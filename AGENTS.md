@@ -314,7 +314,21 @@ usage on every one of them: measured over the 40 largest real transcripts here,
 **13,755 assistant lines carrying a `message.usage` resolve to 7,683 distinct
 `requestId`s**, 4,088 of them written as more than one line (max 11), and **0**
 of those requests disagree with themselves about their token counts. A record per
-line therefore publishes 1.79x the tokens the work cost. The mirror emits on the
+line therefore publishes 1.79x the tokens the work cost. **Replicated
+independently on a wider sample the same night** — every transcript under
+`~/.claude/projects` rather than the 40 largest: **26,410 lines carrying usage,
+14,622 distinct `requestId`s, 1.81x, and again 0 requests disagreeing with
+themselves.** Two samples, two ratios, one conclusion; the ratio is a property
+of how the tool writes, not of which transcripts were read.
+⚠️ **AND ATLAS DOES NOT ABSORB IT**, which is what makes this a live data defect
+rather than a wasteful payload: `services/otel.py::_dedup_key` prefers
+`session.id:event.sequence` and falls back to `request_id` only when one of them
+is absent, while the pre-fix mirror stamped a fresh sequence per record. Every
+duplicate was therefore stored as its own row. Cowork is the only source that
+has been mirrored, so Cowork's tokens and spend in Atlas are inflated by about
+that factor for as long as this has run. The client half is fixed here; making a
+mirrored row and a tool-sent row COLLAPSE needs Atlas to prefer `request_id` on
+`api_request`, which is one line in that function and is not in this repo. The mirror emits on the
 FIRST line of a request and drops the rest — one variable, not a set, because
 **7,703 request runs and 0 requests that resumed after another intervened** says
 a request's lines are contiguous. Codex has the same class of defect from the
