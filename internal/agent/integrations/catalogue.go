@@ -31,6 +31,13 @@ type SupportLevel struct {
 	// store rows. Until it can, the reader lane (and, for a tool whose watcher
 	// exists only to feed it, the watcher lane) is not expected.
 	ReaderAvailable bool
+	// ToolOTLP — this machine asks the tool to export OTLP at all
+	// (settings.Settings.ToolOTLPEnabled, OFF by default). Threaded in as part
+	// of the LEVEL rather than checked anywhere else, so the one derivation of
+	// "expected" stays the one derivation: a lane keld does not write is not a
+	// lane that went silent, and by ExpectedLanes' existing rule it can then
+	// contribute neither half of `broken`.
+	ToolOTLP bool
 }
 
 // SurfaceSpec is one lane in the catalogue: its kind, whether the TOOL
@@ -104,6 +111,15 @@ func Get(id string) (Entry, bool) {
 // whenSupported — expected wherever Signal supports the tool.
 func whenSupported(l SupportLevel) bool { return l.Supported }
 
+// whenToolOTLP — expected only while this machine asks the tool to export OTLP.
+//
+// ⚠️ The lane is behind a DEVELOPER switch that is off by default, so on an
+// ordinary machine this is false and the otel lane is shown, unwired and not
+// expected — the same shape Codex's reader lane had before WS-D. It is not an
+// absence to interpret: the lane is scheduled for removal once nothing needed is
+// seen to arrive only on it, and until then a person can turn it back on.
+func whenToolOTLP(l SupportLevel) bool { return l.Supported && l.ToolOTLP }
+
 // whenReaderAvailable — expected only once a reader exists for this source.
 // The watcher rides this too wherever the watcher's only consumer is the
 // reader: expecting it earlier would report a lane silent that nothing asked
@@ -139,7 +155,7 @@ var Catalogue = []Entry{
 		ReaderAvailable: true,
 		Surfaces: []SurfaceSpec{
 			{Kind: SurfaceHook, Documented: true, ExpectedWhen: whenSupported},
-			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenSupported},
+			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenToolOTLP},
 			// The transcript format is ours to read, not theirs to promise —
 			// which is exactly why a tool release is what breaks it.
 			{Kind: SurfaceWatcher, Documented: false, ExpectedWhen: whenSupported},
@@ -162,7 +178,7 @@ var Catalogue = []Entry{
 		ReaderAvailable: true,
 		Surfaces: []SurfaceSpec{
 			{Kind: SurfaceHook, Documented: true, ExpectedWhen: whenSupported},
-			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenSupported},
+			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenToolOTLP},
 			{Kind: SurfaceWatcher, Documented: false, ExpectedWhen: whenReaderAvailable},
 			{Kind: SurfaceReader, Documented: false, ExpectedWhen: whenReaderAvailable},
 		},
@@ -179,7 +195,7 @@ var Catalogue = []Entry{
 		Surfaces: []SurfaceSpec{
 			// No hook lane: Gemini CLI runs no command hook for us, so there is
 			// nothing to be silent.
-			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenSupported},
+			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenToolOTLP},
 			{Kind: SurfaceWatcher, Documented: false, ExpectedWhen: whenSupported},
 			{Kind: SurfaceReader, Documented: false, ExpectedWhen: whenReaderAvailable},
 		},

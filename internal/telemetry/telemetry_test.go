@@ -39,7 +39,10 @@ func TestClaudeEnvOrderAndHeaders(t *testing.T) {
 }
 
 func TestCodexBlockBodyHasHooksAndOtel(t *testing.T) {
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	// ToolOTLP asked for explicitly: the [otel] table is opt-in as of the
+	// Developer switch, so a test about it has to say it wants the lane. The
+	// off position is covered by tools.TestApplyWritesNoOTLPBlock…
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 	body := CodexBlockBody(p, "codex")
 	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.UserPromptSubmit]]", "[[hooks.Stop]]", "keld __hook --source codex"} {
 		if !strings.Contains(body, want) {
@@ -65,7 +68,7 @@ func TestClaudeHookEventsIncludeUserPromptSubmit(t *testing.T) {
 }
 
 func TestCodexBlockBodyMetricsAndHeaderAuth(t *testing.T) {
-	got := CodexBlockBody(SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}, "codex")
+	got := CodexBlockBody(SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", ToolOTLP: true}, "codex")
 	// logs exporter present, metrics exporter present
 	if !strings.Contains(got, "metrics_exporter") {
 		t.Error("missing metrics_exporter (token metrics never flow otherwise)")

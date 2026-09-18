@@ -48,6 +48,19 @@ type SetupParams struct {
 	// commands (resolved from os.Executable at setup time). Empty → hooks use
 	// bare "keld" (PATH-resolved). See HookCommand.
 	BinPath string
+	// ToolOTLP decides whether the tool's OWN OTLP export is written into its
+	// config at all — Claude's OTEL_* env block, Codex's [otel] table, Gemini's
+	// telemetry block. The hook is never behind it.
+	//
+	// ⚠️ THE ZERO VALUE IS OFF, AND THAT IS THE PRODUCT DEFAULT rather than an
+	// accident of the struct. Signal reads usage from the tool's own
+	// transcript, so this lane adds nothing Atlas prices while being the only
+	// one that needs a credential inside a file a tool reads once at startup.
+	// It is resolved from settings.Settings.ToolOTLPEnabled by the two callers
+	// that build a SetupParams (`keld signal setup` and the daemon's
+	// integrations detector); anything constructing one without an opinion gets
+	// the safe half.
+	ToolOTLP bool
 }
 
 // ClaudeHookEvent represents one (event, optional matcher) pair for Claude Code
@@ -138,6 +151,19 @@ func quoteBin(bin string) string {
 		return bin // already quoted by a caller
 	}
 	return `"` + bin + `"`
+}
+
+// ClaudeEnvKeys is every env key ClaudeEnv sets, in the same order.
+//
+// ⚠️ It exists because REMOVING the block needs the list when the block is not
+// being written: with `tool_otlp` off there is no ClaudeEnv result to read the
+// keys off, and the adapter must still be able to take out what an earlier keld
+// left behind. It is also what the manifest records, so `keld signal uninstall`
+// strips those keys on a machine configured in either position. A test pins the
+// two lists against each other, because a key added to one and not the other
+// would be a key nothing ever removes.
+func ClaudeEnvKeys() []string {
+	return ClaudeEnv(SetupParams{}).Keys()
 }
 
 // ClaudeEnv returns an ordered map of environment variables to inject into
@@ -243,6 +269,12 @@ func endpointWithToken(base, token string) string {
 // instead of "python3 {path}; true"; it also emits a metrics_exporter entry
 // alongside the logs exporter; and it authenticates via the
 // x-keld-ingest-token header rather than a token embedded in the endpoint URL.
+//
+// ⚠️ **WITH `p.ToolOTLP` OFF THE [otel] TABLE IS NOT EMITTED AT ALL**, and the
+// hook blocks are the whole body. The block is marker-delimited and upserted
+// whole (config.UpsertKeldBlock), so a config written by an earlier keld loses
+// its [otel] table on the next apply without anything having to find and strip
+// it — the removal is the same write as the one that stops adding it.
 func CodexBlockBody(p SetupParams, source string) string {
 	logsEndpoint := fmt.Sprintf("%s/v1/logs", p.Endpoint)
 	metricsEndpoint := fmt.Sprintf("%s/v1/metrics", p.Endpoint)
@@ -253,6 +285,10 @@ func CodexBlockBody(p SetupParams, source string) string {
 		hookBlocks = append(hookBlocks,
 			fmt.Sprintf("[[hooks.%s]]\nhooks = [ { type = \"command\", command = '%s' } ]\n", event, cmd),
 		)
+	}
+
+	if !p.ToolOTLP {
+		return strings.Join(hookBlocks, "\n")
 	}
 
 	return fmt.Sprintf(

@@ -77,7 +77,15 @@ func (a *GeminiAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 		obj = orderedmap.New()
 	}
 
-	obj.Set("telemetry", telemetry.GeminiTelemetry(p))
+	// ⚠️ Deleted rather than merely not written when the lane is off: keld owns
+	// this whole key (it is the one named in `managed["keys"]`), so a config an
+	// earlier keld wrote loses its exporter — and the credential in its URL —
+	// on the next apply, without a separate migration pass.
+	if p.ToolOTLP {
+		obj.Set("telemetry", telemetry.GeminiTelemetry(p))
+	} else {
+		obj.Delete("telemetry")
+	}
 
 	// Strip any existing keld hook before adding the current one, so re-running
 	// setup is idempotent even when the command STRING changes (e.g. bare
@@ -98,7 +106,10 @@ func (a *GeminiAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 		"created":     currentText == nil,
 	}
 
-	summary := []string{"set telemetry block", "add BeforeAgent hook"}
+	summary := []string{otelOffSummary, "add BeforeAgent hook"}
+	if p.ToolOTLP {
+		summary[0] = "set telemetry block"
+	}
 	if envFile != nil {
 		summary = append(summary, "remove legacy ~/.gemini/.env OTEL block")
 	}
@@ -214,8 +225,14 @@ func (a *GeminiAdapter) Remove(currentText *string, managed map[string]any) Plan
 }
 
 // Status reports whether Gemini CLI is installed (Detect) and configured with
-// keld's telemetry block and BeforeAgent hook. keld no longer manages
-// ~/.gemini/.env, so it plays no part in the configured check.
+// keld's BeforeAgent hook, and whether the telemetry block is present. keld no
+// longer manages ~/.gemini/.env, so it plays no part in either question.
+//
+// ⚠️ **CONFIGURED IS THE HOOK ALONE SINCE THE OTLP LANE BECAME OPT-IN** — the
+// same correction ClaudeAdapter.Status carries and for the same reason: with
+// `tool_otlp` off keld deliberately writes no telemetry block, so requiring one
+// here would report every default machine as drift and have the detector
+// rewrite it on every poll.
 func (a *GeminiAdapter) Status(currentText *string, managed map[string]any) ToolStatus {
 	text := ptrToStr(currentText)
 
@@ -224,9 +241,10 @@ func (a *GeminiAdapter) Status(currentText *string, managed map[string]any) Tool
 		obj = orderedmap.New()
 	}
 
-	configured := false
+	configured := config.HasHookWithCommand(obj, telemetry.HookCommandSubstr)
+	otlp := false
 	if telVal, ok := obj.Get("telemetry"); ok {
-		configured = hasOTLPEndpointGemini(telVal) && config.HasHookWithCommand(obj, telemetry.HookCommandSubstr)
+		otlp = hasOTLPEndpointGemini(telVal)
 	}
 
 	detail := "not configured"
@@ -238,6 +256,7 @@ func (a *GeminiAdapter) Status(currentText *string, managed map[string]any) Tool
 		Name:       a.Name(),
 		Installed:  a.Detect(),
 		Configured: configured,
+		OTLP:       otlp,
 		Detail:     detail,
 	}
 }

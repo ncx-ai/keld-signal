@@ -21,9 +21,7 @@ const sessionScanWindow = 2 * time.Hour
 // being written right now, and which of them the proxy has ever forwarded for.
 func sessionTelemetryState(manifest *config.Manifest) localagent.SessionTelemetryState {
 	s := localagent.SessionTelemetryState{Now: time.Now()}
-	if manifest != nil && len(manifest.Tools) > 0 {
-		s.Configured = true
-	}
+	s.Configured = configuredForToolTelemetry(manifest)
 	_, s.Known = teleproxy.LastForwardOnDisk()
 	s.Forwarded = teleproxy.SessionsOnDisk()
 	s.Active = activeClaudeSessions(claudeProjectDirs(), time.Now())

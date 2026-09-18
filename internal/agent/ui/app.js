@@ -432,6 +432,7 @@ export const SETTINGS_ENV = {
   send_to_atlas: "KELD_ATLAS",
   dev_blocks: "KELD_DEV_BLOCKS",
   attribution: "KELD_ATTRIBUTION",
+  tool_otlp: "KELD_TOOL_OTLP",
 };
 
 /** validProjectTitle is the one rule for naming a project from a suggestion:
@@ -2246,7 +2247,59 @@ if (typeof document !== "undefined") {
       dev ? el("div", { class: "settings-sep" }) : null,
       dev ? renderDevGenerate(settings) : null,
       dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null
+      dev ? renderDevAttribution(settings, readonly) : null,
+      dev ? el("div", { class: "settings-sep" }) : null,
+      dev ? renderDevToolOTLP(settings, readonly) : null
+    );
+  }
+
+  /** The copy for the OTLP row, hoisted out of the renderer so the page and its
+   *  Playwright assertions quote ONE string rather than two that drift. */
+  const TOOL_OTLP_TITLE = "Extended telemetry from the tool (OTLP)";
+  const TOOL_OTLP_BODY =
+    "Off. Signal reads usage from the tool's own transcript; this lane is scheduled for removal " +
+    "once we have confirmed nothing we need arrives only here. Turning it on writes into the " +
+    "tool's configuration, and the tool must be restarted once to pick it up.";
+  /** Shown only while the switch is on, and only once.
+   *
+   *  ⚠️ It is deliberately NOT a copy of the Integrations pane's `restart`
+   *  instruction. That sentence lives once, server-side, in
+   *  `integrations.Instructions`, and the pane prints what the server sent — a
+   *  second copy here would be a copy that drifts. This says the one thing the
+   *  person has to do after flipping the switch; the row that tracks whether
+   *  they have done it is the Integrations one, which arrives on its own once
+   *  the detector has written the config. */
+  const TOOL_OTLP_RESTART = "Restart the tool once to pick this up.";
+
+  /** renderDevToolOTLP is the tool-OTLP switch, a DEVELOPER control because the
+   *  lane is on its way out rather than because it is dangerous.
+   *
+   *  Signal reads a tool's usage from the tool's own transcript, so this export
+   *  adds nothing Atlas prices; what it does add is a credential inside a file
+   *  the tool reads once at startup, which is why it is the lane that keeps
+   *  breaking. It stays reachable, off by default, so someone can prove to
+   *  themselves that nothing needed arrives only here before it is removed.
+   *  The env pin (KELD_TOOL_OTLP) wins and renders read-only, like every other
+   *  row in this box. */
+  function renderDevToolOTLP(settings, readonly) {
+    const on = !!settings.tool_otlp;
+    return el(
+      "div",
+      {},
+      el(
+        "div",
+        { class: "settings-row" },
+        // ⚠️ The title is its OWN element rather than a bare text node beside
+        // the description, which is what every other row here uses. Both
+        // strings are asserted verbatim by the Playwright suite — a deprecation
+        // notice and a restart instruction are exactly the copy that must not
+        // drift unnoticed — and a bare text node cannot be matched exactly,
+        // because the span's text is then the title and the body run together.
+        el("span", {}, el("span", { class: "settings-title" }, TOOL_OTLP_TITLE), el("div", { class: "desc" }, TOOL_OTLP_BODY)),
+        switchEl({ checked: on, disabled: readonly.has("tool_otlp"), onChange: (v) => updateSettings({ tool_otlp: v }) })
+      ),
+      on ? el("div", { class: "settings-note tool-otlp-restart" }, TOOL_OTLP_RESTART) : null,
+      fieldNote("tool_otlp", readonly)
     );
   }
 
