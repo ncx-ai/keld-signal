@@ -40,13 +40,18 @@ func startTelemetryProxy(ctx context.Context, emitter *clientevents.Emitter,
 			"set %s to move it)", addr, err, teleproxy.EnvPort)
 	}
 
-	secret, err := agentcfg.EnsureTelemetrySecret()
+	secrets, err := agentcfg.EnsureTelemetrySecrets()
 	if err != nil {
 		_ = ln.Close()
 		return nil, fmt.Errorf("telemetry secret: %w", err)
 	}
 	p := teleproxy.New(logsEndpoint(ingestEndpoint), metricsEndpoint(ingestEndpoint),
-		token, secret, paths.TelemetrySpoolDir())
+		token, secrets.Secret, paths.TelemetrySpoolDir())
+	// A rotation is survivable only if the outgoing secret keeps working while
+	// the machine is reconfigured: every tool already running holds the old value
+	// in memory and cannot be told otherwise from outside. Set BEFORE Serve, so
+	// no request can observe a proxy that has the new secret and not the grace.
+	p.AcceptPrevious(secrets.Previous, secrets.RotatedAt)
 	if onAuthRejection != nil {
 		p.OnAuthRejection(onAuthRejection)
 	}
