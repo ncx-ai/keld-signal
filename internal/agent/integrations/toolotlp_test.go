@@ -65,7 +65,7 @@ func TestNoFactsProduceBrokenOTelWhileTheSwitchIsOff(t *testing.T) {
 		Wiring: WiringFacts{
 			ConfigPresent:        true,
 			ConfigMatchesAdapter: true,
-			ConfigMtime:          now.Add(-2 * time.Hour),
+			ConfiguredAt:         now.Add(-2 * time.Hour),
 			NewestSessionStart:   now.Add(-time.Hour),
 		},
 		Lanes: LaneFacts{
