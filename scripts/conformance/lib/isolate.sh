@@ -411,7 +411,11 @@ artifact_install() {
   case "$(uname -s)" in
     Darwin) script="$ROOT/scripts/conformance/install-macos.sh" ;;
     Linux)  script="$ROOT/scripts/conformance/install-linux.sh" ;;
-    *) say "no unattended installer script for $(uname -s); Windows runs install-windows.ps1 directly"; return 1 ;;
+    # Windows has no artifact-install script here on purpose: the workflow
+    # installs keld-setup.exe /VERYSILENT itself, on both chains, because the
+    # sidecar ships ONLY inside that .exe and chain B's upgrade pair has to be
+    # built by installing two releases in order. One installer owner per job.
+    *) say "no unattended installer script for $(uname -s); on Windows the workflow owns the installer"; return 1 ;;
   esac
 
   if [ "${CI:-}" != "true" ] && [ "${KELD_CONFORM_DISPOSABLE:-0}" != "1" ]; then

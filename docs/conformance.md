@@ -57,7 +57,6 @@ make conformance TOOL=claude_code ARTIFACT=dir:./artifacts
 # or one artifact on its own
 KELD_CONFORM_DISPOSABLE=1 scripts/conformance/install-macos.sh --pkg keld-3.0.0-arm64.pkg --code CONFORM
 KELD_CONFORM_DISPOSABLE=1 scripts/conformance/install-linux.sh --artifacts ./artifacts --code CONFORM
-pwsh scripts/conformance/install-windows.ps1 -Artifacts artifacts -Code CONFORM
 ```
 
 `--artifact dir:<path>` follows `--previous dir:<path>`'s shape and changes only
@@ -87,9 +86,18 @@ guard rather than passed it.
 2. ⚠️ **`install-linux.sh --tag v2.5.0` against the REAL published release**, in
    a disposable container, on both architectures. This is the run that matters,
    and it is the one a fake release cannot substitute for — see below.
-3. `install-windows.ps1` has never been run, or even parsed. It also has no
-   invoker: the CI install step is gated `runner.os != 'Windows'` and
-   `lib/isolate.sh` declines it, so today it is an artifact, not a path.
+3. ⚠️ **Windows has no install script here, and does not need one.** There was
+   an `install-windows.ps1`; it was deleted because it was a second, never-run
+   implementation of a claim the workflow already proves on every run. The
+   Windows cells install the REAL `keld-setup.exe` with `/VERYSILENT
+   /SUPPRESSMSGBOXES /NORESTART` — once on chain A, and twice on chain B (old
+   then new) because Windows ships the sidecar only inside that .exe, so the
+   upgrade pair can only be built by installing both in order. A non-zero Inno
+   exit fails the step, and exit 5 ("cancelled/declined", what a silent install
+   returns rather than overwrite a running one) is named there so the next
+   reader is not sent to a search engine by a number. Keeping an unexecuted
+   duplicate beside that made Windows LOOK unproven when it is the best-proven
+   of the three.
 
 ### ⚠️ What the REAL release found, and the fake one could not
 
@@ -163,9 +171,9 @@ OK — verified from observed state, but scripts/install.sh EXITED 1
 
 Real statically linked ELF binaries, the real 1.2 GB sidecar tree, the unit file
 **enabled**, and a real ingest token written by a real onboarding against the
-mock Atlas. What is still NOT proven anywhere: the macOS `.pkg` (installing one
-rewrites the developer's own LaunchAgent, so it needs a VM or CI) and every line
-of `install-windows.ps1`.
+mock Atlas. What is still NOT proven anywhere: the macOS `.pkg` — installing one
+rewrites the developer's own LaunchAgent, so it needs a VM or CI, and the CI
+step that runs it fires only on a Signal release.
 
 ---
 

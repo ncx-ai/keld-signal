@@ -145,7 +145,6 @@ do the same rather than `test -x`.
 |---|---|
 | `scripts/conformance/install-macos.sh` | `sudo installer -pkg … -target /` → the three commands → verify |
 | `scripts/conformance/install-linux.sh` | `scripts/install.sh`, run verbatim (a local artifacts dir is served on loopback, so the installer under test is the file users run) → the three commands → verify |
-| `scripts/conformance/install-windows.ps1` | `/VERYSILENT` → the three commands → verify |
 
 Each prints its step, fails loudly with the step named, and ends by printing
 `bin_dir=` / `sidecar_dir=`. They are what the conformance chain uses
@@ -165,10 +164,15 @@ run end to end against a **local fake release** (inert stand-in binaries), which
 proves the argument handling, the loopback artifact server, `install.sh`'s
 unattended path and all four verification outcomes — including the important
 one: with every command exiting 0 and no `hook.json` written, the script still
-fails, at `verify-onboarded`. They have **not** yet been run against a real pkg
-or a real release tarball, and `install-windows.ps1` has never been run at all
-(no PowerShell on the machine it was written on). The first CI run on a Signal
-release is the test.
+fails, at `verify-onboarded`. They have **not** yet been run against a real pkg,
+and the CI step that would do it fires only on a Signal release. The first CI
+run on a Signal release is the test.
+
+⚠️ **Windows is not in that table and is not a gap.** `keld-setup.exe` is run
+`/VERYSILENT` by `.github/workflows/conformance.yml` itself, on both chains of
+every Windows cell — chain B installs two published releases in order, because
+Windows ships the sidecar only inside that .exe. One installer owner per job, so
+there is deliberately no Windows sibling of the two scripts above.
 
 ---
 
