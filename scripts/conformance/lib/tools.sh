@@ -586,8 +586,20 @@ tool_not_expected() {
       # it for everyone would hide a real regression in the one lane that works.
       # `upgraded-prompts` still requires all five, so the upgrade must repair
       # this, which is exactly what chain B is for.
+      # ⚠️ **AND `publish` GOES WITH IT, BECAUSE `publish` IS A GLOBAL
+      # COUNT.** It reads /v1/enrichments at the mock Atlas for the whole run,
+      # not for this tool — so requiring it here while excusing `pointer`, the
+      # per-tool form of the same fact, asks Codex to be vouched for by SOMEONE
+      # ELSE'S enrichment. That is exactly what happened: every green chain B
+      # ever recorded had claude_code in the BEFORE half, and its enrichment
+      # satisfied the count for all three tools. Seed 35341283833 was the first
+      # to put claude_code in the AFTER half, leaving before=[codex gemini_cli]
+      # — and `publish` read 0 on all three OSes with every other lane green,
+      # because neither tool can produce an enrichment on v3.0.3 at all.
+      # A checkpoint whose verdict depends on the shuffle is worse than one
+      # that is absent: it reads as a product failure.
       local extra=""
-      [ "${STEP:-}" = "prev-prompts" ] && extra="pointer"
+      [ "${STEP:-}" = "prev-prompts" ] && extra="pointer,publish"
       if [ -n "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ]; then
         echo "$KELD_CONFORM_CODEX_NOT_EXPECTED"
       elif [ -n "${FROZEN_SIDECAR:-}" ]; then
@@ -628,8 +640,12 @@ tool_not_expected() {
     # that works. `upgraded-prompts` still requires it, so the upgrade must
     # repair it, which is exactly what chain B is for.
     gemini_cli)
+      # ⚠️ **AND `publish` GOES WITH IT** — it is a GLOBAL /v1/enrichments
+      # count, so requiring it while excusing `pointer` (the per-tool form of
+      # the same fact) lets another tool's enrichment vouch for Gemini. See the
+      # Codex branch above for the seed that exposed it.
       local gextra=""
-      [ "${STEP:-}" = "prev-prompts" ] && gextra=",pointer"
+      [ "${STEP:-}" = "prev-prompts" ] && gextra=",pointer,publish"
       echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows,blocks$gextra}"
       ;;
     *)           echo "" ;;
