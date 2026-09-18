@@ -1,4 +1,11 @@
 /keld
+# ⚠️ The other two Go entrypoints' build output, for the reason `/keld` is here.
+# `go build ./cmd/keld-conform` with no -o drops a 10 MB Mach-O at the repo
+# ROOT, where nothing ignored it and no extension made it look like a binary —
+# so one was committed and survived a bloat sweep that keyed on file extensions.
+# The conformance harness builds its own into $WORK and never reads this path.
+/keld-agent
+/keld-conform
 *.test
 # Local installer dry-run build output dirs (installers-<os>-<arch>/, e.g. from
 # `act`/local CI runs) and the Inno Setup output dir — not the tracked installers/
