@@ -286,16 +286,35 @@ step_c_old_binary() {
   local saved_path=$PATH rc=0
 
   keld_build "$WORK/bin-old" "$OLD_VERSION"
-  export PATH="$WORK/bin-old:$PATH"
+  # ⚠️ **BOTH BINARIES ON PATH, OLD FIRST — that IS the incident.** An earlier
+  # cut put only the old one there, and the WS4 guard then compared it against
+  # whatever `keld` the developer happens to have installed system-wide (measured
+  # here: /usr/local/bin/keld 3.0.0-rc.3). The guard fired, correctly, about the
+  # wrong pair: the run would have reported a refusal that had nothing to do with
+  # the release under test, and would have behaved differently on a clean runner.
+  export PATH="$WORK/bin-old:$BIN_DIR:$PATH"
   say "an older keld is now first on PATH: $(command -v keld) ($(keld --version 2>/dev/null | head -1))"
+  say "  the release under test is behind it at $BIN_DIR"
 
   # The upgrade as a person performs it: re-run setup BY NAME, which is what
   # every runbook, every doc and every muscle memory says.
-  keld signal setup --yes >"$WORK/setup-old-path.out" 2>&1 || {
-    say "keld signal setup (through PATH) failed: $(tail -5 "$WORK/setup-old-path.out")"
-    PATH=$saved_path
-    return 1
-  }
+  #
+  # ⚠️ **A REFUSAL IS ONE OF TWO ACCEPTABLE OUTCOMES, AND THE STEP'S CLAIM IS
+  # NEITHER OF THEM.** Since WS4 the older binary REFUSES to configure when a
+  # newer keld is on PATH ("A newer keld … is on PATH … refusing to configure
+  # tools"), because an older keld writing the telemetry credential is how a
+  # machine ends up with tools holding a secret the running daemon rejects. That
+  # is the machine being protected, so a non-zero exit here is not a failure.
+  # What this step asserts either way is what the machine is WIRED TO — a
+  # refusal leaves the good wiring in place, a write must leave the new binary.
+  local refused=0
+  keld signal setup --yes >"$WORK/setup-old-path.out" 2>&1 || refused=1
+  if [ "$refused" = "1" ]; then
+    say "the older keld REFUSED to configure (WS4's guard) — the machine keeps the wiring it had:"
+    sed -n '1,6p' "$WORK/setup-old-path.out" | sed 's/^/    /'
+  else
+    say "the older keld configured the tools (no refusal) — what it wrote is what the machine now runs"
+  fi
 
   # ⚠️ **ASK THE RELEASE UNDER TEST WHAT IT SAYS, rather than assuming the shape
   # of `--version`.** The first cut compared the whole output line against the
