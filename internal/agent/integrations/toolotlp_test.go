@@ -53,8 +53,12 @@ func TestOTelIsNotExpectedWhileTheSwitchIsOff(t *testing.T) {
 // with the lane on must produce something else with it off — and it must not be
 // producible by any silence at all.
 func TestNoFactsProduceBrokenOTelWhileTheSwitchIsOff(t *testing.T) {
-	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	recent := now.Add(-time.Minute)
+	// The package's decision-table helper computes against the fixed `now` in
+	// compute_test.go, so a second clock here is a fixture in the future.
+	// ⚠️ And the activity has to be older than settleWindow: this row is about
+	// which lanes are EXPECTED, not about timing, and a one-minute-old sighting
+	// now reads as "still in flight" rather than as a break.
+	recent := now.Add(-10 * time.Minute)
 	e, _ := Get("claude_code")
 
 	// Hook, watcher and reader all seen; the otel lane silent. That is row 6 of

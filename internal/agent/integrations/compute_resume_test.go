@@ -16,7 +16,6 @@ import (
 // only reach by having read it. The row said `restart_required` across two
 // genuine restarts.
 func TestARestartedSessionClearsRestartRequired(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
@@ -39,7 +38,6 @@ func TestARestartedSessionClearsRestartRequired(t *testing.T) {
 // The other side: an unadopted stale session still says restart. The exemption
 // is evidence of a restart, not a blanket amnesty for an old start instant.
 func TestAStaleSessionThatHasSentNothingStillSaysRestart(t *testing.T) {
-	now := time.Now()
 
 	f := configured()
 	f.Wiring.ConfiguredAt = now.Add(-30 * time.Minute)

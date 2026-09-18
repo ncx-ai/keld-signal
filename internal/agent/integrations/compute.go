@@ -17,6 +17,24 @@ const DefaultWindow = 24 * time.Hour
 // WindowEnv overrides it on one machine (a Go duration: "6h", "30m").
 const WindowEnv = "KELD_INTEGRATIONS_WINDOW"
 
+// settleWindow is how long a lane is given to report after the tool has been
+// seen on another one, before its silence counts as evidence of a break.
+//
+// ⚠️ WITHOUT IT A HEALTHY MACHINE READS `broken` SECONDS AFTER A PROMPT. The
+// lanes do not fire together: the hook posts its pointer as the prompt is
+// submitted, while the reader lane only reports once the watcher's poll
+// (`KELD_WATCH_POLL`, 5s) has signalled the sidecar and the sidecar has parsed
+// the tail into rows. `broken` needs one expected lane active and another
+// silent, and both halves are momentarily true on every prompt a working
+// machine serves. Observed by the day-three conformance chain on 2026-09-19,
+// which reported it rather than failing on it.
+//
+// Two minutes is generous against those mechanisms and cheap against the
+// detection it delays: a genuinely broken lane is still reported inside the
+// look-back, which is a day. It errs toward `working`, the direction AC-4 asks
+// for — a check that cries wolf on every prompt is one nobody reads.
+const settleWindow = 2 * time.Minute
+
 // Options are Compute's knobs. A zero Options is the shipped behaviour.
 type Options struct {
 	// Window is the lane look-back. Zero means DefaultWindow, honouring
@@ -107,7 +125,7 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP 
 	}
 	active := laneActivity(e, f, now, window)
 
-	state, brokenLane := decide(e, f, expected, active)
+	state, brokenLane := decide(now, e, f, expected, active)
 
 	in := Integration{
 		ID:           e.ID,
@@ -263,7 +281,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 }
 
 // decide walks spec §4's table in its own order.
-func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
+func decide(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
 	// Row 9, first: an unsupported entry is a catalogue row whatever else is
 	// true of the machine. Cursor with its config dir present is still
 	// `unsupported`, not `not_installed` — Signal names the tool and its
@@ -353,10 +371,31 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	if !anyActive {
 		return Idle, "" // row 4 — a quiet user is not a bug
 	}
-	if firstSilent != "" {
+	if firstSilent != "" && settled(now, e, f, expected) {
 		return Broken, firstSilent // rows 5, 6, 7
 	}
 	return Working, "" // rows 7b and 8
+}
+
+// settled reports whether enough time has passed since this tool was last seen
+// on ANY expected lane for a still-silent lane to mean something. See
+// settleWindow.
+func settled(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool) bool {
+	newest := time.Time{}
+	for _, spec := range e.Surfaces {
+		if !expected[spec.Kind] {
+			continue
+		}
+		if at := lastSeen(spec.Kind, f); at != nil && at.After(newest) {
+			newest = *at
+		}
+	}
+	// No instant at all: the active lane is the reader, which answers a
+	// yes/no rather than an instant. Nothing to wait for.
+	if newest.IsZero() {
+		return true
+	}
+	return now.Sub(newest) >= settleWindow
 }
 
 // wired answers, per lane, whether the configuration this lane needs is on

@@ -22,7 +22,6 @@ import (
 // telemetry flows and whose hook never fires still reads broken within the hour,
 // because that telemetry lands after the config.
 func TestActivityBeforeTheConfigIsNotEvidenceAboutIt(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
@@ -48,7 +47,6 @@ func TestActivityBeforeTheConfigIsNotEvidenceAboutIt(t *testing.T) {
 // once activity lands AFTER the config, a silent expected lane still breaks the
 // tool, and it does so inside the window rather than a day later.
 func TestActivityAfterTheConfigStillBreaksASilentLane(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
@@ -69,7 +67,6 @@ func TestActivityAfterTheConfigStillBreaksASilentLane(t *testing.T) {
 // A machine whose config mtime cannot be read (zero) falls back to the plain
 // window. Unknown must not become a grace period that silences broken forever.
 func TestAnUnknownConfigMtimeDoesNotSuppressBroken(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()

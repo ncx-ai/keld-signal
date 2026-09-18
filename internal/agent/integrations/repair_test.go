@@ -376,12 +376,16 @@ func TestARepairedRowSaysSoWhenTheRowIsBroken(t *testing.T) {
 	e, _ := Get("codex") // the real catalogue row, so the lanes are the real ones
 	now := time.Now().UTC()
 	hook := now.Add(-48 * time.Hour) // before the repair: silent since
-	otel := now.Add(-time.Minute)
+	// ⚠️ Older than settleWindow. A lane seen a minute ago means the machine is
+	// still in flight, and a still-silent sibling is no longer evidence of a
+	// break — which is right, and would make this fixture stop reproducing the
+	// incident it is about.
+	otel := now.Add(-10 * time.Minute)
 	rows := true
 	f := Facts{
 		Configured: true,
 		Repair:     &Repair{Reason: ReasonTelemetryDrift, At: now},
-		Wiring:     WiringFacts{ConfigPresent: true, ConfiguredAt: now.Add(-2 * time.Minute)},
+		Wiring:     WiringFacts{ConfigPresent: true, ConfiguredAt: now.Add(-3 * time.Hour)},
 		Lanes: LaneFacts{
 			LastHookPointer: &hook, LastTelemetryForward: &otel,
 			LastWatcherPointer: &otel, RowsForRecentPointers: &rows,
