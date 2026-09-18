@@ -1787,6 +1787,14 @@ for no inference — but only when a service actually exists to become ready. Wi
 no sidecar installed at all it runs on without window analysis rather than wait
 for something that cannot arrive (see *Model backends* above).
 
+**What each lane buffers, replays and loses is written down per lane in
+`docs/durability.md`**, with the spool path, cursor or ring size cited for every
+claim — including the three places where something is genuinely lost (a
+`promptlog` observation made while unpaired, client events emitted before the
+reporter starts, and the rows a feature flush drops past its first failing
+chunk). The page carries the one-sentence version beside the health strip
+(`ui/app.js` · `durabilityNote`), pinned against that document from both sides.
+
 **Deadlines are PER PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, default
 30s). Per-pass is the only correct unit: a job issues 8-9 inferences, so a
 job-wide budget meant one slow pass discarded *every pass that had already

@@ -829,6 +829,33 @@ export function visibleHealth(health, settings) {
   return list.filter((h) => h.key !== "atlas");
 }
 
+/** The one sentence a person reading a red badge is actually asking about.
+ *
+ *  Kept VERBATIM in docs/durability.md (between the `page-copy:durability`
+ *  markers) and pinned against it from both sides — ui/e2e/durability.spec.ts
+ *  reads the file, test/durability.test.js reads it too — because the page and
+ *  the document are the same claim in two registers and a drift between them
+ *  is the page quietly promising something the lanes do not do.
+ *
+ *  ⚠️ **"usually" IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY.** Three lanes
+ *  genuinely lose things: a transcript-mirror observation made while unpaired
+ *  has no spool (promptlog.NewPending), client events emitted before the
+ *  reporter starts sit in a bounded ring, and a feature flush drops what it
+ *  drained past the first failing chunk. The word is what keeps this sentence
+ *  true; docs/durability.md names each case. */
+export const DURABILITY_NOTE =
+  "Work is recorded on this machine first and delivered when Atlas can be reached, " +
+  "so a red badge here usually means late rather than lost.";
+
+/** Shown only when a visible health cell is NOT ok — the same rule
+ *  serviceQueueNote follows one screen over: a healthy machine gets no
+ *  reassurance it did not ask for, and the sentence appears exactly where the
+ *  question it answers is being asked. */
+export function durabilityNote(health, settings) {
+  const cells = visibleHealth(health, settings);
+  return cells.some((h) => h && h.status !== "ok") ? DURABILITY_NOTE : "";
+}
+
 /** ---- The analysis service's own health, which is NOT the `health` array ----
  *
  *  `GET /v1/ledger` carries a top-level `service` block beside `health`:
@@ -1675,6 +1702,12 @@ if (typeof document !== "undefined") {
         `${healthLabel(h.key)}${detail ? " " + detail : ""}`
       );
     });
+    // The durability line sits INSIDE the strip, below the pills, and only when
+    // one of them is not ok — see durabilityNote. Its own row rather than a
+    // third flex item: the strip is `justify-content: space-between`, so a
+    // sentence sharing that row would be squeezed between the cells and the
+    // toggles at every width.
+    const note = durabilityNote(ledger ? ledger.health : [], settings);
     return el(
       "div",
       { class: "health-strip" },
@@ -1694,7 +1727,8 @@ if (typeof document !== "undefined") {
             route();
           },
         }))
-      )
+      ),
+      note ? el("div", { class: "durability-note" }, note) : null
     );
   }
 
