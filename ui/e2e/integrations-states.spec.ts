@@ -286,6 +286,42 @@ for (const size of WIDTHS) {
       await expect(checks(page, "claude_code").nth(0)).toHaveAttribute("data-ok", "false");
       await expect(checks(page, "claude_code").nth(2)).toContainText("transcripts readable");
       await expect(checks(page, "claude_code").nth(2)).toHaveAttribute("data-ok", "true");
+      // The window to restart, named beside the sentence telling you to.
+      await expect(row(page, "claude_code").locator(".intg-stale")).toHaveText("session 8f21c0de");
+    });
+
+    /**
+     * ⚠️ **"RESTART THIS TOOL" IS NOT AN INSTRUCTION WHEN TWO WINDOWS ARE
+     * OPEN.** Measured on the maintainer's machine 2026-09-18: two live Claude
+     * Code sessions, one restarted since the config and one carried over, and
+     * the row could only say "restart". The daemon resolves the verdict over
+     * every live session, so it already knows which one is stale; the row now
+     * prints the first eight characters of that id — the same prefix
+     * `keld signal doctor` prints for the same session, so a person reading one
+     * recognises the other.
+     *
+     * The wire carries the VERDICT, not the session list, so what a fixture can
+     * show is the id the daemon named. The second row is a healthy tool, which
+     * is what makes "only the stale row says it" checkable in one render.
+     */
+    test("two live sessions: the row names the window to restart, and a healthy row names none", async ({ page, shell }) => {
+      shell.serve(fixture("two-live-sessions"));
+      await openPane(page, shell, size);
+      const stale = row(page, "claude_code").locator(".intg-stale");
+      await expect(stale).toHaveCount(1);
+      await expect(stale).toHaveText("session 8f21c0de");
+      // Never the whole id: it is an identifier to recognise, not to read out.
+      await expect(row(page, "claude_code")).not.toContainText("8f21c0de-4b17");
+      // And the tool that is fine says nothing about sessions at all.
+      await expect(row(page, "codex").locator(".intg-stale")).toHaveCount(0);
+    });
+
+    test("a healthy machine names no session anywhere", async ({ page, shell }) => {
+      for (const name of ["working", "idle", "not_configured"]) {
+        shell.serve(fixture(name));
+        await openPane(page, shell, size);
+        await expect(page.locator(".intg-stale")).toHaveCount(0);
+      }
     });
 
     test("approval_required: the AC-9 sentence verbatim, beside the reader sentence", async ({ page, shell }) => {

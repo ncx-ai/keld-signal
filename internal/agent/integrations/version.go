@@ -6,10 +6,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/sessions"
 )
 
 // headRecords bounds how far into a transcript either reader looks.
@@ -87,14 +87,9 @@ func scalar(v any) string {
 
 // newestSessionStart is the instant the newest transcript's session began.
 //
-// ⚠️ IT DECODES LINES AND TAKES A TOP-LEVEL `timestamp`, and that is the whole
-// of the care here. Claude Code opens a transcript with `mode`,
-// `custom-title`, `aiTitle` and `file-history-snapshot` records that carry no
-// top-level timestamp at all — and `file-history-snapshot` carries a NESTED
-// one. Reading the first line, or regexing the first `"timestamp"` out of it,
-// therefore returns either nothing or a fabricated instant. `capture.scan`
-// documents the same trap sidecar-side, where taking a nested timestamp made
-// 31 of 40 real transcripts non-monotone.
+// ⚠️ IT DECODES LINES AND TAKES A TOP-LEVEL `timestamp` — `sessions.StartedAt`
+// does, and this reads through it so the pane and doctor cannot answer that
+// question two different ways.
 //
 // The zero instant means UNKNOWN and must never be read as "long ago": Compute
 // refuses to call a tool `restart_required` on it.
@@ -103,104 +98,29 @@ func newestSessionStart(dirs []string) time.Time {
 	if !ok {
 		return time.Time{}
 	}
-	return sessionStartOf(path)
+	return sessions.StartedAt(path)
 }
 
 // newestSessionTranscript is newestTranscript with SUBAGENT transcripts
 // excluded, and it is what every question about "the newest SESSION" reads.
 //
-// ⚠️ An `agent-*.jsonl` is not a session. It shares its parent's OTEL session
-// id and is written whenever the parent spawns a subagent, so it is usually the
-// most recently modified file on the machine — 620 of 671 here — and its own
-// first timestamp is when the SUBAGENT started, not when the tool did. Reading
-// it as the newest session start makes a session that predates the config look
-// fresh, which hides `restart_required` on exactly the machines that need it;
-// reading its basename as a session id joins to nothing. Same exclusion
-// SessionTelemetryState makes one package over, for the same reason.
+// ⚠️ An `agent-*.jsonl` is not a session — see `sessions`' package comment,
+// which now owns that rule for both this package and doctor. Reading one as the
+// newest session start makes a session that predates the config look fresh,
+// which hides `restart_required` on exactly the machines that need it.
 func newestSessionTranscript(dirs []string) (string, bool) {
-	return newestTranscriptWhere(dirs, func(name string) bool {
-		return !strings.HasPrefix(name, "agent-")
-	})
+	return newestTranscriptWhere(dirs, sessions.IsSessionTranscript)
 }
 
-// sessionActiveWindow is how recently a transcript must have been written for
-// its session to count as one the person still has open.
-//
-// ⚠️ It MIRRORS `localagent.sessionActiveWindow`, which asks the same question
-// for doctor. The two cannot share a constant — localagent imports this package
-// — so the value is restated here and named there, deliberately, rather than
-// each inventing its own idea of "open".
-const sessionActiveWindow = 30 * time.Minute
-
-// liveSessions lists the sessions this tool still has open: non-subagent
-// transcripts written inside sessionActiveWindow, newest first.
-func liveSessions(dirs []string, now time.Time) []string {
-	type row struct {
-		path string
-		mod  time.Time
-	}
-	var rows []row
-	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
-		_ = filepath.WalkDir(dir, func(p string, de fs.DirEntry, err error) error {
-			if err != nil || de.IsDir() || filepath.Ext(p) != ".jsonl" || strings.HasPrefix(de.Name(), "agent-") {
-				return nil
-			}
-			info, err := de.Info()
-			if err != nil || now.Sub(info.ModTime()) > sessionActiveWindow {
-				return nil
-			}
-			rows = append(rows, row{p, info.ModTime()})
-			return nil
-		})
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].mod.After(rows[j].mod) })
-	out := make([]string, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, r.path)
-	}
-	return out
-}
-
-// sessionStartOf reads one transcript's own start instant. Zero is UNKNOWN —
-// no decodable top-level timestamp in the head — never "long ago".
-func sessionStartOf(path string) time.Time {
-	var start time.Time
-	scanHead(path, func(rec map[string]any) bool {
-		s, _ := rec["timestamp"].(string)
-		if s == "" {
-			return true
-		}
-		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-			start = t.UTC()
-			return false
-		}
-		return true
-	})
-	return start
-}
-
-// sessionIDOf names one session as its tool's OTLP session id.
-func sessionIDOf(path string) string {
-	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
-}
-
-// newestSessionID names the newest session this tool wrote, as the tool's own
-// OTLP session id.
-//
-// It is the transcript's basename, which holds for Claude Code and is checked
-// nowhere else: Codex and Gemini name their files something that is not their
-// session id, so the join simply MISSES for them and nothing downstream reads
-// an adoption fact it was never given. A miss is the honest answer there, not a
-// wrong one.
+// newestSessionStart is the instant the newest transcript's session began, and
+// newestSessionID names it. Both read through `sessions`, so the pane and
+// doctor cannot disagree about what a session is or when it started.
 func newestSessionID(dirs []string) string {
 	path, ok := newestSessionTranscript(dirs)
 	if !ok {
 		return ""
 	}
-	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	return sessions.IDOf(path)
 }
 
 // newestTranscript returns the most recently modified *.jsonl anywhere under

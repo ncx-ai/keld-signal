@@ -42,6 +42,46 @@
         }
       ],
       "stale_session_id": "8f21c0de-4b17-4c2a-9a55-0f3e7d1b2c44"
+    },
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "installed": true,
+      "configured": true,
+      "supported": true,
+      "storage_class": "jsonl-tail",
+      "state": "working",
+      "tool_version": "0.153.4",
+      "surfaces": [
+        {
+          "kind": "hook",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        },
+        {
+          "kind": "otel",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        },
+        {
+          "kind": "watcher",
+          "documented": false,
+          "wired": true,
+          "expected": false
+        },
+        {
+          "kind": "reader",
+          "documented": false,
+          "wired": false,
+          "expected": false,
+          "waiting_on": "reader",
+          "instruction": "Signal captures this tool but cannot read its transcripts yet, so its prompts are not classified — nothing for you to do."
+        }
+      ]
     }
   ],
   "vocabulary": {

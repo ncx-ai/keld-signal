@@ -310,11 +310,19 @@ func ApplyEntry(e Entry, adapterFor func(string) (tools.Adapter, error), params 
 	if backup != "" {
 		backupPtr = &backup
 	}
+	// ⚠️ `configured_at` IS STAMPED HERE, WITH THE WRITE, and it is the only
+	// record of when keld configured this tool. The tools rewrite their own
+	// config files — measured 2026-09-18, Codex writing `hooks.state` at session
+	// start and Claude Code rewriting settings.json unprompted — so the file's
+	// mtime answers a different question, and answering the restart question
+	// with it told people to restart tools nobody had touched.
+	wroteAt := time.Now().UTC()
 	manifest.Tools[adapter.Name()] = config.ToolManifest{
-		Name:       adapter.Name(),
-		ConfigPath: plan.ConfigPath,
-		Managed:    plan.Managed,
-		BackupPath: backupPtr,
+		Name:         adapter.Name(),
+		ConfigPath:   plan.ConfigPath,
+		Managed:      plan.Managed,
+		BackupPath:   backupPtr,
+		ConfiguredAt: &wroteAt,
 	}
 	if err := manifest.Save(); err != nil {
 		return SetupResult{}, err

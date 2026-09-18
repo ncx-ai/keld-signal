@@ -563,6 +563,14 @@ fieldset:disabled { opacity: .55; }
   line-height: 1.5;
   max-width: 70ch;
 }
+/* The stale session id, under the sentence that says to restart. Monospace
+   because it is an identifier a person matches against a window title, and quiet
+   because it qualifies the instruction rather than adding a second one. */
+.intg-stale {
+  margin: 6px 0 0;
+  font: 400 11.5px var(--mono);
+  color: var(--muted);
+}
 .intg-unsupported { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font-size: 12.5px; }
 .intg-storage { font: 600 11px var(--mono); color: var(--ink-2); }
 .intg-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
