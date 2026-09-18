@@ -29,9 +29,15 @@ func entry(t *testing.T, id string) Entry {
 }
 
 // one runs Compute over a single entry and returns its row.
+//
+// ⚠️ **WITH `ToolOTLP` ON, BECAUSE THIS IS THE DECISION TABLE AND THE TABLE HAS
+// AN otel ROW.** The lane is opt-in as of the Developer switch, so on a default
+// machine it is not expected and rows 5 and 6 are not reachable at all — which
+// is a fact about the switch, pinned in toolotlp_test.go, not about the rule.
+// Asking for the lane here keeps every row of §4 exercised as written.
 func one(t *testing.T, e Entry, f Facts) Integration {
 	t.Helper()
-	rows := Compute(now, []Entry{e}, map[string]Facts{e.ID: f}, Options{Window: 24 * time.Hour})
+	rows := Compute(now, []Entry{e}, map[string]Facts{e.ID: f}, Options{Window: 24 * time.Hour, ToolOTLP: true})
 	if len(rows) != 1 {
 		t.Fatalf("Compute returned %d rows, want 1", len(rows))
 	}

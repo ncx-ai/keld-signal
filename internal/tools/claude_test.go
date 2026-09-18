@@ -11,7 +11,7 @@ import (
 
 func TestClaudeApplyStructural(t *testing.T) {
 	a := &ClaudeAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", ToolOTLP: true}
 	existing := "{\n  \"model\": \"x\"\n}\n"
 
 	plan := a.Apply(&existing, p, false)

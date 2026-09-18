@@ -41,11 +41,18 @@ func startIntegrationsDetector(ctx context.Context) *integrations.Detector {
 	d := &integrations.Detector{
 		Entries:   integrations.Catalogue,
 		AutoSetup: func() bool { return settings.Load().AutoSetupEnabled() },
-		Params:    integrationsSetupParams,
-		Emit:      lateEmitter{},
-		Log:       log.Printf,
+		// Read live, per tick, for the reason AutoSetup is: the page writes this
+		// toggle and a person who has just moved it expects the next poll to put
+		// the tool's config in step, not the next daemon restart.
+		ToolOTLP: func() bool { return settings.Load().ToolOTLPEnabled() },
+		Params:   integrationsSetupParams,
+		Emit:     lateEmitter{},
+		Log:      log.Printf,
 		Snapshot: func() []integrations.Integration {
-			return integrations.Snapshot(integrations.Deps{}, integrations.Options{}).Integrations
+			return integrations.Snapshot(
+				integrations.Deps{},
+				integrations.Options{ToolOTLP: settings.Load().ToolOTLPEnabled()},
+			).Integrations
 		},
 		Sink: currentIntegrationSink(),
 	}
@@ -78,6 +85,12 @@ func integrationsSetupParams() (tools.SetupParams, error) {
 		Endpoint:    "http://" + teleproxy.Addr(),
 		IngestToken: secret,
 		BinPath:     keldCLIPath(),
+		// ⚠️ Resolved per call, and OFF unless this machine says otherwise. The
+		// tool's own OTLP export is the one lane that needs a credential inside
+		// a tool's config, and Signal reads the same usage off the transcript,
+		// so it is opt-in behind the Developer switch while its removal is being
+		// evaluated. See settings.Settings.ToolOTLP.
+		ToolOTLP: settings.Load().ToolOTLPEnabled(),
 	}, nil
 }
 

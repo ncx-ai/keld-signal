@@ -24,7 +24,7 @@ func TestNoToolConfigCarriesAnAtlasCredential(t *testing.T) {
 		local    = "LOCAL-STABLE-SECRET"
 		atlasTok = "ATLAS-ORG-INGEST-TOKEN"
 	)
-	p := SetupParams{Endpoint: loopback, IngestToken: local, BinPath: "/usr/bin/keld"}
+	p := SetupParams{Endpoint: loopback, IngestToken: local, BinPath: "/usr/bin/keld", ToolOTLP: true}
 
 	outs := map[string]string{
 		"claude": fmt.Sprint(ClaudeEnv(p)),
@@ -50,7 +50,7 @@ func TestNoToolConfigCarriesAnAtlasCredential(t *testing.T) {
 // Whatever endpoint is handed in is what every writer emits — no writer may
 // substitute its own. This is what keeps the three tools from drifting apart.
 func TestEveryWriterHonoursTheEndpointItIsGiven(t *testing.T) {
-	p := SetupParams{Endpoint: "http://127.0.0.1:15999", IngestToken: "s", BinPath: "/usr/bin/keld"}
+	p := SetupParams{Endpoint: "http://127.0.0.1:15999", IngestToken: "s", BinPath: "/usr/bin/keld", ToolOTLP: true}
 	for name, out := range map[string]string{
 		"claude": fmt.Sprint(ClaudeEnv(p)),
 		"codex":  CodexBlockBody(p, "codex"),

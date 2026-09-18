@@ -195,20 +195,23 @@ func TestCatalogueExpectedLanesFollowSupportLevel(t *testing.T) {
 	if !codex.ReaderAvailable {
 		t.Fatal("codex.ReaderAvailable is false: readers/codex.py exists, and a false flag hides a broken reader as `idle`")
 	}
-	if got, want := codex.ExpectedLanes(codex.SupportLevel()), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
+	// ⚠️ `SupportLevel()` carries ToolOTLP false — the shipped default — so the
+	// otel lane is NOT in the answer. The lane is opt-in behind the Developer
+	// switch; toolotlp_test.go asserts both positions for all three tools.
+	if got, want := codex.ExpectedLanes(codex.SupportLevel()), []SurfaceKind{SurfaceHook, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
 		t.Errorf("codex expected lanes = %v, want %v", got, want)
 	}
 	// ...and the same table still says what a reader-less Codex would expect, so
 	// the rule stays readable rather than collapsing into today's answer.
-	noReader := SupportLevel{Supported: true, ReaderAvailable: false}
+	noReader := SupportLevel{Supported: true, ReaderAvailable: false, ToolOTLP: true}
 	if got, want := codex.ExpectedLanes(noReader), []SurfaceKind{SurfaceHook, SurfaceOTel}; !sameLanes(got, want) {
 		t.Errorf("codex expected lanes without a reader = %v, want %v", got, want)
 	}
 
-	if got, want := lanes(t, "claude_code", SupportLevel{Supported: true, ReaderAvailable: true}), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
+	if got, want := lanes(t, "claude_code", SupportLevel{Supported: true, ReaderAvailable: true, ToolOTLP: true}), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
 		t.Errorf("claude_code expected lanes = %v, want %v", got, want)
 	}
-	if got, want := lanes(t, "gemini_cli", SupportLevel{Supported: true}), []SurfaceKind{SurfaceOTel, SurfaceWatcher}; !sameLanes(got, want) {
+	if got, want := lanes(t, "gemini_cli", SupportLevel{Supported: true, ToolOTLP: true}), []SurfaceKind{SurfaceOTel, SurfaceWatcher}; !sameLanes(got, want) {
 		t.Errorf("gemini_cli expected lanes = %v, want %v", got, want)
 	}
 	// Cowork runs in a VM: no hook can reach the host daemon and its egress to

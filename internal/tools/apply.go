@@ -37,6 +37,24 @@ func ConfiguredOnDisk(a Adapter, managed map[string]any) bool {
 	return ConfiguredAt(a, a.ConfigPath(), managed)
 }
 
+// OTLPOnDisk reports whether the tool's config on disk currently carries keld's
+// OTLP wiring — the sibling of ConfiguredOnDisk, asked of the same file by the
+// same Status call.
+//
+// ⚠️ It reads the FILE, never the manifest. The manifest records that keld
+// configured this tool; it does not record which lanes were written, and it
+// cannot, because the answer changes whenever someone moves the `tool_otlp`
+// switch. This is the fact the detector compares against that switch to decide
+// whether the machine still agrees with it.
+func OTLPOnDisk(a Adapter, managed map[string]any) bool {
+	var current *string
+	if data, err := os.ReadFile(a.ConfigPath()); err == nil {
+		s := string(data)
+		current = &s
+	}
+	return a.Status(current, managed).OTLP
+}
+
 // ConfiguredAt is ConfiguredOnDisk against an EXPLICIT path: the one the
 // manifest recorded at setup time, which is what `keld signal doctor` has
 // always compared against. The two paths are the same file on every ordinary

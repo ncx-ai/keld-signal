@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
 
@@ -121,9 +122,19 @@ func (a *CodexAdapter) Apply(currentText *string, p SetupParams, replace bool) P
 		ConfigPath: a.ConfigPath(),
 		AfterText:  after,
 		Managed:    map[string]any{"block": true, "created": currentText == nil},
-		Summary:    []string{"add [otel] + SessionStart/UserPromptSubmit/Stop hooks block"},
+		Summary:    []string{codexApplySummary(p)},
 		Changed:    after != ptrToStr(currentText),
 	}
+}
+
+// codexApplySummary names what this apply actually puts in the block. With the
+// OTLP lane off the block is the hooks and nothing else, and saying "[otel]"
+// there would describe a table the write is removing.
+func codexApplySummary(p SetupParams) string {
+	if !p.ToolOTLP {
+		return "add SessionStart/UserPromptSubmit/Stop hooks block (" + otelOffSummary + ")"
+	}
+	return "add [otel] + SessionStart/UserPromptSubmit/Stop hooks block"
 }
 
 // Remove strips the keld-managed block from the Codex config.toml.
@@ -139,7 +150,15 @@ func (a *CodexAdapter) Remove(currentText *string, managed map[string]any) Plan 
 	}
 }
 
-// Status reports whether Codex is installed (Detect) and configured with keld's block.
+// Status reports whether Codex is installed (Detect) and configured with keld's
+// block, and whether that block currently carries the [otel] table.
+//
+// ⚠️ `configured` is unchanged by the tool_otlp switch — keld's marker block is
+// written in both positions, because the hooks live in it — so only the OTLP
+// half is new. The [otel] table is looked for INSIDE the keld block: Codex users
+// are free to keep an [otel] table of their own, and reporting theirs as keld's
+// would have the detector rewrite the file trying to remove something it does
+// not own.
 func (a *CodexAdapter) Status(currentText *string, managed map[string]any) ToolStatus {
 	text := ptrToStr(currentText)
 	configured := config.HasKeldBlock(text)
@@ -151,6 +170,7 @@ func (a *CodexAdapter) Status(currentText *string, managed map[string]any) ToolS
 		Name:       a.Name(),
 		Installed:  a.Detect(),
 		Configured: configured,
+		OTLP:       configured && strings.Contains(config.KeldBlockBody(text), "[otel]"),
 		Detail:     detail,
 	}
 }

@@ -46,6 +46,11 @@ type Detector struct {
 	// writes the toggle and a person who turns it off expects the next poll to
 	// respect that, not the next daemon restart.
 	AutoSetup func() bool
+	// ToolOTLP is the Developer switch, read LIVE per tick for the reason
+	// AutoSetup is: a person who has just moved it expects the next poll to
+	// act on it, not the next daemon restart. Nil means OFF, matching the
+	// setting's own default and `tools.SetupParams`' zero value.
+	ToolOTLP func() bool
 	// Params are the telemetry parameters written into a tool's config — the
 	// daemon's loopback address and the LOCAL secret, never Atlas's URL and
 	// never the org ingest token.
@@ -194,6 +199,30 @@ func (d *Detector) hookCommandBroken(e Entry) bool {
 	return hookCommandBroken(*current)
 }
 
+// wantToolOTLP is the Developer switch's current position; nil means off.
+func (d *Detector) wantToolOTLP() bool { return d.ToolOTLP != nil && d.ToolOTLP() }
+
+// otlpDisagrees reports whether this tool's config on disk is out of step with
+// the `tool_otlp` switch — it carries keld's OTLP wiring while the switch is
+// off, or lacks it while the switch is on.
+//
+// ⚠️ **IT IS THE ONLY WAY A CONFIG THE MANIFEST ALREADY RECORDS GETS THE BLOCK
+// REMOVED.** The detector deliberately never edits a config it has already
+// written, so without this a machine an earlier keld configured would keep its
+// OTEL block — and the credential in it — for as long as the manifest entry
+// lived, however the switch was set. It is the same narrow exception
+// `hookCommandBroken` is, and it settles the same way: the answer is read back
+// off the file the apply just wrote, so a successful write makes it false and
+// the next poll takes the "nothing to do" branch. `TestApplyIsIdempotentInEither
+// Position` one package over is what pins that it cannot oscillate.
+func (d *Detector) otlpDisagrees(e Entry) bool {
+	adapter, err := d.adapterFor(e.AdapterName)
+	if err != nil || adapter == nil {
+		return false
+	}
+	return tools.OTLPOnDisk(adapter, nil) != d.wantToolOTLP()
+}
+
 // maybeConfigure applies one entry's adapter, subject to every refusal.
 func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 	switch {
@@ -203,7 +232,7 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		return
 	case d.AutoSetup == nil || !d.AutoSetup():
 		return
-	case Configured(e, manifest) && !d.hookCommandBroken(e):
+	case Configured(e, manifest) && !d.hookCommandBroken(e) && !d.otlpDisagrees(e):
 		// The daemon never edits a config the manifest already records —
 		// ⚠️ UNLESS what it records cannot execute. An upgrade preserves tool
 		// configs by design, so a keld that fixes the hook QUOTING can never
@@ -216,6 +245,12 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		// same ApplyEntry path a first-time setup uses, and `attempted` bounds
 		// it to one try per daemon life. A healthy row never reaches it,
 		// pinned by TestRepairIsIdempotent one package over.
+		//
+		// ⚠️ AND UNLESS THE CONFIG DISAGREES WITH THE `tool_otlp` SWITCH. That
+		// is the second exception, added with the Developer switch, and it is
+		// what makes the switch REVERSIBLE rather than one-way: a machine an
+		// earlier keld configured keeps its OTEL block otherwise, because the
+		// manifest records the tool and this branch returns. See otlpDisagrees.
 		return
 	case d.attempted[e.ID]:
 		return
@@ -242,6 +277,15 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 	if !res.RestartRequired {
 		return // nothing changed; the adapter had nothing to write
 	}
+	// ⚠️ A SUCCESSFUL WRITE RELEASES THE ONE-TRY BOUND. `attempted` exists to
+	// stop a CONFLICTING tool being retried every minute forever — the person
+	// owns that file and the pane's Set up button is how they ask again — and a
+	// write that succeeded is not that case. Holding it would make the
+	// `tool_otlp` switch move only once per daemon life: flip it on, and
+	// flipping it back off before a restart would silently do nothing. Releasing
+	// it cannot loop, because every trigger above is read back off the file this
+	// write just produced, so a successful apply makes all of them false.
+	d.attempted[e.ID] = false
 
 	if d.Emit != nil {
 		d.Emit.Emit(EventConfigured, map[string]any{

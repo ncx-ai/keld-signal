@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/api"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -377,6 +378,15 @@ func newSetupCmd() *cobra.Command {
 				Endpoint:    tp.Endpoint,
 				IngestToken: tp.Secret,
 				BinPath:     resolveSetupBinPath(binPath),
+				// ⚠️ The tool's OWN OTLP export is opt-in and OFF by default.
+				// Signal reads the same usage off the tool's transcript, and
+				// this is the one lane that requires a credential to live inside
+				// a file the tool reads once at startup — so setup writes no
+				// OTEL block unless this machine asked for one, and takes out a
+				// block an earlier keld left. Same resolution the daemon's
+				// detector uses, so a machine set up by hand and one set up by
+				// the poll agree. See settings.Settings.ToolOTLP.
+				ToolOTLP: settings.Load().ToolOTLPEnabled(),
 			}
 
 			opts := SetupOpts{

@@ -24,6 +24,19 @@ type Options struct {
 	Window time.Duration
 	// AutoSetup is reported on the Response, not used by the rule.
 	AutoSetup bool
+	// ToolOTLP is the Developer switch (settings.Settings.ToolOTLPEnabled, off
+	// by default): whether this machine asks a tool to export OTLP at all.
+	//
+	// ⚠️ It reaches the rule ONLY as part of the SupportLevel Compute evaluates
+	// ExpectedLanes against — there is no second test for it anywhere in this
+	// file, and adding one would be the second copy AC-8 forbids. With the
+	// switch off keld writes no OTEL block, so the lane is not expected, and by
+	// the existing rule an unexpected lane contributes neither half of `broken`.
+	//
+	// The zero value is off, which matches the product default: a caller that
+	// has not resolved the setting gets the shipped behaviour rather than a
+	// lane it never wrote being blamed for silence.
+	ToolOTLP bool
 }
 
 // Window resolves the effective look-back: the explicit option, else the env
@@ -76,13 +89,14 @@ func Compute(now time.Time, entries []Entry, facts map[string]Facts, opts Option
 	window := opts.window()
 	out := make([]Integration, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, computeOne(now, window, e, facts[e.ID]))
+		out = append(out, computeOne(now, window, e, facts[e.ID], opts.ToolOTLP))
 	}
 	return out
 }
 
-func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integration {
+func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP bool) Integration {
 	level := e.SupportLevel()
+	level.ToolOTLP = toolOTLP
 	expected := map[SurfaceKind]bool{}
 	for _, k := range e.ExpectedLanes(level) {
 		expected[k] = true
