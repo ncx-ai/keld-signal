@@ -114,12 +114,24 @@ async function freePort(): Promise<number> {
   });
 }
 
-type Shell = { url: string; serve: (body: unknown) => void; close: () => Promise<void> };
+type Shell = {
+  url: string;
+  serve: (body: unknown) => void;
+  /** What GET /v1/settings answers with, and what a PUT merges into. The
+   *  Developer box is rendered from this, so a spec that drives the switch
+   *  reads its own writes exactly as the page does. */
+  settings: Record<string, unknown>;
+  close: () => Promise<void>;
+};
 
 async function startShell(): Promise<Shell> {
   // What the pane under test is handed. Mutable so one page can be re-polled
   // with a different answer (the poll is what a real state change arrives on).
   let integrations: unknown = { integrations: [], vocabulary: { states: [], waiting_on: [] }, auto_setup: true };
+  // The page's Settings pane state. `readonly: []` because no env var pins
+  // anything here; `tool_otlp` is absent, which is what a daemon that has never
+  // been told otherwise answers — and the row must render OFF from that.
+  const settings: Record<string, unknown> = { readonly: [] };
 
   const json = (res: http.ServerResponse, body: unknown, status = 200) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -139,8 +151,33 @@ async function startShell(): Promise<Shell> {
     // The rest of the page's boot. Minimal but valid: an empty ledger and empty
     // settings are what a machine that has done no work yet answers, and the
     // integrations pane must not depend on any of it.
-    if (p === "/v1/ledger") return json(res, { generated_at: "2026-09-15T09:13:00Z", blocks: [], health: [] });
-    if (p === "/v1/settings") return json(res, {});
+    // A daemon health row with a detail is what draws the version in the
+    // sidebar — which is the control developer mode is reached through, so
+    // without it the seven taps have nothing to land on.
+    if (p === "/v1/ledger")
+      return json(res, {
+        generated_at: "2026-09-15T09:13:00Z",
+        blocks: [],
+        health: [{ key: "daemon", status: "ok", detail: "3.0.0" }],
+      });
+    if (p === "/v1/settings") {
+      if (req.method === "PUT") {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          try {
+            Object.assign(settings, JSON.parse(body || "{}"));
+          } catch {
+            /* a malformed body is the test's bug, and an empty merge shows it */
+          }
+          // No daemon restart for tool_otlp: the detector reads it live and the
+          // restart that IS needed belongs to the tool. See ingress/settings.go.
+          json(res, { restart_required: false });
+        });
+        return;
+      }
+      return json(res, settings);
+    }
     if (p === "/v1/projects") return json(res, { projects: [] });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
@@ -162,6 +199,7 @@ async function startShell(): Promise<Shell> {
     serve: (body) => {
       integrations = body;
     },
+    settings,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
@@ -432,5 +470,129 @@ test.describe("no state logic in JavaScript", () => {
     // No switch over states, and no map keyed by them.
     expect(/switch\s*\(\s*[\w.]*[Ss]tate/.test(section)).toBe(false);
     expect(section).toContain("vocabulary");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Developer switch that turns the tool's own OTLP export off
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ **THE LANE IS OFF BY DEFAULT AND SCHEDULED FOR REMOVAL.** Signal reads a
+ * tool's usage from the tool's own transcript; the OTLP export adds nothing
+ * Atlas prices, and it is the one lane that needs a credential inside a file the
+ * tool reads once at startup. It stays reachable behind the Developer box so
+ * someone can prove to themselves that nothing needed arrives only here.
+ *
+ * The copy is asserted VERBATIM rather than by substring: it carries a
+ * deprecation notice and a restart instruction, and a reworded half is exactly
+ * the kind of change that would go unnoticed.
+ */
+const TOOL_OTLP_TITLE = "Extended telemetry from the tool (OTLP)";
+const TOOL_OTLP_BODY =
+  "Off. Signal reads usage from the tool's own transcript; this lane is scheduled for removal " +
+  "once we have confirmed nothing we need arrives only here. Turning it on writes into the " +
+  "tool's configuration, and the tool must be restarted once to pick it up.";
+const TOOL_OTLP_RESTART = "Restart the tool once to pick this up.";
+
+/** The Settings pane, opened the way a person opens it. */
+async function openSettings(page: Page, shell: Shell): Promise<void> {
+  await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
+  await page.goto(`${shell.url}/?secret=irrelevant&n=${nonce++}#/settings`);
+  await expect(page.getByText("Loading…")).toBeHidden();
+  // The Environment tile's own label: unique, and drawn from nothing the
+  // Developer box depends on, so it settles the pane without vouching for it.
+  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
+}
+
+/** Developer mode, the way a person reaches it: seven taps on the version in the
+ *  sidebar, inside the tap window. ⚠️ The taps TOGGLE — call once per test. */
+async function enterDeveloperMode(page: Page): Promise<void> {
+  const version = page.locator("#navVersion");
+  await expect(version).toBeVisible();
+  for (let i = 0; i < 7; i++) await version.click();
+  await expect(page.getByText("Developer", { exact: true })).toBeVisible();
+}
+
+/** The row's switch. The input is visually hidden, so state is read off it and
+ *  clicks go to the label — the idiom `support/fixtures.ts` already uses. */
+function otlpSwitch(page: Page) {
+  const row = page.locator(".settings-row").filter({ has: page.getByText(TOOL_OTLP_TITLE, { exact: true }) });
+  return { control: row.locator("label.switch").first(), input: row.locator("input[type=checkbox]").first() };
+}
+
+test.describe("Developer · extended tool telemetry (OTLP)", () => {
+  test("the row is not reachable until developer mode is on", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    // The Atlas box is drawn; the developer rows under it are not.
+    await expect(page.getByText("Atlas", { exact: true })).toBeVisible();
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Developer", { exact: true })).toHaveCount(0);
+
+    await enterDeveloperMode(page);
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toBeVisible();
+  });
+
+  test("its title and body are the deprecation notice, verbatim, and it reads off", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    await enterDeveloperMode(page);
+
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(1);
+    await expect(page.getByText(TOOL_OTLP_BODY, { exact: true })).toHaveCount(1);
+    // A daemon that has never been told otherwise sends no `tool_otlp` at all,
+    // and the row must read that as OFF rather than as "unknown".
+    await expect(otlpSwitch(page).input).not.toBeChecked();
+    // Nothing tells anyone to restart anything while the lane is off.
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(0);
+  });
+
+  test("turning it on shows the restart instruction, once", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    await enterDeveloperMode(page);
+
+    const { control, input } = otlpSwitch(page);
+    await control.click();
+    await expect(input).toBeChecked();
+
+    // Once. Two copies of one instruction reads as two things to do.
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(1);
+    // And it is what the daemon was told, not just what the page drew.
+    await expect.poll(() => shell.settings.tool_otlp).toBe(true);
+    // Signal's own restart bar stays down: the restart belongs to the tool.
+    await expect(page.getByText("Signal restarts to apply this.")).toHaveCount(0);
+
+    // Off again takes the instruction away.
+    await control.click();
+    await expect(input).not.toBeChecked();
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(0);
+    await expect.poll(() => shell.settings.tool_otlp).toBe(false);
+  });
+
+  /**
+   * ⚠️ **NO FIXTURE MAY RENDER `broken · otel` WHILE THE SWITCH IS OFF**, and
+   * this is checked over EVERY fixture rather than over one: with the lane not
+   * expected, `Compute` cannot produce that pair at all (pinned Go-side in
+   * `integrations/toolotlp_test.go`), so a fixture that showed it would be
+   * teaching the pane a state the server can no longer send.
+   */
+  test("no fixture renders a broken otel lane", async ({ page, shell }) => {
+    const files = fs.readdirSync(FIXTURES).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const body = JSON.parse(fs.readFileSync(path.join(FIXTURES, file), "utf8")) as {
+        integrations?: Array<{ id: string; state: string; broken_lane?: string }>;
+      };
+      for (const row of body.integrations || []) {
+        expect(
+          row.state === "broken" && row.broken_lane === "otel",
+          `${file}: ${row.id} is broken · otel, which the server cannot produce with tool_otlp off`
+        ).toBe(false);
+      }
+      shell.serve(body);
+      await openPane(page, shell, WIDTHS[0]);
+      // Rendered, too: the pane names the silent lane in the checklist, so a
+      // fixture sneaking it in another way would still show here.
+      await expect(page.locator('.intg-check[data-kind="otel"]').filter({ hasText: "nothing arrived" })).toHaveCount(0);
+    }
   });
 });

@@ -143,7 +143,7 @@ calls `Compute` once. Neither may trigger a model load or a download.
 | `kind` | `hook` \| `otel` \| `watcher` \| `extension` \| `reader` |
 | `documented` | the **TOOL** documents this lane. `false` is the lane a tool release breaks silently — tailing a transcript format nobody promised. |
 | `wired` | the config **on disk** is what the adapter would write, read back now — never remembered (AC-1) |
-| `expected` | this lane can feed at the tool's current support level. A lane that is not expected can never make the tool `broken`. |
+| `expected` | this lane can feed at the tool's current support level. A lane that is not expected can never make the tool `broken`. ⚠️ The `otel` lane is `false` here unless `tool_otlp` is on, which it is not by default — the example above is a machine that turned it on. |
 | `last_seen` | the last instant this lane carried something for this tool; **omitted** when never seen. It is an instant on disk, so a daemon restart does not erase it. |
 | `waiting_on` | `""` \| `restart` \| `approval` \| `reader`; omitted when `""` |
 | `instruction` | present whenever `waiting_on` is set; the sentences are fixed and quoted verbatim in §4 |
@@ -153,7 +153,21 @@ The lanes, and where each fact comes from:
 - **hook** — the tool runs `keld __hook`, which posts a prompt pointer. Last
   pointer with `Origin: spool.OriginHook` for this source.
 - **otel** — the tool posts OTLP to the loopback telemetry proxy. Teleproxy's
-  **per-source** last forward (`teleproxy.LastForwardForSource`). ⚠️ It used to
+  **per-source** last forward (`teleproxy.LastForwardForSource`).
+  ⚠️ **OPT-IN AND OFF BY DEFAULT SINCE 2026-09-18** (`tool_otlp` in
+  `~/.keld/agent-config.json`, `KELD_TOOL_OTLP` in both directions; a Developer
+  row on the Settings page). Signal reads a tool's usage from the tool's OWN
+  TRANSCRIPT, so this lane carries nothing Atlas prices — and it is the only
+  lane that requires a credential to live inside a tool's config file, which is
+  why it is the one that keeps breaking: a tool reads that file once, at
+  startup, so a rotation, a moved endpoint or a keld upgrade leaves a stale copy
+  inside a process nothing on the machine can inspect. It stays in the product,
+  behind the switch, so "nothing we need arrives only here" can be CHECKED
+  before the lane is removed. With the switch off `keld signal setup` and the
+  detector write no OTEL block and REMOVE one an earlier keld left, and the lane
+  is `expected: false` — so by the rule above it can contribute neither half of
+  `broken`. Local only: no remote override, the reasoning `attribution` and
+  `dev_blocks` already carry. ⚠️ It used to
   be the machine-wide instant answered for every source, which supplied the
   ACTIVE half of `broken` out of a *different* tool's traffic: a tool nobody had
   used read `broken · watcher` off Claude Code's telemetry. The machine-wide
@@ -212,6 +226,12 @@ say how quiet real machines get, not a measurement.
 | 8 | yes | yes | >0 | >0 | yes | `working` |
 | 9 | unsupported entry | — | — | — | — | `unsupported`, storage class shown |
 
+⚠️ **Rows 5 and 6 turn on the `otel` lane, so with `tool_otlp` off they are not
+reachable at all.** The telemetry column then reads "—": the lane is not
+expected, so neither its silence nor its activity is evidence about the tool.
+Row 6 (`broken · otel`) is unproducible; row 5's silent hook is still reported
+as `broken · hook` when some OTHER expected lane is active.
+
 ## 4 · `waiting_on` and its instructions
 
 Four values; `""` is a member and means *waiting on nothing*, stated rather than
@@ -239,17 +259,25 @@ so a test or the conformance harness isolates it by setting `HOME`.
 
 | id | display name | adapter | config dir | storage class | supported | reader | expected lanes |
 |---|---|---|---|---|---|---|---|
-| `claude_code` | Claude Code | `claude_code` | `~/.claude` | jsonl-tail | yes | yes | hook, otel, watcher, reader |
-| `codex` | Codex | `codex` | `~/.codex` | jsonl-tail | yes | **no** | hook, otel |
-| `gemini_cli` | Gemini CLI | **`gemini`** | `~/.gemini` | jsonl-tail | yes | no | otel, watcher |
+| `claude_code` | Claude Code | `claude_code` | `~/.claude` | jsonl-tail | yes | yes | hook, watcher, reader (+ `otel` *) |
+| `codex` | Codex | `codex` | `~/.codex` | jsonl-tail | yes | **no** | hook (+ `otel` *) |
+| `gemini_cli` | Gemini CLI | **`gemini`** | `~/.gemini` | jsonl-tail | yes | no | watcher (+ `otel` *) |
 | `cowork` | Cowork | — | `~/Library/Application Support/Claude/local-agent-mode-sessions` | jsonl-tail | yes | yes | watcher |
 | `pi` | Pi | — | `~/.pi/agent` | jsonl-tail | **no** | no | *(none)* |
 | `antigravity` | Antigravity | — | `~/.antigravity` | rpc | **no** | no | *(none)* |
 | `cursor` | Cursor | — | `~/.cursor` | db-poll | **no** | no | *(none)* |
 
+\* **`otel` is expected only while `tool_otlp` is on, and it is OFF by
+default.** The lane is opt-in behind a Developer row on the Settings page while
+its removal is being evaluated — see its note in §2 for why. On a default
+machine it is listed, unwired and `expected: false`, which is the same shape
+Codex's `reader` lane had before WS-D: shown so that a lane with no traffic and
+a lane nothing asked to speak do not look alike.
+
 Why each expected set is what it is:
 
-- **Claude Code** feeds all four lanes today.
+- **Claude Code** feeds all four lanes today — three of them by default, since
+  the tool's own OTLP export is opt-in.
 - **Codex** has no sidecar reader yet (WS-D). Its `reader` lane — and its
   `watcher` lane, whose only consumer is that reader — are listed and **not
   expected**, because expecting them would read `broken · reader` by
@@ -270,8 +298,12 @@ Why each expected set is what it is:
 
 `ExpectedLanes` is the one derivation of "expected"
 (`Entry.ExpectedLanes(level)`), evaluated against a `SupportLevel`
-(`{Supported, ReaderAvailable}`) rather than read off the entry inside the rule,
-so a test can ask what an entry *would* expect at a level it is not at yet.
+(`{Supported, ReaderAvailable, ToolOTLP}`) rather than read off the entry inside
+the rule, so a test can ask what an entry *would* expect at a level it is not at
+yet. ⚠️ `tool_otlp` reaches the rule ONLY through that level — `Options.ToolOTLP`
+→ `SupportLevel.ToolOTLP` → `ExpectedLanes` — and `Compute` tests it nowhere
+else. A second check for it would be the second copy of the rule AC-8 exists to
+prevent.
 
 ## 6 · What this package does NOT hold
 
