@@ -5,7 +5,13 @@
 //	transcript   the tool wrote a transcript under the root we expect
 //	pointer      the daemon was told about the prompt and acted on it
 //	store_rows   the sidecar ingested that session into the reference series
-//	telemetry    the tool's OTLP reached Atlas through the loopback proxy
+//	telemetry    this tool's usage reached Atlas as OTLP logs/metrics, by
+//	             EITHER path: the tool's own export through the loopback proxy
+//	             (`tool_otlp` on), or the daemon mirroring its transcript
+//	             (`tool_otlp` off, the default). The checkpoint counts POSTs at
+//	             the mock Atlas deliberately — it asks whether the usage
+//	             arrived, not which route carried it, which is why it stayed
+//	             meaningful when the default route changed.
 //	publish      a block or an enrichment reached Atlas
 //
 // The decision is a PURE function over already-gathered Facts (`Evaluate`), so
