@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one conformance chain against real tools, a mock model and a mock Atlas.
 #
-#   scripts/conformance/run-chain.sh --tool all [--chain A|B] [--seed N] [--work DIR]
+#   scripts/conformance/run-chain.sh --tool all [--chain A|B|C] [--seed N] [--work DIR]
 #   scripts/conformance/run-chain.sh --tool claude_code
 #   scripts/conformance/run-chain.sh --tool all --chain B --previous installed
 #   scripts/conformance/run-chain.sh --tool all --artifact dir:./artifacts
@@ -35,6 +35,22 @@
 #   before half  ->  PREVIOUS release  ->  prompts  ->  the release under test
 #     installed OVER it  ->  configs preserved, sidecar replaced, no version skew
 #     ->  prompts  ->  after half  ->  detector  ->  prompts
+#
+# Chain C — the DAY-THREE chain: a machine that has a HISTORY.
+#
+#   chain A's install + first session  ->  an older keld left ahead on PATH
+#     ->  three daemon restarts under a tool holding a credential
+#     ->  a setup re-run  ->  a RESUMED session  ->  a SECOND live window
+#     ->  a wall-clock jump (sleep/wake)  ->  an UNPAIRED pass, then pairing
+#     ->  the tool-OTLP switch on
+#
+# Chains A and B prove a machine can be INSTALLED and work for ten minutes.
+# Every failure the maintainer hit on 2026-09-18 needed history instead, and a
+# fresh machine has none — so none of those six defects is reachable by either
+# chain. ⚠️ Chain C is EXPECTED TO FAIL today: its steps are written against
+# behaviour four other workstreams are landing, and a step that cannot even be
+# EXPRESSED on this build reports `blocked: <what is missing>` rather than a
+# false pass. See lib/chainc.sh for each step's incident and its measurement.
 #
 # Chain B is the chain that would have caught the three-week sidecar skew
 # (AGENTS.md → Gotchas): a 2.3.0 daemon against an Aug 11 sidecar, publishing
@@ -77,7 +93,7 @@ while [ $# -gt 0 ]; do
     --previous) PREVIOUS=$2; shift 2 ;;
     --artifact) ARTIFACT=$2; shift 2 ;;
     -h|--help)
-      sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,64p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "run-chain.sh: unknown flag $1" >&2; exit 2 ;;
   esac
@@ -104,14 +120,16 @@ LIB=$(cd "$(dirname "$0")/lib" && pwd)
 . "$LIB/tools.sh"
 # shellcheck source=lib/checkpoints.sh
 . "$LIB/checkpoints.sh"
+# shellcheck source=lib/chainc.sh
+. "$LIB/chainc.sh"
 
 # ⚠️ FIRST LINE.
 echo "seed: $SEED"
 echo "chain: $CHAIN   host: $(uname -s) $(uname -m)"
 
 case "$CHAIN" in
-  A|B) ;;
-  *) echo "run-chain.sh: unknown chain $CHAIN (A or B)" >&2; exit 2 ;;
+  A|B|C) ;;
+  *) echo "run-chain.sh: unknown chain $CHAIN (A, B or C)" >&2; exit 2 ;;
 esac
 
 # --- the tool list and the seeded split --------------------------------------
@@ -771,28 +789,88 @@ done
 # checkout's serve.py — the only "new" sidecar a local run has.
 UNDER_TEST_SIDECAR=${KELD_CONFORM_NEW_SIDECAR:-worktree}
 
-if [ "$CHAIN" = "A" ]; then
-  STEPS="step_before_install step_signal_install step_before_prompts step_detect step_after_prompts"
-else
-  STEPS="step_before_install step_prev_install step_prev_prompts step_skew_control step_upgrade step_upgraded_prompts step_detect step_after_prompts"
-fi
+case "$CHAIN" in
+  A) STEPS="step_before_install step_signal_install step_before_prompts step_detect step_after_prompts" ;;
+  B) STEPS="step_before_install step_prev_install step_prev_prompts step_skew_control step_upgrade step_upgraded_prompts step_detect step_after_prompts" ;;
+  # ⚠️ **CHAIN C OPENS WITH CHAIN A'S OWN STEPS, BY NAME, NOT WITH A COPY OF
+  # THEM.** Day three needs day one to have happened, and a second copy of
+  # "install Signal, configure a tool, drive a session, read the checkpoints"
+  # is precisely the drift this harness exists to prevent — the day one of them
+  # learned something the other did not, chain C would be proving day three
+  # against a machine nobody ships. Everything after those three is chain C's
+  # own, and lives in lib/chainc.sh.
+  C) STEPS="step_before_install step_signal_install step_before_prompts \
+            step_c_old_binary step_c_daemon_restarts step_c_setup_rerun \
+            step_c_resume step_c_second_window step_c_sleep_wake \
+            step_c_unpaired step_c_otlp_switch"
+     # ⚠️ **CHAIN C TURNS THE TOOL'S OWN OTLP LANE ON, AND HAS TO SAY SO.**
+     # Since WS3 it is opt-in (`tool_otlp`, default OFF), so on a default
+     # machine `keld signal setup` writes no OTEL block at all and the tool
+     # holds NO credential. Three of this chain's incidents are about a tool
+     # that holds one — the 18-minute silence after three daemon restarts, the
+     # setup re-run that left a secret the proxy 401s, and the switch's own step
+     # — and none of them exists on a machine without the lane. So the chain
+     # asks for the machine the incidents happened on.
+     #
+     # That the DEFAULT machine cannot have those three failures is WS3's
+     # mitigation working, not a gap in this chain, and it is worth stating
+     # rather than discovering: a reader who sees these steps pass should know
+     # they ran against the opt-in configuration.
+     export KELD_TOOL_OTLP=${KELD_TOOL_OTLP:-1}
+     echo "conformance: chain C runs with KELD_TOOL_OTLP=$KELD_TOOL_OTLP — the tool's own OTLP lane is opt-in since WS3, and three of this chain's incidents need it"
+     ;;
+esac
+
+# ⚠️ **KEEP_GOING IS OFF BY DEFAULT AND MUST STAY THAT WAY.** Stopping at the
+# first failure is what makes one break read as one break; a later step running
+# on a machine an earlier step left in a state no user is ever in produces
+# verdicts nobody can act on. It exists for ONE job — surveying a chain that is
+# expected to fail in several places at once, which chain C is today — and
+# every step it runs past a failure is labelled as such, so a report cannot
+# quietly present a survey as a chain.
+KEEP_GOING=${KELD_CONFORM_KEEP_GOING:-0}
 
 FAILED_STEP=""
+FAILED_STEPS=""
+BLOCKED_STEPS=""
 for fn in $STEPS; do
-  if [ -n "$FAILED_STEP" ]; then
+  if [ -n "$FAILED_STEP" ] && [ "$KEEP_GOING" != "1" ]; then
     echo "conformance: SKIPPED ${fn#step_} (chain stopped at $FAILED_STEP, seed $SEED)"
     continue
   fi
+  [ -n "$FAILED_STEP" ] && echo "conformance: ⚠️  ${fn#step_} runs AFTER a failed step (KELD_CONFORM_KEEP_GOING=1) — its verdict is a survey, not a chain result"
+  # ⚠️ Cleared per step, never per chain: a step that reports blocked must not
+  # make the next one look blocked too.
+  STEP_BLOCKED=""
   if ! "$fn"; then
-    FAILED_STEP=$STEP
-    echo "conformance: chain $CHAIN stopped at step $FAILED_STEP [seed $SEED]" >&2
+    [ -n "$FAILED_STEP" ] || FAILED_STEP=$STEP
+    FAILED_STEPS="${FAILED_STEPS}${FAILED_STEPS:+ }$STEP"
+    echo "conformance: chain $CHAIN step $STEP FAILED [seed $SEED]" >&2
   fi
 done
 
 echo
+# ⚠️ **BLOCKED IS REPORTED WHETHER THE CHAIN PASSED OR FAILED.** A step that
+# could not be EXPRESSED on this build proved nothing, and a headline that said
+# only PASS would be claiming coverage the run does not have — the same
+# confident-negative failure the checkpoints refuse one level down.
+if [ -n "$BLOCKED_STEPS" ]; then
+  say "BLOCKED steps (nothing was proved by these):"
+  printf '%s\n' "$BLOCKED_STEPS" | while IFS= read -r l; do say "  $l"; done
+fi
 if [ -n "$FAILED_STEP" ]; then
-  say "FAIL — chain $CHAIN, seed $SEED, stopped at step $FAILED_STEP"
+  if [ "$KEEP_GOING" = "1" ]; then
+    say "FAIL — chain $CHAIN, seed $SEED, failed steps: $FAILED_STEPS"
+    say "  (KELD_CONFORM_KEEP_GOING=1: every step after the first failure ran on a"
+    say "   machine an earlier step had already broken — read these as a survey.)"
+  else
+    say "FAIL — chain $CHAIN, seed $SEED, stopped at step $FAILED_STEP"
+  fi
   exit 1
 fi
-say "PASS — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+if [ -n "$BLOCKED_STEPS" ]; then
+  say "PASS (with blocked steps) — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+else
+  say "PASS — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+fi
 for t in $TOOLS; do say "  $(tool_display "$t") $(tool_version_of "$t")"; done
