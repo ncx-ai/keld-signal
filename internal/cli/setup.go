@@ -110,6 +110,23 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			"tools must point at the daemon's telemetry proxy and hold only the local secret " +
 			"(see docs/superpowers/specs/2026-08-27-telemetry-loopback-proxy-design.md)")
 	}
+	// ⚠️ THE OLDER OF TWO INSTALLS MUST NOT WRITE THE MACHINE'S TOOL CONFIGS.
+	// Measured 2026-09-18: a keld 3.0.0-rc.3 at /usr/local/keld/keld wrote
+	// telemetry secret a5629e92… into ~/.codex/config.toml and
+	// ~/.claude/settings.json while the running proxy held 26908e20…, because
+	// that binary predates the secret having a file of its own. Codex's
+	// telemetry was dead and setup had reported success.
+	//
+	// Checked BEFORE anything is read or written, so the refusal costs nothing
+	// and leaves nothing half-done. A dry run is exempt: it changes nothing, and
+	// the wizard's preview pane runs it before anyone has agreed to anything.
+	if !opts.DryRun {
+		if path, ver := newerKeldOnPATH(version.CLI); path != "" {
+			console.Print("")
+			console.Print(fmt.Sprintf("  ✗ A newer keld (%s) is on PATH at %s", ver, path))
+			return nil, shadowedByNewerKeld(path, ver, version.CLI)
+		}
+	}
 	quiet := opts.Emit != nil
 	emit := func(e SetupEvent) {
 		if opts.Emit != nil {
@@ -282,6 +299,38 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	if err := manifest.Save(); err != nil {
 		return nil, err
 	}
+
+	// ⚠️ VERIFY WHAT WAS JUST WRITTEN, AGAINST THE PROXY THAT HAS TO ACCEPT IT.
+	// Every check above this point asks whether the tool configs were written
+	// correctly; none can tell whether the credential in them WORKS. On
+	// 2026-09-18 that gap was the whole failure: the files were written exactly
+	// as intended, with a secret the running daemon rejected, and setup said
+	// nothing. One loopback POST closes it.
+	//
+	// No daemon listening is NOT a failure — `keld-agent install` starts the
+	// service after this runs, so the ordinary first install has nothing to ask.
+	switch outcome, code := probeTelemetry(p.Endpoint, p.IngestToken); outcome {
+	case probeRejected:
+		// Leaving the rejected credential in place would leave the machine in
+		// the state the probe just proved broken, so the rollback is part of the
+		// refusal rather than a courtesy. The secret itself is never printed —
+		// a terminal, a CI log and an installer transcript are all places it
+		// would then live.
+		say("")
+		say(fmt.Sprintf("  ✗ The running daemon REJECTED (%d) the telemetry credential just written.", code))
+		say("    Your tools would have been configured with a secret it does not accept.")
+		say("    Rolling back the tool configs.")
+		if err := runRestore(manifest, nil, true, false, stdinConfirm); err != nil {
+			return nil, fmt.Errorf("telemetry credential rejected (%d) and the rollback failed: %w", code, err)
+		}
+		return nil, fmt.Errorf("the running daemon rejected the telemetry credential (HTTP %d); "+
+			"tool configs were rolled back. Restart the daemon (`keld-agent restart`) and re-run setup", code)
+	case probeUnverified:
+		say("")
+		say("  • could not verify (daemon not running) — the tools are configured;")
+		say("    the check runs against the loopback proxy, which starts with the agent.")
+	}
+
 	// A tool that is ALREADY RUNNING read its configuration at startup and will
 	// go on posting to the previous destination until it is restarted. Say so:
 	// this is the one part of setup a human has to do, and it is invisible —

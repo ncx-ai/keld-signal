@@ -72,10 +72,53 @@ flowchart LR
   block to its own OTEL SDK and exports nothing. So detection was impossible and
   remediation could only ever be "ask the human to restart"; the fix is to stop
   handing the tool a credential. `keld signal setup` writes the loopback address
-  and a **stable local secret** (`agentcfg.TelemetrySecret`, generated once and
-  never rotated — unlike `Info.Secret`, regenerated every daemon start, which
-  would rebuild the bug one layer down and fire it daily). The token the daemon
-  attaches is read **per request**, so a rotation mid-flight is picked up.
+  and a **stable local secret**, generated once and never rotated — unlike
+  `Info.Secret`, regenerated every daemon start, which would rebuild the bug one
+  layer down and fire it daily. The token the daemon attaches is read **per
+  request**, so a rotation mid-flight is picked up.
+  ⚠️ **THAT SECRET NOW HAS ITS OWN FILE (`~/.keld/telemetry-secret`, 0600), AND
+  IT USED TO LIVE INSIDE `agent.json` — WHICH COST AN OUTAGE.** Measured
+  2026-09-18 on the maintainer's machine: `agent.json` held `26908e20…` while
+  `~/.codex/config.toml` and `~/.claude/settings.json` both held `a5629e92…`,
+  written at 17:34 by a `keld` 3.0.0-rc.3 still on PATH at
+  `/usr/local/keld/keld`. A probe POST to the running proxy with the tools'
+  token returned **401**: Codex's telemetry was dead, and Claude Code survived
+  only because its running process still held the older, correct value in memory
+  — it would have broken on its next restart. `agent.json` is rewritten by
+  several writers and the value was protected only by a preservation rule inside
+  `agentcfg.Write`, i.e. by every writer remembering to route through it. The
+  file is now the SOURCE OF TRUTH and `agentcfg.EnsureTelemetrySecrets` resolves
+  it; the value is still **mirrored into `agent.json`** (write-through) so an
+  older binary on the same machine reads the same secret rather than minting a
+  second one. ⚠️ **Migration ADOPTS, never mints**: on a machine upgrading from
+  the old layout the value in `agent.json` is moved into the file, because
+  generating a fresh one there 401s every already-configured tool at once, which
+  IS the incident. The file is deliberately **not** under `state/`, which
+  `keld signal uninstall` removes wholesale.
+  ⚠️ **A deliberate rotation is survivable rather than an outage.** The file is
+  a small JSON object (`{secret, previous, rotated_at}`; a bare-string file is
+  still read as the secret) and `teleproxy` accepts the retired value for
+  `KELD_TELEMETRY_SECRET_GRACE` (default **24h**) after the rotation instant, in
+  **all three credential shapes** — a grace honoured for Claude Code and Codex
+  but not for Gemini breaks one of a person's tools for reasons they cannot see.
+  An empty previous, or one with no recorded instant, authenticates nothing:
+  `ConstantTimeCompare("", "")` is 1, so that guard is what keeps the route from
+  failing open. Nothing in the product rotates on its own.
+  ⚠️ **AND `keld signal setup` NOW REFUSES TWICE RATHER THAN REPORTING SUCCESS
+  ONTO A BROKEN MACHINE.** (1) After writing the tool configs it POSTs one empty
+  OTLP batch (`{"resourceLogs":[]}`) to the running proxy with the credential it
+  just wrote; a **401 restores the backups and exits non-zero**, because leaving
+  the rejected value in place is leaving the machine in the state the probe just
+  proved broken. **No daemon listening is NOT a failure** — `keld-agent install`
+  starts the service after setup runs and the macOS wizard onboards before the
+  daemon exists, so it says "could not verify (daemon not running)" and carries
+  on. (2) If another `keld` on PATH reports a **newer** version it refuses before
+  reading or writing anything and names the path — the incident's cause rather
+  than its symptom, since the mismatched secret was written by the older of two
+  installs. It reuses `keldPATHBinaries()`, doctor's own shadowed-binary
+  detection; `version.Newer` orders pre-releases (`3.0.0-rc.3 < 3.0.0`) and
+  answers **unknown** for `dev` or anything unparseable, so a source build never
+  accuses anyone.
   ⚠️ **The proxy accepts that secret in THREE shapes, because the tools do not
   agree on one**: `x-keld-ingest-token` (Claude Code, Codex), `?token=` in the
   URL (Gemini — its OTLP SDK cannot send a custom header at all), and
