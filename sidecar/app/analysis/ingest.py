@@ -78,6 +78,7 @@ from app.analysis.reconcile import reconcile
 # `_order_key` is transcript.py's ordering-only timestamp parser. Imported rather than
 # re-derived: the watermark is a comparison between two turn timestamps, which is exactly
 # what it is for, and a third timestamp parser in this package is a third thing to drift.
+from app.analysis.readers import reader_for
 from app.analysis.transcript import _order_key, tool_use_in, turns_in
 from app.analysis.workspace import new_evidence, resolve_workspace, scan_tool_use
 
@@ -244,14 +245,20 @@ def session_of(path):
 
 
 def _scope(path):
-    """`(root, projdir)`, derived exactly as `analyze.analyze_window` derives them, and for the
-    reasons documented there: a transcript's path is `<root>/<projdir>/<session>.jsonl`, so the
-    collection root is recovered by two `dirname`s rather than by a second convention. Like
-    `analyze_window`, this layer passes `repo_root=()` — it has no configured filesystem
-    repo-root list to confirm a candidate checkout against, and needs none to resolve a
-    workspace from transcript evidence alone.
+    """`(root, projdir)` — THE READER'S, not a layout this module assumes.
+
+    For Claude Code a transcript's path is `<root>/<projdir>/<session>.jsonl`, so the collection
+    root is two `dirname`s up and `projdir` is the encoded launch directory. That was hard-coded
+    here and in `analyze.py`, which is two copies of one convention — and it is wrong for a Codex
+    rollout, whose path is `<sessions>/<YYYY>/<MM>/<DD>/rollout-….jsonl`: two `dirname`s would
+    make every MONTH its own reconcile scope and silently disable cross-session reattribution
+    within a session's own year.
+
+    Like `analyze_window`, this layer passes `repo_root=()` — it has no configured filesystem
+    repo-root list to confirm a candidate checkout against, and needs none to resolve a workspace
+    from transcript evidence alone.
     """
-    return os.path.dirname(os.path.dirname(path)), os.path.basename(os.path.dirname(path))
+    return reader_for(path).scope(path)
 
 
 def _head_fingerprint(path, nbytes=HEAD_BYTES):
@@ -406,11 +413,15 @@ def _load_state(store, path):
     for name, n in raw.get("remotes") or ():
         evidence[2][name] += n
     pending = [(tuple(b), rel, bool(fi), rt) for b, rel, fi, rt in raw.get("pending") or ()]
+    # `reader` is the READER's own carried state, and an absent key loads as empty. It needs no
+    # STATE_VERSION bump for the reason an added accumulator usually would: the Claude reader
+    # carries nothing, so every existing store is correct with an empty one, and no Codex session
+    # has ever been ingested by any released build, so there is no Codex state to repair.
     return (evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0),
-            set(raw.get("reqs") or ()))
+            set(raw.get("reqs") or ()), dict(raw.get("reader") or {}))
 
 
-def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
+def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=(), reader_carry=None):
     """The state as storable JSON. `reqs` is a SET on the way in and a sorted list on the way
     out: nothing reads it but a membership test, and sorting makes the stored blob a function of
     the file rather than of Python's iteration order — which is what lets two ingests of the same
@@ -436,6 +447,7 @@ def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
             "pending": [[list(b), rel, fi, rt] for b, rel, fi, rt in pending],
             "cwds": cwds,
             "reqs": sorted(reqs),
+            "reader": dict(reader_carry or {}),
             "lines": lines}
 
 
@@ -631,14 +643,20 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     session, (root, projdir) = session_of(path), _scope(path)
     lines, offsets, end_offset = _read_complete_lines(path, offset, size)
 
-    evidence, pending, cwds, prev_lines, reqs = ((new_evidence(), [], [], 0, set()) if reparse
-                                                 else _load_state(store, path))
+    # The reader is chosen by PATH ROOT and passed to both projections, because the line-shaped
+    # doors cannot work out which tool wrote a line they are handed out of context. One lookup,
+    # two projections: a batch read by two different readers is not a batch at all.
+    reader = reader_for(path)
+    evidence, pending, cwds, prev_lines, reqs, carry = (
+        (new_evidence(), [], [], 0, set(), {}) if reparse else _load_state(store, path))
     before = _answers(cwds, projdir, evidence)
-    scan_tool_use(tool_use_in(lines), into=evidence)
+    # The tool projection takes a COPY of the carry: it walks the same batch BEFORE the speech
+    # pass, and a shared dict would leave that pass reading state this one had already advanced.
+    scan_tool_use(tool_use_in(lines, reader=reader, carry=dict(carry)), into=evidence)
     if not reparse and _answers(cwds, projdir, evidence) != before:
         return None
 
-    turns = list(turns_in(lines))
+    turns = list(turns_in(lines, reader=reader, carry=carry))
     # `seen_requests=reqs` is MUTATED in place by the call, exactly as `evidence` is: a request
     # is written as several assistant lines, so the "cost this request once" rule spans batches
     # and cannot live inside one call. See `levels.events_for_turns`' `seen_requests` for the
@@ -649,11 +667,10 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
                                              resolved=resolved, seen_requests=reqs)
     pending += new_pending
     for o in turns:
-        cwd = o.get("cwd") or ""
-        if cwd not in cwds:
-            cwds.append(cwd)
+        if o.cwd not in cwds:
+            cwds.append(o.cwd)
     for o in turns:
-        watermark_ts = _latest(watermark_ts, o.get("timestamp"))
+        watermark_ts = _latest(watermark_ts, o.ts)
 
     # `source_line` is the absolute 1-based ordinal of the LAST transcript line this batch read
     # through -- a real position in the file, not a synthetic counter, so it stays meaningful
@@ -669,7 +686,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     # line is filtered out before that function sees it (see `capture.py`), and a byte offset is
     # not a property of a turn at all. One walk, no `json.loads`.
     capture_on = capture_mode() == "1"
-    outcomes, bin_offsets = capture.scan(lines, offsets) if capture_on else ([], {})
+    outcomes, bin_offsets = (capture.scan(lines, offsets, reader=reader) if capture_on
+                             else ([], {}))
     outcome_rows = []
     # `t` arrives already quantized, from the same arithmetic `capture.scan` binned the offset
     # with. Re-deriving it here is what let the two disagree across a bin boundary.
@@ -694,10 +712,11 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         # so indexing every turn it yields keeps resolution semantics identical -- an assistant
         # turn's uuid resolved then and must resolve now.
         #
-        # ⚠️ BOTH IDS, and indexing only `uuid` was a silent, total failure of the workstreams
-        # facet. A Claude Code user line carries TWO: `uuid` (unique per line) and `promptId`
-        # (the identity of the human TURN, shared by every follow-on line of it). The daemon
-        # names a prompt by `promptId` everywhere -- watch/filter.go REJECTS a line without one,
+        # ⚠️ BOTH IDS, and indexing only the per-line one was a silent, total failure of the
+        # workstreams facet. A Claude Code user line carries TWO: `uuid` (unique per line, the
+        # record's `line_id`) and `promptId` (the identity of the human TURN, shared by every
+        # follow-on line of it, the record's `prompt_id`). The daemon names a prompt by the
+        # latter everywhere -- watch/filter.go REJECTS a line without one,
         # the spool pointer carries it, and it is published to Atlas as `corr_id`, which Atlas
         # joins against ToolEvent.prompt_id. So `promptId` is the id this index is ASKED about,
         # and while it held only uuids every /analyze call 404'd, failing the pass and publishing
@@ -715,16 +734,15 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         # 8 minutes; resolving to the last would run every window minutes long.
         prompt_rows = []
         for o in turns:
-            o_ts = o.get("timestamp")
-            prompt_rows.append((o.get("uuid"), o_ts))
-            o_pid = o.get("promptId")
-            if o_pid:
-                prompt_rows.append((o_pid, o_ts))
+            prompt_rows.append((o.line_id, o.ts))
+            if o.prompt_id:
+                prompt_rows.append((o.prompt_id, o.ts))
         store.upsert_prompts(session, prompt_rows)
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
         store.set_parse_state(path,
-                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved, reqs))
+                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved, reqs,
+                                          reader_carry=carry))
         store.record_ingest(path, end_offset, size, _head_fingerprint(path),
                             os.path.getmtime(path), watermark_ts)
     return IngestResult(len(turns), watermark_ts, reparse)

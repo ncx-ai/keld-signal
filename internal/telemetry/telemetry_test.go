@@ -41,10 +41,14 @@ func TestClaudeEnvOrderAndHeaders(t *testing.T) {
 func TestCodexBlockBodyHasHooksAndOtel(t *testing.T) {
 	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
 	body := CodexBlockBody(p, "codex")
-	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", "keld __hook --source codex"} {
+	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.UserPromptSubmit]]", "[[hooks.Stop]]", "keld __hook --source codex"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\n%s", want, body)
 		}
+	}
+	// PreToolUse names no prompt and fires per tool call; it must not return.
+	if strings.Contains(body, "[[hooks.PreToolUse]]") {
+		t.Errorf("body registers PreToolUse\n%s", body)
 	}
 }
 
@@ -88,13 +92,14 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123"}
 	tm := GeminiTelemetry(p)
 
-	// The ingest token rides in the otlpEndpoint query (gemini can't carry an
-	// auth header in an untrusted workspace); the base host/path is preserved
-	// and no /v1/logs path is baked in (the SDK appends it).
+	// The ingest token rides in the otlpEndpoint PATH (gemini can't carry an
+	// auth header in an untrusted workspace, and the query form does not
+	// survive the SDK's path append — see endpointWithToken); the base host is
+	// preserved and no /v1/logs path is baked in (the SDK appends it).
 	otlpVal, _ := tm.Get("otlpEndpoint")
 	s, _ := otlpVal.(string)
-	if s != "https://api.gemini.example.com?token=tok123" {
-		t.Fatalf("otlpEndpoint should be base + ?token=, got %q", otlpVal)
+	if s != "https://api.gemini.example.com/t/tok123" {
+		t.Fatalf("otlpEndpoint should be base + /t/<token>, got %q", otlpVal)
 	}
 	if strings.Contains(s, "/v1/logs") {
 		t.Errorf("otlpEndpoint must not bake in a signal path: %q", s)
@@ -121,13 +126,19 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 		t.Errorf("logPrompts should be false, got %v", logPrompts)
 	}
 
-	// traces=false is the native knob that (with logPrompts) gates
-	// shouldIncludePayloads, keeping prompt/response bodies out of spans.
-	// Trace *export* itself cannot be disabled in gemini-cli, but stays
-	// content-free.
-	traces, ok := tm.Get("traces")
-	if !ok || traces != false {
-		t.Errorf("traces should be present and false, got %v (present=%v)", traces, ok)
+	// ⚠️ **`traces` MUST NOT BE WRITTEN, and this test used to REQUIRE it.**
+	// Current gemini-cli does not know the key, and rejects the whole telemetry
+	// block over it — printing "Invalid configuration in ~/.gemini/settings.json
+	// … Unrecognized key(s) in object: 'traces' … Please fix the configuration"
+	// on every invocation, about a file Keld wrote. Measured on 0.37.1: the
+	// strings `"traces"` and `shouldIncludePayloads` appear zero times in its
+	// bundle. `logPrompts: false`, asserted above, is the real control.
+	//
+	// The assertion is inverted rather than deleted so the key cannot come back
+	// as a "harmless" hardening.
+	if _, ok := tm.Get("traces"); ok {
+		t.Error("traces must not be written: gemini-cli rejects the telemetry " +
+			"block over it and blames the user's settings file")
 	}
 
 	// The token is intentionally in otlpEndpoint and NOWHERE else.
@@ -143,16 +154,23 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 }
 
 func TestGeminiTelemetryTokenEndpointIsURLEncodable(t *testing.T) {
-	// A token with a URL-special char must be safely query-escaped so the
-	// resulting otlpEndpoint is still a valid parseable URL.
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "a b/c&d"}
+	// A token with URL-special chars must be escaped on the wire and decode
+	// back to the SAME secret — or the proxy compares the wrong bytes and 401s
+	// every export. (Double-escaping is the live failure mode here: writing an
+	// already-escaped token into url.URL.Path escapes the percent signs again.)
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "a b&d"}
 	tm := GeminiTelemetry(p)
 	otlpVal, _ := tm.Get("otlpEndpoint")
-	u, err := url.Parse(otlpVal.(string))
+	raw := otlpVal.(string)
+	if strings.Contains(raw, " ") {
+		t.Errorf("the endpoint must be escaped on the wire: %q", raw)
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("otlpEndpoint not a valid URL: %v", err)
 	}
-	if got := u.Query().Get("token"); got != "a b/c&d" {
-		t.Fatalf("token round-trip failed: got %q", got)
+	// u.Path is the DECODED path — what a router hands a handler.
+	if want := "/t/a b&d"; u.Path != want {
+		t.Fatalf("decoded path = %q, want %q", u.Path, want)
 	}
 }

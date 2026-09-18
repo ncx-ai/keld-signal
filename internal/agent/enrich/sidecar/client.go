@@ -34,6 +34,9 @@ type Client struct {
 	// gliner2's own default — see lenstat for why a cap is required and how
 	// this value is derived from the machine's prompt-length distribution.
 	maxLen int
+	// devReasons admits the developer block boundary vocabulary. Set only by
+	// AdmitDevBlockReasons, from the one place the granularity is resolved.
+	devReasons bool
 }
 
 func New(baseURL string, timeout time.Duration) *Client {

@@ -8,20 +8,36 @@ import "errors"
 const WorkstreamSpanMinutes = 60
 
 // workstreamAnalyzableSources are the sources whose transcripts the window
-// analysis can actually read. It resolves a prompt by Claude-Code JSONL shape —
-// a line with "type":"user" and a matching "uuid" (see
-// sidecar/app/analysis/analyze.py:_prompt_time and transcript.py:iter_turns) —
-// which Cowork writes too, since it is Claude Code in a sandbox.
+// analysis can actually read — the one rule being that the sidecar has a READER
+// for that source's files and can resolve its prompt ids.
 //
-// Codex ("<sessionID>#<ordinal>") and Gemini ("<sessionId>########<ordinal>")
-// key their prompts differently over differently-shaped files, so the analysis
-// cannot find the prompt and answers 404. Left ungated, that failure would run
-// the pass, fail it, and downgrade EVERY Codex/Gemini job to
-// pipeline_status:"partial" in the default ml_backend mode — corrupting an
-// operational signal, one wasted sidecar round-trip at a time, for a facet that
-// could never have been produced. Extend this set only alongside a reader in
-// the analysis that resolves that source's prompt ids.
-var workstreamAnalyzableSources = map[string]bool{"claude_code": true, "cowork": true}
+// Claude Code and Cowork were the original two: the analysis read the Claude
+// JSONL shape directly, and Cowork writes it too, being Claude Code in a sandbox.
+//
+// ⚠️ CODEX JOINED 2026-09-15, and the entry is the LAST line of that work rather
+// than the first. Everything else had to exist before it could be true:
+// sidecar/app/analysis/readers/codex.py behind the normalised turn record, the
+// watcher and resolver keyed on turn_context.turn_id, and the hook registered on
+// UserPromptSubmit. Flipping it earlier would have run the pass, failed it, and
+// downgraded EVERY Codex job to pipeline_status:"partial" — corrupting an
+// operational signal, one wasted round-trip at a time, for a facet that could
+// never have been produced.
+//
+// ⚠️ THIS COMMENT USED TO SAY CODEX KEYS ITS PROMPTS "<sessionID>#<ordinal>",
+// AND THAT WAS NEVER TRUE OF A REAL FILE. Measured over 287 rollouts across 20
+// CLI versions: 0 of 4,076 user_message lines carry an ordinal the watcher could
+// have used, which is why Codex captured exactly zero prompts for its whole life
+// as a configured source. The id is <session_meta.id>#<turn_context.turn_id>.
+//
+// GEMINI IS STILL OUT, and for the stated reason rather than by omission: its
+// chat files are a different shape again and no reader reads them. Extend this
+// set only alongside a reader in the analysis that resolves that source's prompt
+// ids — that is the whole of the rule.
+var workstreamAnalyzableSources = map[string]bool{
+	"claude_code": true,
+	"cowork":      true,
+	"codex":       true,
+}
 
 // WorkstreamsEligible reports whether a source's transcripts can be read by the
 // window analysis (mirrors ContextEligible's shape).

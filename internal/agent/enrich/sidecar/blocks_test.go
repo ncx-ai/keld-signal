@@ -312,3 +312,74 @@ func TestBlocks503IsNotAnUnsupportedRoute(t *testing.T) {
 		t.Fatalf("503 must be neither success nor missing route: %+v", ans)
 	}
 }
+
+// ⚠️ **THE DEVELOPER GRANULARITY WAS DEAD ON ARRIVAL AND NOTHING SAID SO.**
+// `KELD_DEV_BLOCKS=prompt` makes the sidecar cut one block per human prompt, so
+// a test can produce a closed block in seconds instead of twenty minutes; it
+// names both boundaries `"prompt"`, deliberately, rather than borrowing
+// blocks.REASONS. This binary had never heard of that name, so the skew gate
+// above discarded every such block — with a bare `continue`. Measured in the
+// conformance chain: the sidecar holding one closed block, the emitter enabled,
+// no error reported anywhere, and zero blocks at Atlas. Four CI rounds went
+// into narrowing that from the outside.
+//
+// The default is unchanged — a binary nobody configured still refuses the name.
+func TestDevBlockReasonsAreRefusedUntilAdmitted(t *testing.T) {
+	body := map[string]any{
+		"blocks":    []any{oneBlock(9, "prompt", "prompt")},
+		"watermark": 3000.0,
+	}
+	srv := blocksServer(t, body, nil)
+	defer srv.Close()
+
+	ask := func(admit bool) enrich.BlocksAnswer {
+		c := New(srv.URL, 5*time.Second)
+		c.AdmitDevBlockReasons(admit)
+		return c.BlocksCharacterised("/t.jsonl", "claude_code", "s", nil,
+			time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+	}
+
+	// Default: refused, AND SAID SO. The count is the whole point — without it
+	// "the sidecar closed nothing" and "this binary threw away what it was
+	// handed" are the same observation from outside.
+	ans := ask(false)
+	if !ans.OK {
+		t.Fatal("not ok")
+	}
+	if len(ans.Blocks) != 0 {
+		t.Fatalf("an unadmitted dev reason must not publish: %+v", ans.Blocks)
+	}
+	if ans.DroppedUnreadableReason != 1 || ans.UnreadableReason != "prompt" {
+		t.Fatalf("the drop must be REPORTED, got dropped=%d reason=%q",
+			ans.DroppedUnreadableReason, ans.UnreadableReason)
+	}
+
+	// Admitted — which the daemon does only where settings.DevBlocksMode has
+	// already admitted the granularity, i.e. never against a real Atlas.
+	ans = ask(true)
+	if len(ans.Blocks) != 1 {
+		t.Fatalf("an admitted dev reason must publish, got %d blocks", len(ans.Blocks))
+	}
+	if ans.Blocks[0].Ref.StartReason != "prompt" || ans.Blocks[0].Ref.EndReason != "prompt" {
+		t.Fatalf("the boundary names must survive verbatim: %+v", ans.Blocks[0].Ref)
+	}
+	if ans.DroppedUnreadableReason != 0 {
+		t.Fatalf("nothing was dropped, got %d", ans.DroppedUnreadableReason)
+	}
+}
+
+// AdmitDevBlockReasons must survive the shallow copies the daemon makes per job
+// and per pass, or the emitter's client would silently lose it.
+func TestAdmitDevBlockReasonsSurvivesAShallowCopy(t *testing.T) {
+	c := New("http://127.0.0.1:1", time.Second)
+	c.AdmitDevBlockReasons(true)
+	if !c.WithContext(context.Background()).readableReason("prompt") {
+		t.Error("WithContext lost the admitted dev vocabulary")
+	}
+	if !c.WithMaxLen(512).readableReason("minute") {
+		t.Error("WithMaxLen lost the admitted dev vocabulary")
+	}
+	if New("http://127.0.0.1:1", time.Second).readableReason("prompt") {
+		t.Error("a client nobody admitted must refuse a dev reason")
+	}
+}

@@ -243,7 +243,9 @@ def test_a_prompt_id_from_one_transcript_does_not_resolve_against_another():
         st = open_store(os.path.join(tmp, "merged.db"))
         ingest_file(st, a)
         ingest_file(st, b)
-        pid_a = next(o["uuid"] for o in iter_turns(a) if o.get("uuid"))
+        # `iter_turns` yields `readers.base.Turn` records; `line_id` is the per-line id
+        # this file used to read as `uuid`.
+        pid_a = next(o.line_id for o in iter_turns(a) if o.line_id)
         assert st.prompt_time(session_of(a), pid_a) is not None, (
             "the first transcript's own prompt id no longer resolves: under the colliding key "
             "the second file's ingest reparsed the SAME key and cleared it")

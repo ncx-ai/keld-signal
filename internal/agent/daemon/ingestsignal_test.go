@@ -60,8 +60,9 @@ func TestIngestSignalNeverBlocksTheWatcher(t *testing.T) {
 	}
 }
 
-// /analyze cannot resolve a Codex or Gemini prompt id, so the workstreams pass
-// is gated to WorkstreamsEligible sources. Ingesting a transcript whose windows
+// /analyze can only resolve a prompt id for a source the sidecar has a READER
+// for, so the workstreams pass is gated to WorkstreamsEligible sources.
+// (Codex joined that set on 2026-09-15; Gemini has not.) Ingesting a transcript whose windows
 // can never be served is pure cost — a whole-file parse and permanent store rows
 // for an answer nobody can ask for.
 func TestIngestSignalOnlyForSourcesTheAnalysisCanServe(t *testing.T) {
@@ -84,7 +85,7 @@ func TestIngestSignalOnlyForSourcesTheAnalysisCanServe(t *testing.T) {
 		mu.Lock()
 		n := len(got)
 		mu.Unlock()
-		if n >= 2 || time.Now().After(deadline) {
+		if n >= 3 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -92,18 +93,28 @@ func TestIngestSignalOnlyForSourcesTheAnalysisCanServe(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // give an ineligible source time to leak through
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 2 {
-		t.Fatalf("want exactly the 2 eligible sources signalled, got %v", got)
+	// codex joined the eligible set on 2026-09-15, when the sidecar gained a
+	// reader for its rollouts. gemini_cli and made_up are what keep this a test
+	// of the GATE rather than of a list: neither has a reader.
+	if len(got) != 3 {
+		t.Fatalf("want exactly the 3 eligible sources signalled, got %v", got)
 	}
 	for _, p := range got {
-		if p != "/w/claude_code.jsonl" && p != "/w/cowork.jsonl" {
+		if p != "/w/claude_code.jsonl" && p != "/w/cowork.jsonl" && p != "/w/codex.jsonl" {
 			t.Errorf("ineligible source signalled: %q", p)
 		}
 	}
-	// The gate is the same predicate the pass itself uses, so a source becoming
-	// eligible needs no change here.
-	if !enrich.WorkstreamsEligible("claude_code") || enrich.WorkstreamsEligible("codex") {
-		t.Error("this test is asserting against the wrong predicate")
+	// The gate is the same predicate the pass itself uses. This self-check exists
+	// so that a source changing sides FAILS here rather than passing quietly
+	// against a stale example — which is exactly what it did on 2026-09-15, when
+	// codex gained a reader and moved from the ineligible column to the eligible
+	// one. gemini_cli is the ineligible example now; when it gains a reader this
+	// check will say so too.
+	if !enrich.WorkstreamsEligible("claude_code") || !enrich.WorkstreamsEligible("codex") {
+		t.Error("an eligible source is no longer eligible; this test's expectations are stale")
+	}
+	if enrich.WorkstreamsEligible("gemini_cli") {
+		t.Error("gemini_cli became eligible; this test needs a new ineligible example")
 	}
 }
 

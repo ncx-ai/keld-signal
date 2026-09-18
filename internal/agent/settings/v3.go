@@ -1,6 +1,10 @@
 package settings
 
 import (
+	"net"
+	"net/url"
+
+	"github.com/ncx-ai/keld-signal/internal/paths"
 	"os"
 	"strings"
 )
@@ -46,10 +50,44 @@ func (s Settings) DevBlocksMode() (mode string, refused bool) {
 	if !validDevBlocks(want) {
 		want = ""
 	}
-	if want != "" && s.AtlasEnabled() {
+	// ⚠️ **THE RULE IS ABOUT WHERE A BLOCK LANDS, NOT WHETHER PUBLISHING IS
+	// ON**, and it used to be written as the latter. A dev granularity
+	// MISLABELS real work — a minute-long block is a false statement about
+	// something a person actually did — so it must never reach the ORG'S
+	// NUMBERS. Those live behind the real Atlas. A LOOPBACK endpoint is a mock
+	// on this machine: there are no org numbers there to corrupt, and
+	// publishing is precisely what a conformance run has to exercise.
+	//
+	// Conflating the two had a concrete cost: the conformance chain could not
+	// produce a block AT ALL, because a run lasts seconds and the cutter closes
+	// nothing under 20 minutes. So `publish` passed on enrichments alone and
+	// the one signal Atlas actually RENDERS went untested on every tool and
+	// every platform — the same silent half-working shape as the sidecar skew
+	// that cost three weeks of blocks.
+	if want != "" && s.AtlasEnabled() && !atlasIsLoopback() {
 		return "", true
 	}
 	return want, false
+}
+
+// atlasIsLoopback reports whether the configured Atlas is a mock on this
+// machine rather than a real one.
+//
+// ⚠️ Parsed as a URL and matched on the HOST, never on a substring: a hostname
+// that merely CONTAINS "localhost" — say `localhost.evil.example.com` — is a
+// perfectly ordinary public name, and a Contains check would hand it a
+// granularity that misstates real work. A test pins that case.
+func atlasIsLoopback() bool {
+	u, err := url.Parse(paths.APIBase())
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validDevBlocks(m string) bool {

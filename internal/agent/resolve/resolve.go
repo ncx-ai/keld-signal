@@ -19,6 +19,9 @@ func init() {
 	register(NewClaudeReaderForSource("cowork"))
 	register(NewCodexReader())
 	register(NewGeminiReader())
+	// ⚠️ The hook writes `--source gemini` while every other lane says
+	// `gemini_cli`; see NewGeminiReaderForSource for what that cost.
+	register(NewGeminiReaderForSource("gemini"))
 }
 
 // Resolve returns the prompt text. Inline text (when present) wins; otherwise it

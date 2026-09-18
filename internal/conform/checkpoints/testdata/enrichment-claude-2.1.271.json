@@ -1,0 +1,166 @@
+{
+ "source": {
+  "id": "claude_code",
+  "origin": "hook"
+ },
+ "correlation": {
+  "scheme": "prompt_id",
+  "id": "26688d07-0146-4617-a9dc-4a0b63953f63",
+  "session_id": "3ae427d7-2751-423b-a452-e1434057ae70"
+ },
+ "actor": "conformance@keld.test",
+ "task_type": {
+  "value": "",
+  "confidence": 0,
+  "producer": "task_type"
+ },
+ "domain": {
+  "value": "",
+  "confidence": 0,
+  "producer": "domain_entities"
+ },
+ "sensitivity": {
+  "value": "",
+  "confidence": 0,
+  "producer": "sensitivity"
+ },
+ "activity_type": {
+  "value": "",
+  "confidence": 0,
+  "producer": "activity_type"
+ },
+ "personal": {
+  "value": "",
+  "confidence": 0,
+  "producer": "personal"
+ },
+ "function_guess": {
+  "value": "",
+  "confidence": 0,
+  "producer": "function_guess"
+ },
+ "subcategory": {
+  "value": "",
+  "confidence": 0,
+  "producer": "subcategory"
+ },
+ "workstreams": {
+  "branch": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "language": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "model": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "output_type": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "project": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "repo": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "skill": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  },
+  "tooling": {
+   "value": "",
+   "confidence": 0,
+   "status": "absent",
+   "producer": "workstreams-v23"
+  }
+ },
+ "dynamics": {
+  "branch": {
+   "status": "both_absent",
+   "changed": false
+  },
+  "language": {
+   "status": "both_absent",
+   "changed": false
+  },
+  "output_type": {
+   "status": "both_absent",
+   "changed": false
+  },
+  "skill": {
+   "status": "both_absent",
+   "changed": false
+  }
+ },
+ "effort": {
+  "authoring_turns": 0,
+  "authored_status": "absent",
+  "gaps": 0,
+  "tempo_status": "absent"
+ },
+ "prior": {
+  "branch": {
+   "share": 0,
+   "evidence": 0,
+   "status": "absent"
+  },
+  "language": {
+   "share": 0,
+   "evidence": 0,
+   "status": "absent"
+  },
+  "output_type": {
+   "share": 0,
+   "evidence": 0,
+   "status": "absent"
+  },
+  "skill": {
+   "share": 0,
+   "evidence": 0,
+   "status": "absent"
+  }
+ },
+ "pipeline_status": "partial",
+ "facets_skipped": [
+  "task_type",
+  "domain_entities",
+  "activity_type",
+  "personal",
+  "function_guess",
+  "subcategory"
+ ],
+ "extractor_versions": {
+  "activity_type": "activity_type-v23",
+  "domain_entities": "domain_entities-v23",
+  "function_guess": "function_guess-v23",
+  "personal": "personal-v23",
+  "sensitivity": "sensitivity-v23",
+  "subcategory": "subcategory-v23",
+  "task_type": "task_type-v23",
+  "workstreams": "workstreams-v23"
+ },
+ "schema_version": 23,
+ "model_version": "gliner2-large-v1",
+ "prompt_chars": 19,
+ "ts": "2026-09-15T14:37:39Z"
+}

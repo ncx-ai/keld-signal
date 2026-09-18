@@ -21,7 +21,7 @@ func envMap(env []string) map[string]string {
 }
 
 func TestSidecarEnvAppliesTenancyCaps(t *testing.T) {
-	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", "", nil, false))
+	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", "", nil, false, ""))
 
 	if m["KELD_GLINER2_DIR"] != "/models/gliner2" {
 		t.Errorf("KELD_GLINER2_DIR = %q, want /models/gliner2", m["KELD_GLINER2_DIR"])
@@ -57,7 +57,7 @@ func TestSidecarEnvAppliesTenancyCaps(t *testing.T) {
 
 func TestSidecarEnvRespectsOperatorOverride(t *testing.T) {
 	base := []string{"OMP_NUM_THREADS=8", "MALLOC_ARENA_MAX=4"}
-	m := envMap(sidecarEnv(base, "/m", "", nil, false))
+	m := envMap(sidecarEnv(base, "/m", "", nil, false, ""))
 
 	// Operator-set tunables must win over our defaults.
 	if m["OMP_NUM_THREADS"] != "8" {
@@ -79,7 +79,7 @@ func TestSidecarEnvRespectsOperatorOverride(t *testing.T) {
 // KELD_WATCH_ROOTS, the platform's Cowork layout).
 func TestSidecarEnvPassesTheAnalysisAllowlist(t *testing.T) {
 	roots := []string{"/home/u/.claude/projects", "/home/u/.gemini/tmp"}
-	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/m", "", roots, false))
+	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/m", "", roots, false, ""))
 
 	want := strings.Join(roots, string(os.PathListSeparator))
 	if m["KELD_ANALYZE_ROOTS"] != want {
@@ -92,7 +92,7 @@ func TestSidecarEnvPassesTheAnalysisAllowlist(t *testing.T) {
 // daemon that found no roots means the latter, and dropping the assignment
 // would silently hand the sidecar a wider allowlist than the daemon computed.
 func TestSidecarEnvSetsAnEmptyAllowlistRatherThanOmittingIt(t *testing.T) {
-	env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, false)
+	env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, false, "")
 	if !hasEnvKey(env, "KELD_ANALYZE_ROOTS") {
 		t.Fatalf("KELD_ANALYZE_ROOTS omitted for an empty root set: %v", env)
 	}
@@ -103,7 +103,7 @@ func TestSidecarEnvSetsAnEmptyAllowlistRatherThanOmittingIt(t *testing.T) {
 
 func TestSidecarEnvRespectsAnOperatorAnalysisAllowlist(t *testing.T) {
 	base := []string{"KELD_ANALYZE_ROOTS=/srv/transcripts"}
-	m := envMap(sidecarEnv(base, "/m", "", []string{"/home/u/.claude/projects"}, false))
+	m := envMap(sidecarEnv(base, "/m", "", []string{"/home/u/.claude/projects"}, false, ""))
 	if m["KELD_ANALYZE_ROOTS"] != "/srv/transcripts" {
 		t.Errorf("operator override lost: got %q", m["KELD_ANALYZE_ROOTS"])
 	}
@@ -121,21 +121,21 @@ func TestSidecarEnvRespectsAnOperatorAnalysisAllowlist(t *testing.T) {
 // here.
 func TestSidecarEnvSetsKeldTextembedWhenTheEncoderIsNeeded(t *testing.T) {
 	t.Run("needed and unset: KELD_TEXTEMBED=1 is set", func(t *testing.T) {
-		env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, true)
+		env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, true, "")
 		m := envMap(env)
 		if m["KELD_TEXTEMBED"] != "1" {
 			t.Fatalf("KELD_TEXTEMBED = %q, want \"1\"", m["KELD_TEXTEMBED"])
 		}
 	})
 	t.Run("not needed: KELD_TEXTEMBED stays unset", func(t *testing.T) {
-		env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, false)
+		env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, false, "")
 		if hasEnvKey(env, "KELD_TEXTEMBED") {
 			t.Fatalf("KELD_TEXTEMBED set with encoderNeeded=false: %v", env)
 		}
 	})
 	t.Run("operator override wins even when needed", func(t *testing.T) {
 		base := []string{"PATH=/bin", "KELD_TEXTEMBED=0"}
-		env := sidecarEnv(base, "/m", "", nil, true)
+		env := sidecarEnv(base, "/m", "", nil, true, "")
 		m := envMap(env)
 		if m["KELD_TEXTEMBED"] != "0" {
 			t.Fatalf("operator KELD_TEXTEMBED=0 override lost: got %q", m["KELD_TEXTEMBED"])
@@ -143,7 +143,7 @@ func TestSidecarEnvSetsKeldTextembedWhenTheEncoderIsNeeded(t *testing.T) {
 	})
 	t.Run("never sets the features/publish toggles, needed or not", func(t *testing.T) {
 		for _, needed := range []bool{true, false} {
-			env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, needed)
+			env := sidecarEnv([]string{"PATH=/bin"}, "/m", "", nil, needed, "")
 			if hasEnvKey(env, "KELD_FEATURES") || hasEnvKey(env, "KELD_FEATURES_PUBLISH") {
 				t.Fatalf("encoderNeeded=%v set a features/publish toggle; the two subsystems must stay independent: %v", needed, env)
 			}
@@ -185,8 +185,37 @@ func TestEncoderThreadsScalesWithTheHost(t *testing.T) {
 // tunable here, so a machine that needs a different answer says so and is obeyed. That is what
 // makes deriving it safe — it is a better default, not a policy the operator cannot escape.
 func TestEncoderThreadsStillYieldsToTheOperator(t *testing.T) {
-	m := envMap(sidecarEnv([]string{"KELD_SIDECAR_MAX_THREADS=1"}, "/m", "", nil, false))
+	m := envMap(sidecarEnv([]string{"KELD_SIDECAR_MAX_THREADS=1"}, "/m", "", nil, false, ""))
 	if m["KELD_SIDECAR_MAX_THREADS"] != "1" {
 		t.Errorf("operator override lost: got %q", m["KELD_SIDECAR_MAX_THREADS"])
+	}
+}
+
+// ⚠️ **THE REFUSAL WAS UNENFORCEABLE BECAUSE NOTHING ASSIGNED THIS VARIABLE.**
+// The sidecar reads KELD_DEV_BLOCKS out of its own environment and inherits the
+// daemon's, so a developer who exported it got minute- or prompt-long blocks on
+// ANY machine — including one publishing to a real Atlas — while
+// settings.DevBlocksMode's refusal ("a dev granularity misstates real work and
+// must never reach the org's numbers") sat in a function no caller invoked.
+//
+// So the resolved value is assigned ALWAYS, and the empty case is the one that
+// matters: it must OVERRIDE an inherited value rather than defer to it.
+func TestSidecarEnvAlwaysAssignsDevBlocks(t *testing.T) {
+	// A refusal against an inherited value.
+	env := sidecarEnv([]string{"KELD_DEV_BLOCKS=minute"}, "/m", "", nil, false, "")
+	if got := envMap(env)["KELD_DEV_BLOCKS"]; got != "" {
+		t.Errorf("a refused granularity must blank the child's variable, got %q — "+
+			"the sidecar would cut minute-long blocks into a real org's numbers", got)
+	}
+	// And an admitted one is passed through.
+	env = sidecarEnv([]string{"KELD_DEV_BLOCKS=minute"}, "/m", "", nil, false, "prompt")
+	if got := envMap(env)["KELD_DEV_BLOCKS"]; got != "prompt" {
+		t.Errorf("the RESOLVED value must win over the inherited one, got %q", got)
+	}
+	// A machine that configured nothing says so explicitly rather than by omission.
+	env = sidecarEnv(nil, "/m", "", nil, false, "")
+	if !hasEnvKey(env, "KELD_DEV_BLOCKS") {
+		t.Error("KELD_DEV_BLOCKS must be assigned even when empty: an absent variable " +
+			"leaves the child reading whatever it inherited")
 	}
 }

@@ -5,7 +5,7 @@ Two signals, one walk over the lines `ingest._read_complete_lines` already holds
 
 ## WHY THIS IS NOT IN `levels.py` OR `transcript.py`
 
-`transcript.turns_in` SKIPS a `tool_result` line by a substring check performed BEFORE any JSON
+The reader's speech filter SKIPS a `tool_result` line by a substring check performed BEFORE any JSON
 decoding, and that skip is load-bearing: a tool result carries no speech and no reference, and it
 is where the huge lines are, so skipping it unparsed is what keeps a parse seconds-long rather
 than minutes-long. `tool_use_in` skips it too whenever it echoes no `tool_use` block. So the
@@ -79,17 +79,12 @@ import json
 import re
 from datetime import datetime
 
+from app.analysis import readers
 from app.analysis.levels import quantize
 from app.analysis.store import BIN_SECONDS
 
 # See the module docstring. Do not loosen this, and do not rebuild it from parts at a call site.
 ERROR_LITERAL = '"is_error":true'
-_TOOL_RESULT = '"tool_result"'
-# The same substring shape `transcript.turns_in` gates on, minus its `tool_result` skip -- this
-# pass exists to read exactly the lines that skip discards. See the docstring: it decides which
-# half of the timestamp mechanism a line takes, not whether the line is interesting.
-_USER = '"type":"user"'
-_ASST = '"type":"assistant"'
 # Bounded on both sides: an ISO instant is 20-32 characters and nothing else in a MESSAGE record
 # is keyed `timestamp`. `search` scans until it matches, which on a large line is a memchr-speed
 # walk rather than a parse.
@@ -133,8 +128,15 @@ def _decoded_ts(line):
     return ts if isinstance(ts, str) else None
 
 
-def scan(lines, offsets):
+def scan(lines, offsets, reader=None):
     """`(outcomes, bin_offsets)` for one batch of raw lines.
+
+    `reader` decides which lines are MESSAGE-SHAPED (regex, measured exact) and which carry a
+    tool OUTCOME; everything else is decoded. Those two questions are the only tool-specific thing
+    in this pass, and they are the reader's because the substring shapes are a tool's own line
+    format — `readers/claude.py` owns the literals that used to sit at the top of this file, and a
+    second copy of them here is a second place for them to drift from the filter `turns_in`
+    applies. Defaults to Claude Code, as the rest of the package does.
 
     `lines` are decoded strings and `offsets` their BYTE offsets in the file, positionally
     aligned -- see `ingest._read_complete_lines`, which produces both and is the only correct
@@ -161,11 +163,12 @@ def scan(lines, offsets):
     That includes a timestamp `epoch` REFUSES -- a naive one is dropped rather than guessed at,
     which is the safe direction and the only one that is not machine-dependent.
     """
+    rd = reader or readers.DEFAULT
     outcomes, bins = [], {}
     for line, off in zip(lines, offsets):
         # See the docstring: message-shaped lines take the regex (measured exact, and they are
         # the ones that must not be decoded); everything else is decoded (exact by construction).
-        message = _USER in line or _ASST in line
+        message = rd.message_line(line)
         if message:
             m = _TS.search(line)
             ts_iso = m.group(1) if m else None
@@ -181,6 +184,6 @@ def scan(lines, offsets):
         prev = bins.get(bin_ts)
         if prev is None or off < prev:
             bins[bin_ts] = off
-        if message and _TOOL_RESULT in line:
+        if message and rd.tool_result_line(line):
             outcomes.append((t, ERROR_LITERAL in line, len(line)))
     return outcomes, bins

@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/debuglog"
+	"github.com/ncx-ai/keld-signal/internal/geminichat"
 	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
@@ -37,6 +39,10 @@ type Watcher struct {
 	poll       time.Duration
 	backfill   bool
 	extractors map[string]promptExtractor
+	// started is when this watcher was constructed. ⚠️ It is what separates
+	// HISTORY from a session happening NOW on a document source — see
+	// scanDocument's first-sight branch.
+	started time.Time
 }
 
 // promptExtractor detects a genuine user prompt within a single transcript
@@ -81,11 +87,11 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 		version:  version,
 		poll:     poll,
 		backfill: backfill,
+		started:  time.Now(),
 		extractors: map[string]promptExtractor{
 			"claude_code": claudeExtractor{},
 			"cowork":      claudeExtractor{},
 			"codex":       newCodexExtractor(),
-			"gemini_cli":  geminiExtractor{},
 		},
 	}
 }
@@ -153,7 +159,7 @@ func (w *Watcher) safePollOnce() {
 func (w *Watcher) pollOnce() {
 	changed := false
 	for _, root := range w.discover() {
-		for _, path := range transcriptFiles(root.Dir) {
+		for _, path := range transcriptFiles(root.Dir, root.SourceID) {
 			if w.scanFile(root.SourceID, path) {
 				changed = true
 			}
@@ -218,6 +224,9 @@ const firstSightPerPoll = 4
 // scanFile reads new complete lines from path's cursor, offers each genuine
 // prompt, and advances the cursor. Returns true if the cursor moved.
 func (w *Watcher) scanFile(source, path string) bool {
+	if isDocumentSource(source) {
+		return w.scanDocument(source, path)
+	}
 	off, known := w.cursors.Get(path)
 	if !known {
 		// First sighting. Forward-only: skip existing content by starting the
@@ -261,7 +270,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 	recs, consumed := scanFrom(path, off, w.extractorFor(source), observe)
 	for _, rec := range recs {
 		w.offer(spool.Pointer{
-			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
+			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: rec.PromptID, SessionID: rec.SessionID},
 			Pointer:     &spool.Ptr{TranscriptPath: path, PromptID: rec.PromptID, Cwd: rec.Cwd},
 		})
@@ -291,20 +300,167 @@ func (w *Watcher) scanFile(source, path string) bool {
 	return false
 }
 
-// transcriptFiles returns *.jsonl under dir (recursively). Best-effort.
-func transcriptFiles(dir string) []string {
+// scanDocument is scanFile for a source whose session is ONE JSON DOCUMENT
+// (Gemini). It keeps every rule the line path keeps — forward-only first
+// sighting, the first-sight ingest signal, one offer per genuine prompt — and
+// differs only where the format forces it.
+//
+// ⚠️ **THE CURSOR HERE COUNTS PROMPTS, NOT BYTES, and it has to.** Gemini
+// rewrites the whole file on every turn, so the byte offset the line path
+// stores is meaningless: the file's size changes in places other than the end,
+// and "bytes appended" names nothing. The stored number is therefore how many
+// GENUINE USER PROMPTS this transcript has already been offered — which is also
+// the next prompt's ordinal, so a resumed daemon needs nothing else. The two
+// meanings never meet, because a path is only ever scanned by one of the two
+// branches.
+//
+// Re-offering is harmless but not free (the queue dedups on prompt id), so the
+// cursor exists to keep a 50-turn session from re-offering 50 prompts on every
+// single turn.
+func (w *Watcher) scanDocument(source, path string) bool {
+	done, known := w.cursors.Get(path)
+	s, ok := geminichat.Read(path)
+	if !ok {
+		// Unreadable, or caught mid-rewrite. A document has no valid prefix, so
+		// there is nothing to salvage and nothing to say: the file is rewritten
+		// whole on the next turn and the next poll reads it.
+		return false
+	}
+	if !known {
+		if watchDebug {
+			log.Printf("keld-agent: watch: first sight of %s — %d prompt(s), fresh=%v (file %s, watcher started %s)",
+				filepath.Base(path), len(s.Prompts), w.startedBefore(path),
+				fileModTime(path).Format(time.RFC3339), w.started.Format(time.RFC3339))
+		}
+		// ⚠️ **A SESSION THAT BEGAN AFTER THIS DAEMON DID IS NOT HISTORY, AND
+		// TREATING IT AS HISTORY DROPPED EVERY ONE-SHOT GEMINI RUN.** Forward-only
+		// exists so that installing Keld does not enrich a machine's entire past.
+		// On a LINE source that rule is cheap, because a transcript is appended to
+		// over time: first sight lands on a file that is still growing and the
+		// next prompt is captured. A DOCUMENT is different — `gemini -p` creates a
+		// whole new session file per invocation, so its only prompt is already
+		// there the first time the watcher sees the file, and forward-only skips
+		// it FOREVER. There is no second chance and no hook to cover it: Gemini's
+		// BeforeAgent event carries no prompt id, which internal/hook already
+		// treats as a silent no-op. Measured in the conformance chain: transcripts
+		// found and read, 2 prompt ids in them, and 0 enrichments published.
+		//
+		// A file whose mtime is newer than this watcher's start cannot be the
+		// history that rule protects against: it is being written now. So it is
+		// read from the beginning. The bound on that is one SESSION — tens of
+		// prompts, not a machine's corpus — and the queue dedups by prompt id, so
+		// the cost of the one ambiguous case (a session that predates the daemon
+		// and is appended to afterwards) is that its earlier turns are offered
+		// once.
+		if !w.backfill && !w.startedBefore(path) {
+			w.cursors.Set(path, int64(len(s.Prompts)))
+			if w.signalFirstSight && w.advanced != nil {
+				w.firstSight = append(w.firstSight, advanceRef{source, path})
+			}
+			return true
+		}
+		done = 0
+	}
+	if int64(len(s.Prompts)) < done {
+		// Fewer prompts than we have offered: a new session reusing the path, or
+		// a truncation. Re-read from the start rather than stall forever.
+		done = 0
+	}
+	if int64(len(s.Prompts)) == done {
+		return false
+	}
+	if watchDebug {
+		log.Printf("keld-agent: watch: offering %d prompt(s) of %s (cursor %d -> %d)",
+			int64(len(s.Prompts))-done, filepath.Base(path), done, len(s.Prompts))
+	}
+	for _, p := range s.Prompts[done:] {
+		w.offer(spool.Pointer{
+			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
+			Correlation: spool.Correlation{Scheme: "prompt_id", ID: s.CorrID(p.Ordinal), SessionID: s.ID},
+			Pointer:     &spool.Ptr{TranscriptPath: path, PromptID: s.CorrID(p.Ordinal)},
+		})
+	}
+	w.cursors.Set(path, int64(len(s.Prompts)))
+	if w.advanced != nil {
+		w.advanced(source, path)
+	}
+	return true
+}
+
+// watchDebug prints what the DOCUMENT lane decided per transcript. Off unless
+// KELD_WATCH_DEBUG is set.
+//
+// ⚠️ **"FORWARD-ONLY SKIPPED IT" AND "OFFERED IT" LEAVE THE SAME CURSOR**, which
+// is how an afternoon went: a Gemini session showed cursor 1 in cursors.json and
+// published nothing, and 1 is exactly what BOTH paths write — the skip records
+// the prompts it declined to offer, the offer records the ones it sent. Nothing
+// else distinguished them, so the question "did the watcher offer this?" could
+// not be answered from the machine's own state.
+var watchDebug = os.Getenv("KELD_WATCH_DEBUG") != ""
+
+// fileModTime is path's mtime, or the zero time when it cannot be stat'd. For
+// the debug line only.
+func fileModTime(path string) time.Time {
+	st, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
+}
+
+// startedBefore reports whether path was written after this watcher started —
+// i.e. whether the session is happening now rather than being history. A file
+// that cannot be stat'd reads as history, the conservative direction.
+func (w *Watcher) startedBefore(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return st.ModTime().After(w.started)
+}
+
+// transcriptFiles returns the transcripts of `source` under dir (recursively).
+// Best-effort.
+//
+// ⚠️ **IT FILTERED ON `.jsonl` ALONE, WHICH MATCHED NOTHING GEMINI HAS EVER
+// WRITTEN.** Gemini keeps a session as ONE JSON DOCUMENT at
+// `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.json`, so this walk returned
+// an empty list for every Gemini root on every machine — and an empty list is
+// indistinguishable from a quiet tool. Measured: 55 real chat files on one
+// developer machine, none of them a `.jsonl`. The extension is therefore a
+// property of the SOURCE, not a constant.
+func transcriptFiles(dir, source string) []string {
 	var out []string
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable subtrees
 		}
-		if !d.IsDir() && filepath.Ext(p) == ".jsonl" {
+		if d.IsDir() {
+			return nil
+		}
+		if isDocumentSource(source) {
+			if geminichat.IsChatFile(p) {
+				out = append(out, p)
+			}
+			return nil
+		}
+		if filepath.Ext(p) == ".jsonl" {
 			out = append(out, p)
 		}
 		return nil
 	})
 	return out
 }
+
+// isDocumentSource reports whether a source keeps a session as ONE JSON
+// DOCUMENT rather than as appended lines.
+//
+// The distinction is structural, not cosmetic: a line-oriented transcript can be
+// TAILED from a byte offset, and a document is rewritten whole on every turn, so
+// its cursor cannot be a byte count and its content cannot be parsed a line at a
+// time. Everything this package does for Claude Code, Cowork and Codex assumes
+// the first shape; Gemini is the second.
+func isDocumentSource(source string) bool { return source == "gemini_cli" }
 
 // scanFrom reads complete (newline-terminated) lines from byte offset off. It
 // invokes observe (if non-nil) with every complete line — for telemetry that

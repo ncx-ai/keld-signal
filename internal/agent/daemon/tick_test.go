@@ -109,13 +109,17 @@ func TestTheTickIsToldWhichPromptsEnrichmentAlreadyCovered(t *testing.T) {
 	}
 }
 
-// A source the window analysis cannot read (Codex, Gemini: differently-keyed
-// prompts over differently-shaped files) must not enter the ticker's memory —
+// A source the window analysis cannot read must not enter the ticker's memory —
 // the tick would ask for windows nobody can answer, once per interval forever.
+//
+// ⚠️ The example is GEMINI, and it used to be Codex. Codex became readable on
+// 2026-09-15 when the sidecar gained a reader for its rollouts, so using it here
+// would now assert the opposite of the truth. Gemini keys its prompts over a
+// differently-shaped file and no reader resolves it.
 func TestATranscriptTheAnalysisCannotReadIsNeverTicked(t *testing.T) {
 	st := tickFixture(t)
 	j := aJob("/t/c.jsonl", "P1")
-	j.Source = "codex"
+	j.Source = "gemini_cli"
 	st.observe(j)
 	st.observe(queue.Job{Source: "claude_code", PromptID: "P2"}) // no transcript path
 

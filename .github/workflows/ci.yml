@@ -19,6 +19,26 @@ jobs:
       - name: go test
         run: go test ./...
 
+  # ⚠️ **169 TESTS THAT NOTHING RAN.** internal/agent/ui/test/ holds the daemon
+  # page's unit tests — the money formatting, the health copy, the cell
+  # vocabulary, the dev-mode gate — and no Makefile target, script or workflow
+  # invoked them, so they could rot silently while every other suite stayed
+  # green. They are `node --test` scripts with no dependencies, which is why
+  # this job needs neither a checkout of node_modules nor an install step.
+  #
+  # The glob is explicit (`*.test.js`) rather than the directory: `node --test
+  # <dir>` walks it and collects ONE file, reporting "tests 1, fail 1" — a
+  # runner that appears to run and does not, which is worse than no runner.
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: daemon page unit tests
+        run: node --test internal/agent/ui/test/*.test.js
+
   shell-tests:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,1099 @@
+name: conformance
+
+# Prove each integration against a REAL tool on a clean machine: install the
+# tool, install Signal unattended, talk to a mock model and a mock Atlas on
+# loopback, and read five checkpoints out of the isolated daemon (AC-10, AC-11,
+# AC-12). Spec: docs/superpowers/specs/2026-09-15-signal-integrations-discovery.html
+# § "Conformance matrix — how it runs on GitHub".
+#
+# ⚠️ **THERE IS NO NIGHTLY FULL MATRIX, DELIBERATELY.** A run with nothing new
+# to test proves nothing new and spends the money in the wrong place. The daily
+# job is one minute of `npm view` (`version-watch.sh`) and a chain runs only
+# when a tool actually published a version we have not proven. That canary is
+# what the nightly was replaced BY, not a cheaper version of it.
+#
+# ⚠️ **THE SCHEDULE ONLY EXISTS ON THE DEFAULT BRANCH.** GitHub runs `schedule`
+# from the default branch's copy of a workflow, so committing this on
+# `feat/integrations-ci` turns nothing on; it starts when the branch merges.
+# That is also why it is safe to land with the triggers in place.
+on:
+  schedule:
+    # 06:17 UTC — off the hour, so it is not queued behind everyone else's
+    # midnight cron.
+    - cron: "17 6 * * *"
+
+  # A Signal release: installers.yml has finished building the artifacts a user
+  # would download, so the matrix tests those rather than rebuilding them.
+  workflow_run:
+    workflows: [installers]
+    types: [completed]
+
+  # ⚠️ **THIS IS HOW THE WORKFLOW RUNS ON A BRANCH, AND IT USED TO HAVE NO WAY
+  # TO.** The three triggers were schedule, workflow_run and workflow_dispatch.
+  # None of them fires on a branch: `schedule` and the manual Run-workflow
+  # button both require the file to be on the DEFAULT branch, and workflow_run
+  # needs a real release build. So the only way to exercise this workflow was to
+  # merge it to main first — i.e. to ship the thing before proving it, which is
+  # backwards and is exactly what this whole harness exists to stop.
+  #
+  # `pull_request` fires on the PR's own branch, running that branch's copy of
+  # both the workflow and every script it calls. Nothing needs to be on main.
+  #
+  # ⚠️ It is PATH-SCOPED on purpose. The full matrix is six cells of up to 25
+  # minutes, and macOS bills at 10x — charging that to every unrelated PR is how
+  # a useful gate becomes the one people disable. It runs only when the harness
+  # itself changes, which is when a PR can actually invalidate it.
+  pull_request:
+    paths:
+      - "scripts/conformance/**"
+      - ".github/workflows/conformance.yml"
+      - "internal/conform/**"
+      - "cmd/keld-conform/**"
+      - "Makefile"
+
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: "Tool id (claude_code, codex, pi, gemini_cli)"
+        type: string
+        default: claude_code
+      version:
+        description: "Tool version to pin (empty = @latest)"
+        type: string
+        default: ""
+      os:
+        description: "Runner"
+        type: choice
+        options: [ubuntu-latest, macos-14, windows-latest, all]
+        default: ubuntu-latest
+      chain:
+        description: "Chain"
+        type: choice
+        options: ["A", "B", "all"]
+        default: "A"
+      seed:
+        description: "Seed for the before/after split (empty = the run id)"
+        type: string
+        default: ""
+      force_fail:
+        description: "Force a failing checkpoint, to prove the issue step (AC-11)"
+        type: boolean
+        default: false
+
+# One conformance run at a time per trigger. NOT cancel-in-progress: a chain
+# killed half way tells you nothing, and the run it would cancel is the one
+# holding the evidence.
+concurrency:
+  group: conformance-${{ github.event_name }}-${{ github.event.workflow_run.id || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- plan -----
+  # One job decides what to run for all three triggers, so the matrix lives in
+  # exactly one place. On a schedule this IS the version watch (~1 minute).
+  plan:
+    name: plan (version watch on a schedule)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A workflow_run fires for EVERY installers.yml run, including failed ones
+    # and dry runs on a branch. Only a successful build of a v* tag is a release.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+      seed: ${{ steps.plan.outputs.seed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Version watch
+        if: github.event_name == 'schedule'
+        run: bash scripts/conformance/version-watch.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide the matrix
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_TOOL: ${{ inputs.tool }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_OS: ${{ inputs.os }}
+          IN_CHAIN: ${{ inputs.chain }}
+          IN_SEED: ${{ inputs.seed }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          seed="${IN_SEED:-$RUN_ID}"
+          case "$EVENT" in
+            schedule)
+              # Only tools whose published version moved, Linux only: a
+              # transcript shape does not differ by OS, so paying for macOS
+              # minutes on a tool release buys nothing.
+              matrix=$(bash scripts/conformance/version-watch.sh --matrix)
+              ;;
+            pull_request)
+              # ⚠️ CHAIN A ONLY, AND NOT WINDOWS — because those are the cells
+              # that can pass today, and a gate that is red before anyone
+              # touches it teaches people to ignore it.
+              #
+              # Chain B upgrades FROM a previous release and the workflow never
+              # supplies one (`--previous` appears nowhere), so it falls back to
+              # "whatever is installed on this machine" and a clean runner has
+              # nothing — it cannot pass here until that is wired.
+              # run-chain.ps1 does not exist, so the Windows leg exits 1 by
+              # design. Both are tracked; neither belongs in a PR gate yet.
+              #
+              # Widen this the day each of those is true, not before.
+              matrix='{"include":[
+                {"os":"ubuntu-latest","chain":"A","tool":"all","version":""},
+                {"os":"ubuntu-latest","chain":"B","tool":"all","version":""},
+                {"os":"macos-14","chain":"A","tool":"all","version":""},
+                {"os":"macos-14","chain":"B","tool":"all","version":""},
+                {"os":"windows-latest","chain":"A","tool":"all","version":""},
+                {"os":"windows-latest","chain":"B","tool":"all","version":""}]}'
+              ;;
+            workflow_run)
+              # A Signal release: every OS, both chains. Installers and service
+              # registration ARE OS-specific, which is what this trigger is for.
+              #
+              # ⚠️ **THIS COMMENT WAS FALSE AND IT HID A REAL GAP.** It read
+              # "lib/tools.sh's table has one row and run-chain.sh exits 2 on
+              # any other id", which justified pinning every cell to
+              # claude_code. The table has TWO rows — `tool_supported` accepts
+              # claude_code and codex, and `tool_all` returns both — so Codex
+              # was fully built into the harness and never once exercised by
+              # CI, with a comment explaining why it could not be.
+              #
+              # A comment that misdescribes the code is how a gap stays
+              # invisible; this branch has already been bitten by that twice
+              # (a spec header claiming unmerged code, and AGENTS.md's "Windows
+              # deferred" for a watcher that is not platform-gated at all).
+              #
+              # `all` is the design the spec describes: the tool dimension
+              # collapses INTO the chain via the seeded before/after split, so
+              # adding a tool costs no extra cells.
+              #
+              # ⚠️ Windows is now green on BOTH chains, so the reason it stayed
+              # pinned to claude_code is gone. Every cell drives `all`, which
+              # today is claude_code + codex + gemini_cli — three tools across
+              # six cells rather than eighteen, because the split rotates per
+              # run instead of multiplying the matrix.
+              matrix='{"include":[
+                {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"B","tool":"claude_code","version":""}]}'
+              ;;
+            *)
+              matrix=$(python3 - <<'PY'
+          import json, os
+          oses = ["ubuntu-latest", "macos-14", "windows-latest"] if os.environ["IN_OS"] == "all" else [os.environ["IN_OS"]]
+          chains = ["A", "B"] if os.environ["IN_CHAIN"] == "all" else [os.environ["IN_CHAIN"]]
+          tool = os.environ["IN_TOOL"] or "claude_code"
+          version = os.environ["IN_VERSION"]
+          print(json.dumps({"include": [
+              {"os": o, "chain": c, "tool": tool, "version": version}
+              for o in oses for c in chains]}))
+          PY
+              )
+              ;;
+          esac
+          matrix=$(printf '%s' "$matrix" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
+          any=$(printf '%s' "$matrix" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin)["include"] else "false")')
+          {
+            echo "matrix=$matrix"
+            echo "any=$any"
+            echo "seed=$seed"
+          } >> "$GITHUB_OUTPUT"
+          echo "matrix: $matrix"
+          echo "seed: $seed"
+
+      - name: Nothing to run
+        if: steps.plan.outputs.any == 'false'
+        run: |
+          echo "No tool published a version we have not already proven — no chain run." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------- chain -----
+  chain:
+    name: ${{ matrix.tool }} · chain ${{ matrix.chain }} · ${{ matrix.os }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ${{ matrix.os }}
+    # 25 minutes: a chain is ~15 (npm install, a Go build, two headless prompts
+    # and the settle), and a hung daemon must not hold a macOS runner at 10x.
+    timeout-minutes: 25
+    # ⚠️ The Windows leg is EXPECTED TO FAIL and is marked so on purpose:
+    # scripts/conformance/run-chain.ps1 does not exist yet (task A.3's Windows
+    # half, owned elsewhere). A permanently red leg nobody reads is worse than
+    # an honest amber one, and deleting the leg would hide that Windows is
+    # unproven. Remove this the day the .ps1 lands.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    permissions:
+      contents: read
+      issues: write
+      actions: read   # download-artifact from the installers.yml run
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      SEED: ${{ needs.plan.outputs.seed }}
+      TOOL_VERSION: ${{ matrix.version }}
+      KELD_CONFORM_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The cache holds the npm STORE and its key names no tool version, so
+      # `@latest` still resolves to whatever is published today — a cache keyed
+      # by version would quietly pin the canary to the thing it is watching.
+      - name: Cache the npm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: conformance-npm-${{ runner.os }}
+          restore-keys: conformance-npm-${{ runner.os }}
+
+      - name: sqlite3 (store_rows reads refseries.db through it)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3
+
+      # --- the Signal artifacts under test ---------------------------------
+      #
+      # ⚠️ installers.yml uploads workflow ARTIFACTS only on its dry-run
+      # dispatch path; on a real release it attaches the pkg/exe/sidecar to the
+      # GitHub RELEASE instead. So both are tried, artifacts first, and neither
+      # failing stops the job — the chain still builds from source and reports
+      # which sidecar it resolved.
+      - name: Download the installers.yml artifacts
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fall back to the release assets
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          mkdir -p artifacts
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "no workflow artifacts; pulling the assets attached to $TAG"
+            gh release download "$TAG" --dir artifacts \
+              --pattern '*.pkg' --pattern 'keld-setup.exe' \
+              --pattern 'keld-agent-sidecar_*.tar.gz' || true
+          fi
+          ls -la artifacts || true
+
+      # AC-12: every installer we ship has an unattended mode. This is where
+      # that claim is exercised — the silent invocation per artifact, no window.
+      #
+      # ⚠️ **THIS STEP USED TO BE `continue-on-error: true` AND END `|| echo`,
+      # AND SO COULD NOT FAIL.** The phase-2 review found it and marked AC-12
+      # MISSED for exactly that: a gate that cannot go red is not a gate, and
+      # nothing downstream consumed it either — the chain built from source, so
+      # a pkg that refused to install changed nothing anybody could see. Both
+      # are gone. scripts/conformance/install-<os>.sh installs the artifact
+      # unattended, onboards by command and verifies from OBSERVED STATE, and
+      # its failure fails this job.
+      #
+      # It is skipped when there is no artifact rather than "passed": an
+      # installer nobody handed us is not an installer that worked.
+      - name: Install Signal unattended (AC-12)
+        id: install
+        if: github.event_name == 'workflow_run' && runner.os != 'Windows'
+        shell: bash
+        env:
+          # The scripts refuse to touch a machine that has not said it is
+          # disposable. A GitHub runner is thrown away after the job; a
+          # developer's Mac is not, which is the case the guard exists for.
+          KELD_CONFORM_DISPOSABLE: "1"
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          case "$RUNNER_OS" in
+            macOS) pkgs=(artifacts/*.pkg)
+                   if [ ${#pkgs[@]} -eq 0 ]; then
+                     echo "::warning::no .pkg among the artifacts; AC-12's macOS path was NOT exercised"
+                     echo "exercised=false" >> "$GITHUB_OUTPUT"; exit 0
+                   fi
+                   bash scripts/conformance/install-macos.sh \
+                     --pkg "${pkgs[0]}" --skip-onboarding
+                   ;;
+            Linux) # install.sh downloads both archives; without the CLI tarball
+                   # there is nothing for it to install, and installers.yml only
+                   # attaches the sidecar on this leg today.
+                   if [ ! -f artifacts/keld_linux_amd64.tar.gz ]; then
+                     echo "::warning::no keld_linux_amd64.tar.gz among the artifacts; AC-12's Linux path was NOT exercised"
+                     echo "exercised=false" >> "$GITHUB_OUTPUT"; exit 0
+                   fi
+                   # ⚠️ A GitHub runner has no systemd --user bus, so the "is it
+                   # loaded" half of the service check is downgraded to a stated
+                   # line. The unit FILE is still required — the flag narrows one
+                   # check, it does not switch verification off.
+                   bash scripts/conformance/install-linux.sh \
+                     --artifacts artifacts --skip-onboarding \
+                     --allow-no-service-manager
+                   ;;
+          esac
+          echo "exercised=true" >> "$GITHUB_OUTPUT"
+
+      # A frozen sidecar must exist for the store_rows checkpoint to mean
+      # anything (lib/isolate.sh refuses to run without one). On a tool-release
+      # or dispatch run there are no artifacts, so the latest published Linux
+      # sidecar stands in — which is also what a user has.
+      - name: Provide a sidecar
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" ]; then
+            echo "sidecar already present"; exit 0
+          fi
+          case "$RUNNER_OS" in
+            Linux) asset="keld-agent-sidecar_linux_amd64.tar.gz" ;;
+            macOS) asset="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
+          esac
+          mkdir -p "$HOME/.local/bin"
+          # ⚠️ RETRIED. The sidecar asset is ~440 MB and a single GET of it
+          # failed mid-stream on 2026-09-16 ("read: connection reset by peer"),
+          # which left the runner with no sidecar and turned a green leg red for
+          # a reason that had nothing to do with the code. A gate that fails on
+          # someone else's TCP reset is a gate people learn to re-run without
+          # reading, which is the same as not having one.
+          # ⚠️ **"THE LATEST RELEASE" CAN BE ONE THAT IS STILL BEING BUILT.**
+          # Measured 2026-09-16: v3.0.2 was tagged at 17:13 and its release
+          # workflow was still running; the tag was already `latest` and
+          # non-prerelease while carrying only the six Go archives — no sidecar
+          # for any platform, no pkg, no exe. Every cell in the matrix went red
+          # at once on "no analysis sidecar", for something nobody had broken.
+          #
+          # So the release is chosen by what it CARRIES, not by its position:
+          # walk the published non-prereleases newest-first and take the first
+          # one that actually has this runner's sidecar. A release mid-publish
+          # is simply skipped until it is complete.
+          tag=""
+          for cand in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+                          --json tagName,isPrerelease,isDraft \
+                          --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'); do
+            if gh release view "$cand" --repo "$GITHUB_REPOSITORY" --json assets \
+                 --jq '[.assets[].name]' | grep -q "$asset"; then
+              tag=$cand; break
+            fi
+            echo "  $cand carries no $asset (mid-publish, or an incomplete release) — skipping"
+          done
+          [ -n "$tag" ] || { echo "::warning::no published release carries $asset"; exit 0; }
+          echo "sidecar release: $tag"
+          for attempt in 1 2 3; do
+            rm -rf /tmp/sc; mkdir -p /tmp/sc
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc; then
+              break
+            fi
+            echo "::warning::sidecar download attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          done
+          if [ -f "/tmp/sc/$asset" ]; then
+            tar -xzf "/tmp/sc/$asset" -C "$HOME/.local/bin"
+            chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" || true
+            echo "sidecar $(cat "$HOME/.local/bin/keld-agent-sidecar/VERSION" 2>/dev/null || echo 'no VERSION')"
+          else
+            echo "::warning::no frozen sidecar available; the chain will say so and stop"
+          fi
+
+      # --- the Windows sidecar ----------------------------------------------
+      #
+      # ⚠️ **WINDOWS HAS NO SIDECAR TARBALL.** Every other platform publishes
+      # keld-agent-sidecar_<os>_<arch>.tar.gz; Windows ships it INSIDE
+      # keld-setup.exe (installers/windows/keld.iss lays it flat into
+      # {localappdata}\Programs\keld). So the only way to get one onto a runner
+      # is to run the real installer — which is why the Windows chain failed at
+      # `no analysis sidecar` on its first real run, the single thing stopping
+      # it after bash, Node, Python and Go all turned out to be present.
+      #
+      # That is a happy accident rather than a workaround: AC-12 needs the
+      # Windows installer exercised unattended, and nothing had ever run it.
+      # This runs it with the documented silent flags, so the step that unblocks
+      # the chain IS the Windows half of the installer claim.
+      # ⚠️ **CHAIN A ONLY. TWO INSTALLER STEPS IN ONE JOB FOUGHT, AND THE SILENT
+      # INSTALLER LOST.** This step installed the newest release; chain B's pair
+      # step then installed an OLDER one over it, and keld-setup.exe exited 5 —
+      # Inno's "cancelled, or declined a prompt", which is what a SILENT install
+      # returns rather than go backwards over an existing install. It cannot
+      # ask, so it refuses and returns a number.
+      #
+      # Chain B needs no help here: its pair step installs both releases itself,
+      # oldest first, and leaves the NEWER one in {localappdata}\Programs\keld,
+      # which is exactly what isolate_init's frozen-sidecar resolution finds.
+      # One installer owner per job.
+      - name: Install the Windows sidecar from keld-setup.exe
+        if: runner.os == 'Windows' && matrix.chain == 'A'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # ⚠️ Same rule as the sidecar and previous-release steps, and it was
+          # missed here: taking [0] resolves whatever is newest, and a release
+          # mid-publish is newest while carrying nothing. v3.0.2 did exactly
+          # that on 2026-09-16 and this step failed on an exe that had not been
+          # uploaded yet. Walk back to the newest release that actually HAS it.
+          $tag = $null
+          $cands = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 20 `
+                     --json tagName,isPrerelease,isDraft `
+                     --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'
+          foreach ($c in $cands) {
+            $names = gh release view $c --repo "$env:GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join(" ")'
+            if ($names -match 'keld-setup\.exe') { $tag = $c; break }
+            Write-Host "  $c carries no keld-setup.exe (mid-publish, or incomplete) - skipping"
+          }
+          if (-not $tag) { throw "no published release carries keld-setup.exe" }
+          Write-Host "installing $tag unattended"
+          gh release download $tag --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir "$env:RUNNER_TEMP/win"
+          # ⚠️ **pwsh, NOT Git Bash, AND Start-Process -Wait.** The first attempt
+          # ran this from bash with //VERYSILENT — the doubled slash is the MSYS
+          # idiom for "do not rewrite this as a path", and Inno does not accept
+          # it, so the installer opened its GUI on a headless runner and hung
+          # until the job was killed. The evidence was in the cleanup, not the
+          # step: "Terminate orphan process: pid (3056) (keld-setup)".
+          #
+          # In pwsh the flags need no escaping at all. -Wait is load-bearing for
+          # a different reason: an Inno setup re-execs itself as keld-setup.tmp
+          # and the parent returns IMMEDIATELY, so without it the next step
+          # races a half-finished install.
+          $p = Start-Process -FilePath "$env:RUNNER_TEMP/win/keld-setup.exe" `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP/keld-install.log" `
+                 -Wait -PassThru -NoNewWindow
+          Write-Host "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path "$env:RUNNER_TEMP/keld-install.log") { Get-Content "$env:RUNNER_TEMP/keld-install.log" -Tail 40 }
+            throw "keld-setup.exe exited $($p.ExitCode)"
+          }
+          $app = "$env:LOCALAPPDATA\Programs\keld"
+          Get-ChildItem $app | Select-Object -First 20 | Format-Table Name,Length
+          if (-not (Test-Path "$app\keld-agent-sidecar.exe")) {
+            throw "no keld-agent-sidecar.exe under $app after a silent install"
+          }
+          $v = if (Test-Path "$app\VERSION") { Get-Content "$app\VERSION" -Raw } else { "(no VERSION)" }
+          Write-Host "sidecar $($v.Trim()) at $app"
+
+      # --- chain B's previous release ---------------------------------------
+      #
+      # ⚠️ CHAIN B COULD NOT PASS ON ANY RUNNER UNTIL THIS EXISTED. It upgrades
+      # FROM a previous release, and `--previous` was supplied nowhere in this
+      # file, so run-chain.sh fell back to its `installed` default: the Signal
+      # release already on THIS machine. A GitHub runner has none, so every
+      # chain B cell failed at its first step, on every OS, for a reason that
+      # had nothing to do with the code under test.
+      #
+      # `dir:<path>` is the seam run-chain.sh documents for exactly this ("the
+      # workflow downloads the previous release's artifacts and points the chain
+      # at them, so the run names a VERSION rather than a machine"). Downloading
+      # belongs here, in the job that already holds the token and knows the
+      # asset names — not in the script, where it would be a network path
+      # nothing local could test.
+      #
+      # The default (no --pattern tag) resolves the latest NON-prerelease, so
+      # this upgrades from the last thing real users were given, never from an
+      # rc. A missing asset FAILS the step rather than silently leaving
+      # PREVIOUS empty, which would put the fallback back.
+      # --- chain B's release pair, Windows ------------------------------------
+      #
+      # ⚠️ **WINDOWS PUBLISHES NO SIDECAR ARCHIVE, so a "previous release"
+      # cannot be assembled by downloading.** Every other platform gets
+      # keld-agent-sidecar_<os>_<arch>.tar.gz and unpacks two of them side by
+      # side; Windows ships the sidecar ONLY inside keld-setup.exe. So the pair
+      # is built by INSTALLING each release and copying the result aside —
+      # both write to the same {localappdata}\Programs\keld, so the older must
+      # be taken away before the newer overwrites it.
+      #
+      # That ordering is the whole step: install old -> copy -> install new ->
+      # copy. Reversing it silently yields two copies of the same version, and
+      # the chain would then refuse at `upgrade` with "the sidecar was NOT
+      # replaced" — which is what it did on Linux when both halves matched.
+      - name: Build chain B's release pair (Windows)
+        id: previous-windows
+        if: matrix.chain == 'B' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $app = "$env:LOCALAPPDATA\Programs\keld"
+          # Releases chosen by CONTENT, never by position — a tag mid-publish is
+          # newest and carries nothing (measured on v3.0.2, 2026-09-16).
+          $have = @()
+          $cands = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 20 `
+                     --json tagName,isPrerelease,isDraft `
+                     --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'
+          foreach ($c in $cands) {
+            $names = gh release view $c --repo "$env:GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join(" ")'
+            if ($names -match 'keld-setup\.exe') { $have += $c }
+            if ($have.Count -ge 2) { break }
+          }
+          if ($have.Count -lt 2) { throw "need two published releases carrying keld-setup.exe; found $($have.Count)" }
+          $newTag, $oldTag = $have[0], $have[1]
+          Write-Host "upgrade: $oldTag -> $newTag"
+
+          function Install-Keld([string]$tag, [string]$into) {
+            $dir = "$env:RUNNER_TEMP\dl-$tag"
+            gh release download $tag --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir $dir
+            # ⚠️ **THE FIRST INSTALL LEAVES keld RUNNING, AND A SILENT
+            # INSTALLER CANNOT ASK TO CLOSE IT.** v3.0.2 installed fine; v3.0.3
+            # over the top of it exited 5 — Inno's files-in-use prompt, which
+            # /VERYSILENT can only answer by refusing. `keld-agent install`
+            # registers and STARTS the logon task, so by the second install the
+            # binary Inno wants to replace is open.
+            #
+            # Two belts: stop anything of ours still running, and pass
+            # /FORCECLOSEAPPLICATIONS so Inno closes what it finds rather than
+            # asking a question nobody is there to answer. The Stop-Process is
+            # best-effort — nothing running is the normal case on the first
+            # install, and that must not be an error.
+            Get-Process -Name keld,keld-agent,keld-agent-sidecar -ErrorAction SilentlyContinue |
+              Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $p = Start-Process -FilePath "$dir\keld-setup.exe" `
+                   -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/FORCECLOSEAPPLICATIONS' -Wait -PassThru -NoNewWindow
+            # Inno exit 5 is "cancelled, or declined a prompt" — what a silent
+            # install returns rather than overwrite an existing one. Named here
+            # so the next reader is not sent to a search engine by a number.
+            if ($p.ExitCode -eq 5) {
+              throw "$tag installer exited 5 (Inno: cancelled/declined) - something is already installed at $app; one step must own the installer for the whole job"
+            }
+            if ($p.ExitCode -ne 0) { throw "$tag installer exited $($p.ExitCode)" }
+            New-Item -ItemType Directory -Force -Path $into | Out-Null
+            Copy-Item -Path "$app\*" -Destination $into -Recurse -Force
+            $v = if (Test-Path "$into\VERSION") { (Get-Content "$into\VERSION" -Raw).Trim() } else { "(no VERSION)" }
+            Write-Host "  $tag -> $into (sidecar $v)"
+          }
+
+          # OLD FIRST. The newer install overwrites the same directory.
+          $prev = "$env:RUNNER_TEMP\previous"
+          $newsc = "$env:RUNNER_TEMP\new-sidecar"
+          Install-Keld $oldTag $prev
+          Install-Keld $newTag $newsc
+          foreach ($f in @("keld.exe","keld-agent.exe","keld-agent-sidecar.exe")) {
+            if (-not (Test-Path "$prev\$f")) { throw "$oldTag install left no $f" }
+          }
+          "dir=$prev"        | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "newsidecar=$newsc" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Fetch the previous release (chain B)
+        id: previous
+        if: matrix.chain == 'B' && runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) cli="keld_linux_amd64.tar.gz";  sc="keld-agent-sidecar_linux_amd64.tar.gz" ;;
+            macOS) cli="keld_darwin_arm64.tar.gz"; sc="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
+            *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
+          esac
+          dest="$RUNNER_TEMP/previous"
+          mkdir -p "$dest" /tmp/prev
+          # ⚠️ **TWO RELEASES, NOT ONE — an upgrade needs something to upgrade TO.**
+          # The first cut downloaded only the latest and left the NEW sidecar
+          # pointing at the same tree, so both halves reported v3.0.1 and the
+          # chain refused at step `upgrade`: "the sidecar was NOT replaced".
+          # That refusal is correct and worth keeping — a run that calls an
+          # upgrade an upgrade when nothing moved proves nothing — so the fix is
+          # to give it a real pair.
+          #
+          # previous = the SECOND-newest published release, new = the newest.
+          # Both are real, shipped, STAMPED sidecars, which is what the skew
+          # assertion needs: it fired correctly on the run before this one, and
+          # it can only stay meaningful while the two halves genuinely differ.
+          # Same rule as the sidecar step, and for the same measured reason: a
+          # tag that is still mid-publish is `latest` and carries nothing. Take
+          # the two newest releases that actually hold BOTH archives.
+          tags=""
+          for cand in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
+                          --json tagName,isPrerelease,isDraft \
+                          --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'); do
+            names=$(gh release view "$cand" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]')
+            if grep -q "$cli" <<<"$names" && grep -q "$sc" <<<"$names"; then
+              tags="$tags$cand"$'\n'
+              [ "$(printf '%s' "$tags" | grep -c .)" -ge 2 ] && break
+            else
+              echo "  $cand is incomplete for this runner — skipping"
+            fi
+          done
+          new_tag=$(echo "$tags" | sed -n 1p)
+          tag=$(echo "$tags" | sed -n 2p)
+          [ -n "$tag" ] && [ -n "$new_tag" ] || { echo "::error::need two published non-prereleases to test an upgrade; found: $tags"; exit 1; }
+          echo "upgrade: $tag -> $new_tag"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$cli" --dir /tmp/prev
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$sc"  --dir /tmp/prev
+          tar -xzf "/tmp/prev/$cli" -C "$dest"
+          tar -xzf "/tmp/prev/$sc"  -C "$dest"
+          # The NEWER sidecar is what the upgrade moves to. Staged separately so
+          # the two trees can never be confused for one another.
+          newsc="$RUNNER_TEMP/new-sidecar"
+          mkdir -p "$newsc" /tmp/new
+          gh release download "$new_tag" --repo "$GITHUB_REPOSITORY" --pattern "$sc" --dir /tmp/new
+          tar -xzf "/tmp/new/$sc" -C "$newsc"
+          [ -x "$newsc/keld-agent-sidecar/keld-agent-sidecar" ] || { echo "::error::$new_tag has no sidecar binary"; exit 1; }
+          echo "  new sidecar $(cat "$newsc/keld-agent-sidecar/VERSION" 2>/dev/null || echo '?')"
+          echo "newsidecar=$newsc/keld-agent-sidecar" >> "$GITHUB_OUTPUT"
+          chmod +x "$dest/keld" "$dest/keld-agent" "$dest/keld-agent-sidecar/keld-agent-sidecar"
+          # prev_resolve needs all three; assert rather than discover it mid-chain.
+          for f in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
+            [ -x "$dest/$f" ] || { echo "::error::$tag has no $f"; exit 1; }
+          done
+          echo "  keld      $("$dest/keld" --version 2>&1 | head -1)"
+          echo "  sidecar   $(cat "$dest/keld-agent-sidecar/VERSION" 2>/dev/null || echo '(no VERSION)')"
+          echo "dir=$dest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"  >> "$GITHUB_OUTPUT"
+
+      # --- this branch's own analysis service ---------------------------------
+      #
+      # ⚠️ **A RELEASED SIDECAR CANNOT TEST A SIDECAR CHANGE**, and two
+      # checkpoints proved it in one day: `blocks` could never pass because
+      # v3.0.3 predates devblocks.py entirely, and Codex's `store_rows` could
+      # never pass because the reader that resolves a Codex prompt id is new
+      # here. Both were declared "not expected" against a frozen sidecar —
+      # honest, and leaving the code unexercised.
+      #
+      # ⚠️ It costs SIX WHEELS AND SECONDS, not the ~5 GB the full sidecar venv
+      # implies: the service loads GLiNER2 lazily on a first inference this
+      # chain never issues, so torch/transformers/spacy/presidio/llama-cpp are
+      # dead weight. analysis-venv.sh excludes them by NAME and then ASSERTS
+      # app.main still imports, so a heavy dependency creeping in fails there
+      # rather than as a sidecar that will not start.
+      #
+      # The frozen sidecar keeps its place on the RELEASE trigger, where proving
+      # the shipped artifact is the point. A pull request proves the branch.
+      - name: This branch's analysis service (not the released one)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=$(scripts/conformance/analysis-venv.sh "$RUNNER_TEMP/analysis-venv")
+          echo "KELD_CONFORM_PYTHON=$py" >> "$GITHUB_ENV"
+          echo "worktree analysis service: $py"
+
+      # --- the chain --------------------------------------------------------
+      - name: Run the chain
+        id: chain
+        if: runner.os != 'Windows' && !inputs.force_fail
+        shell: bash
+        env:
+          TOOL: ${{ matrix.tool }}
+          CHAIN: ${{ matrix.chain }}
+          # When the step above actually installed an artifact, the chain
+          # installs it AGAIN at its own signal-install step — idempotent, and
+          # the only moment at which onboarding can be completed by command,
+          # since the setup code is redeemed against a mock Atlas that does not
+          # exist until run-chain.sh starts it. The chain then drives the
+          # INSTALLED binaries, so a green result is a statement about the
+          # artifact rather than about a source build.
+          ARTIFACT: ${{ steps.install.outputs.exercised == 'true' && format('dir:{0}/artifacts', github.workspace) || '' }}
+          # A GitHub runner has no systemd --user bus; the flag narrows the
+          # service check to the unit file and says so, it does not skip it.
+          KELD_CONFORM_INSTALL_FLAGS: ${{ runner.os == 'Linux' && '--allow-no-service-manager' || '' }}
+          KELD_CONFORM_DISPOSABLE: "1"
+          # Empty on chain A, so the ${VAR:+...} below adds nothing there.
+          PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
+          NEW_SIDECAR: ${{ steps.previous.outputs.newsidecar || '' }}
+          # ⚠️ **A RUNNER HAS NO ~/.keld/sidecar-venv**, so the chain's default
+          # "upgrade to the WORKTREE sidecar" cannot happen here — `make sidecar`
+          # is a developer step and freezing one in CI costs a ~5 GB venv and
+          # minutes. Left at the default it wrote a wrapper pointing at a python
+          # that does not exist, the sidecar never started, and chain B failed
+          # three checkpoints later with `store_rows 0` — blaming the store for
+          # a missing interpreter. isolate.sh now refuses that case by name; this
+          # is the other half, which makes the leg actually runnable.
+          #
+          # So CI upgrades the BINARIES (previous release -> this branch's build)
+          # while the sidecar half stays the frozen one already downloaded. What
+          # that still proves is most of chain B: the upgrade completes, the
+          # tool configs survive it byte for byte, and prompts after it still
+          # produce a transcript, a pointer, store rows, telemetry and a publish.
+          # What it cannot prove is the skew assertion, which needs two DIFFERENT
+          # stamped sidecars — the chain already reports that as INCONCLUSIVE
+          # rather than passing it, which is the honest half of the same fact.
+
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/conformance"
+          # $HOME is only real inside the shell, which is why this is not an
+          # env: entry — GitHub expressions cannot read the runner's HOME.
+          if [ "$CHAIN" = "B" ] && [ -n "${NEW_SIDECAR:-}" ]; then
+            export KELD_CONFORM_NEW_SIDECAR="$NEW_SIDECAR"
+            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
+          fi
+          make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
+            ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
+            ${PREVIOUS:+PREVIOUS="$PREVIOUS"} \
+            WORK="$RUNNER_TEMP/conformance" 2>&1 | tee "$RUNNER_TEMP/conformance/chain.log"
+          exit "${PIPESTATUS[0]}"
+
+      # --- the chain, Windows -----------------------------------------------
+      #
+      # ⚠️ THIS RAN `run-chain.ps1`, A FILE THAT HAS NEVER EXISTED, and exited 1
+      # to say so. That was honest but it bought nothing: it asserted Windows is
+      # unproven without ever finding out WHY, and it set the price of Windows
+      # at "write a second chain runner in PowerShell" — 1,500 lines of harness,
+      # reimplemented, with two copies of every rule to keep in step.
+      #
+      # That price was never checked against the code. Reading it first:
+      #   - The chain runs the daemon in the FOREGROUND (lib/isolate.sh), so it
+      #     needs no launchd, no systemd and no schtasks. Service registration
+      #     belongs to install-<os>.sh (AC-12), not here.
+      #   - The transcript watcher is NOT platform-gated. There are no
+      #     _windows/_darwin files under internal/agent/watch, discoverRoots
+      #     puts ~/.claude/projects in unconditionally, and only the Cowork glob
+      #     is darwin-only. AGENTS.md's "macOS + Linux; Windows deferred" does
+      #     not describe this code.
+      #   - windows-latest ships Git Bash, Node, Python and Go.
+      #
+      # So the harness is mostly platform-neutral and the honest next step is to
+      # RUN it and read the failure, not to guess at a rewrite. Whatever breaks
+      # here is a real, named Windows gap; a PowerShell port written blind would
+      # have had to discover the same list anyway, after the rewrite.
+      #
+      # ⚠️ Still `continue-on-error` for this cell (see the job), so this is an
+      # honest amber while we learn. It stops being amber the day it passes, not
+      # the day we stop looking.
+      #
+      # run-chain.sh is invoked directly rather than through `make`: GNU make is
+      # not guaranteed on windows-latest, and the Makefile target is a
+      # passthrough anyway. Paths come through `cygpath -u` because RUNNER_TEMP
+      # is a Windows path and Git Bash needs a POSIX one.
+      - name: Run the chain (Windows, Git Bash)
+        id: chain-windows
+        if: runner.os == 'Windows' && !inputs.force_fail
+        shell: bash
+        env:
+          TOOL: ${{ matrix.tool }}
+          CHAIN: ${{ matrix.chain }}
+          KELD_CONFORM_DISPOSABLE: "1"
+          PREVIOUS_WIN: ${{ steps.previous-windows.outputs.dir || '' }}
+          NEW_SIDECAR_WIN: ${{ steps.previous-windows.outputs.newsidecar || '' }}
+        run: |
+          set -uo pipefail
+          work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          # Chain B's pair, converted to POSIX for the harness that reads them.
+          PREV_ARG=""
+          if [ "$CHAIN" = "B" ] && [ -n "${PREVIOUS_WIN:-}" ]; then
+            PREV_ARG="--previous dir:$(cygpath -u "$PREVIOUS_WIN")"
+            export KELD_CONFORM_NEW_SIDECAR="$(cygpath -u "$NEW_SIDECAR_WIN")"
+            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN"
+          fi
+          mkdir -p "$work"
+          echo "bash: $(bash --version | head -1)"
+          echo "node: $(node --version 2>&1)  python: $(python --version 2>&1)  go: $(go version 2>&1)"
+          # shellcheck disable=SC2086  # PREV_ARG must word-split into two args
+          bash scripts/conformance/run-chain.sh \
+            --tool "$TOOL" --chain "$CHAIN" --seed "$SEED" --work "$work" $PREV_ARG \
+            2>&1 | tee "$work/chain.log"
+          rc=${PIPESTATUS[0]}
+          echo "run-chain.sh exited $rc"
+          exit "$rc"
+
+      # The forced failure that proves the issue step (AC-11). It fabricates a
+      # failing verdict rather than breaking the harness, so what is tested is
+      # the reporting path and nothing else.
+      - name: Force a failing checkpoint (AC-11 proof)
+        id: forced
+        if: inputs.force_fail
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/conformance"
+          cat > "$RUNNER_TEMP/conformance/verdict-after-signal.json" <<JSON
+          {"tool":"${{ matrix.tool }}","chain":"${{ matrix.chain }}","step":"after-signal",
+           "seed":"$SEED","pass":false,
+           "checkpoints":[
+             {"name":"transcript","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"pointer","ok":false,"required":true,"source":"forced","detail":"FORCED FAILURE (workflow_dispatch force_fail=true)"},
+             {"name":"store_rows","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"telemetry","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"publish","ok":true,"required":true,"source":"forced","detail":"forced pass"}]}
+          JSON
+          echo "forced a failing 'pointer' checkpoint"
+          exit 1
+
+      # --- reporting --------------------------------------------------------
+      - name: Summary table
+        id: summary
+        if: always() && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 - "$RUNNER_TEMP/conformance" > "$RUNNER_TEMP/summary.md" <<'PY'
+          import glob, json, os, sys
+          work = sys.argv[1]
+          rows, failed = [], []
+          for path in sorted(glob.glob(os.path.join(work, "verdict-*.json"))):
+              try:
+                  v = json.load(open(path))
+              except Exception:
+                  continue
+              for c in v.get("checkpoints", []):
+                  mark = "✅" if c["ok"] else ("❌" if c.get("required", True) else "n/a")
+                  rows.append(f"| `{v['tool']}` | {v['chain']}/{v['step']} | `{c['name']}` | {mark} | {c.get('detail','')} |")
+                  if not c["ok"] and c.get("required", True):
+                      failed.append((v["tool"], v["chain"], v["step"], c["name"]))
+          print("| tool | chain/step | checkpoint | ok | detail |")
+          print("| --- | --- | --- | --- | --- |")
+          print("\n".join(rows) if rows else "| — | — | — | — | no verdict was written (the chain stopped before its first step) |")
+          if failed:
+              t, ch, st, cp = failed[0]
+              with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+                  fh.write(f"failed_tool={t}\nfailed_chain={ch}\nfailed_step={st}\nfailed_checkpoint={cp}\n")
+          PY
+          {
+            echo "### ${{ matrix.tool }} · chain ${{ matrix.chain }} · ${{ matrix.os }}"
+            echo
+            echo "tool version: \`${TOOL_VERSION:-@latest}\` · seed: \`$SEED\`"
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ⚠️ **WHAT MAY BE UPLOADED IS AN EXHAUSTIVE LIST, NOT A DIRECTORY.** The
+      # run's HOME is isolated, so the only transcript under it is the one OUR
+      # scripted prompt produced ("reply with one word") — nothing a person
+      # wrote is reachable. That is a property of the isolation, so the paths
+      # are named one by one rather than swept with a wildcard from $HOME.
+      # ⚠️ **WINDOWS WAS EXCLUDED FROM THIS, WHICH IS BACKWARDS.** The exclusion
+      # dated from when the Windows leg was a stub that exited 1 with nothing to
+      # collect. It now runs the real chain, so it is the leg with the most to
+      # learn from and was the only one whose evidence was thrown away — two
+      # rounds of Windows debugging were spent reading the step's stdout because
+      # the daemon log was never uploaded.
+      # A Windows-only dump of the three files that answer "why did the hook
+      # not fire". The enrichment lane is the last failing checkpoint there, and
+      # the hook is a command the TOOL runs, so what matters is what setup wrote
+      # into the tool's own config — not anything the chain prints.
+      # Why the enrichment lane is dark on Windows. The daemon log from the
+      # previous run showed NO pointer arriving at all, so the question is
+      # narrowed: does `keld.exe __hook` work when something other than the
+      # tool runs it? That is the one thing nothing has ever checked, and it
+      # separates "Claude Code did not run the hook" from "the hook runs and
+      # cannot reach the daemon".
+      #
+      # ⚠️ `set +e` FIRST. The previous version of this step died on its own
+      # `cat` of a missing file, because the step shell runs with -e — a
+      # diagnostic that aborts halfway is worse than none, since it looks like
+      # the thing it was diagnosing.
+      - name: Why did the hook not fire (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set +e
+          work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          home="$work/home"
+          echo "=== hook command as written into settings.json ==="
+          find "$home" -name settings.json 2>/dev/null | while read -r f; do
+            echo "--- $f"; grep -o '"command": "[^"]*"' "$f" | sort -u
+          done
+          echo
+          echo "=== RUN THE HOOK BY HAND, exactly as the tool would ==="
+          # A UserPromptSubmit payload is what Claude Code pipes on stdin.
+          payload='{"session_id":"winprobe","transcript_path":"'"$home"'/.claude/projects/x.jsonl","prompt_id":"winprobe-1","hook_event_name":"UserPromptSubmit"}'
+          echo "$payload" | "$work/bin-under-test/keld.exe" __hook --source claude_code
+          echo "hook exit: $?"
+          echo
+          # ⚠️ **AN ABSENT agent.log IS AMBIGUOUS, and this step used to claim
+          # otherwise.** debuglog.Append is called ONLY on forwardToAgent's
+          # FAILURE branches — a spool write, or an unreachable daemon. The
+          # happy path (postToAgent returns true) logs nothing at all. So no
+          # file means "every hook that ran delivered" OR "no hook ran", and it
+          # cannot separate them. Printed for what it does say, not as a verdict.
+          echo "=== hook log (FAILURE paths only — absence is ambiguous) ==="
+          [ -f "$home/agent.log" ] && tail -40 "$home/agent.log" || echo "  (none: either no hook ran, or each one delivered)"
+          echo
+          # THE UNAMBIGUOUS EXPERIMENT: give Claude Code a hook that can only
+          # leave a trace, and look for the trace. This separates the two
+          # candidates nothing else has — "Claude Code runs no hook on Windows"
+          # versus "it runs them and keld's command form is wrong".
+          echo "=== CONTROL: does Claude Code run ANY hook on Windows? ==="
+          marker="$work/hook-marker.txt"; rm -f "$marker"
+          probe="$work/probe-hook.cmd"
+          printf '@echo off\r\necho fired 1>>"%%~1"\r\n' > "$probe"
+          PROBE_WIN=$(cygpath -w "$probe"); MARKER_WIN=$(cygpath -w "$marker")
+          python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); c="\"%s\" \"%s\""%(sys.argv[2],sys.argv[3]); d.setdefault("hooks",{}).setdefault("UserPromptSubmit",[]).append({"hooks":[{"type":"command","command":c}]}); json.dump(d,open(p,"w"),indent=2); print("control hook:",c)' "$home/.claude/settings.json" "$PROBE_WIN" "$MARKER_WIN"
+          "$work/npm/claude" -p "say ok" >/dev/null 2>&1
+          if [ -f "$marker" ]; then
+            echo "  CONTROL FIRED — Claude Code DOES run hooks here; keld's command form is the suspect"
+          else
+            echo "  CONTROL DID NOT FIRE — Claude Code ran no hook at all on this platform"
+          fi
+          echo
+          echo "=== did anything reach the daemon's spool? ==="
+          find "$home/spool" -type f 2>/dev/null | head -10
+          echo "=== hook.json ==="
+          sed -e 's/\(ingest_token[^A-Za-z0-9]*[A-Za-z0-9]\{4\}\)[^"]*/\1…REDACTED/' "$home/hook.json" 2>/dev/null
+          echo "=== daemon log ==="
+          tail -40 "$work/daemon.log" 2>/dev/null
+          exit 0
+
+      # ⚠️ **WINDOWS WAS EXCLUDED FROM THIS, WHICH IS BACKWARDS.** The exclusion
+      # dated from when the Windows leg was a stub that exited 1 with nothing to
+      # collect. It now runs the real chain, so it is the leg with the most to
+      # learn from and was the only one whose evidence was thrown away — two
+      # rounds of Windows debugging were spent reading the step's stdout because
+      # the daemon log was never uploaded.
+      # A Windows-only dump of the three files that answer "why did the hook
+      # not fire". The enrichment lane is the last failing checkpoint there, and
+      # the hook is a command the TOOL runs, so what matters is what setup wrote
+      # into the tool's own config — not anything the chain prints.
+      - name: Upload the evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.tool }}-${{ matrix.chain }}-${{ matrix.os }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/conformance/chain.log
+            ${{ runner.temp }}/conformance/artifact-install.log
+            ${{ runner.temp }}/conformance/daemon.log
+            ${{ runner.temp }}/conformance/mockllm.jsonl
+            ${{ runner.temp }}/conformance/mockllm.out
+            ${{ runner.temp }}/conformance/mockatlas.out
+            ${{ runner.temp }}/conformance/verdict-*.json
+            ${{ runner.temp }}/conformance/setup.out
+            ${{ runner.temp }}/conformance/login.out
+            ${{ runner.temp }}/conformance/npm-install.log
+            ${{ runner.temp }}/conformance/home/.claude/settings.json
+            ${{ runner.temp }}/conformance/home/.codex/config.toml
+            # ⚠️ **GEMINI'S CONFIG AND THE PROMPT OUTPUTS WERE BOTH MISSING, AND
+            # THAT COST A WHOLE CI ROUND TRIP.** Chain A died on every OS with
+            # `gemini -p exited 41`, and the harness prints only `tail -5` of the
+            # tool's output — which caught a deprecation warning rather than the
+            # actual error. The real line ("Invalid auth method selected.") was in
+            # prompt-after-detect-gemini_cli.out, which was never uploaded, and
+            # the config that explains it was ~/.gemini/settings.json, also never
+            # uploaded. Diagnosing it needed the tool installed locally at CI's
+            # exact version to reproduce. Both are cheap and both are the first
+            # thing anyone reads when a TOOL, rather than keld, refuses to run.
+            ${{ runner.temp }}/conformance/home/.gemini/settings.json
+            ${{ runner.temp }}/conformance/prompt-*.out
+            ${{ runner.temp }}/conformance/home/hook.json
+            # ⚠️ THE HOOK'S OWN LOG, and the one file that settles whether the
+            # hook ever RAN. debuglog.Append writes $KELD_HOME/agent.log
+            # unconditionally — no env var gates it — so its absence means the
+            # tool never invoked the hook, and its presence names what the hook
+            # then did (spooled, POSTed, got a status). Two rounds of Windows
+            # debugging asked that question without collecting the file that
+            # answers it.
+            ${{ runner.temp }}/conformance/home/agent.log
+            ${{ runner.temp }}/conformance/home/agent.log.1
+            # ⚠️ THE MOCK ATLAS'S RECEIVED BODIES. `blocks` reads counts off
+            # these, so when it says 0 the bodies are the only thing that can
+            # say whether the daemon posted a block batch at all, what the
+            # client events reported about the cut, and what shape arrived.
+            # Two rounds were spent inferring that from the outside.
+            ${{ runner.temp }}/conformance/atlas-state/**
+            ${{ runner.temp }}/conformance/home/.claude/projects/**/*.jsonl
+
+      - name: File or update the issue (AC-11)
+        if: failure() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          bash scripts/conformance/file-issue.sh \
+            --tool "${{ steps.summary.outputs.failed_tool || matrix.tool }}" \
+            --version "${TOOL_VERSION:-latest}" \
+            --os "${{ matrix.os }}" \
+            --chain "${{ steps.summary.outputs.failed_chain || matrix.chain }}" \
+            --step "${{ steps.summary.outputs.failed_step || 'chain' }}" \
+            --checkpoint "${{ steps.summary.outputs.failed_checkpoint || 'run' }}" \
+            --seed "$SEED" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --summary "$RUNNER_TEMP/summary.md"
+
+  # -------------------------------------------------------------- record -----
+  # A version lands in .conformance/last-tested.json only after a chain PROVED
+  # it. That is the whole contract of the file: a commit there means green, not
+  # that somebody looked.
+  record:
+    name: record the proven versions
+    needs: [plan, chain]
+    if: github.event_name == 'schedule' && needs.chain.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record and commit
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          python3 - "$MATRIX" > /tmp/proven.txt <<'PY'
+          import json, sys
+          for c in json.loads(sys.argv[1])["include"]:
+              print(c["tool"], c["version"])
+          PY
+          while read -r tool version; do
+            [ -n "$tool" ] || continue
+            bash scripts/conformance/version-watch.sh --record "$tool" "$version"
+          done < /tmp/proven.txt
+          git config user.name "keld-conformance"
+          git config user.email "noreply@keld.co"
+          git add .conformance/last-tested.json
+          # `git diff --quiet && …` would be a failing list under `set -e` in
+          # the CHANGED case and fail the job for having work to do.
+          if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
+          # ⚠️ THIS JOB HOLDS `contents: write` AND PUSHES TO THE DEFAULT
+          # BRANCH, so it is fenced to the one file it exists to update.
+          # The realistic failure is not a compromised script but a buggy one —
+          # a version-watch change that rewrites more than it means to, landing
+          # on main unattended at 03:00 with nobody reading the run. Both guards
+          # below fail the job rather than push something unexpected.
+          git add -A .conformance/last-tested.json
+          changed=$(git diff --cached --name-only)
+          if [ "$changed" != ".conformance/last-tested.json" ]; then
+            echo "refusing to push: expected only .conformance/last-tested.json, staged:" >&2
+            echo "$changed" >&2
+            exit 1
+          fi
+          # A corrupt record is worse than a stale one: the canary reads this
+          # file, so unparseable JSON on main turns the whole trigger off and
+          # nothing says so.
+          python3 -c "import json,sys; d=json.load(open('.conformance/last-tested.json')); sys.exit(0 if d.get('tools') else 1)" \
+            || { echo "refusing to push: the record is not valid JSON with a tools key" >&2; exit 1; }
+          git commit -m "chore(conformance): record proven tool versions
+
+          A chain passed at these versions on ubuntu-latest."
+          git push

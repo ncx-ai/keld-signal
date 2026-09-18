@@ -329,6 +329,74 @@ def test_chunked_ingest_of_the_second_fixture_equals_one_pass():
     _assert_chunked_equals_whole(lines, projdir, fname)
 
 
+def _codex_fixture_lines(name):
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis", "testdata", "codex")
+    with open(os.path.join(d, f"{name}.jsonl")) as fh:
+        return fh.readlines()
+
+
+def _codex_laid_out(tmp, name, lines):
+    """The rollout at a path `readers.reader_for` recognises as Codex.
+
+    The layout is load-bearing for a second reason here, beyond reader selection: `ingest._scope`
+    asks the READER for the root, and the Codex reader answers with the `sessions` directory
+    rather than two `dirname`s up — which for `<sessions>/<YYYY>/<MM>/<DD>/rollout-….jsonl` would
+    make every month its own reconcile scope.
+    """
+    d = os.path.join(tmp, ".codex", "sessions", "2026", "09", "13")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, f"rollout-{name}.jsonl")
+    with open(p, "w") as fh:
+        fh.writelines(lines)
+    return p
+
+
+def _assert_codex_chunked_equals_whole(name, chunks=40):
+    """AC-7: ingesting a real rollout in `chunks` pieces equals one pass, row for row.
+
+    ⚠️ THIS IS THE TEST THE CODEX READER'S DESIGN IS SHAPED BY, not a check bolted on after. Codex
+    splits a turn across records — the cwd, model and turn id arrive on a `turn_context` and the
+    text on the `user_message` that follows — so a batch that begins between them has to be
+    handed what the previous batch saw, which is why the reader carries state and `ingest`
+    persists it in `parse_state`. It is also why the token dedup key is `(timestamp, cumulative
+    total)` and not `token_usage_record.response_id`: the response id sits on a DIFFERENT record
+    from the usage, so a tail beginning between the two cannot reconstruct the pairing, and a key
+    that differs between a tail parse and a whole-file parse fails exactly here.
+    """
+    lines = _codex_fixture_lines(name)
+    with tempfile.TemporaryDirectory() as tmp:
+        whole_store = open_store(os.path.join(tmp, "whole.db"))
+        whole_path = _codex_laid_out(os.path.join(tmp, "w"), name, lines)
+        ingest_file(whole_store, whole_path)
+
+        chunk_store = open_store(os.path.join(tmp, "chunked.db"))
+        cuts = sorted({round(len(lines) * (i + 1) / chunks) for i in range(chunks)})
+        chunk_path, prev = None, 0
+        for end in cuts:
+            if end == prev:
+                continue
+            chunk_path = _codex_laid_out(os.path.join(tmp, "c"), name, lines[:end])
+            ingest_file(chunk_store, chunk_path)
+            prev = end
+        assert _dump(whole_store, whole_path) == _dump(chunk_store, chunk_path), (
+            f"{name}: a {len(cuts)}-chunk ingest differs from one pass")
+
+
+def test_chunked_ingest_of_a_codex_rollout_equals_one_pass():
+    """The 0.153.4 fixture: both tool transports, 45 usage events, 7 human turns."""
+    _assert_codex_chunked_equals_whole("codex-0.153.4")
+
+
+def test_chunked_ingest_of_a_classic_codex_rollout_equals_one_pass():
+    """0.125.0 — the classic transport, whose human turn is named from a PRECEDING record and so
+    is the one a chunk boundary can actually separate."""
+    _assert_codex_chunked_equals_whole("codex-0.125.0")
+
+
+def test_chunked_ingest_of_an_item_model_codex_rollout_equals_one_pass():
+    _assert_codex_chunked_equals_whole("codex-0.151.0")
+
+
 def test_late_workspace_evidence_still_equals_a_full_parse():
     """The retroactive case: a repo marker and a remote arrive after the turns they re-resolve."""
     _assert_chunked_equals_whole(_late_evidence_lines())

@@ -8,6 +8,9 @@ metrics_exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/metrics"
 [[hooks.SessionStart]]
 hooks = [ { type = "command", command = 'keld __hook --source codex' } ]
 
-[[hooks.PreToolUse]]
+[[hooks.UserPromptSubmit]]
+hooks = [ { type = "command", command = 'keld __hook --source codex' } ]
+
+[[hooks.Stop]]
 hooks = [ { type = "command", command = 'keld __hook --source codex' } ]
 # <<< keld

@@ -9,7 +9,8 @@
 #
 # On success <workdir>/state.json holds everything the suite needs:
 #   {"baseURL","secret","port","daemonPid","pgid","sidecarPidFile",
-#    "home","work","log","settingsMounted","blocks"}
+#    "home","work","repoRoot","log","settingsMounted","integrationsMounted",
+#    "blocks"}
 # and the daemon (plus its sidecar) is left RUNNING, in the process group
 # this script was started in, for ui/e2e/global-teardown.ts to reap.
 #
@@ -77,8 +78,26 @@ JSON
 # facet set plus the block emitter. Under the compiled-in "auto" default the
 # first enrichment job downloads ~1.9 GB of GLiNER2 weights into this HOME —
 # the one network access the suite must never make.
+#
+# ⚠️ **`auto_setup_integrations` IS OFF, AND IT IS SET IN THE FILE RATHER THAN
+# THE ENVIRONMENT ON PURPOSE.** Two reasons, and neither is a preference.
+#
+# OFF because the detector writes REAL tool configs, through the same adapters
+# and the same write path `keld signal setup` uses, into whatever HOME it is
+# given. The safe default for a fixture machine is that nothing is configured
+# until a spec has decided it should be: AC-2's Set up journey needs the Codex
+# row to still be `not_configured` when the button is pressed, and a detector
+# that got there first leaves nothing to click.
+#
+# IN THE FILE because `Settings.AutoSetupEnabled` resolves env > file > ON, and
+# the detector re-reads it LIVE on every tick (`settings.Load()` opens
+# agent-config.json per call and caches nothing). So an env var would freeze the
+# toggle for the daemon's whole life, while the file stays the live lever — which
+# is how AC-2 (needs OFF) and AC-3 (needs ON) share ONE fixture daemon instead of
+# paying a second three-minute bring-up. `integrations.spec.ts` flips this key and
+# the next poll honours it, exactly as the pane's own toggle would.
 cat > "$HOME_DIR/agent-config.json" <<JSON
-{"ml_backend":"deterministic","blocks":true}
+{"ml_backend":"deterministic","blocks":true,"auto_setup_integrations":false}
 JSON
 
 # One workstream so the Projects pane has a "counts for my work" switch to
@@ -233,6 +252,38 @@ echo "e2e-up: repository resolved ($REPO_KEYED repo-keyed suggestion(s))"
 SETTINGS_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "x-keld-agent-secret: $SECRET" "$BASE/v1/settings")
 SETTINGS_MOUNTED=False; [ "$SETTINGS_CODE" = "200" ] && SETTINGS_MOUNTED=True
 
+# ⚠️ **PROVE HOME ISOLATION REACHED THE DETECTOR BEFORE ANY SPEC WRITES A FILE.**
+# The integrations catalogue resolves `~/.codex`, `~/.claude`, `~/.gemini` and
+# `~/.cursor` through `os.UserHomeDir()` — i.e. `$HOME` — at CALL time, and so do
+# all three tool adapters and `watch.DiscoverRoots()`. The export above is
+# therefore sufficient, and that was verified by reading the same values twice in
+# one process with HOME moved between the reads.
+#
+# But "sufficient today" is exactly the thing that stops being true quietly, and
+# the cost of it stopping is not a failed test: `ui/e2e/integrations.spec.ts`
+# CREATES `<HOME>/.codex/config.toml` and lets the daemon's own adapter rewrite
+# it. If HOME ever leaked, that spec would edit the developer's real Codex config
+# and the daemon would point their real editors at a throwaway loopback port.
+#
+# So the harness asserts the machine it is about to hand over. A fresh isolated
+# HOME has NO tool config directory in it; this laptop has four. Any row
+# reporting `installed` means the daemon is reading a home nobody isolated, and
+# the run stops HERE — before the suite starts, not after a spec has written.
+INTEGRATIONS_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "x-keld-agent-secret: $SECRET" "$BASE/v1/integrations")
+INTEGRATIONS_MOUNTED=False
+if [ "$INTEGRATIONS_CODE" = "200" ]; then
+  INTEGRATIONS_MOUNTED=True
+  INSTALLED=$(curl -s -H "x-keld-agent-secret: $SECRET" "$BASE/v1/integrations" | python3 -c '
+import json,sys
+try: rows = json.load(sys.stdin).get("integrations") or []
+except Exception: rows = []
+print(",".join(r.get("id","?") for r in rows if r.get("installed")))' 2>/dev/null)
+  [ -z "$INSTALLED" ] || fail "HOME IS NOT ISOLATED. The daemon reports these tools installed under HOME=$HOME_DIR: $INSTALLED. A fresh isolated home contains none of them, so the daemon is reading a real home and ui/e2e/integrations.spec.ts would rewrite that machine's tool configs. Nothing was changed; fix the isolation before re-running."
+  echo "e2e-up: integrations route mounted; no tool installed under the isolated HOME (isolation holds)"
+else
+  echo "e2e-up: WARNING integrations route answered $INTEGRATIONS_CODE — the live integrations journeys will skip"
+fi
+
 python3 - "$WORK/state.json" <<PY
 import json,sys,os
 json.dump({
@@ -244,11 +295,13 @@ json.dump({
   "sidecarPidFile": "$WORK/sidecar.pid",
   "home": "$HOME_DIR",
   "work": "$WORK",
+  "repoRoot": "$ROOT",
   "log": "$LOG",
   "settingsMounted": $SETTINGS_MOUNTED,
+  "integrationsMounted": $INTEGRATIONS_MOUNTED,
   "blocks": $N,
   "intended": $INTENDED,
 }, open(sys.argv[1], "w"), indent=1)
 PY
 [ -s "$WORK/state.json" ] || fail "could not write state.json"
-echo "e2e-up: ready (settings route: $SETTINGS_CODE) -> $WORK/state.json"
+echo "e2e-up: ready (settings route: $SETTINGS_CODE, integrations route: $INTEGRATIONS_CODE) -> $WORK/state.json"

@@ -1,0 +1,45 @@
+# The Linux conformance leg. Driven by `make conformance-linux TOOL=<id>`.
+#
+#   docker compose -f scripts/conformance/compose/docker-compose.yml run --rm --build conformance
+#
+# ⚠️ The repo is mounted READ-ONLY. Everything the run writes goes to the two
+# named volumes: /work (the isolated HOME, the built binaries, the mock logs and
+# the verdicts) and /cache (Go's build and module caches, so a second run does
+# not recompile the world). A conformance run that could write to the checkout
+# would be able to change the thing it is testing.
+services:
+  conformance:
+    build:
+      # The repo root, so the Dockerfile could COPY if it ever needs to; today
+      # it installs toolchains only and the source arrives via the mount.
+      context: ../../..
+      dockerfile: scripts/conformance/compose/Dockerfile
+    init: true
+    working_dir: /repo
+    volumes:
+      - ../../..:/repo:ro
+      - conformance-work:/work
+      - conformance-cache:/cache
+      # The frozen sidecar the entrypoint fetches (~200 MB): kept across runs so
+      # only the first one pays for it.
+      - conformance-sidecar:/root/.local/bin
+    environment:
+      TOOL: ${TOOL:-}
+      CHAIN: ${CHAIN:-A}
+      SEED: ${SEED:-}
+      # Install the tool at @latest inside the container rather than borrowing
+      # the host's copy — this leg is the tool-release canary.
+      KELD_CONFORM_INSTALL: "1"
+      # Set to 0 to run against a sidecar you mounted yourself.
+      KELD_CONFORM_FETCH_SIDECAR: ${KELD_CONFORM_FETCH_SIDECAR:-1}
+      # Pin the sidecar release under test; empty = the latest published one.
+      KELD_CONFORM_SIDECAR_TAG: ${KELD_CONFORM_SIDECAR_TAG:-}
+      KELD_CONFORM_WORK: /work
+      GOCACHE: /cache/go-build
+      GOMODCACHE: /cache/go-mod
+      GOTOOLCHAIN: local
+
+volumes:
+  conformance-work:
+  conformance-cache:
+  conformance-sidecar:

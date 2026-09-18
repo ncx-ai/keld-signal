@@ -171,10 +171,12 @@ func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 	if !strings.Contains(plan.AfterText, "\"selectedType\": \"oauth-personal\"") {
 		t.Fatalf("security.auth not preserved:\n%s", plan.AfterText)
 	}
-	// Token rides in the endpoint query (gemini can't carry an auth header in an
-	// untrusted workspace); still no baked-in /v1/logs path (the SDK appends it).
-	if !strings.Contains(plan.AfterText, "\"otlpEndpoint\": \"https://atlas.keld.co?token=tok\"") {
-		t.Fatalf("expected token-in-query otlpEndpoint:\n%s", plan.AfterText)
+	// Token rides in the endpoint PATH (gemini can't carry an auth header in an
+	// untrusted workspace, and the query form does not survive the SDK's
+	// `${endpoint}/v1/logs` concatenation — see telemetry.endpointWithToken);
+	// still no baked-in signal path, which the SDK appends.
+	if !strings.Contains(plan.AfterText, "\"otlpEndpoint\": \"https://atlas.keld.co/t/tok\"") {
+		t.Fatalf("expected token-in-path otlpEndpoint:\n%s", plan.AfterText)
 	}
 	if strings.Contains(plan.AfterText, "/v1/logs") {
 		t.Fatalf("otlpEndpoint must not carry a signal path:\n%s", plan.AfterText)
@@ -239,8 +241,8 @@ func TestGeminiApplyLeavesCleanEnvUntouched(t *testing.T) {
 		t.Fatalf("Apply touched ~/.gemini/.env:\nwant: %q\ngot:  %q", seeded, string(onDisk))
 	}
 	// Token rides in settings.json's otlpEndpoint, not the .env.
-	if !strings.Contains(plan.AfterText, "?token=tok") {
-		t.Fatalf("expected token in otlpEndpoint query:\n%s", plan.AfterText)
+	if !strings.Contains(plan.AfterText, "/t/tok") {
+		t.Fatalf("expected token in the otlpEndpoint path:\n%s", plan.AfterText)
 	}
 }
 

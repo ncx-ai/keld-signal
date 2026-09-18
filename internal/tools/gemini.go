@@ -15,8 +15,9 @@ import (
 // GeminiAdapter implements the Adapter interface for Gemini CLI.
 //
 // keld manages one artifact: ~/.gemini/settings.json — the telemetry block
-// (with the ingest token carried in otlpEndpoint's ?token= query, since gemini
-// can't reliably carry an auth header — see telemetry.endpointWithToken) plus
+// (with the ingest token carried as a SEGMENT of otlpEndpoint's path, since
+// gemini can't reliably carry an auth header and its SDK destroys a query
+// string when it appends the signal path — see telemetry.endpointWithToken) plus
 // hooks.BeforeAgent. It's carried as Plan.AfterText like every other adapter:
 // Apply/Remove compute it, the caller commits it on confirm.
 //
