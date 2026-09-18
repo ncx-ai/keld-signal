@@ -43,22 +43,32 @@ SESSIONS=${KELD_E2E_SESSIONS:-5}
 # whatever the anchor; only the clock times move, and the visual baseline masks
 # those. Set KELD_E2E_END to an ISO instant to pin them too.
 #
-# ⚠️ THE ANCHOR MUST LAND INSIDE THE LOCAL DAY, AND "30 MINUTES AGO" DOES NOT
-# JUST AFTER MIDNIGHT. The Today pane asks the ledger for
-# `since=startOfLocalDay(now)` (app.js `todayLedgerURL`), so a corpus ending
-# before local midnight leaves that pane empty -- and five specs assert on a
-# block card, on two browsers. Measured 2026-09-19 at 00:16 CEST: the anchor
-# landed at 23:46 the previous day and the suite reported 10 failed / 94 passed,
-# with every failure reading as a product defect. The wall clock was the defect.
+# ⚠️ THE TODAY-SCOPED SPECS CANNOT PASS UNTIL THE LOCAL DAY IS OLDER THAN THE
+# CORPUS, AND NOTHING SAID SO. The Today pane asks the ledger for
+# `since=startOfLocalDay(now)` (app.js `todayLedgerURL`), while this corpus is
+# generated BACKWARDS from the anchor. Measured 2026-09-19: seed 1 with 5
+# sessions spans **9.67 hours**, so anchored at 00:01 local only **5 of its 576
+# events** land after local midnight -- not one closed block -- and the five
+# Today-scoped specs (breaks, details, settings, today, visual) fail on both
+# browsers. The suite reported 10 failed / 11 did not run / 94 passed at 00:16
+# CEST, and every one of the ten read as a product defect. The wall clock was
+# the defect.
 #
-# So the anchor is clamped into the local day. When the local day is younger
-# than a block's own closing time (IDLE_BINS x BIN_SECONDS = 15 minutes of
-# quiet, plus margin) no anchor can satisfy both, and the run REFUSES with the
-# reason instead of producing ten failures whose cause is invisible from the
-# report. KELD_E2E_NOW pins "now" for the tests that exercise this rule.
+# Two things follow. The anchor is clamped into the local day, which is correct
+# on its own terms and free. And when the day is younger than the corpus, the
+# run says so ONCE, up front, naming the specs that cannot pass and the earliest
+# local time they can -- rather than refusing (the other ~94 specs, integrations
+# included, are unaffected and are the gate most branches need) and rather than
+# staying silent (which costs the reader an hour per occurrence).
+#
+# The real fix is to stop reading the wall clock in the browser at all: freeze
+# the page clock to an instant inside the corpus's own day
+# (`page.clock.setFixedTime`) in the `signal` fixture. That is a change to the
+# spec harness rather than to this script, and it belongs with the day-three
+# chain work. KELD_E2E_NOW pins "now" so this rule is exercisable.
 anchor_end() {
   python3 - <<'ANCHOR_PY'
-import datetime, os, sys
+import datetime, os
 
 raw = os.environ.get('KELD_E2E_NOW')
 now = datetime.datetime.fromisoformat(raw).astimezone() if raw else datetime.datetime.now().astimezone()
@@ -68,9 +78,6 @@ if anchor < midnight:
     anchor = midnight + datetime.timedelta(minutes=1)
 # A block closes after 15 minutes of quiet; without that much of the local day
 # behind the anchor there is nothing closed for the Today pane to show.
-if now - anchor < datetime.timedelta(minutes=20):
-    print('TOO_EARLY')
-    sys.exit(0)
 print(anchor.astimezone(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'))
 ANCHOR_PY
 }
@@ -83,7 +90,26 @@ SETTLE_TIMEOUT=${KELD_E2E_SETTLE_TIMEOUT:-150}
 
 fail() { echo "e2e-up: FAIL: $*" >&2; [ -f "$LOG" ] && tail -40 "$LOG" >&2; exit 1; }
 
-[ "$END" != "TOO_EARLY" ] || fail "the local day is less than ~20 minutes old, and the Today pane is scoped to it (since=startOfLocalDay), so no corpus can hold a CLOSED block inside today. Re-run after 00:20 local, or pin KELD_E2E_END to an instant in a day that is old enough."
+# Measured span of seed 1 / 5 sessions. Recompute if those defaults change.
+CORPUS_SPAN_H=${KELD_E2E_CORPUS_SPAN_H:-9.7}
+day_age_warning() {
+  python3 - <<'AGE_PY'
+import datetime, os
+raw = os.environ.get('KELD_E2E_NOW')
+now = datetime.datetime.fromisoformat(raw).astimezone() if raw else datetime.datetime.now().astimezone()
+span = float(os.environ.get('CORPUS_SPAN_H', '9.7'))
+midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+needed = datetime.timedelta(hours=span, minutes=30)
+if now - midnight < needed:
+    ready = (midnight + needed).strftime('%H:%M')
+    print('e2e-up: NOTE: this local day is %.1fh old and the corpus spans %.1fh, so it cannot fit inside '
+          'today. The Today-scoped specs (breaks, details, settings, today, visual) will fail on both '
+          'browsers with empty block lists -- that is the clock, not the product. Everything else, '
+          'integrations included, is unaffected. Earliest they can pass today: %s local.'
+          % ((now - midnight).total_seconds() / 3600, span, ready))
+AGE_PY
+}
+CORPUS_SPAN_H="$CORPUS_SPAN_H" day_age_warning
 
 [ -x "$PY" ] || fail "no sidecar interpreter at $PY (run 'make sidecar', or set KELD_E2E_PYTHON)"
 command -v go >/dev/null || fail "go toolchain not on PATH"
