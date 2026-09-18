@@ -204,9 +204,23 @@ func TestStopChildReapsTheWholeProcessTree(t *testing.T) {
 func TestGracefulPrecedesForceful(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "term")
+	// ⚠️ A PID IS NOT A TRAP, AND WAITING FOR THE PID RACED THE SHELL. The
+	// child proves the ordering by trapping SIGTERM, so the test must not
+	// signal it until the trap is INSTALLED -- and `s.Pid() != 0` says only
+	// that fork/exec returned. Under `go test ./...` on a loaded machine
+	// (2026-09-19, five concurrent agents) the shell had not reached its
+	// `trap` line when cancel() fired, the supervisor's SIGKILL half did the
+	// reaping, no marker was written, and the failure read "SIGTERM never
+	// reached the child -- the forceful half ran first": a sentence accusing
+	// the supervisor of a defect the supervisor did not have.
+	//
+	// So the child announces readiness and the test waits for THAT. This
+	// removes the race rather than widening the window around it; the
+	// ordering assertion below is unchanged and still the point of the test.
+	ready := filepath.Join(dir, "ready")
 	spawn := func(int) (*exec.Cmd, error) {
-		c := exec.Command("sh", "-c", `trap 'echo term > "$M"; exit 0' TERM; while :; do sleep 0.05; done`)
-		c.Env = append(os.Environ(), "M="+marker)
+		c := exec.Command("sh", "-c", `trap 'echo term > "$M"; exit 0' TERM; : > "$R"; while :; do sleep 0.05; done`)
+		c.Env = append(os.Environ(), "M="+marker, "R="+ready)
 		return c, nil
 	}
 	s := NewSupervisor(spawn, 0, func() bool { return false }, 30*time.Second)
@@ -214,12 +228,15 @@ func TestGracefulPrecedesForceful(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go s.Start(ctx)
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && s.Pid() == 0; {
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if s.Pid() == 0 {
+	if _, err := os.Stat(ready); err != nil {
 		cancel()
-		t.Fatal("child never started")
+		t.Fatalf("the child never installed its TERM trap: %v", err)
 	}
 	cancel()
 	if !s.AwaitStopped(3 * time.Second) {
