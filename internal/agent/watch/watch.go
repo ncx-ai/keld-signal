@@ -23,6 +23,12 @@ import (
 type Watcher struct {
 	offer   func(spool.Pointer)
 	observe func(source, transcriptPath string, line []byte)
+	// observeDoc is observe's sibling for a DOCUMENT source. ⚠️ A Gemini session
+	// is one JSON file rewritten whole on every turn, so there are no appended
+	// lines for the per-line hook to see and a telemetry mirror for it could not
+	// exist on `observe` alone. It is handed coordinates only — a source and a
+	// path — exactly like the ingest signal.
+	observeDoc func(source, transcriptPath string)
 	// advanced reports whether the signal was TAKEN ON. A refused one must not be
 	// dropped — see drainFirstSight.
 	advanced func(source, transcriptPath string) bool
@@ -120,6 +126,16 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 // never offers historical prompts — see scanFile.
 func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
 	w.signalFirstSight = on
+	return w
+}
+
+// WithDocumentObserver installs the whole-file telemetry hook for document
+// sources. It fires once per poll for a transcript this watcher is actively
+// reading, and never for one it has classed as history — the same rule
+// scanDocument applies to prompts, because mirroring an old session's usage
+// would publish spend that was never reported.
+func (w *Watcher) WithDocumentObserver(fn func(source, transcriptPath string)) *Watcher {
+	w.observeDoc = fn
 	return w
 }
 
@@ -360,6 +376,14 @@ func (w *Watcher) scanDocument(source, path string) bool {
 			return true
 		}
 		done = 0
+	}
+	// Past the history branch, so this transcript is one being written now.
+	// Fired every poll rather than only when the PROMPT cursor moves: a session
+	// can gain model turns (and therefore cost) after its last human prompt, and
+	// a mirror keyed on new prompts would never see them. The mirror keeps its
+	// own cursor, so a poll that finds nothing new costs one parse and no POST.
+	if w.observeDoc != nil {
+		w.observeDoc(source, path)
 	}
 	if int64(len(s.Prompts)) < done {
 		// Fewer prompts than we have offered: a new session reusing the path, or

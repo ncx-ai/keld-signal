@@ -1,18 +1,46 @@
-// Package promptlog emits OTEL telemetry to the Keld ingest endpoint for prompts
-// captured by the transcript watcher whose source cannot deliver its own OTEL —
-// notably Cowork, whose agent sandbox egress allowlist excludes atlas.keld.co, so
-// its natively-configured OTEL export is dropped at the firewall. Running
-// host-side in the daemon (unrestricted egress), it mirrors the Claude Code CLI's
-// native OTEL: for each new transcript line it emits the matching log event
-// (user_prompt / api_request / assistant_response) and usage/cost metrics, with
-// identity recovered from the Cowork session path. It NEVER carries prompt or
-// response text — only lengths, ids, model, and token counts.
+// Package promptlog is the TRANSCRIPT-FIRST USAGE MIRROR: it reads what a tool
+// wrote to its own transcript on disk and posts the usage OTLP that tool would
+// have posted, host-side, from the daemon.
+//
+// It began as a Cowork-only workaround — Cowork's agent sandbox egress allowlist
+// excludes atlas.keld.co, so its natively-configured OTEL export dies at the
+// firewall — and that narrow job is the reason to widen it. A tool reads its
+// telemetry configuration ONCE, at startup, so every change Keld makes to it is
+// invisible until a human restarts the editor; a transcript needs no
+// configuration, no credential in the tool, and no restart. The evidence that
+// this reading is enough: this machine's own ledger holds **1,073 delivered
+// blocks (966 Claude Code, 107 Codex) covering 22,746 requests and $3,732.92 of
+// estimated spend, all derived from transcripts rather than from OTLP**.
+//
+// Three mirrors, one per tool family, each emitting THAT TOOL'S OWN native OTLP
+// shape so Atlas needs no new parser:
+//
+//	claude_code, cowork  claude_code.user_prompt / claude_code.api_request
+//	codex                codex.sse_event (event.kind = response.completed)
+//	gemini               gemini_cli.api_response
+//
+// # What never crosses
+//
+// No prompt, no response, no thinking, no tool input, no tool result, no span
+// and no offset. The mirror reads a transcript in order to report NUMBERS —
+// token counts, a model name, identifiers and instants. `privacy_test.go` puts a
+// canary in every text-bearing field each tool writes and asserts none of them
+// reaches the wire.
+//
+// # The dedup contract
+//
+// Atlas stores one tool event per `(event_ts, dedup_key)` and upserts, so a
+// mirrored row and a row the tool sent itself must agree on both halves or the
+// same work is counted twice. Every identifier a mirrored record carries is read
+// off the transcript line; nothing on the priced record comes from process state,
+// because a daemon restart renumbers process state and the key then names a
+// different row for work that happened once. See `dedup_test.go`, which replicas
+// all three of Atlas's key rules.
 package promptlog
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -21,17 +49,17 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/debuglog"
 )
 
-// Event names (log body = "claude_code."+name), matching the captured CLI schema.
+// Capture sources this package knows how to mirror. `cowork` and `claude_code`
+// share one transcript format and therefore one mirror.
 const (
-	eventUserPrompt        = "user_prompt"
-	eventAPIRequest        = "api_request"
-	eventAssistantResponse = "assistant_response"
-	metricTokenUsage       = "claude_code.token.usage"
+	sourceClaudeCode = "claude_code"
+	sourceCowork     = "cowork"
+	sourceCodex      = "codex"
+	sourceGemini     = "gemini"
 )
 
 // Telemetry emits OTLP logs + metrics for eligible captured sources.
@@ -39,35 +67,73 @@ type Telemetry struct {
 	logsURL    string
 	metricsURL string
 	token      func() string
-	sources    map[string]bool
 	ids        *identityCache
 	client     *http.Client
 
 	mu         sync.Mutex
-	seq        map[string]int64  // per-session event.sequence counter
+	sources    map[string]bool
+	seq        map[string]int64  // per-session event.sequence counter (unpriced events only)
 	lastPrompt map[string]string // per-session last user prompt id, for prompt.id linkage
+	lastReq    map[string]string // per-transcript last assistant requestId (Claude Code)
+	codex      map[string]*codexState
+	gemini     map[string]int // per-chat count of model turns already mirrored
 }
 
 // New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
 // read live (re-auth swaps picked up); sources is the set of capture sources to
-// emit for (others ignored — Claude Code is excluded by default as it emits its
-// own OTEL host-side).
+// mirror.
 func New(logsURL, metricsURL string, token func() string, sources map[string]bool) *Telemetry {
 	return &Telemetry{
 		logsURL:    logsURL,
 		metricsURL: metricsURL,
 		token:      token,
-		sources:    sources,
 		ids:        newIdentityCache(),
 		client:     &http.Client{Timeout: 5 * time.Second},
+		sources:    copySources(sources),
 		seq:        map[string]int64{},
 		lastPrompt: map[string]string{},
+		lastReq:    map[string]string{},
+		codex:      map[string]*codexState{},
+		gemini:     map[string]int{},
 	}
 }
 
-// SourcesFromEnv returns the set of capture sources to emit telemetry for.
+// SetSources replaces the set of capture sources this mirror emits for.
+//
+// This is the seam WS3 wires: the per-tool `tool_otlp` switch decides whether a
+// tool posts its own OTLP or the daemon mirrors its transcript, and it is
+// resolved at the ONE call site in daemon.go — deliberately not read here, so
+// this package stays a pure function of "which sources, which transcript" and
+// can be tested without a settings poll. Per source it is on or off; there is no
+// half state, because half a source is how the same request gets counted twice.
+func (t *Telemetry) SetSources(sources map[string]bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.sources = copySources(sources)
+	t.mu.Unlock()
+}
+
+func copySources(in map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		if v {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// SourcesFromEnv returns the set of capture sources to mirror.
 // Default {"cowork"}. KELD_WATCH_TELEMETRY=off disables (empty set);
 // KELD_WATCH_TELEMETRY_SOURCES=a,b overrides the list.
+//
+// The default stays {cowork} here on purpose. Widening the MECHANISM to three
+// tools and widening the POLICY that turns it on are separate changes: the
+// policy rides the per-tool `tool_otlp` setting (WS3) through SetSources, and a
+// default flipped in this function would enable mirroring on every machine the
+// moment the binary shipped, beside tools still posting their own OTLP.
 func SourcesFromEnv() map[string]bool {
 	switch strings.ToLower(os.Getenv("KELD_WATCH_TELEMETRY")) {
 	case "off", "0", "false":
@@ -82,177 +148,71 @@ func SourcesFromEnv() map[string]bool {
 		}
 		return out
 	}
-	return map[string]bool{"cowork": true}
+	return map[string]bool{sourceCowork: true}
 }
 
-// --- transcript record parsing (tolerant) ---
-
-type tRecord struct {
-	Type          string          `json:"type"`
-	PromptID      string          `json:"promptId"`
-	UUID          string          `json:"uuid"`
-	ParentUUID    string          `json:"parentUuid"`
-	RequestID     string          `json:"requestId"`
-	Effort        string          `json:"effort"`
-	SessionID     string          `json:"sessionId"`
-	Version       string          `json:"version"`
-	Timestamp     string          `json:"timestamp"`
-	IsSidechain   bool            `json:"isSidechain"`
-	IsMeta        bool            `json:"isMeta"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	Message       json.RawMessage `json:"message"`
-}
-type tMessage struct {
-	Role    string          `json:"role"`
-	Model   string          `json:"model"`
-	ID      string          `json:"id"`
-	Content json.RawMessage `json:"content"`
-	Usage   *tUsage         `json:"usage"`
-}
-type tUsage struct {
-	InputTokens              int    `json:"input_tokens"`
-	OutputTokens             int    `json:"output_tokens"`
-	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
-	ServiceTier              string `json:"service_tier"`
-	CacheCreation            struct {
-		Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
-		Ephemeral5m int `json:"ephemeral_5m_input_tokens"`
-	} `json:"cache_creation"`
+// eligible reports whether this source is mirrored and a token exists to post
+// with.
+func (t *Telemetry) eligible(source string) bool {
+	if t == nil || t.token == nil || t.token() == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sources[source]
 }
 
-// Observe parses one transcript line and emits the matching telemetry for an
+// Observe parses one transcript LINE and emits the matching telemetry for an
 // eligible source. Best-effort: any parse/POST failure is logged and swallowed.
+//
+// Gemini is absent from the switch by construction: its session is one JSON
+// document that is rewritten whole on every turn, so there are no appended lines
+// to observe. It arrives through ObserveFile instead.
 func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
-	if t == nil || !t.sources[source] {
+	if !t.eligible(source) {
 		return
 	}
-	if t.token == nil || t.token() == "" {
-		return
-	}
-	var r tRecord
-	if json.Unmarshal(line, &r) != nil {
-		return
-	}
-	var msg tMessage
-	if len(r.Message) > 0 {
-		_ = json.Unmarshal(r.Message, &msg)
-	}
-	id := t.ids.forCowork(transcriptPath)
-	res := resourceAttrs(source, r.Version)
-
-	switch r.Type {
-	case "user":
-		// Genuine human prompt only (mirror the watch filter): promptId set, real
-		// text, not a tool-result / sidechain / meta record.
-		if r.PromptID == "" || r.IsSidechain || r.IsMeta || len(r.ToolUseResult) > 0 {
-			return
-		}
-		text := contentText(msg.Content)
-		if text == "" {
-			return
-		}
-		t.setLastPrompt(r.SessionID, r.PromptID) // for prompt.id linkage on later assistant events
-		rec := t.record(eventUserPrompt, r, id, []kv{
-			attr("session.id", r.SessionID),
-			attr("prompt.id", r.PromptID),
-			attr("message.uuid", r.UUID),
-			attrInt("prompt_length", utf8.RuneCountInString(text)),
-		})
-		t.postLogs(res, []logRecord{rec})
-	case "assistant":
-		if msg.Usage == nil {
-			return
-		}
-		respLen := utf8.RuneCountInString(contentText(msg.Content))
-		promptID := t.lastPromptID(r.SessionID)
-		requestID := r.RequestID
-		if requestID == "" {
-			requestID = msg.ID
-		}
-		common := []kv{
-			attr("session.id", r.SessionID),
-			attr("prompt.id", promptID),
-			attr("model", msg.Model),
-			attr("request_id", requestID),
-		}
-		// Exact token detail — including the 1h/5m cache-write split and service
-		// tier — so Atlas can compute cost authoritatively. We do NOT emit a
-		// derived cost: the transcript carries no first-hand cost figure.
-		apiAttrs := append(append([]kv{}, common...),
-			attr("client_request_id", r.UUID),
-			attr("effort", r.Effort),
-			attrInt("input_tokens", msg.Usage.InputTokens),
-			attrInt("output_tokens", msg.Usage.OutputTokens),
-			attrInt("cache_creation_tokens", msg.Usage.CacheCreationInputTokens),
-			attrInt("cache_read_tokens", msg.Usage.CacheReadInputTokens),
-			attrInt("cache_creation_1h_tokens", msg.Usage.CacheCreation.Ephemeral1h),
-			attrInt("cache_creation_5m_tokens", msg.Usage.CacheCreation.Ephemeral5m),
-			attr("service_tier", msg.Usage.ServiceTier),
-		)
-		api := t.record(eventAPIRequest, r, id, apiAttrs)
-		resp := t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
-			attr("message.uuid", r.UUID),
-			attrInt("response_length", respLen),
-		))
-		t.postLogs(res, []logRecord{api, resp})
-		t.postMetrics(res, r, msg, id)
+	switch source {
+	case sourceCodex:
+		t.observeCodexLine(transcriptPath, line)
+	case sourceClaudeCode, sourceCowork:
+		t.observeClaudeLine(source, transcriptPath, line)
 	}
 }
 
-// record builds a log record for an event with common event metadata + the given
-// event-specific attributes + identity.
-func (t *Telemetry) record(event string, r tRecord, id Identity, specific []kv) logRecord {
-	attrs := []kv{
-		attr("event.name", event),
-		attr("event.timestamp", r.Timestamp),
-		attrInt("event.sequence", int(t.nextSeq(r.SessionID))),
-	}
-	attrs = append(attrs, specific...)
-	attrs = append(attrs, identityAttrs(id)...)
-	ns := timeNano(r.Timestamp)
-	return logRecord{
-		TimeUnixNano:         ns,
-		ObservedTimeUnixNano: ns,
-		SeverityNumber:       9,
-		SeverityText:         "INFO",
-		Body:                 anyVal{StringValue: "claude_code." + event},
-		Attributes:           attrs,
-	}
-}
-
-func (t *Telemetry) postMetrics(res []kv, r tRecord, msg tMessage, id Identity) {
-	ns := timeNano(r.Timestamp)
-	base := append([]kv{attr("session.id", r.SessionID), attr("model", msg.Model)}, identityAttrs(id)...)
-	tok := func(typ string, n int) metric {
-		return metric{Name: metricTokenUsage, Value: float64(n), IsInt: true, TimeUnixNano: ns,
-			Attrs: append(append([]kv{}, base...), attr("type", typ))}
-	}
-	metrics := []metric{
-		tok("input", msg.Usage.InputTokens),
-		tok("output", msg.Usage.OutputTokens),
-	}
-	if msg.Usage.CacheReadInputTokens > 0 {
-		metrics = append(metrics, tok("cacheRead", msg.Usage.CacheReadInputTokens))
-	}
-	if msg.Usage.CacheCreationInputTokens > 0 {
-		metrics = append(metrics, tok("cacheCreation", msg.Usage.CacheCreationInputTokens))
-	}
-	// No cost.usage metric: cost is derived authoritatively in Atlas from these
-	// exact token counts, not estimated client-side.
-	body, err := metricsPayload(res, metrics)
-	if err != nil {
+// ObserveFile mirrors a whole transcript FILE, for a source whose session is one
+// document rather than a stream of appended lines (Gemini). The watcher calls it
+// once per poll in which the file advanced; the mirror keeps its own per-file
+// cursor so an unchanged re-read costs nothing.
+func (t *Telemetry) ObserveFile(source, transcriptPath string) {
+	if !t.eligible(source) {
 		return
 	}
-	t.doPost(t.metricsURL, body)
+	if source == sourceGemini {
+		t.observeGeminiFile(source, transcriptPath)
+	}
 }
 
 func (t *Telemetry) postLogs(res []kv, recs []logRecord) {
+	if len(recs) == 0 {
+		return
+	}
 	body, err := logsPayload(res, recs)
 	if err != nil {
 		return
 	}
 	t.doPost(t.logsURL, body)
+}
+
+func (t *Telemetry) postMetricList(res []kv, metrics []metric) {
+	if len(metrics) == 0 {
+		return
+	}
+	body, err := metricsPayload(res, metrics)
+	if err != nil {
+		return
+	}
+	t.doPost(t.metricsURL, body)
 }
 
 func (t *Telemetry) doPost(url string, body []byte) {
@@ -295,16 +255,12 @@ func (t *Telemetry) lastPromptID(session string) string {
 	return t.lastPrompt[session]
 }
 
-func resourceAttrs(source, version string) []kv {
-	// service.name=claude-code so Atlas recognizes it as Claude-Code-family
-	// telemetry; tool=<source> marks the surface (e.g. cowork) so it is
-	// attributable and not conflated with CLI traffic — mirroring Cowork's own
-	// native otelConfig resourceAttributes ("tool=cowork").
-	a := []kv{attr("service.name", "claude-code"), attr("tool", source)}
-	if version != "" {
-		a = append(a, attr("service.version", version))
-	}
-	return append(a, attr("os.type", runtime.GOOS), attr("host.arch", runtime.GOARCH))
+// hostResource is the machine half of the resource attributes, identical for
+// every tool: os.type and host.arch are what the tools' own SDKs report and they
+// are constant per machine, so including them cannot make a payload
+// non-deterministic.
+func hostResource() []kv {
+	return []kv{attr("os.type", runtime.GOOS), attr("host.arch", runtime.GOARCH)}
 }
 
 func identityAttrs(id Identity) []kv {
@@ -319,32 +275,6 @@ func identityAttrs(id Identity) []kv {
 		a = append(a, attr("organization.id", id.OrgID))
 	}
 	return a
-}
-
-// contentText concatenates message text (bare string or text blocks) for LENGTH
-// measurement only — the returned text is never emitted in telemetry.
-func contentText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &blocks) == nil {
-		var b strings.Builder
-		for _, bl := range blocks {
-			if bl.Type == "text" {
-				b.WriteString(bl.Text)
-			}
-		}
-		return b.String()
-	}
-	return ""
 }
 
 // timeNano converts an RFC3339 timestamp to a UnixNano decimal string, or "" if

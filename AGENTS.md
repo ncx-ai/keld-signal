@@ -230,19 +230,90 @@ machines are caught. Restoring capture needs a path the host can read (or an
 in-VM emitter); `KELD_WATCH_ROOTS=cowork:<dir>` points the watcher at one the day
 it exists.
 
-**Watched-source telemetry (`internal/agent/promptlog`).** Cowork's own OTEL is
-configured to Keld but its sandbox egress blocks `atlas.keld.co`, so the daemon
-mirrors the transcript's events into OTLP logs+metrics host-side: the watcher's
-per-line `observe` hook → `promptlog.Telemetry.Observe`, which emits `user_prompt`
-/ `api_request` / `assistant_response` logs + `token.usage`/`cost.usage` metrics to
-`/v1/logs` + `/v1/metrics`, matching the CLI's native OTEL schema. Identity
-(`user.email`/`account_uuid`/`organization.id`) is recovered from the Cowork
-session path/metadata. **Never emits prompt/response text.** Default source
-`{cowork}` (Claude Code emits its own OTEL); `KELD_WATCH_TELEMETRY` (off/on),
-`KELD_WATCH_TELEMETRY_SOURCES`. **Codex** and **Gemini** are covered via their own watcher roots
-(`~/.codex/sessions` and `~/.gemini/tmp/*/chats`, sources codex and gemini) + specialized readers for enrichment
-(TranscriptReader resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
-telemetry via their native OTEL (config completed in the tool adapters), not host-side promptlog.
+**The transcript-first usage mirror (`internal/agent/promptlog`).** Cowork's own
+OTEL is configured to Keld but its sandbox egress blocks `atlas.keld.co`, so the
+daemon mirrors the transcript's events into OTLP logs+metrics host-side. That
+narrow workaround is now the general mechanism, for the reason the teleproxy
+bullet above already documents at length: **a tool reads its telemetry
+configuration once, at startup**, so every change Keld makes to it is invisible
+until a human restarts the editor, while a transcript needs no configuration, no
+credential inside the tool and no restart. Evidence it is enough: this machine's
+ledger holds **1,073 delivered blocks (966 Claude Code, 107 Codex) covering
+22,746 requests and $3,732.92 of estimated spend, all derived from transcripts
+rather than from OTLP**.
+
+⚠️ **THREE MIRRORS, EACH IN ITS OWN TOOL'S NATIVE OTLP SHAPE, so Atlas needs no
+new parser.** `claude_code`/`cowork` → `claude_code.user_prompt` +
+`claude_code.api_request` (+ `claude_code.token.usage` metrics); `codex` →
+`codex.sse_event` with `event.kind == "response.completed"`, the record Atlas
+prices Codex off; `gemini` → `gemini_cli.api_response`, the token-bearing event
+(NOT `api_request`, which is the request side). Codex and Gemini emit no metrics
+— Atlas prices both entirely off their log record, and inventing a metric name
+would be a guess. Identity (`user.email`/`account_uuid`/`organization.id`) is
+recovered from the Cowork session path/metadata where it exists; elsewhere it is
+absent, which costs nothing, because Atlas stamps the authoritative `principal`
+from the ingest token that authenticated the request.
+**Never emits prompt/response text** — `privacy_test.go` puts a canary in every
+text-bearing field each of the three tools writes and asserts none reaches the
+wire.
+
+⚠️ **GEMINI CANNOT RIDE THE PER-LINE HOOK.** Its session is ONE JSON document
+rewritten whole every turn, so there are no appended lines to observe; it arrives
+through `Telemetry.ObserveFile` on `watch.WithDocumentObserver`, the coarse
+sibling of `observe` and of the ingest signal, carrying coordinates only.
+`geminichat.Session.Responses` is the reader — gated on the `tokens` BLOCK rather
+than on a type string, because shape is what stays stable across builds (measured:
+203 of 262 messages across 55 real chat files carry it, no user turn does).
+
+⚠️ **ONE RECORD PER REQUEST, NOT PER LINE, AND THE DIFFERENCE IS 1.79x.** Claude
+Code writes one assistant line per CONTENT BLOCK and stamps the whole request's
+usage on every one of them: measured over the 40 largest real transcripts here,
+**13,755 assistant lines carrying a `message.usage` resolve to 7,683 distinct
+`requestId`s**, 4,088 of them written as more than one line (max 11), and **0**
+of those requests disagree with themselves about their token counts. A record per
+line therefore publishes 1.79x the tokens the work cost. The mirror emits on the
+FIRST line of a request and drops the rest — one variable, not a set, because
+**7,703 request runs and 0 requests that resumed after another intervened** says
+a request's lines are contiguous. Codex has the same class of defect from the
+other end: **936 of 10,061 real `token_count` records (9.3%) repeat the previous
+record's `total_token_usage` exactly** while still carrying a non-zero
+`last_token_usage`, so the mirror prices a record only where the cumulative total
+ADVANCED — which reconciles with the session's own final total on 22 of 23
+rollouts.
+
+**The dedup contract.** Atlas stores one tool event per `(event_ts, dedup_key)`
+and upserts, so a mirrored row and a row the tool sent itself must agree on both
+halves. Every identifier on a PRICED record is read off the transcript line and
+nothing comes from process state — in particular the mirror emits **no
+`event.sequence`** on `api_request`, because Atlas keys a Claude-Code row on
+`session.id:event.sequence` and falls back to `request_id`
+(`services/api/app/services/otel.py::_dedup_key`), and a process-local counter
+renumbers on a daemon restart while the tool's own `requestId` does not. ⚠️ **The
+remaining gap is Atlas-side and is one line**: the tool DOES send a sequence, so
+under the current preference order the two rows do not collapse; preferring
+`request_id` on `api_request` closes it. Codex and Gemini key on a content HASH
+of the attributes, so for those the mirror's dedup IS the determinism of its
+payload — which is why no wall clock and no counter appear in either. ⚠️
+**`assistant_response` is no longer mirrored**: it carried only `response_length`
+(a measurement of response TEXT, priced by nothing), it could not be told from
+`api_request` under the natural key since Claude Code stamps both with the same
+`request_id`, and per-request it is not computable without buffering a whole
+request.
+
+**Source selection is a parameter, not a setting read here.** `SourcesFromEnv`
+still defaults to `{cowork}` with `KELD_WATCH_TELEMETRY` (off/on) and
+`KELD_WATCH_TELEMETRY_SOURCES`; `Telemetry.SetSources` REPLACES the set whole, and
+is the seam the per-tool `tool_otlp` switch is wired to at the one call site in
+`daemon.go`. Per source, mirroring is on or off — half a source is how the same
+request gets counted twice. Widening the MECHANISM and flipping the POLICY are
+deliberately separate changes: a default flipped in `SourcesFromEnv` would start
+mirroring on every machine the moment the binary shipped, beside tools still
+posting their own OTLP.
+
+**Codex** and **Gemini** also keep their own watcher roots (`~/.codex/sessions`
+and `~/.gemini/tmp/*/chats`) + specialized readers for ENRICHMENT (TranscriptReader
+resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
+that path is unchanged.
 
 ⚠️ **GEMINI WRITES TWO DIFFERENT CHAT SHAPES AND BOTH ARE IN THE WILD; READING
 EITHER ALONE LEAVES A WHOLE POPULATION UNCAPTURED.** Under
