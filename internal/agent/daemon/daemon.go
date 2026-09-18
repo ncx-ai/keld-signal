@@ -1352,8 +1352,18 @@ func Run(ctx context.Context) error {
 		// footprint the CLI's native OTEL provides. Claude Code is excluded by
 		// default (it emits its own OTEL host-side). The watcher's observe hook
 		// feeds every new transcript line to the telemetry; offer handles enrichment.
+		// ⚠️ WHICH SOURCES ARE MIRRORED IS THE COMPLEMENT OF THE `tool_otlp`
+		// SWITCH, and this is the call site promptlog's own comment promises.
+		// While it was missing, a machine on the shipped defaults had the
+		// switch off (so no tool wrote an OTEL block) AND the mirror defaulting
+		// to {cowork} (so no tool was mirrored): Claude Code and Codex emitted
+		// no usage at all, and the pane still read `working` because the otel
+		// lane is not expected while the switch is off. Resolved ONCE here, from
+		// the same settings read everything else in this function uses, so the
+		// two halves cannot disagree about one machine.
 		tel := promptlog.NewPending(deriveEndpoint(pr.ingest, logsEndpoint),
-			deriveEndpoint(pr.ingest, metricsEndpoint), tok.Get, promptlog.SourcesFromEnv())
+			deriveEndpoint(pr.ingest, metricsEndpoint), tok.Get,
+			promptlog.SourcesFor(set.ToolOTLPEnabled()))
 		offer := watchOffer(q)
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
 		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its

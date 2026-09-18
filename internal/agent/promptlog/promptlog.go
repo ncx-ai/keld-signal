@@ -166,6 +166,47 @@ func SourcesFromEnv() map[string]bool {
 	return map[string]bool{sourceCowork: true}
 }
 
+// SourcesFor is the POLICY the comment above promises: which sources this
+// machine mirrors, given the position of the `tool_otlp` switch.
+//
+// ⚠️ THE TWO PATHS ARE COMPLEMENTS — NEVER BOTH, AND NEVER NEITHER — AND
+// "NEITHER" IS WHAT SHIPPED FOR ONE COMMIT. The switch stops writing an OTEL
+// block into a tool's config, so with it off the tool sends nothing; this
+// mirror's default set was `{cowork}`, so it did not cover that tool either.
+// Two changes each correct on their own left Claude Code and Codex emitting NO
+// usage at all, and nothing said so: the pane's otel lane is not expected while
+// the switch is off, so the row read `working`. The conformance chain is what
+// caught it, as `telemetry: 0 OTLP forwarded`.
+//
+// Cowork is mirrored either way and is not part of the complement: its sandbox
+// blocks its own egress to Atlas by design, so host-side mirroring is the only
+// path it has ever had.
+func SourcesFor(toolOTLP bool) map[string]bool {
+	if v, explicit := sourcesFromEnvExplicit(); explicit {
+		return v
+	}
+	out := map[string]bool{sourceCowork: true}
+	if !toolOTLP {
+		out[sourceClaudeCode] = true
+		out[sourceCodex] = true
+		out[sourceGemini] = true
+	}
+	return out
+}
+
+// sourcesFromEnvExplicit reports the env override and whether one was given, so
+// SourcesFor can tell "the operator asked for this set" from "nobody said".
+func sourcesFromEnvExplicit() (map[string]bool, bool) {
+	switch strings.ToLower(os.Getenv("KELD_WATCH_TELEMETRY")) {
+	case "off", "0", "false":
+		return map[string]bool{}, true
+	}
+	if v := os.Getenv("KELD_WATCH_TELEMETRY_SOURCES"); v != "" {
+		return SourcesFromEnv(), true
+	}
+	return nil, false
+}
+
 // eligible reports whether this source is mirrored and a token exists to post
 // with.
 func (t *Telemetry) eligible(source string) bool {
