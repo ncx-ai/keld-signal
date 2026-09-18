@@ -33,7 +33,7 @@ func TestSignalBlocksEndpointDerivation(t *testing.T) {
 // now write the key per machine.
 func TestTheBlockEmitterIsOffByDefault(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "")
-	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
+	if got := startBlockEmitter(context.Background(), stubDigester{}, constEndpoint("https://a/v1/x"),
 		func() string { return "tok" }, "actor", nil, false, true, nil, nil, nil, nil, nil); got != nil {
 		t.Fatal("the block emitter started with KELD_BLOCKS unset and no config key")
 	}
@@ -47,7 +47,7 @@ func TestTheBlockEmitterStartsFromTheConfigKeyAlone(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if got := startBlockEmitter(ctx, stubDigester{}, "https://a/v1/x",
+	if got := startBlockEmitter(ctx, stubDigester{}, constEndpoint("https://a/v1/x"),
 		func() string { return "tok" }, "actor", nil, true, true, nil, nil, nil, nil, nil); got == nil {
 		t.Fatal("the block emitter stayed off with blocks:true in agent-config.json")
 	}
@@ -57,7 +57,7 @@ func TestTheBlockEmitterStartsFromTheConfigKeyAlone(t *testing.T) {
 // disable a machine the installer switched on without editing JSON.
 func TestKeldBlocksZeroOverridesTheConfigKey(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "0")
-	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
+	if got := startBlockEmitter(context.Background(), stubDigester{}, constEndpoint("https://a/v1/x"),
 		func() string { return "tok" }, "actor", nil, true, true, nil, nil, nil, nil, nil); got != nil {
 		t.Fatal("KELD_BLOCKS=0 did not override blocks:true in agent-config.json")
 	}
@@ -67,7 +67,7 @@ func TestKeldBlocksZeroOverridesTheConfigKey(t *testing.T) {
 // rather than starting a loop that can only fail.
 func TestTheBlockEmitterNeedsADigester(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "1")
-	if got := startBlockEmitter(context.Background(), nil, "https://a/v1/x",
+	if got := startBlockEmitter(context.Background(), nil, constEndpoint("https://a/v1/x"),
 		func() string { return "tok" }, "actor", nil, false, true, nil, nil, nil, nil, nil); got != nil {
 		t.Fatal("the block emitter started with no digester")
 	}

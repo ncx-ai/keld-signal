@@ -141,3 +141,10 @@ func (r *Reporter) Flush(ctx context.Context) error {
 func NewTransport(endpoint string, token func() string, spoolDir string) *clientevents.Transport {
 	return clientevents.NewTransport(endpoint, token, spoolDir)
 }
+
+// NewPendingTransport is NewTransport for a daemon constructed before it is
+// paired: the endpoint is resolved per send, and while it answers "" a batch is
+// spooled rather than posted or dropped.
+func NewPendingTransport(endpoint func() string, token func() string, spoolDir string) *clientevents.Transport {
+	return clientevents.NewPendingTransport(endpoint, token, spoolDir)
+}

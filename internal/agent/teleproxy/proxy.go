@@ -106,10 +106,31 @@ type Proxy struct {
 // Logs and metrics get separate spool subdirectories: a poison metrics batch
 // must not be able to block logs behind it.
 func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+// NewPending is New for a daemon that is LISTENING BEFORE IT IS PAIRED.
+//
+// ⚠️ **THE PROXY HAS TO BE UP FROM THE FIRST SECOND, WHICH IS EARLIER THAN THE
+// ADDRESS IS KNOWN.** `keld signal setup` writes this port into every AI tool's
+// config, and a tool reads that config once at startup — so a daemon that binds
+// only after `hook.json` arrives leaves every already-configured tool posting
+// into a closed port for as long as nobody has finished signing in. The
+// endpoints are therefore resolved PER FORWARD, the same treatment `token`
+// already has, and while they answer "" a batch is spooled rather than lost.
+func NewPending(logsEndpoint, metricsEndpoint func() string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewPendingTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewPendingTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+func newProxy(secret, spoolDir string, logs, metric *clientevents.Transport) *Proxy {
 	p := &Proxy{
 		secret:    secret,
-		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
-		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
+		logs:      logs,
+		metric:    metric,
 		statePath: StatePath(),
 		// ⚠️ LOAD, don't start empty. The record is what tells doctor which
 		// running tools have never reached Atlas; a daemon restart that dropped

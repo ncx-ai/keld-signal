@@ -64,8 +64,8 @@ const (
 
 // Telemetry emits OTLP logs + metrics for eligible captured sources.
 type Telemetry struct {
-	logsURL    string
-	metricsURL string
+	logsURL    func() string
+	metricsURL func() string
 	token      func() string
 	ids        *identityCache
 	client     *http.Client
@@ -83,6 +83,21 @@ type Telemetry struct {
 // read live (re-auth swaps picked up); sources is the set of capture sources to
 // mirror.
 func New(logsURL, metricsURL string, token func() string, sources map[string]bool) *Telemetry {
+	return NewPending(func() string { return logsURL }, func() string { return metricsURL }, token, sources)
+}
+
+// NewPending is New for a daemon that starts its WATCHER before it is paired.
+// The two endpoints are resolved per POST, so the watcher's observe hook can be
+// wired from the first second on an unpaired machine.
+//
+// ⚠️ **AN OBSERVATION MADE WHILE UNPAIRED IS LOST, and that is stated rather
+// than hidden.** This path has no spool — it mirrors a transcript's events as
+// OTLP, fire-and-forget — so while the endpoints answer "" the post is skipped.
+// The cost is bounded: the default source set is {cowork}, Claude Code emits its
+// own OTEL through the telemetry proxy (which DOES spool), and a person is
+// unpaired only until they finish signing in. Giving this path a spool of its
+// own would be a new durable queue, which WS1 deliberately does not add.
+func NewPending(logsURL, metricsURL func() string, token func() string, sources map[string]bool) *Telemetry {
 	return &Telemetry{
 		logsURL:    logsURL,
 		metricsURL: metricsURL,
@@ -201,7 +216,7 @@ func (t *Telemetry) postLogs(res []kv, recs []logRecord) {
 	if err != nil {
 		return
 	}
-	t.doPost(t.logsURL, body)
+	t.doPost(t.logsURL(), body)
 }
 
 func (t *Telemetry) postMetricList(res []kv, metrics []metric) {
@@ -212,10 +227,16 @@ func (t *Telemetry) postMetricList(res []kv, metrics []metric) {
 	if err != nil {
 		return
 	}
-	t.doPost(t.metricsURL, body)
+	t.doPost(t.metricsURL(), body)
 }
 
 func (t *Telemetry) doPost(url string, body []byte) {
+	// Not paired yet: no address to post to. See NewPending for why this is a
+	// skip rather than a spool.
+	if strings.TrimSpace(url) == "" {
+		debuglog.Append("promptlog: not paired yet — skipping one OTLP post")
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

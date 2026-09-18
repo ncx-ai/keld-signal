@@ -304,9 +304,16 @@ func (p *Publisher) SendBlocksResult(blocks []BlockEnrichment) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// ErrNotPaired here is what HOLDS the emitter's cursor on an unpaired
+	// machine: the blocks were cut and are still cuttable, so the sweep must ask
+	// for the same ground again once a pairing arrives.
+	url, err := p.url()
+	if err != nil {
+		return 0, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
