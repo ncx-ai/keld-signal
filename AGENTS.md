@@ -272,6 +272,36 @@ still restarts; systemd's `Restart=on-failure` was already the equivalent
 (don't add `RestartSec` — see the note in `service.go`), and the Windows
 `ONLOGON` scheduled task never retried at all.
 
+⚠️ **AND AN UNPAIRED AGENT COLLECTS — IT NO LONGER IDLES AT ALL.** The bullet
+above used to describe the whole daemon: `Run` started nothing but the
+integrations detector until `awaitConfig` saw `hook.json`, so a machine between
+install and login had **no telemetry proxy listening** (every AI tool `keld
+signal setup` had already configured posted into a closed port), no transcript
+watcher, no block emitter and no enrichment. That gate is left over from the
+design where the hook POSTed telemetry straight to Atlas and without a token
+there genuinely was nothing to do. **Collect always, pair to send**
+(`daemon/pairing.go`, `daemon/senders.go`): every collector is constructed and
+started immediately, and every sender resolves its endpoint through `pairing`,
+which answers `""` until the pairing arrives. A sender handed `""` **HOLDS** —
+it spools the batch, keeps the cursor, or re-spools the pointer — and never
+reports success and never drops; said three ways, `publish.ErrNotPaired`,
+`clientevents.ErrNotPaired` and `settings.ErrNotPaired`. The endpoint gets the
+treatment the ingest token already had (a getter read per request, not a string
+captured at construction), which is what lets a pairing be adopted mid-run with
+no restart. **Enrichment is the one collector with nowhere local to put its
+OUTPUT** — a block is cut into the ledger and re-offered by a held cursor, a
+telemetry batch lands in the proxy's spool, a finished profile has neither — so
+the worker holds each job back in the enrich spool on the existing "not ready
+yet is never un-enrichable" path, consuming no retry attempt; the spool drain is
+held with it, or the drain and the deferral chase each other once per sweep.
+Both are gated on Atlas being ON as well as on the pairing, since a local-only
+machine publishes through `localOnlySender` and must keep enriching. One log
+line when collection starts unpaired and one when the pairing lands, following
+`awaitConfig`'s announce-once idiom; `keld signal status`/`doctor` and the
+health strip's `atlas` row say **collecting, not paired** — `n/a` with reason
+`not_paired`, never `failed` (which accuses a healthy machine) and never
+silence (which renders as "we could not tell").
+
 **Capture triggers.** Two triggers feed the same queue: the **command hook**
 (`keld __hook --source <tool>`, wired by `keld setup`), and an on-device
 **transcript watcher** (`internal/agent/watch/`) that tails the JSONL transcripts

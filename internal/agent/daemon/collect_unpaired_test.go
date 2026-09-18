@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -164,7 +165,31 @@ func TestCollectorsRunBeforeThePairing(t *testing.T) {
 		return err == nil && s.Rows > 0
 	})
 
-	// 3. AND NOTHING THAT SENDS HAS STARTED. Collection does not need Atlas;
+	// 3. THE HOOK'S OWN LANE IS OPEN TOO. The pre-config handler used to leave
+	// /enrich unmounted on the argument that "a pointer accepted before the
+	// daemon can publish is work with nowhere to go" — the durable queue it
+	// declined to invent is internal/spool, which already existed.
+	info, err := agentcfg.Read()
+	if err != nil {
+		t.Fatalf("read agent.json: %v", err)
+	}
+	body := `{"source":{"id":"claude_code","origin":"hook"},` +
+		`"correlation":{"scheme":"prompt_id","id":"ws1-hook-1"},` +
+		`"pointer":{"transcript_path":"/nope.jsonl","prompt_id":"ws1-hook-1","cwd":"/tmp"}}`
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/enrich", info.Port), strings.NewReader(body))
+	req.Header.Set("x-keld-agent-secret", info.Secret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /enrich on an unpaired daemon: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /enrich on an unpaired daemon = %d, want 202 — the hook must not have to spool "+
+			"against a daemon that is running and collecting", resp.StatusCode)
+	}
+
+	// 4. AND NOTHING THAT SENDS HAS STARTED. Collection does not need Atlas;
 	// only delivery does.
 	if sendersStarted.Load() {
 		t.Fatal("the senders started on a machine with no pairing")
