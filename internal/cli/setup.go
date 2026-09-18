@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -265,11 +266,19 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		if backup != "" {
 			backupPtr = &backup
 		}
+		// ⚠️ `configured_at` is stamped by BOTH paths that apply an adapter —
+		// here and in integrations.ApplyEntry — because it is the only record
+		// of when keld wrote a tool's config, and the tools rewrite those files
+		// themselves (measured 2026-09-18: Codex at session start, Claude Code
+		// unprompted). A machine set up through this command and a machine set
+		// up by the detector must answer the restart question the same way.
+		wroteAt := time.Now().UTC()
 		manifest.Tools[a.adapter.Name()] = config.ToolManifest{
-			Name:       a.adapter.Name(),
-			ConfigPath: a.plan.ConfigPath,
-			Managed:    a.plan.Managed,
-			BackupPath: backupPtr,
+			Name:         a.adapter.Name(),
+			ConfigPath:   a.plan.ConfigPath,
+			Managed:      a.plan.Managed,
+			BackupPath:   backupPtr,
+			ConfiguredAt: &wroteAt,
 		}
 		line := fmt.Sprintf("  ✓ %-26s configured", a.adapter.DisplayName())
 		if backup != "" {

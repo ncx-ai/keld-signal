@@ -5,9 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/sessions"
 	"github.com/ncx-ai/keld-signal/internal/agent/teleproxy"
 	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
@@ -44,9 +46,10 @@ type WiringFacts struct {
 	// the detector rewrites it through the ONE setup path.
 	HookCommandBroken bool
 
-	// ConfigMtime — when keld's config was last written. The other half of the
-	// restart question.
-	ConfigMtime time.Time
+	// ConfiguredAt — when KELD last wrote this tool's config. The other half of
+	// the restart question, and NOT the config file's mtime: see configuredAt
+	// for the three-step resolution and the measurement that forced it.
+	ConfiguredAt time.Time
 	// NewestSessionStart — when the newest session this tool wrote began.
 	// ZERO MEANS UNKNOWN (no transcript, or none carrying a decodable
 	// top-level timestamp) and Compute refuses to call a tool
@@ -71,6 +74,18 @@ type WiringFacts struct {
 	// second editor window started after setup cannot vouch for a stale one —
 	// the vouching trap this file's otel lane already had to correct.
 	NewestSessionAdopted bool
+	// StaleSessionID names the live session that produced a restart verdict —
+	// the one a person has to go and restart.
+	//
+	// ⚠️ THE ROW USED TO SAY "restart this tool" TO SOMEBODY WITH TWO WINDOWS
+	// OPEN, and could not say which. The rule already asks over EVERY live
+	// session (restartFacts), so it knows; it simply threw the answer away.
+	// Only the id, which is an IDENTIFIER of the class already published as
+	// `corr_id` — no text, no span, no offset is read to produce it.
+	//
+	// Empty when no session is stale. Compute publishes it only under
+	// RestartRequired, so it can never accompany a verdict it did not cause.
+	StaleSessionID string
 }
 
 // LaneFacts is what each lane last carried for one tool. Every field is a
@@ -139,6 +154,10 @@ type Deps struct {
 	// SessionForward answers when ONE session last forwarded telemetry, for
 	// the restart question. Default: teleproxy's per-session record.
 	SessionForward func(sessionID string) *time.Time
+	// ManifestMtime is when keld last wrote ~/.keld/manifest.json — step 2 of
+	// configuredAt's chain, and a seam so a test can state it rather than
+	// having to touch a real file.
+	ManifestMtime func() time.Time
 }
 
 func (d Deps) withDefaults() Deps {
@@ -162,6 +181,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.SessionForward == nil {
 		d.SessionForward = sessionForward
+	}
+	if d.ManifestMtime == nil {
+		d.ManifestMtime = manifestMtime
 	}
 	return d
 }
@@ -281,11 +303,65 @@ func ReadWiring(e Entry, d Deps) WiringFacts {
 		}
 		w.HookCommandBroken = hookCommandBroken(*current)
 	}
-	if info, err := os.Stat(adapter.ConfigPath()); err == nil {
-		w.ConfigMtime = info.ModTime().UTC()
-	}
-	w.NewestSessionStart, w.NewestSessionAdopted = restartFacts(d, e, w.ConfigMtime)
+	w.ConfiguredAt = configuredAt(d, e, adapter.ConfigPath())
+	w.NewestSessionStart, w.NewestSessionAdopted, w.StaleSessionID = restartFacts(d, e, w.ConfiguredAt)
 	return w
+}
+
+// configuredAt answers WHEN KELD LAST WROTE THIS TOOL'S CONFIG, which is the
+// question both the restart rule and the lane look-back clamp are actually
+// asking.
+//
+// ⚠️ **IT USED TO BE THE TOOL CONFIG'S MTIME, AND THE TOOLS REWRITE THOSE FILES
+// THEMSELVES.** Measured on the maintainer's machine 2026-09-18: Codex wrote
+// `hooks.state` trust entries into its own config.toml at session start
+// (observed 20:56) and Claude Code rewrote settings.json on its own (observed
+// 21:21). Each write moved the instant this function returns, so a tool nobody
+// had touched started asking for a restart — and would ask again on the next
+// session, forever, because the tool's own housekeeping is not an event keld
+// can ever "finish".
+//
+// Three steps, strongest evidence first, and each is a different kind of fact:
+//
+//  1. THE PER-TOOL RECORD. `manifest.Tools[<adapter>].ConfiguredAt` is written
+//     by the two paths that apply an adapter — `keld signal setup` and the
+//     detector, through `ApplyEntry`. It is the only thing on the machine that
+//     means "keld wrote this".
+//  2. THE MANIFEST FILE'S MTIME. Every machine configured before that field
+//     existed has no per-tool instant, and the manifest is a file KELD IS THE
+//     ONLY WRITER OF — so its mtime is still a fact about keld, just a
+//     machine-wide one. Coarse: it moves when any tool is configured, so on a
+//     multi-tool machine it can be later than this tool's own write. That errs
+//     toward asking for a restart, which is recoverable; the tool's mtime errs
+//     toward asking on the tool's own schedule, which is not.
+//  3. THE TOOL CONFIG'S MTIME — the proxy this work replaces, kept because it
+//     is what a machine written by an older keld still has and a zero here
+//     would silently switch `restart_required` off for that whole population.
+//
+// A zero answer means UNKNOWN, and Compute already refuses to conclude on one.
+func configuredAt(d Deps, e Entry, configPath string) time.Time {
+	if d.Manifest != nil && e.AdapterName != "" {
+		if tm, ok := d.Manifest.Tools[e.AdapterName]; ok && tm.ConfiguredAt != nil && !tm.ConfiguredAt.IsZero() {
+			return tm.ConfiguredAt.UTC()
+		}
+	}
+	if at := d.ManifestMtime(); !at.IsZero() {
+		return at.UTC()
+	}
+	if info, err := os.Stat(configPath); err == nil {
+		return info.ModTime().UTC()
+	}
+	return time.Time{}
+}
+
+// manifestMtime is when ~/.keld/manifest.json was last written. keld is its
+// only writer, which is the whole reason it is admissible here at all.
+func manifestMtime() time.Time {
+	info, err := os.Stat(paths.ManifestPath())
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime().UTC()
 }
 
 // restartFacts answers row 3 over EVERY session this tool still has open, not
@@ -308,30 +384,41 @@ func ReadWiring(e Entry, d Deps) WiringFacts {
 // With no stale session live, the newest session's own facts are reported
 // exactly as before — including the case where no session is live at all, which
 // is what keeps a machine nobody is using from claiming anything.
-func restartFacts(d Deps, e Entry, configMtime time.Time) (start time.Time, adopted bool) {
+func restartFacts(d Deps, e Entry, configuredAt time.Time) (start time.Time, adopted bool, staleID string) {
 	dirs := d.TranscriptDirs(e)
-	if !configMtime.IsZero() {
-		for _, path := range liveSessions(dirs, d.Now()) {
-			st := sessionStartOf(path)
-			if st.IsZero() || !st.Before(configMtime) {
+	if !configuredAt.IsZero() {
+		for _, s := range sessions.Live(dirs, d.Now()) {
+			if s.StartedAt.IsZero() || !s.StartedAt.Before(configuredAt) {
 				continue // unknown, or started after the config: nothing to restart
 			}
-			if at := d.SessionForward(sessionIDOf(path)); at != nil && at.After(configMtime) {
+			if at := d.SessionForward(s.ID); at != nil && at.After(configuredAt) {
 				continue // this one has demonstrably read the new config
 			}
-			return st, false
+			// ⚠️ The id travels WITH the verdict rather than being re-derived
+			// by a caller: this loop is the only thing that knows WHICH of the
+			// open windows is the stale one, and a second walk could answer
+			// differently a poll later.
+			return s.StartedAt, false, s.ID
 		}
 	}
 	start = newestSessionStart(dirs)
-	if configMtime.IsZero() {
-		return start, false
+	if configuredAt.IsZero() {
+		return start, false, ""
 	}
 	id := newestSessionID(dirs)
 	if id == "" {
-		return start, false
+		return start, false, ""
 	}
 	at := d.SessionForward(id)
-	return start, at != nil && at.After(configMtime)
+	adopted = at != nil && at.After(configuredAt)
+	if adopted || start.IsZero() || !start.Before(configuredAt) {
+		return start, adopted, ""
+	}
+	// The newest session predates the config and has not adopted it. It is not
+	// LIVE — nothing has been written to it inside sessions.ActiveWindow — so
+	// the loop above passed over it, but Compute still calls this
+	// restart_required and the person still needs to know which window.
+	return start, false, id
 }
 
 // sessionForward is the default per-session telemetry fact: teleproxy's record

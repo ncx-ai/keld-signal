@@ -1173,6 +1173,27 @@ export function rowInstructions(integration) {
   return out;
 }
 
+/**
+ * The window a person has to go and restart, named.
+ *
+ * ⚠️ "Restart this tool" is not an instruction once two windows are open — the
+ * server's own rule had to be widened to ask about every live session for that
+ * reason, and `stale_session_id` is the answer it already had. The id is
+ * SHORTENED the way `keld signal doctor` shortens it: eight characters is enough
+ * to pick the right window out of a handful, and both surfaces print the same
+ * prefix of the same id so a person reading one recognises the other.
+ *
+ * Absent means there is nothing to say — never a placeholder, and never a guess
+ * about which session the server meant. Decided on the FIELD's presence, never
+ * on the row's state: the server sends it only with the verdict it caused.
+ */
+export const STALE_SESSION_ID_CHARS = 8;
+export function staleSessionLabel(integration) {
+  const id = ((integration && integration.stale_session_id) || "").trim();
+  if (!id) return "";
+  return `session ${id.slice(0, STALE_SESSION_ID_CHARS)}`;
+}
+
 // A dash, never "unknown version": the version is read off the newest
 // transcript and is "" when there is nothing to read it from (AC-7). A word
 // where a number goes reads as a fact about the tool rather than about us.
@@ -2721,6 +2742,11 @@ if (typeof document !== "undefined") {
       for (const sentence of rowInstructions(it)) {
         body.appendChild(el("p", { class: "intg-instruction" }, sentence));
       }
+
+      // Which window, beside the sentence that tells you to restart one. Driven
+      // by the field's presence alone — the pane decides nothing about states.
+      const stale = staleSessionLabel(it);
+      if (stale) body.appendChild(el("p", { class: "intg-stale" }, stale));
     }
 
     const actions = el("div", { class: "intg-actions" });

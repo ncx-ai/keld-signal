@@ -20,7 +20,7 @@ func TestARestartedSessionClearsRestartRequired(t *testing.T) {
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-30 * time.Minute)
+	f.Wiring.ConfiguredAt = now.Add(-30 * time.Minute)
 	f.Wiring.NewestSessionStart = now.Add(-2 * time.Hour) // the resumed transcript's first line
 	f.Wiring.NewestSessionAdopted = true                  // it has forwarded since the config
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
@@ -42,7 +42,7 @@ func TestAStaleSessionThatHasSentNothingStillSaysRestart(t *testing.T) {
 	now := time.Now()
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-30 * time.Minute)
+	f.Wiring.ConfiguredAt = now.Add(-30 * time.Minute)
 	f.Wiring.NewestSessionStart = now.Add(-2 * time.Hour)
 	f.Wiring.NewestSessionAdopted = false
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true

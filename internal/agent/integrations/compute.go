@@ -100,9 +100,14 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 		StorageClass: e.StorageClass,
 		State:        state,
 		BrokenLane:   brokenLane,
-		ToolVersion:  f.ToolVersion,
-		BackupPath:   f.BackupPath,
-		Surfaces:     make([]Surface, 0, len(e.Surfaces)),
+		// ⚠️ ONLY UNDER RestartRequired. The facts reader can name a stale
+		// session whenever it finds one, but a row that is `working` or `idle`
+		// carrying a "this session is stale" id would be stating a problem it
+		// had just decided there isn't. The verdict owns the evidence.
+		StaleSessionID: staleSessionID(state, f),
+		ToolVersion:    f.ToolVersion,
+		BackupPath:     f.BackupPath,
+		Surfaces:       make([]Surface, 0, len(e.Surfaces)),
 	}
 	for _, spec := range e.Surfaces {
 		s := Surface{
@@ -117,6 +122,15 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 		in.Surfaces = append(in.Surfaces, s)
 	}
 	return in
+}
+
+// staleSessionID is the id the restart verdict was decided on, and "" for every
+// other verdict — see the field comment on Integration.StaleSessionID.
+func staleSessionID(state State, f Facts) string {
+	if state != RestartRequired {
+		return ""
+	}
+	return f.Wiring.StaleSessionID
 }
 
 // laneState is a lane's answer inside the window. `unknown` exists because a
@@ -153,7 +167,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 	// UNREADABLE mtime (zero) falls back to the plain window rather than
 	// suppressing every break forever.
 	cut := now.Add(-window)
-	if m := f.Wiring.ConfigMtime; !m.IsZero() && m.After(cut) {
+	if m := f.Wiring.ConfiguredAt; !m.IsZero() && m.After(cut) {
 		cut = m
 	}
 	within := func(t *time.Time) laneState {
@@ -237,8 +251,8 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// process adopted it: the loopback proxy is what the config points at.
 	// Without this the instruction is unfollowable — restarting the tool does
 	// not clear it, and the row states a repair that cannot work.
-	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfigMtime.IsZero() &&
-		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfigMtime) &&
+	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfiguredAt.IsZero() &&
+		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfiguredAt) &&
 		!f.Wiring.NewestSessionAdopted {
 		return RestartRequired, ""
 	}

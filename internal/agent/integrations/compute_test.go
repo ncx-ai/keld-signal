@@ -47,7 +47,7 @@ func configured() Facts {
 			ConfigPresent:        true,
 			ConfigMatchesAdapter: true,
 			PointsAtProxy:        true,
-			ConfigMtime:          now.Add(-48 * time.Hour),
+			ConfiguredAt:         now.Add(-48 * time.Hour),
 			NewestSessionStart:   now.Add(-2 * time.Hour),
 		},
 	}
@@ -78,7 +78,7 @@ func TestComputeDecisionTable(t *testing.T) {
 			row: "3 · newest session older than the config", id: "claude_code",
 			facts: func() Facts {
 				f := configured()
-				f.Wiring.NewestSessionStart = f.Wiring.ConfigMtime.Add(-time.Hour)
+				f.Wiring.NewestSessionStart = f.Wiring.ConfiguredAt.Add(-time.Hour)
 				// Lanes are live; the restart notice still wins.
 				f.Lanes = LaneFacts{LastHookPointer: ago(time.Minute), LastTelemetryForward: ago(time.Minute)}
 				return f
@@ -240,7 +240,7 @@ func TestIdleIsNeverBroken(t *testing.T) {
 // not a fault — even when the lanes would otherwise say broken.
 func TestRestartRequiredBeatsBroken(t *testing.T) {
 	f := configured()
-	f.Wiring.NewestSessionStart = f.Wiring.ConfigMtime.Add(-time.Hour)
+	f.Wiring.NewestSessionStart = f.Wiring.ConfiguredAt.Add(-time.Hour)
 	f.Lanes = LaneFacts{LastTelemetryForward: ago(time.Minute)} // row 5's shape
 	got := one(t, entry(t, "claude_code"), f)
 	if got.State != RestartRequired {
@@ -298,7 +298,7 @@ func TestUnexpectedLaneCannotBreak(t *testing.T) {
 	f := Facts{
 		Configured: true,
 		Wiring: WiringFacts{
-			ConfigPresent: true, ConfigMtime: now.Add(-48 * time.Hour),
+			ConfigPresent: true, ConfiguredAt: now.Add(-48 * time.Hour),
 			NewestSessionStart: now.Add(-time.Hour),
 		},
 		Lanes: LaneFacts{LastWatcherPointer: ago(time.Hour)},
@@ -406,7 +406,7 @@ func TestAnEntryWithNoAdapterIsNeverNotConfigured(t *testing.T) {
 	f := Facts{
 		Configured: false,
 		Wiring: WiringFacts{
-			ConfigPresent: true, ConfigMtime: now.Add(-48 * time.Hour),
+			ConfigPresent: true, ConfiguredAt: now.Add(-48 * time.Hour),
 			NewestSessionStart: now.Add(-time.Hour),
 		},
 	}

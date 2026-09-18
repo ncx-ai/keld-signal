@@ -26,7 +26,7 @@ func TestActivityBeforeTheConfigIsNotEvidenceAboutIt(t *testing.T) {
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-2 * time.Second) // the detector just wrote it
+	f.Wiring.ConfiguredAt = now.Add(-2 * time.Second) // the detector just wrote it
 	f.Wiring.NewestSessionStart = now.Add(-1 * time.Second)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	// Telemetry from BEFORE setup. The hook has never fired, having existed for
@@ -52,7 +52,7 @@ func TestActivityAfterTheConfigStillBreaksASilentLane(t *testing.T) {
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-2 * time.Hour)
+	f.Wiring.ConfiguredAt = now.Add(-2 * time.Hour)
 	f.Wiring.NewestSessionStart = now.Add(-90 * time.Minute)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	f.Lanes = LaneFacts{LastTelemetryForward: at(-30 * time.Minute)} // after the config
@@ -73,7 +73,7 @@ func TestAnUnknownConfigMtimeDoesNotSuppressBroken(t *testing.T) {
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = time.Time{} // unreadable
+	f.Wiring.ConfiguredAt = time.Time{} // unreadable
 	f.Wiring.NewestSessionStart = now.Add(-90 * time.Minute)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	f.Lanes = LaneFacts{LastTelemetryForward: at(-30 * time.Minute)}

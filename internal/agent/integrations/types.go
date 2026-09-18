@@ -114,6 +114,19 @@ type Integration struct {
 	State        State  `json:"state"`
 	// BrokenLane — the expected lane that went silent, set only under Broken.
 	BrokenLane SurfaceKind `json:"broken_lane,omitempty"`
+	// StaleSessionID — the tool session still running on the previous config,
+	// set only under RestartRequired and omitted when there is none.
+	//
+	// ⚠️ THE ROW NAMES THE WINDOW BECAUSE "restart this tool" DOES NOT, once
+	// there are two of them open. The restart rule already asks over every live
+	// session — that is what stopped the row flickering between them — so it
+	// knows which one is stale; this is that answer reaching the reader.
+	// `keld signal doctor` names a stale session id the same way, and both
+	// resolve which sessions are live through `agent/sessions`.
+	//
+	// It is an IDENTIFIER, the class already published as `corr_id`: no text,
+	// no span and no offset is read to produce it.
+	StaleSessionID string `json:"stale_session_id,omitempty"`
 	// ToolVersion — read from the newest transcript, "" when unknown. NEVER
 	// guessed (AC-7).
 	ToolVersion string    `json:"tool_version"`
