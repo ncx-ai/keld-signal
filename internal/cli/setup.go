@@ -63,6 +63,37 @@ type SetupOpts struct {
 
 // runSetup applies keld telemetry configuration to each adapter, writes the
 // manifest, and returns the resulting Manifest.
+// adoptOnboarding persists the credential this run VERIFIED: hook.json, which
+// the daemon reads to decide where to publish, and the manifest's record of
+// which CLI wrote it.
+//
+// It is called from both post-dry-run paths — "nothing to apply" and "tools
+// applied" — because the daemon's destination has nothing to do with whether a
+// tool's config file needed editing. Keeping it in one function is what stops
+// those two paths from drifting apart again.
+//
+// It deliberately does NOT run for a dry run (which must not touch the machine)
+// or after an aborted confirmation (where the person said change nothing).
+func adoptOnboarding(ob *api.Onboarding, say func(string)) error {
+	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
+		return err
+	}
+	// Reporting the DESTINATION, not just the path: this line used to print
+	// "✓ Hook ~/.keld/hook.json" unconditionally, above a return that wrote
+	// nothing, so an install log showed the hook being configured on exactly
+	// the run that left it stale.
+	say(fmt.Sprintf("  ✓ %-26s %s → %s", "Hook", "~/.keld/hook.json", ob.Endpoint))
+	m, err := config.LoadManifest()
+	if err != nil || m == nil {
+		// A missing or unreadable manifest is not a setup failure: hook.json is
+		// the file the daemon reads, and it is already written. The apply path
+		// below builds and saves a full manifest of its own.
+		return nil
+	}
+	m.Hook = &config.HookRecord{Version: version.CLI}
+	return m.Save()
+}
+
 func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client, ob *api.Onboarding, opts SetupOpts) (*config.Manifest, error) {
 	// ⚠️ THE ORG INGEST TOKEN MUST NEVER REACH A TOOL CONFIG. This is the one
 	// place the two credentials are both in scope, so it is the only place the
@@ -166,8 +197,6 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		approveds = append(approveds, approved{adapter, plan})
 	}
 
-	say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
-
 	if opts.DryRun {
 		// ⚠️ A dry run must say what it WOULD do, not just what it is skipping.
 		// Every event above this point is skipped_conflict/already_configured;
@@ -185,6 +214,22 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		return config.LoadManifest()
 	}
 	if len(approveds) == 0 {
+		// ⚠️ NOTHING TO APPLY IS NOT NOTHING TO WRITE. This is the ordinary
+		// state of every re-install and every upgrade — the tools are already
+		// configured — and `SaveHookConfig` used to sit BELOW this return, so a
+		// verified onboarding was thrown away and whatever hook.json the machine
+		// already had survived.
+		//
+		// Measured on a real v3.0.0 install (2026-09-16): the wizard signed in
+		// to production, postinstall ran setup, every tool reported "already
+		// configured", and the daemon went on reporting to a dev Atlas from the
+		// day before — 882 calls to localhost against 9 to atlas.keld.co — while
+		// `status` displayed the production login and `doctor` found no problem,
+		// because nothing compared the two. An installer that leaves the machine
+		// internally inconsistent is worse than one that fails loudly.
+		if err := adoptOnboarding(ob, say); err != nil {
+			return nil, err
+		}
 		// The per-tool "already configured" / "skipped (conflict)" lines above
 		// already convey the outcome; no separate "Nothing to apply." summary.
 		emit(SetupEvent{Kind: "done", Configured: 0, Endpoint: ob.Endpoint})
@@ -203,7 +248,7 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		Tools:    map[string]config.ToolManifest{},
 	}
 	manifest.Hook = &config.HookRecord{Version: version.CLI}
-	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
+	if err := adoptOnboarding(ob, say); err != nil {
 		return nil, err
 	}
 

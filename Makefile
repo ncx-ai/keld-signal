@@ -224,16 +224,6 @@ crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)
 pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizard pane (KeldSetup.bundle)
 	@[ "$$(uname -s)" = "Darwin" ] || { echo "pkg-plugin-check: macOS only — skipping"; exit 0; }
 	@bash installers/macos/plugin_test.sh
-	@# The clipboard pairing-code predicate decides whether the pane auto-submits
-	@# whatever a person happens to have copied, so it is unit-tested rather than
-	@# eyeballed. It lives in its own InstallerPlugins-free file precisely so it
-	@# can be compiled and run here — the pane itself cannot be executed by any
-	@# automated check.
-	@clang -fobjc-arc -arch arm64 -isysroot "$$(xcrun --show-sdk-path)" -framework Foundation \
-		-I installers/macos/plugin -o /tmp/keld-code-test \
-		installers/macos/plugin/KeldCodeTest.m installers/macos/plugin/KeldCode.m
-	@/tmp/keld-code-test
-	@rm -f /tmp/keld-code-test
 	@go build -o /tmp/keld-plugin-check-keld ./cmd/keld
 	@bash installers/macos/plugin/build-plugin.sh /tmp/keld-plugin-check-plugins 0.0.0-check /tmp/keld-plugin-check-keld
 	@rm -rf /tmp/keld-plugin-check-plugins /tmp/keld-plugin-check-keld

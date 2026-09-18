@@ -5,13 +5,139 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
-## [Unreleased] — v3 (release/v3 branch, shipped as `v3.0.0-rc.N` pre-releases)
+## [3.0.4] — 2026-09-16
 
-Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
-— what `install.sh`, `install.ps1` and the pkg fall back to — keeps pointing at
-2.5.0 until v3 is merged to `main` and tagged `v3.0.0`.
+### Changed
+- **Continue waits for the analysis engine.** The wizard pane let someone click
+  past while the ~190 MB download was still running, which is what made
+  `postinstall`'s fallback the common path rather than the exception — and that
+  fallback is the one that silently did nothing until 3.0.3. Continue is now
+  computed in ONE place from three conditions (connected, tool list read, engine
+  download settled) rather than assigned from four scattered sites, which is how
+  this pane's earlier state bugs happened. The panel says why it is held.
+  ⚠️ **Settled, not succeeded:** a failed download still enables Continue and
+  offers Try again. Gating on success would make an offline machine impossible
+  to install — a captive portal, a VPN or a GitHub outage would leave someone
+  unable to finish — and the install is worth completing without it, since the
+  engine arrives in the background either way.
+- **Removed "nothing multi-gigabyte is fetched, now or later"** from the macOS
+  pane, `onboard.command`, `onboard.cmd` and `install.sh`. It reassured people
+  about an implementation detail they had not asked about and could not act on.
+  Replaced with what the line is actually for: prompts are analysed on the
+  machine, and only masked signal is sent.
+
+## [3.0.3] — 2026-09-16
+
+### Fixed
+- **A sidecar download that silently never happened.** The fallback path — taken
+  by anyone ALREADY SIGNED IN, who reaches Continue before the ~190 MB download
+  finishes — backgrounded the fetch as a child of `postinstall` and sent its
+  output to `/dev/null`. Measured on a real 3.0.2 install: no fetch process, no
+  staging directory, a sidecar tree still bearing its previous timestamp, and
+  nothing said. The work is now a launchd job, which owns it independently of
+  the installer script's lifetime, and it writes
+  `~/.keld/logs/sidecar-install.log`. It runs Keld's own signed binary rather
+  than a generated shell script, because **macOS names the background item after
+  the program and shows that to the person installing** — the first attempt
+  produced a system notification reading "'.sidecar-fetch.sh' can run in the
+  background". `--cleanup-job` deletes the job after a SUCCESSFUL fetch; a
+  failed one keeps it, since it is the only thing that will try again.
+- **The pane's diagnostics recorded nothing.** They went to the unified log,
+  where os_log redacts dynamic strings: every line arrived as
+  `keld-pane: <private>`. They now write `~/.keld/logs/installer-pane.log`.
+- **The setup-code field is gone.** The pane fetches its own device code and
+  approves inside the embedded page, so a box asking for `ABCD-EFGH` was an
+  instruction for a step that never comes, sitting under a form that had already
+  signed you in. The clipboard auto-submit and its shape-check went with it.
+- **The wait after signing in is visible.** Atlas's form posts over `fetch`, so
+  no navigation occurs and the pane could not tell that anyone had pressed
+  anything: the panel sat unchanged until the device poll answered. The pane now
+  injects its own click listener, says "Signing you in…" the moment the form is
+  submitted, and keeps a progress bar moving through both that wait and the tool
+  enumeration that follows. Continue is held until the tool list is actually on
+  screen, so the button becoming available means the pane is finished rather
+  than lighting up over an empty panel.
+
+## [3.0.2] — 2026-09-16
+
+### Fixed
+- **Installing a new sidecar now restarts the one that is running.** Swapping the
+  tree on disk does not change the process serving from it, and on a real 3.0.1
+  install the two happened five seconds apart in the wrong order:
+
+  ```
+  08:41:26  daemon starts, spawns the sidecar   (postinstall: keld-agent install)
+  08:41:31  sidecar tree replaced on disk (v3.0.1)
+  08:41:32  sidecar binary written
+  ```
+
+  `postinstall` backgrounds the ~190 MB fetch deliberately — it must not block
+  the install — and restarts the daemon on its own schedule, so the daemon
+  spawned the OLD image and held it. `doctor` reported version skew on a machine
+  whose disk was entirely correct, and a manual `keld-agent restart` cleared it
+  at once. The restart now lives beside the swap itself
+  (`commitStagedSidecar`), so no future call site can perform one without the
+  other. It is best-effort: the new sidecar is already on disk and verified, the
+  next daemon start respawns it anyway, and doctor reports the gap meanwhile —
+  failing there would discard a completed install over a recoverable condition.
+  The result and the `installed` NDJSON event say whether the running sidecar is
+  the one just installed (`restarted`, `restart_error`).
+
+## [3.0.1] — 2026-09-16
+
+### Fixed
+- **An install no longer leaves the machine internally inconsistent.** Measured
+  on a real 3.0.0 install: the wizard signed in to production, every tool
+  reported "already configured", and the daemon went on publishing to a dev
+  Atlas from the day before — 882 calls to `localhost` against 9 to
+  `atlas.keld.co` — while `status` showed the production login and `doctor`
+  reported no problems. Every fact either command could reach was true; nothing
+  compared them. Three causes:
+  - `signal setup` discarded the credential it had just verified whenever no
+    tool config needed changing, which is the ordinary state of every upgrade:
+    `SaveHookConfig` and the manifest write sat below the "nothing to apply"
+    early return. Both paths now adopt through one function. A dry run still
+    writes nothing; an aborted confirmation still changes nothing. The
+    `✓ Hook` line — printed unconditionally, above that return, so the install
+    log showed the hook being configured on exactly the run that left it stale —
+    now prints where the write happens and names the destination.
+  - **The desktop app was skipped on every upgrade after the first.**
+    `build-pkg.sh` stamped `VERSION` and the wizard plugin but never the app
+    bundle, so every release shipped Tauri's default `0.1.0` and PackageKit
+    refused a component that was not newer. Both version keys are now stamped on
+    the staged copy before `pkgbuild`, and read back — `plutil` can exit 0
+    without having set what it was asked to.
+  - **Nothing compared the signed-in Atlas with the daemon's.** `doctor` gained
+    that comparison, naming both endpoints and the one command that reconciles
+    them. It stays silent where it cannot know: a machine paired by setup code
+    (no CLI credential) and an unconfigured daemon (no hook yet) are not
+    mismatches, and a trailing slash or a capitalised host is not a difference.
+- `keld signal status` printed the hook version as `vv2.5.0`.
+
+## [3.0.0] — 2026-09-16
+
+The v3 line, shipped. `releases/latest` — what `install.sh`, `install.ps1` and
+the pkg's sidecar fetch fall back to — moves off 2.5.0 with this tag, so every
+NEW install gets v3; running daemons do not move themselves, because nothing
+serves `agent_release` yet (see *Auto-update* in AGENTS.md).
+
+Preceded by `v3.0.0-rc.1` … `v3.0.0-rc.4`, whose entries are folded in here.
 
 ### Added
+- **macOS installs with no Terminal at all.** Onboarding now happens INSIDE the
+  installer wizard: a custom Installer.app section
+  (`installers/macos/plugin/`, ordered before the Install step) runs the device
+  flow itself, embeds Atlas's own compact approval page in a web view, and
+  collects which AI tools to configure — then `postinstall` does every
+  destructive step silently. No shell, no browser tab, no second app. The page
+  is Atlas's own (`/cli/installer`), never native credential fields: the
+  installer is not an auth client, so SSO and 2FA remain Atlas's business, and
+  only a real page can prove its own origin. `onboard.command` is retained for
+  MDM and for the case where the pane never ran at all.
+  ⚠️ The pane is ALL-OR-NOTHING by design — Continue is enabled by a VERIFIED
+  connection (`whoami --verify`, which performs the same call `postinstall`
+  makes minutes later), never by a file existing, and there is no "set up
+  later": a machine that installs unconnected collects nothing.
 - **The Keld Signal desktop app** (`app/`, Tauri 2): a window onto the daemon's
   own page — today's focus blocks with tokens and estimated spend, which project
   each landed in, whether it reached Atlas, and a Settings pane that can pair a
@@ -79,6 +205,28 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
   `requests`).
 
 ### Fixed
+- **The installer pane shows its wait instead of prompting over a blank page.**
+  It set "Sign in to connect this device." from the `device_code` event — when
+  the embedded page starts LOADING, not when it can be used — so a slow route
+  looked like a form that had failed to render, and the reasonable response was
+  to retry something that was merely still arriving. A progress bar now runs
+  while it loads, the prompt is set from `didFinishNavigation`, and a failed
+  load is stated with its error and retried twice before it gives up.
+- **Going Back and returning no longer leaves the sign-in page untypeable.**
+  Two causes, each ruled in or out by measurement rather than argument.
+  `-initialKeyView` returned the code field unconditionally, and Installer.app
+  applies it on EVERY pane entry — by which point that field is hidden behind
+  the page; a standalone harness (`plugin/focustest.m`) confirmed AppKit hands
+  first responder to a HIDDEN NSTextField and installs its field editor, so
+  keystrokes vanished into a control nobody could see. That is fixed, and was
+  not the whole story: `plugin/reparent.m` showed plain AppKit re-parenting
+  leaves a WKWebView fully typeable, so the remaining cause is this pane's own
+  out-of-process host. Re-entry therefore DISCARDS the web view and builds a
+  fresh one, which is correct whichever half is at fault. A terminated web
+  content process triggers the same rebuild.
+- **The pane logs.** It runs in `InstallerRemotePluginService` with no console,
+  which is why its first two bugs had to be diagnosed by side channels. Read it
+  with `log show --predicate 'process == "InstallerRemotePluginService"'`.
 - **The analysis service no longer dies for the night when a Mac sleeps, and
   the daemon never gives up on it for good.** Measured 2026-09-09: macOS woke
   for ~2 seconds every 15 minutes overnight, and each wake fired the sidecar's

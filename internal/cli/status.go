@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/localagent"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/tools"
@@ -97,7 +99,12 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			if manifest.Hook != nil {
-				console.Print(fmt.Sprintf("  hook            v%s", manifest.Hook.Version))
+				// ⚠️ THE RECORDED VERSION ALREADY CARRIES ITS "v". It is
+				// version.CLI, stamped from the release tag ("v3.0.1"), so
+				// prefixing another one printed "vv2.5.0" on a real machine.
+				// TrimPrefix rather than dropping the prefix outright, because a
+				// dev build records a bare "dev".
+				console.Print(fmt.Sprintf("  hook            v%s", strings.TrimPrefix(manifest.Hook.Version, "v")))
 			}
 
 			// The integrations view, from integrations.Compute via
@@ -265,6 +272,25 @@ func newDoctorCmd() *cobra.Command {
 			// session instead. See localagent.SessionTelemetryState.
 			if p := sessionTelemetryState(manifest).ProblemLine(); p != "" {
 				problems = append(problems, p)
+			}
+
+			// ⚠️ SIGNED IN TO ONE ATLAS, PUBLISHING TO ANOTHER. Every check
+			// above asks whether one half of the install is healthy; this asks
+			// whether the two halves agree. Measured on a real v3.0.0 install
+			// (2026-09-16): identity atlas.keld.co, hook localhost:8000 left by
+			// a dev session, 882 daemon calls to localhost against 9 to Atlas —
+			// and doctor printed "No problems found." while every individual
+			// fact it could reach was true. hook.LoadConfig is the daemon's own
+			// reader (env overrides included), so this compares what the daemon
+			// ACTUALLY uses, not a second guess at it.
+			if hookCfg, err := hook.LoadConfig(); err == nil {
+				identity := ""
+				if a, err := auth.Load(); err == nil && a != nil {
+					identity = a.APIURL
+				}
+				if p := localagent.EndpointAgreement(identity, hookCfg.Endpoint).ProblemLine(); p != "" {
+					problems = append(problems, p)
+				}
 			}
 
 			// Multiple keld binaries on PATH → a stale one can shadow the

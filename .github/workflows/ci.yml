@@ -34,6 +34,8 @@ jobs:
           bash sidecar/test_build_freeze.sh
           bash installers/macos/onboard_command_test.sh
           bash installers/macos/build_pkg_notarization_test.sh
+          bash installers/macos/build_pkg_app_version_test.sh
+          bash installers/macos/postinstall_fetchjob_test.sh
 
   goreleaser-check:
     runs-on: ubuntu-latest
@@ -108,6 +110,11 @@ jobs:
       # every other gate stayed green.
       - name: Workflow line-continuation guard
         run: bash scripts/workflow_continuation_test.sh
+      # Three hops (input -> job env -> build-pkg.sh -> build-plugin.sh) and a
+      # break anywhere in them is silent: the build succeeds and the pkg
+      # installs, it just quietly points at production.
+      - name: Installer dev-target plumbing
+        run: bash scripts/installers_api_url_test.sh
 
   obfuscation-coverage:
     runs-on: ubuntu-latest

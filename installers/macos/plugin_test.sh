@@ -41,7 +41,17 @@ awk '/clang -bundle/{c=NR} /codesign --force/{if (!s) s=NR} /codesign --verify/{
   "$p/build-plugin.sh" || fail "build-plugin.sh must compile, THEN sign, THEN verify"
 
 # The pane must not reimplement Go logic.
-grep -q 'login", @"--code' "$p/KeldSetup.m" || fail "pane does not redeem the code via keld login --json"
+# ⚠️ THIS ASSERTION USED TO REQUIRE THE OPPOSITE — `login --code`, the pane
+# redeeming a typed setup code. That flow is gone: the pane fetches its own
+# device code and approves inside the embedded page, so a field asking someone
+# to paste `ABCD-EFGH` was an instruction for a step that never comes, sitting
+# under a form that had already signed them in. The inversion is deliberate, not
+# a weakened test — a reintroduced field would fail here.
+if grep -qE '_codeField|_connectButton|prefillFromClipboard' "$p/KeldSetup.m"; then
+  fail "the pane still carries the setup-code field; the device flow replaced it"
+fi
+grep -qF 'login", @"--json"' "$p/KeldSetup.m" \
+  || fail "pane does not start a device sign-in via keld login --json"
 grep -q 'install-sidecar' "$p/KeldSetup.m" || fail "pane does not drive keld signal install-sidecar"
 grep -q 'installer-handoff.json' "$p/KeldSetup.m" || fail "pane writes no handoff file"
 grep -q 'nextEnabled' "$p/KeldSetup.m" || fail "pane never gates Continue"
@@ -114,8 +124,14 @@ grep -qF -- '--verify' "$p/KeldSetup.m" || fail "pane checks identity without --
 
 # The code is prefilled from the clipboard (the Atlas download page's Copy
 # button is what puts it there) rather than typed.
-grep -qF 'NSPasteboard' "$p/KeldSetup.m" || fail "pane does not read the clipboard, so the person must type the code by hand"
-grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shape-check clipboard contents before submitting them"
+# The clipboard shortcut existed only to fill the setup-code field, which is
+# gone; reading a person's pasteboard for no remaining purpose is worse than not.
+if grep -qF 'NSPasteboard' "$p/KeldSetup.m"; then
+  fail "the pane still reads the clipboard, which only served the removed setup-code field"
+fi
+# (Its companion — the shape check that kept arbitrary copied text from being
+# submitted as a code — went with it. KeldCode.m and its unit tests remain in
+# the tree, unreferenced, and are removed in the same commit.)
 
 # ⚠️ NOBODY SHOULD HAVE TO FETCH A CODE BY HAND. With no verified credential and
 # nothing usable on the clipboard, the pane starts the OAuth device flow itself
@@ -123,9 +139,23 @@ grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shap
 # session. The pane must RENDER the returned user code: matching it against what
 # the browser shows is the device flow's anti-phishing step, and hiding it turns
 # a security property into decoration.
-grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device_code event, so it cannot start a browser sign-in"
-grep -qF 'user_code' "$p/KeldSetup.m" || fail "pane never renders the device-flow user code, which is what the person matches against the browser"
-grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane does not surface the verification URL, so a failed browser open is a dead end"
+grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device_code event, so it cannot start a sign-in"
+grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane has no fallback URL for an Atlas that predates the compact route"
+
+# ⚠️ THIS ASSERTION USED TO DEMAND THE OPPOSITE, and the reversal is the point
+# rather than a loosening. It required the pane to RENDER the device-flow user
+# code, because matching that code against the one in the browser is the flow's
+# anti-phishing step — true while approval happened in a browser.
+#
+# Approval now happens on Atlas's page EMBEDDED IN THIS PANE: the pane supplies
+# the code, loads the page and reads the result, so there is no second surface
+# to compare against and printing it asks someone to check a number against
+# itself. If approval ever moves out of the pane again — a system browser, or a
+# platform that cannot embed a web view — the comparison becomes real again and
+# this assertion should flip back with it.
+if grep -qF '@"user_code"' "$p/KeldSetup.m"; then
+  fail "pane reads the device-flow user code; with the approval page embedded there is nothing to compare it against, so it should not be displayed"
+fi
 
 # ⚠️ THE APPROVAL HAPPENS INSIDE THE WIZARD, on Atlas's OWN page. The pane loads
 # the verification URL in a WKWebView, so the sign-in fields and the confirm
@@ -159,5 +189,138 @@ grep -qF 'KeldAPIURL' "$p/build-plugin.sh" || fail "build-plugin.sh never stamps
 
 # Content flush against the pane's frame reads as broken; the stack needs insets.
 grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
+
+# ⚠️ THE PANE MUST NOT PROMPT FOR A SIGN-IN THAT IS NOT ON SCREEN YET. The
+# approval page is fetched over the network and compiled by Atlas on demand, so
+# there is a window — seconds, and longer against a cold route — in which the
+# pane showed "Sign in to connect this device." above an empty rectangle. That
+# is the worst possible reading of a wait: it names an action, offers nothing to
+# act on, and so invites a retry of something that was merely still arriving.
+#
+# Two halves, and the fix is incomplete without either. A progress indicator has
+# to be RUNNING while the page loads, and the prompt has to be set from the
+# navigation delegate's didFinish — i.e. when the form actually exists — rather
+# than from the `device_code` event, which only marks the moment the load began.
+grep -q 'navigationDelegate = self' "$p/KeldSetup.m" \
+  || fail "pane never becomes the web view's navigation delegate, so it cannot know when the page has loaded"
+grep -q 'didFinishNavigation' "$p/KeldSetup.m" \
+  || fail "pane does not implement didFinishNavigation, so nothing distinguishes a loading page from a loaded one"
+
+# The prompt must live INSIDE didFinishNavigation. A grep for the string alone
+# would pass on exactly the code this pins against — it was already present, in
+# the device_code handler, which is the bug.
+awk '/didFinishNavigation/,/^}/' "$p/KeldSetup.m" | grep -q 'Sign in to connect' \
+  || fail "the sign-in prompt is not set when the page finishes loading, so it still appears over a blank view"
+
+# And the wait has to be visible for as long as it lasts. The invariant is
+# co-location: whichever method issues the request must also start the
+# indicator, so a later edit cannot move the load somewhere the spinner does not
+# follow. Asserting them separately would pass on a file where one runs and the
+# other never does.
+body=$(awk '/- \(void\)beginApprovalLoad:/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$body" | grep -q 'startAnimation' \
+  || fail "no progress indicator is started when the approval page begins loading"
+printf '%s' "$body" | grep -q 'loadRequest' \
+  || fail "the indicator starts in a method that does not issue the load"
+
+
+# ⚠️ -initialKeyView MUST NEVER NAME A HIDDEN CONTROL, and returning one broke
+# the pane on RE-ENTRY only. Installer.app applies initialKeyView on every pane
+# entry, not just the first. The code field is hidden while the approval page is
+# showing, so after Back-then-Continue the window's first responder became a
+# field nobody could see: measured with a standalone harness (focustest.m),
+# `makeFirstResponder:` on a HIDDEN NSTextField returns YES and installs its
+# field editor, so every keystroke lands in an invisible NSTextView and the
+# embedded page's own inputs look disabled.
+#
+# The guard is that the method consults `hidden` before naming anything.
+key=$(awk '/- \(NSView \*\)initialKeyView/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$key" | grep -q 'hidden' \
+  || fail "initialKeyView can return a hidden control, so pane re-entry sends typing to an invisible field"
+printf '%s' "$key" | grep -q '_approvalWeb' \
+  || fail "initialKeyView ignores the approval page, so focus never reaches the form actually on screen"
+
+# ⚠️ "CONNECTED" MUST NOT MEAN "READY" WHILE THE PANE IS STILL FILLING IN.
+# Continue used to be enabled the instant the credential verified, while
+# `signal setup --dry-run` was still enumerating tools — so the panel showed a
+# success line, an empty list, and no motion, and a person could not tell
+# working from stuck. Reported as: it says I may proceed, the button is
+# disabled, and nothing indicates anything is happening.
+#
+# Two halves: a stated loading state, and Continue held until the list is on
+# screen. Asserting only the first would pass on a pane that still enables the
+# button early.
+grep -q 'beginLoadingTools' "$p/KeldSetup.m" \
+  || fail "the pane has no loading state between signing in and being ready"
+# (Expressed through the single source of truth now: the step clears its own
+# condition and asks for a recompute, rather than assigning the button directly.)
+awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = NO' \
+  || fail "Continue is not held while the pane is still loading its tool list"
+awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+  || fail "nothing moves while the pane loads, so the wait is indistinguishable from a hang"
+awk '/- \(void\)finishLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = YES' \
+  || fail "Continue is never re-enabled once loading finishes"
+
+# And the gap between submitting the form and the device poll answering must
+# also say something: that wait is up to a full poll interval of nothing.
+#
+# ⚠️ A NAVIGATION DELEGATE IS NOT ENOUGH, AND ASSERTING ONLY THAT WAS A TEST
+# THAT COULD NOT FAIL FOR THE REAL CASE. Atlas's approval form submits with
+# fetch() and re-renders in place — no navigation ever happens — so the pane
+# learned nothing when the person pressed the button, and the panel sat
+# unchanged until the device poll answered. The pane therefore INJECTS its own
+# click listener and receives it as a script message; that is the signal, and it
+# is what must be present.
+grep -q 'addScriptMessageHandler' "$p/KeldSetup.m" \
+  || fail "the pane cannot tell that a sign-in was submitted (the page posts by fetch, not navigation)"
+grep -q 'didReceiveScriptMessage' "$p/KeldSetup.m" \
+  || fail "the pane installs a message handler and never handles the message"
+awk '/didReceiveScriptMessage/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+  || fail "submitting the form starts nothing moving, so the wait still looks like a hang"
+# The handler is retained by the content controller, which the web view retains:
+# leaving it installed keeps the pane alive for the life of the process.
+grep -q 'removeScriptMessageHandlerForName' "$p/KeldSetup.m" \
+  || fail "the script message handler is never removed, so the pane leaks through the retain cycle"
+
+# ⚠️ THE PANE'S LOG MUST BE READABLE. It wrote via NSLog to the unified log,
+# where os_log redacts dynamic strings: every line arrived as
+# `keld-pane: <private>` (measured 2026-09-16, streaming a real install), which
+# records that something happened and never what. A file is the primary record.
+grep -q 'installer-pane.log' "$p/KeldSetup.m" \
+  || fail "the pane writes no log file, so its diagnostics are only in a redacting log"
+grep -q '%{public}s' "$p/KeldSetup.m" \
+  || fail "the os_log line still lets its message be redacted to <private>"
+
+# ⚠️ CONTINUE IS COMPUTED IN ONE PLACE, FROM ALL THREE CONDITIONS.
+# It used to be assigned from four scattered sites (`nextEnabled = _paired` on
+# entry, after the tool list, after a failed identity check), which is precisely
+# how this pane's earlier state bugs happened: each site knew about its own
+# condition and nothing knew about the others. Adding the sidecar as a fourth
+# scattered assignment would have guaranteed a repeat.
+grep -q '\- (void)updateNextEnabled' "$p/KeldSetup.m" \
+  || fail "Continue's state is not computed in one place"
+body=$(awk '/- \(void\)updateNextEnabled/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$body" | grep -q '_paired' \
+  || fail "updateNextEnabled ignores whether the machine is connected"
+printf '%s' "$body" | grep -q '_toolsLoaded' \
+  || fail "updateNextEnabled ignores whether the tool list has been read"
+printf '%s' "$body" | grep -q '_sidecarSettled' \
+  || fail "updateNextEnabled ignores the sidecar download, so someone can click through mid-download"
+
+# Nothing else may set it, or the single source of truth is decorative.
+strays=$(grep -c 'nextEnabled = ' "$p/KeldSetup.m" || true)
+[ "$strays" -eq 1 ] \
+  || fail "nextEnabled is assigned in $strays places; it must be computed only inside updateNextEnabled"
+
+# ⚠️ SETTLED, NOT SUCCEEDED — A FAILED DOWNLOAD MUST NOT WEDGE THE INSTALL.
+# Gating Continue on a SUCCESSFUL fetch makes an offline machine impossible to
+# install: a captive portal, a VPN or a GitHub outage would leave someone unable
+# to finish at all. The install is still worth completing without it — telemetry
+# works, enrichment spools, and the launchd fallback fetches the sidecar later —
+# so the failure path sets the same flag and offers a retry.
+done_body=$(awk '/_sidecarSettled = YES/{found++} END{print found+0}' "$p/KeldSetup.m")
+[ "$done_body" -ge 1 ] || fail "nothing ever marks the sidecar download as settled"
+awk '/- \(void\)startSidecarDownload/,/^\}/' "$p/KeldSetup.m" | grep -q 'Downloading the analysis engine' \
+  || fail "the pane does not say why Continue is held while the engine downloads"
 
 echo "plugin_test.sh: OK"

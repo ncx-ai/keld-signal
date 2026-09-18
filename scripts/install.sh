@@ -350,8 +350,7 @@ elif [ "$agent_ok" != "1" ]; then
   exit 1
 elif [ "$onboarded" = "1" ]; then
   echo "Done — Keld is set up and running."
-  echo "  Enrichment runs on-device with no model download — nothing multi-gigabyte"
-  echo "  is fetched, now or later."
+  echo "  Prompts are analysed on this machine; only masked signal is sent."
 elif [ -n "$CODE" ]; then
   # A setup code was supplied, so onboarding was meant to complete without a
   # human. No token means it genuinely failed — that IS an error.

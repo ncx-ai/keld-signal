@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +347,187 @@ func TestInstallSidecarProgressReportsIndeterminateTotal(t *testing.T) {
 	}
 	if !sawIndeterminate {
 		t.Fatal("Progress callback never reported total == -1 for a Content-Length-less download")
+	}
+}
+
+// ⚠️ THE DEFAULT RESTART IS NEUTRALISED FOR THE WHOLE PACKAGE, because
+// commitStagedSidecar now bounces the local service and SEVERAL tests here reach
+// it — TestInstallSidecar…, the commit tests, anything driving a full install.
+// Left alone, `go test ./...` would `launchctl bootout`/`systemctl --user
+// restart` the real agent on a developer's machine and on the CI runner: a test
+// that mutates the machine it runs on is a worse defect than the one it checks
+// for, which this repo has already paid for once (teleproxy writing a real
+// ~/.keld — see AGENTS.md).
+//
+// Tests that care about the restart override this var themselves and restore it
+// with t.Cleanup.
+func TestMain(m *testing.M) {
+	restartServiceAfterSwap = func() error { return nil }
+	os.Exit(m.Run())
+}
+
+// stageFakeSidecar builds the shape commitStagedSidecar expects: a staging dir
+// holding keld-agent-sidecar/ with a VERSION file and an executable binary.
+func stageFakeSidecar(t *testing.T, version string) string {
+	t.Helper()
+	stage := t.TempDir()
+	tree := filepath.Join(stage, "keld-agent-sidecar")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "VERSION"), []byte(version+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "keld-agent-sidecar"), []byte("#!/bin/sh\necho sidecar\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return stage
+}
+
+// ⚠️ SWAPPING THE TREE ON DISK DOES NOT CHANGE THE SIDECAR THAT IS RUNNING, and
+// for one install the two were five seconds apart in the wrong order.
+//
+// Measured on a real v3.0.1 install (2026-09-16):
+//
+//	08:41:26  daemon starts, spawns the sidecar   (postinstall: keld-agent install)
+//	08:41:31  sidecar tree replaced on disk (v3.0.1)
+//	08:41:32  sidecar binary written
+//
+// postinstall backgrounds the ~190MB fetch deliberately — it must not block the
+// install — and then restarts the daemon on its own schedule. So the daemon
+// spawned the OLD image and kept it, and `doctor` reported version skew on a
+// machine whose disk was entirely correct. A manual `keld-agent restart` cleared
+// it instantly, which is the whole diagnosis: only the running process was stale.
+//
+// The restart therefore lives in commitStagedSidecar, beside the swap itself,
+// rather than in either caller: a swap that does not restart is the defect, so
+// the two must not be separable by adding a third call site.
+func TestCommitRestartsTheServiceSoTheRunningSidecarIsTheOneOnDisk(t *testing.T) {
+	restarts := 0
+	orig := restartServiceAfterSwap
+	restartServiceAfterSwap = func() error { restarts++; return nil }
+	t.Cleanup(func() { restartServiceAfterSwap = orig })
+
+	staged := stageFakeSidecar(t, "v9.9.9")
+	dest := t.TempDir()
+
+	res, err := commitStagedSidecar(staged, dest)
+	if err != nil {
+		t.Fatalf("commitStagedSidecar: %v", err)
+	}
+	if restarts != 1 {
+		t.Errorf("service restarted %d times, want exactly 1 — a swapped tree that nothing respawns leaves the old sidecar running", restarts)
+	}
+	if !res.Restarted {
+		t.Error("result does not report the restart, so no caller can tell whether the running sidecar is current")
+	}
+}
+
+// ⚠️ A FAILED RESTART MUST NOT FAIL THE INSTALL. The new sidecar is already on
+// disk and correct at that point; the only thing missing is a respawn, which the
+// next daemon start does anyway and which `doctor`'s skew check reports in the
+// meantime. Turning that into an install failure would discard a completed,
+// verified ~190MB download over a recoverable condition — and on the background
+// path there is nobody watching the exit code at all.
+func TestCommitSurvivesARestartFailure(t *testing.T) {
+	orig := restartServiceAfterSwap
+	restartServiceAfterSwap = func() error { return errors.New("launchctl: no such service") }
+	t.Cleanup(func() { restartServiceAfterSwap = orig })
+
+	staged := stageFakeSidecar(t, "v9.9.9")
+	dest := t.TempDir()
+
+	res, err := commitStagedSidecar(staged, dest)
+	if err != nil {
+		t.Fatalf("a restart failure must not fail the commit: %v", err)
+	}
+	if res.Path == "" {
+		t.Error("the sidecar was installed but the result does not say where")
+	}
+	if res.Restarted {
+		t.Error("a failed restart is reported as having happened")
+	}
+	if res.RestartErr == "" {
+		t.Error("a failed restart is silent — the caller cannot say the running sidecar may be stale")
+	}
+}
+
+// Staging is not installing: --stage-only leaves the running sidecar exactly
+// where it was, so restarting anything there would bounce the service for a tree
+// that has not been put in place yet. The macOS pane stages DURING the wizard,
+// minutes before postinstall commits.
+func TestStageOnlyDoesNotRestartTheService(t *testing.T) {
+	restarts := 0
+	orig := restartServiceAfterSwap
+	restartServiceAfterSwap = func() error { restarts++; return nil }
+	t.Cleanup(func() { restartServiceAfterSwap = orig })
+
+	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
+	defer srv.Close()
+
+	if _, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), StageOnly: true,
+	}); err != nil {
+		t.Fatalf("installSidecar(stage-only): %v", err)
+	}
+	if restarts != 0 {
+		t.Errorf("staging restarted the service %d times; nothing was installed yet", restarts)
+	}
+}
+
+// ⚠️ THE LAUNCHD JOB MUST NOT BE A SHELL SCRIPT, BECAUSE macOS SHOWS ITS NAME TO
+// THE PERSON INSTALLING. The fallback fetch ran from
+// ~/.keld/logs/.sidecar-fetch.sh, and macOS announced "'.sidecar-fetch.sh' can
+// run in the background" — a dot-prefixed script in a log directory, presented
+// to someone who just wanted to install Keld. Reported from a real install,
+// 2026-09-16.
+//
+// So the job runs the signed `keld` binary directly, which is what macOS then
+// names, and launchd does the logging through StandardOutPath. That leaves one
+// thing the shell used to do: delete the plist, without which the job re-runs a
+// ~190MB download at every login. --cleanup-job is that, moved into the binary
+// where it can be tested.
+func TestCleanupJobRemovesThePlistAfterASuccessfulInstall(t *testing.T) {
+	plist := filepath.Join(t.TempDir(), "co.keld.sidecar-fetch.plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
+	defer srv.Close()
+
+	if _, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
+	}); err != nil {
+		t.Fatalf("installSidecar: %v", err)
+	}
+	if _, err := os.Stat(plist); !os.IsNotExist(err) {
+		t.Error("the launchd job's plist survived a successful install, so the fetch re-runs at every login")
+	}
+}
+
+// ⚠️ A FAILED FETCH MUST KEEP ITS JOB. The plist is the only thing that will try
+// again — delete it on failure and the machine is left with a stale sidecar and
+// nothing scheduled to fix it, which is the silent state this whole path exists
+// to end.
+func TestCleanupJobSurvivesAFailedInstall(t *testing.T) {
+	plist := filepath.Join(t.TempDir(), "co.keld.sidecar-fetch.plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A server that answers nothing useful: the fetch cannot succeed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
+	}); err == nil {
+		t.Fatal("expected the install to fail")
+	}
+	if _, err := os.Stat(plist); err != nil {
+		t.Error("a failed fetch deleted its own retry job, leaving nothing to try again")
 	}
 }

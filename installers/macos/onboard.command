@@ -158,8 +158,7 @@ KELD_HOME_DIR="${KELD_HOME:-${HOME}/.keld}"
 echo
 if grep -q '"ingest_token"[[:space:]]*:[[:space:]]*"[^"]' "${KELD_HOME_DIR}/hook.json" 2>/dev/null; then
   echo "Keld is set up and running. You can close this window."
-  echo "  Enrichment runs on-device with no model download — nothing multi-gigabyte"
-  echo "  is fetched, now or later."
+  echo "  Prompts are analysed on this machine; only masked signal is sent."
 else
   echo "Keld is installed, but NOT set up yet (nothing is being collected)."
   echo "Run:  keld login && keld signal setup"
