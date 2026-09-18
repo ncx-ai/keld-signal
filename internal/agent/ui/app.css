@@ -324,6 +324,11 @@ body.pane-today .health-strip { margin-top: 12px; }
   gap: 10px;
 }
 .health-strip .cells { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Its own row under the pills. `flex-basis: 100%` inside the wrapping strip is
+   what puts it there without a second container — the strip is
+   space-between, so a sentence sharing the pills' row would be squeezed
+   against the toggles at every width. */
+.health-strip .durability-note { flex-basis: 100%; color: var(--muted); font-size: 12.5px; }
 .health-strip .toggles { display: flex; gap: 18px; align-items: center; font-size: 12.5px; color: var(--muted); }
 
 /* ---- Toggle switch ---- */

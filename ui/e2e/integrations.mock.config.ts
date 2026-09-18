@@ -19,7 +19,11 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: ".",
-  testMatch: /integrations-states\.spec\.ts$/,
+  // The daemon-free specs. `durability.spec.ts` joins the state suite here
+  // rather than under `playwright.config.ts` for the same reason: it serves the
+  // page itself and answers /v1/ledger from an inline fixture, so it needs
+  // neither the sidecar venv nor a generated corpus.
+  testMatch: /(integrations-states|durability)\.spec\.ts$/,
   workers: 1,
   fullyParallel: false,
   retries: 0,
