@@ -647,6 +647,31 @@ sys.stdout.write("\n")
   # differ in more than a pair of characters.
   python3 -c '
 import sys
+# ⚠️ **KELD DELIMITS ITS OWN BLOCK, AND THE WHOLE BLOCK IS ITS OWN.** Codex|s
+# config carries `# >>> keld (managed by keld CLI — do not edit between
+# markers)` … `# <<< keld`, and a LINE rule cannot see that the block|s SHAPE is
+# keld|s too: this release changed the Codex hook set from PreToolUse to
+# UserPromptSubmit + Stop, so the `[[hooks.X]]` headers moved. Those headers
+# carry no hook command, so nothing blanked them and chain B reported the
+# upgrade as trampling a config its owner had edited — measured on
+# windows-latest, seed 35336597444, with the diff showing only keld|s own
+# section headers.
+#
+# Collapsing between the markers is exactly the claim the markers make. Anything
+# OUTSIDE them is still compared byte for byte, which is what the check is for.
+lines = list(open(sys.argv[1], encoding="utf-8", errors="replace"))
+out, inside = [], False
+for line in lines:
+    if line.startswith("# >>> keld"):
+        inside = True
+        out.append("<KELD_OWNED_BLOCK>\n")
+        continue
+    if inside:
+        if line.startswith("# <<< keld"):
+            inside = False
+        continue
+    out.append(line)
+lines = out
 # Every line keld OWNS, and nothing else. A self-repair re-runs the adapter,
 # which rewrites the whole managed block — not just the hook command — and the
 # telemetry endpoint legitimately moves because the restarted daemon picked a
@@ -659,7 +684,7 @@ OWNED = (
     "CLAUDE_CODE_ENABLE_TELEMETRY", # the switch that turns the above on
     "x-keld-ingest-token",          # the loopback secret, inside the headers
 )
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+for line in lines:
     sys.stdout.write("<KELD_OWNED_LINE>\n" if any(k in line for k in OWNED) else line)
 ' "$1"
 }
