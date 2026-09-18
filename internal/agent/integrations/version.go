@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -97,7 +98,7 @@ func scalar(v any) string {
 // The zero instant means UNKNOWN and must never be read as "long ago": Compute
 // refuses to call a tool `restart_required` on it.
 func newestSessionStart(dirs []string) time.Time {
-	path, ok := newestTranscript(dirs)
+	path, ok := newestSessionTranscript(dirs)
 	if !ok {
 		return time.Time{}
 	}
@@ -116,10 +117,49 @@ func newestSessionStart(dirs []string) time.Time {
 	return start
 }
 
+// newestSessionTranscript is newestTranscript with SUBAGENT transcripts
+// excluded, and it is what every question about "the newest SESSION" reads.
+//
+// ⚠️ An `agent-*.jsonl` is not a session. It shares its parent's OTEL session
+// id and is written whenever the parent spawns a subagent, so it is usually the
+// most recently modified file on the machine — 620 of 671 here — and its own
+// first timestamp is when the SUBAGENT started, not when the tool did. Reading
+// it as the newest session start makes a session that predates the config look
+// fresh, which hides `restart_required` on exactly the machines that need it;
+// reading its basename as a session id joins to nothing. Same exclusion
+// SessionTelemetryState makes one package over, for the same reason.
+func newestSessionTranscript(dirs []string) (string, bool) {
+	return newestTranscriptWhere(dirs, func(name string) bool {
+		return !strings.HasPrefix(name, "agent-")
+	})
+}
+
+// newestSessionID names the newest session this tool wrote, as the tool's own
+// OTLP session id.
+//
+// It is the transcript's basename, which holds for Claude Code and is checked
+// nowhere else: Codex and Gemini name their files something that is not their
+// session id, so the join simply MISSES for them and nothing downstream reads
+// an adoption fact it was never given. A miss is the honest answer there, not a
+// wrong one.
+func newestSessionID(dirs []string) string {
+	path, ok := newestSessionTranscript(dirs)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+}
+
 // newestTranscript returns the most recently modified *.jsonl anywhere under
 // any of dirs. A missing directory is not an error — it is the ordinary state
 // of a tool nobody has run.
 func newestTranscript(dirs []string) (string, bool) {
+	return newestTranscriptWhere(dirs, func(string) bool { return true })
+}
+
+// newestTranscriptWhere is newestTranscript restricted to files whose BASE NAME
+// keep accepts.
+func newestTranscriptWhere(dirs []string, keep func(name string) bool) (string, bool) {
 	var best string
 	var bestMod time.Time
 	for _, dir := range dirs {
@@ -131,6 +171,9 @@ func newestTranscript(dirs []string) (string, bool) {
 				return nil // an unreadable subtree is skipped, never fatal
 			}
 			if de.IsDir() || filepath.Ext(p) != ".jsonl" {
+				return nil
+			}
+			if !keep(de.Name()) {
 				return nil
 			}
 			info, err := de.Info()

@@ -52,6 +52,25 @@ type WiringFacts struct {
 	// top-level timestamp) and Compute refuses to call a tool
 	// `restart_required` on it — see newestSessionStart.
 	NewestSessionStart time.Time
+	// NewestSessionAdopted — that same session has posted telemetry through
+	// the loopback proxy SINCE the config was written, so the process running
+	// it has demonstrably read the new config.
+	//
+	// ⚠️ WITHOUT IT `restart_required` CAN NEVER CLEAR ON A RESUMED SESSION,
+	// and a resume is the ordinary way back into work. The start instant is
+	// read from the transcript's first line, and `claude --resume` keeps the
+	// transcript — so a session resumed into a NEW process, reading the new
+	// config, goes on reporting the old process's start time forever. Measured
+	// here: config written 15:06:55Z, session first line 14:46Z, and that same
+	// session id forwarding telemetry at 15:13:01Z through a proxy it could
+	// only reach by having read the config. The row said restart_required
+	// across two genuine restarts.
+	//
+	// It is asked PER SESSION, never per machine: the record is
+	// `teleproxy.SessionsOnDisk()`, keyed by the tool's own session id, so a
+	// second editor window started after setup cannot vouch for a stale one —
+	// the vouching trap this file's otel lane already had to correct.
+	NewestSessionAdopted bool
 }
 
 // LaneFacts is what each lane last carried for one tool. Every field is a
@@ -117,6 +136,9 @@ type Deps struct {
 	// RowsForRecentPointers is the reader lane. nil function ⇒ nil answer ⇒
 	// unknown ⇒ contributes neither half of broken.
 	RowsForRecentPointers func(e Entry) *bool
+	// SessionForward answers when ONE session last forwarded telemetry, for
+	// the restart question. Default: teleproxy's per-session record.
+	SessionForward func(sessionID string) *time.Time
 }
 
 func (d Deps) withDefaults() Deps {
@@ -137,6 +159,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.TelemetryForward == nil {
 		d.TelemetryForward = perSourceForward
+	}
+	if d.SessionForward == nil {
+		d.SessionForward = sessionForward
 	}
 	return d
 }
@@ -260,7 +285,37 @@ func ReadWiring(e Entry, d Deps) WiringFacts {
 		w.ConfigMtime = info.ModTime().UTC()
 	}
 	w.NewestSessionStart = newestSessionStart(d.TranscriptDirs(e))
+	w.NewestSessionAdopted = sessionAdopted(d, e, w.ConfigMtime)
 	return w
+}
+
+// sessionAdopted answers NewestSessionAdopted: did the newest session forward
+// telemetry after this config was written. A zero ConfigMtime is unknown, and
+// an unknown config instant can prove nothing either way.
+func sessionAdopted(d Deps, e Entry, configMtime time.Time) bool {
+	if configMtime.IsZero() {
+		return false
+	}
+	id := newestSessionID(d.TranscriptDirs(e))
+	if id == "" {
+		return false
+	}
+	at := d.SessionForward(id)
+	return at != nil && at.After(configMtime)
+}
+
+// sessionForward is the default per-session telemetry fact: teleproxy's record
+// of which tool session ids it has forwarded for, and when.
+//
+// ⚠️ An EMPTY record is "not tracked yet", never "this session has sent
+// nothing" — the refusal SessionsOnDisk is built around. Here that direction is
+// already safe: a missing instant leaves the restart rule exactly as it was.
+func sessionForward(sessionID string) *time.Time {
+	at, ok := teleproxy.SessionsOnDisk()[sessionID]
+	if !ok || at.IsZero() {
+		return nil
+	}
+	return &at
 }
 
 // hookCommandBroken reports whether any keld hook command in this config was

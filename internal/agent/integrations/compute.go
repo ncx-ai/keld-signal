@@ -227,8 +227,19 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// that has never been run, or whose transcripts we cannot read, has no
 	// stale session to restart; calling it restart_required would put a
 	// permanent instruction on a row where there is nothing to do.
+	//
+	// ⚠️ AND A SESSION THAT HAS SINCE FORWARDED TELEMETRY HAS RESTARTED,
+	// whatever its start instant says. The start is read from the transcript's
+	// first line and a RESUME keeps the transcript, so a session carried into a
+	// new process — which read the new config on the way in — reports the old
+	// process's start time for as long as it lives. Telemetry arriving for that
+	// session id after the config was written is direct proof the running
+	// process adopted it: the loopback proxy is what the config points at.
+	// Without this the instruction is unfollowable — restarting the tool does
+	// not clear it, and the row states a repair that cannot work.
 	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfigMtime.IsZero() &&
-		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfigMtime) {
+		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfigMtime) &&
+		!f.Wiring.NewestSessionAdopted {
 		return RestartRequired, ""
 	}
 	// Row 3b. Requires KNOWN trust: `known=false` is "we cannot tell", and
