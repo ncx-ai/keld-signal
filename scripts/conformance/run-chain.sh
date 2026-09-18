@@ -802,7 +802,23 @@ case "$CHAIN" in
   C) STEPS="step_before_install step_signal_install step_before_prompts \
             step_c_old_binary step_c_daemon_restarts step_c_setup_rerun \
             step_c_resume step_c_second_window step_c_sleep_wake \
-            step_c_unpaired step_c_otlp_switch" ;;
+            step_c_unpaired step_c_otlp_switch"
+     # ⚠️ **CHAIN C TURNS THE TOOL'S OWN OTLP LANE ON, AND HAS TO SAY SO.**
+     # Since WS3 it is opt-in (`tool_otlp`, default OFF), so on a default
+     # machine `keld signal setup` writes no OTEL block at all and the tool
+     # holds NO credential. Three of this chain's incidents are about a tool
+     # that holds one — the 18-minute silence after three daemon restarts, the
+     # setup re-run that left a secret the proxy 401s, and the switch's own step
+     # — and none of them exists on a machine without the lane. So the chain
+     # asks for the machine the incidents happened on.
+     #
+     # That the DEFAULT machine cannot have those three failures is WS3's
+     # mitigation working, not a gap in this chain, and it is worth stating
+     # rather than discovering: a reader who sees these steps pass should know
+     # they ran against the opt-in configuration.
+     export KELD_TOOL_OTLP=${KELD_TOOL_OTLP:-1}
+     echo "conformance: chain C runs with KELD_TOOL_OTLP=$KELD_TOOL_OTLP — the tool's own OTLP lane is opt-in since WS3, and three of this chain's incidents need it"
+     ;;
 esac
 
 # ⚠️ **KEEP_GOING IS OFF BY DEFAULT AND MUST STAY THAT WAY.** Stopping at the

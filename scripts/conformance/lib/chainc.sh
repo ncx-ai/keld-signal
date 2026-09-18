@@ -240,6 +240,21 @@ raise SystemExit(0 if any(k in d for k in sys.argv[1:]) else 1)
 ' "$@"
 }
 
+# settings_value_true <key> — is this v3 setting effectively ON right now?
+# GET /v1/settings reports the EFFECTIVE value (file merged with env), which is
+# the only one worth asking about: a file value an env var pins is not what the
+# machine is doing.
+settings_value_true() {
+  local body; body=$(daemon_get /v1/settings)
+  [ -n "$body" ] || return 1
+  printf '%s' "$body" | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if d.get(sys.argv[1]) is True else 1)
+' "$1"
+}
+
 # --- chain C's steps ----------------------------------------------------------
 
 # OLD_VERSION is what the "already installed" keld this chain leaves behind
@@ -515,11 +530,39 @@ step_c_resume() {
     any=1
     park_transcripts "$t"
     tool_prompt "$t" "window-fresh"
-    # `touch`, not another `keld signal setup`: the rule reads the config file's
-    # MTIME, and setup may legitimately decide there is nothing to write. This
-    # constructs the one fact under test — a live session that started before
-    # the config — without pretending a rewrite happened.
-    touch "$(tool_config_path "$t")"
+    # ⚠️ **THE PRECONDITION IS WRITTEN WHERE THE RULE READS IT, AND TWO EASIER
+    # LEVERS WERE MEASURED FIRST.** The fact this step needs is "keld wrote this
+    # tool's config after that session started", and since WS6 that is
+    # `manifest.Tools[<adapter>].ConfiguredAt` — keld's OWN record — with the
+    # manifest's mtime and then the tool config's mtime only as fallbacks for
+    # machines that have no such record.
+    #
+    #   - `touch`ing the tool config does nothing at all: the per-tool record
+    #     wins. Measured on the rebased branch — the control read `working`.
+    #   - Re-running `keld signal setup --yes` does not move it either, because
+    #     the config is already correct and keld writes nothing. Measured:
+    #     configured_at stayed at 23:10:55 across two re-runs while the session
+    #     under test started at 23:13:43.
+    #
+    # Both readings are the product being right. So the instant is written
+    # directly into keld's own record — the same class of construction as
+    # parking the other transcripts, and the only one that states the fact the
+    # rule is about rather than hoping a side effect produces it.
+    python3 - "$ISO_HOME/manifest.json" "$(tool_config_path "$t")" <<'PY'
+import json, sys, datetime
+path, cfg = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        d = json.load(f)
+except Exception:
+    raise SystemExit(0)
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+for name, tool in (d.get("tools") or {}).items():
+    if isinstance(tool, dict) and tool.get("config_path") == cfg:
+        tool["configured_at"] = now
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+PY
     local ctl="" i
     for i in $(seq 1 "$DETECT_BUDGET"); do
       ctl=$(integration_state "$t")
@@ -937,17 +980,42 @@ step_c_otlp_switch() {
   local t; t=$(echo $BEFORE | awk '{print $1}')
   [ -n "$t" ] || { blocked "no tool in the before half to drive with the switch on"; return 0; }
 
-  # Turn it on through the same route the page uses, and restart, because a
-  # switch read at startup is not re-read.
   local key="" k
   for k in $OTLP_SWITCH_KEYS; do
     if settings_key_present "$k"; then key=$k; break; fi
   done
-  say "turning $key on through PUT /v1/settings, then restarting (a startup-read switch is not re-read)"
-  curl -fsS -X PUT -H "x-keld-agent-secret: $DAEMON_SECRET" -H 'content-type: application/json' \
-    -d "{\"$key\":true}" "$DAEMON_URL/v1/settings" >/dev/null 2>&1 || {
-      say "PUT /v1/settings refused $key"; return 1; }
-  daemon_stop; daemon_start
+
+  # ⚠️ **ASK WHETHER IT IS ON, AND ONLY THEN TRY TO TURN IT ON.** The chain
+  # exports KELD_TOOL_OTLP=1 (see run-chain.sh), and an env-pinned key is
+  # REPORTED IN `readonly` and refused by PUT — writing the file would have no
+  # observable effect. A step that PUT blindly would either fail on the refusal
+  # or, worse, believe it had changed something it had not.
+  if settings_value_true "$key"; then
+    say "$key is already on (pinned by the environment for this chain)"
+  else
+    say "turning $key on through PUT /v1/settings"
+    curl -fsS -X PUT -H "x-keld-agent-secret: $DAEMON_SECRET" -H 'content-type: application/json' \
+      -d "{\"$key\":true}" "$DAEMON_URL/v1/settings" >/dev/null 2>&1 || {
+        say "PUT /v1/settings refused $key"; return 1; }
+    daemon_stop; daemon_start
+    settings_value_true "$key" || { say "$key is still off after the PUT"; return 1; }
+  fi
+
+  # The lane has to be WIRED before it can be compared: the switch decides
+  # whether keld writes the tool's OTEL block, and the detector does that on its
+  # own poll. Waiting on the CONFIG is the `await_hook_repair` idiom — a timer
+  # here would prove whatever the timer happened to be.
+  local i
+  for i in $(seq 1 "$DETECT_BUDGET"); do
+    [ -n "$(tool_otlp_target "$t")" ] && break
+    sleep 1
+  done
+  if [ -z "$(tool_otlp_target "$t")" ]; then
+    say "$key is on and $(tool_display "$t")'s config still carries no OTLP endpoint after ${DETECT_BUDGET}s."
+    say "  With no tool lane there is only one lane, and this step's question —"
+    say "  do the two agree — has no second side to ask."
+    return 1
+  fi
 
   tool_prompt "$t" "otlp-switch"
   close_open_blocks "$t"
@@ -958,7 +1026,14 @@ step_c_otlp_switch() {
   [ -n "$ledger" ] || { say "GET /v1/ledger did not answer"; return 1; }
   printf '%s' "$ledger" > "$WORK/ledger-otlp-switch.json"
 
-  python3 - "$WORK/ledger-otlp-switch.json" "$ATLAS_STATE" <<'PY' || return 1
+  # ⚠️ **EXIT 2 IS "CANNOT COMPARE", EXIT 1 IS "THEY DISAGREE", and collapsing
+  # them would accuse the product of a defect this harness cannot substantiate.**
+  # Measured on the rebased branch: every block's `measured` cell reads
+  # `status:"n/a", reason:"no_tokens"` — the mock model's usage never reaches the
+  # priced half — so there is no priced side to compare, which is a fact about
+  # the FIXTURE. The cell's own stated reason is printed either way.
+  local rc=0
+  python3 - "$WORK/ledger-otlp-switch.json" "$ATLAS_STATE" <<'PY' || rc=$?
 import json, os, sys, glob
 
 # The priced fields, named once. `model` plus these four buckets are what an
@@ -970,8 +1045,9 @@ led = json.load(open(ledger_path))
 
 # LANE ONE — the transcript: the ledger's `measured` cell, derived from the
 # JSONL the tool wrote and from nothing else.
-measured = []
-for b in led.get("blocks") or []:
+blocks = led.get("blocks") or []
+measured, unpriced = [], []
+for b in blocks:
     cell = (b.get("cells") or {}).get("measured")
     if cell and cell.get("status") == "ok":
         measured.append({
@@ -980,9 +1056,16 @@ for b in led.get("blocks") or []:
             "tokens": cell.get("tokens") or {},
             "requests": int(cell.get("requests") or 0),
         })
+    else:
+        unpriced.append((cell or {}).get("status", "absent") + "/" + (cell or {}).get("reason", ""))
 if not measured:
-    print("otlp-switch: the ledger holds no measured block, so the two lanes cannot be compared")
-    raise SystemExit(1)
+    if not blocks:
+        print("otlp-switch: the ledger holds no block at all, so there is nothing to compare")
+    else:
+        print("otlp-switch: none of the ledger's %d block(s) is priced — measured cells read %s. "
+              "The transcript lane has no priced side, so the comparison cannot run."
+              % (len(blocks), ", ".join(sorted(set(unpriced)))))
+    raise SystemExit(2)
 
 # LANE TWO — the tool's own OTLP, as the mock Atlas stored it after the proxy
 # forwarded it. Read from the persisted BODIES rather than from a count: the
@@ -1043,5 +1126,10 @@ print("otlp-switch: the two lanes agree on model and all four token buckets acro
       "%d block(s), with %d telemetry body/bodies for %d request(s)"
       % (len(measured), len(bodies), want))
 PY
-  return 0
+  case "$rc" in
+    0) return 0 ;;
+    2) blocked "the transcript lane priced nothing this run, so the two lanes have no priced field to disagree about (see the line above). The tool's own lane is live; what is missing is a measured block."
+       return 0 ;;
+    *) return 1 ;;
+  esac
 }

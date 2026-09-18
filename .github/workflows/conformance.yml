@@ -756,6 +756,14 @@ jobs:
           # service check to the unit file and says so, it does not skip it.
           KELD_CONFORM_INSTALL_FLAGS: ${{ runner.os == 'Linux' && '--allow-no-service-manager' || '' }}
           KELD_CONFORM_DISPOSABLE: "1"
+          # ⚠️ **CHAIN C SURVEYS; A AND B STOP AT THE FIRST BREAK.** For a gate,
+          # stopping is right: one break must read as one break. Chain C is not a
+          # gate — it is expected to fail in several places at once, and its
+          # whole value is naming WHICH of the six defects a branch has fixed.
+          # Stopping would report the first one forever and hide the rest. Every
+          # step that runs after a failure is labelled in the output as a survey,
+          # and no assertion is relaxed.
+          KELD_CONFORM_KEEP_GOING: ${{ matrix.chain == 'C' && '1' || '0' }}
           # Empty on chain A, so the ${VAR:+...} below adds nothing there.
           PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
           NEW_SIDECAR: ${{ steps.previous.outputs.newsidecar || '' }}
