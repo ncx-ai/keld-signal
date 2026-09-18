@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
@@ -23,6 +24,15 @@ func detectorWithOTLP(on *bool) *Detector {
 		}, nil
 	}
 	d.ToolOTLP = func() bool { return *on }
+	// ⚠️ TURNING THE SWITCH ON WRITES A CREDENTIAL, so it passes through the
+	// same proxy probe every other credential-writing apply does, and the probe
+	// is ALWAYS stubbed in a test: one that reached the real loopback port would
+	// pass or fail depending on whether the developer's own daemon happens to be
+	// up. Turning it OFF removes the block and needs no probe -- see
+	// writesACredential.
+	d.Probe = func(endpoint, secret string) (telemetry.ProbeOutcome, int) {
+		return telemetry.ProbeOK, 200
+	}
 	return d
 }
 

@@ -2,72 +2,32 @@ package cli
 
 import (
 	"fmt"
-	"net/http"
 	"os/exec"
 	"strings"
-	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
-// probeOutcome is what the post-write verification found.
-type probeOutcome int
+// The post-write verification, MOVED to internal/telemetry and aliased here so
+// this file's callers and its tests read unchanged.
+//
+// ⚠️ IT MOVED BECAUSE IT GAINED A SECOND CALLER, not for tidiness. The daemon's
+// integrations detector now asks the same question before rewriting keld's own
+// block in a tool's config it finds drifted — "do not repair what you cannot
+// verify" — and two copies of "does the running proxy accept this value" are two
+// ways for `keld signal setup` and the daemon to disagree about one machine.
+// The measurement behind it is on telemetry.ProbeSecret.
+type probeOutcome = telemetry.ProbeOutcome
 
 const (
-	// probeOK — the running proxy accepted the credential just written.
-	probeOK probeOutcome = iota
-	// probeUnverified — nothing answered on the loopback port. NOT a failure:
-	// `keld-agent install` registers and starts the service AFTER setup runs,
-	// and the macOS wizard onboards before the daemon exists at all, so the
-	// ordinary first install has nothing listening.
-	probeUnverified
-	// probeRejected — the proxy answered 401. The machine WOULD have been broken.
-	probeRejected
+	probeOK         = telemetry.ProbeOK
+	probeUnverified = telemetry.ProbeUnverified
+	probeRejected   = telemetry.ProbeRejected
 )
 
-// probeTimeout bounds the loopback probe. It is one request to 127.0.0.1 against
-// a handler that authenticates and returns immediately; a setup run must not sit
-// on it if something is wedged.
-const probeTimeout = 3 * time.Second
-
-// probeTelemetry POSTs one empty OTLP batch to the running proxy with the
-// credential setup just wrote into every tool config.
-//
-// ⚠️ IT EXISTS BECAUSE SETUP CAN SUCCEED AND LEAVE THE MACHINE BROKEN, AND DID
-// (2026-09-18, the maintainer's machine). ~/.keld/agent.json held telemetry
-// secret 26908e20…; ~/.codex/config.toml and ~/.claude/settings.json both held
-// a5629e92…, written at 17:34 by a keld 3.0.0-rc.3 still on PATH at
-// /usr/local/keld/keld. A probe POST to the running proxy with the tools' token
-// returned 401. Codex's telemetry was dead and Claude Code was one restart away
-// from the same, and nothing said so — every tool config looked correctly
-// written, because it was, with the wrong value. One request answers the
-// question the file contents cannot.
-//
-// The batch is `{"resourceLogs":[]}`: valid OTLP carrying no records, so a proxy
-// that accepts it forwards nothing.
 func probeTelemetry(endpoint, secret string) (probeOutcome, int) {
-	if endpoint == "" || secret == "" {
-		return probeUnverified, 0
-	}
-	url := strings.TrimRight(endpoint, "/") + "/v1/logs"
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(`{"resourceLogs":[]}`))
-	if err != nil {
-		return probeUnverified, 0
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// The shape Claude Code and Codex send. The proxy accepts three; probing with
-	// the one two of the three tools use is the closest thing to asking on their
-	// behalf.
-	req.Header.Set("x-keld-ingest-token", secret)
-	resp, err := (&http.Client{Timeout: probeTimeout}).Do(req)
-	if err != nil {
-		return probeUnverified, 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return probeRejected, resp.StatusCode
-	}
-	return probeOK, resp.StatusCode
+	return telemetry.ProbeSecret(endpoint, secret)
 }
 
 // newerKeldOnPATH returns the path and version of a `keld` on PATH that reports a

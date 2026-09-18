@@ -68,6 +68,10 @@ type Facts struct {
 	Lanes       LaneFacts
 	ToolVersion string
 	BackupPath  string
+	// Repair — what keld last repaired in this tool's config, nil when it has
+	// never repaired one. Read from disk (LoadRepairs), because the detector
+	// that repairs and the route that reports never share memory.
+	Repair *Repair
 }
 
 // Compute decides one state per tool. IT IS THE ONLY PLACE THAT DECIDES (AC-8):
@@ -119,6 +123,7 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP 
 		// carrying a "this session is stale" id would be stating a problem it
 		// had just decided there isn't. The verdict owns the evidence.
 		StaleSessionID: staleSessionID(state, f),
+		Repaired:       repaired(now, window, state, f),
 		ToolVersion:    f.ToolVersion,
 		BackupPath:     f.BackupPath,
 		Surfaces:       make([]Surface, 0, len(e.Surfaces)),
@@ -145,6 +150,55 @@ func staleSessionID(state State, f Facts) string {
 		return ""
 	}
 	return f.Wiring.StaleSessionID
+}
+
+// repaired is the note the pane prints: keld rewrote its own block in this
+// tool's config, and the tool needs one restart to pick it up.
+//
+// ⚠️ IT IS NOT SCOPED TO RestartRequired, AND THE FIRST DRAFT OF THIS FUNCTION
+// WAS. `broken` is the state the 2026-09-18 incident actually produced — the row
+// read `broken · otel` while both the stale credential and the live one sat on
+// disk in front of the daemon — and it is therefore the row that most needs the
+// sentence. Reproduced end to end on an isolated KELD_HOME: with no Codex
+// transcript on the machine there is no session to call stale, so the repaired
+// row reads `broken`, and under the narrow rule it published nothing at all.
+//
+// Two conditions instead, and each is a refusal the rest of this file already
+// makes:
+//
+//   - `working` CLEARS it. Every expected lane has carried something since the
+//     config was written, so the tool has demonstrably read it; a row that has
+//     just decided the tool is fine must not go on asking for a restart. (This
+//     is staleSessionID's rule, stated against the evidence rather than against
+//     one verdict.)
+//   - it AGES OUT at the row's own lane look-back, so a tool nobody opens does
+//     not carry "restart this once" forever — the permanent-instruction-with-
+//     nothing-to-do failure a zero NewestSessionStart is refused for. The bound
+//     is the window already in hand rather than a new constant: outside it
+//     nothing else on this row counts either. `restart_required` is EXEMPT,
+//     because that verdict is direct evidence the restart still has not
+//     happened, however long ago the repair was.
+//
+// The SENTENCE is attached here rather than stored with the record, so a
+// reworded note reaches every machine with the binary instead of only the ones
+// that repair again afterwards. A reason with no sentence (ReasonFirstSetup, or
+// one a newer daemon wrote and this one does not know) publishes nothing: the
+// pane maps nothing, so a note it cannot be handed is a note that does not
+// exist.
+func repaired(now time.Time, window time.Duration, state State, f Facts) *Repair {
+	if f.Repair == nil || state == Working {
+		return nil
+	}
+	if state != RestartRequired && f.Repair.At.Before(now.Add(-window)) {
+		return nil
+	}
+	note := RepairNotes[f.Repair.Reason]
+	if note == "" {
+		return nil
+	}
+	out := *f.Repair
+	out.Note = note
+	return &out
 }
 
 // laneState is a lane's answer inside the window. `unknown` exists because a

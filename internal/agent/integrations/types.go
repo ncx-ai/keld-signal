@@ -127,6 +127,18 @@ type Integration struct {
 	// It is an IDENTIFIER, the class already published as `corr_id`: no text,
 	// no span and no offset is read to produce it.
 	StaleSessionID string `json:"stale_session_id,omitempty"`
+	// Repaired — keld rewrote its OWN block in this tool's config, and why.
+	// Set only under RestartRequired, the same discipline StaleSessionID has:
+	// the verdict owns the evidence, and a row that has decided the tool is
+	// working must not go on announcing a repair it has already picked up.
+	//
+	// ⚠️ IT EXISTS SO A REPAIRED ROW IS NOT A MYSTERY. On 2026-09-18 the pane
+	// said `broken · otel` while the daemon could see both the stale credential
+	// and the live one; now the daemon fixes it, and a config changing under
+	// somebody with no sentence beside it is the same silence one step along.
+	// Note carries the sentence, from RepairNotes — the pane prints it and maps
+	// nothing.
+	Repaired *Repair `json:"repaired,omitempty"`
 	// ToolVersion — read from the newest transcript, "" when unknown. NEVER
 	// guessed (AC-7).
 	ToolVersion string    `json:"tool_version"`
