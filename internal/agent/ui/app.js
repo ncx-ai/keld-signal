@@ -1194,6 +1194,27 @@ export function staleSessionLabel(integration) {
   return `session ${id.slice(0, STALE_SESSION_ID_CHARS)}`;
 }
 
+/**
+ * What Signal repaired in this tool's config, in the server's own words.
+ *
+ * ⚠️ A CONFIG CHANGING UNDER SOMEBODY WITH NO SENTENCE BESIDE IT IS THE SAME
+ * SILENCE THE REPAIR EXISTS TO END. Measured 2026-09-18 on the maintainer's
+ * machine: ~/.keld/agent.json held one telemetry secret while ~/.codex and
+ * ~/.claude held another, written by an older keld still on PATH; this pane read
+ * `broken · otel` and the fix waited on a human who had to know to re-run setup.
+ * The daemon now rewrites its own block — so the row has to say that it did, and
+ * that the tool needs one restart to pick it up.
+ *
+ * The SENTENCE is the server's (`integrations.RepairNotes`, beside the
+ * instruction sentences and there for the same reason): this prints it and maps
+ * nothing, so a reason a newer daemon invents cannot be rendered here as a raw
+ * enum. Absent means nothing to say — never a placeholder.
+ */
+export function repairLabel(integration) {
+  const r = (integration && integration.repaired) || null;
+  return ((r && r.note) || "").trim();
+}
+
 // A dash, never "unknown version": the version is read off the newest
 // transcript and is "" when there is nothing to read it from (AC-7). A word
 // where a number goes reads as a fact about the tool rather than about us.
@@ -2738,6 +2759,12 @@ if (typeof document !== "undefined") {
         );
       }
       if ((it.surfaces || []).length) body.appendChild(checks);
+
+      // What Signal repaired, FIRST — it explains why the restart below is being
+      // asked for at all, and a row that changed under someone without saying so
+      // is the silence the repair path exists to end.
+      const repair = repairLabel(it);
+      if (repair) body.appendChild(el("p", { class: "intg-repair" }, repair));
 
       for (const sentence of rowInstructions(it)) {
         body.appendChild(el("p", { class: "intg-instruction" }, sentence));

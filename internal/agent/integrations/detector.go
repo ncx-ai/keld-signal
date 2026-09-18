@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
@@ -57,6 +58,11 @@ type Detector struct {
 	Emit Emitter
 	// Log is where refusals go. Optional.
 	Log func(format string, args ...any)
+	// Probe asks the RUNNING proxy whether it accepts a credential, and is the
+	// gate on the repair path alone — see repairVerified. Nil means
+	// telemetry.ProbeSecret, the same request `keld signal setup` makes after
+	// writing every tool's config.
+	Probe func(endpoint, secret string) (telemetry.ProbeOutcome, int)
 
 	// Snapshot answers the current state of every row, and Sink publishes what
 	// changed. ⚠️ BOTH ARE NEW ON 2026-09-15 AND THE ABSENCE WAS THE BUG:
@@ -78,6 +84,11 @@ type Detector struct {
 	// every minute forever: the person owns that file and the pane's Set up
 	// button is how they ask again.
 	attempted map[string]bool
+	// reported bounds the REFUSALS the same way. A machine whose proxy cannot
+	// confirm the credential is refused on every poll, and a line a minute is a
+	// line nobody reads — the `budget_shortfall_mb` rule one subsystem over,
+	// which logs per worker generation rather than per poll for exactly this.
+	reported map[string]bool
 }
 
 // Run ticks until ctx is done. The first tick happens IMMEDIATELY rather than
@@ -156,6 +167,9 @@ func (d *Detector) Tick() []string {
 	if d.attempted == nil {
 		d.attempted = map[string]bool{}
 	}
+	if d.reported == nil {
+		d.reported = map[string]bool{}
+	}
 	manifest, err := config.LoadManifest()
 	if err != nil {
 		d.logf("integrations: manifest unreadable, skipping this poll: %v", err)
@@ -203,21 +217,25 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		return
 	case d.AutoSetup == nil || !d.AutoSetup():
 		return
-	case Configured(e, manifest) && !d.hookCommandBroken(e):
-		// The daemon never edits a config the manifest already records —
-		// ⚠️ UNLESS what it records cannot execute. An upgrade preserves tool
-		// configs by design, so a keld that fixes the hook QUOTING can never
-		// reach a machine an older keld configured; without this the fix lands
-		// in the binary and the machine stays broken forever. Measured on
-		// windows-latest: upgrade completes, configs survive, enrichment dark.
-		//
-		// This is the narrowest possible exception. It fires only on a command
-		// this keld can see is unrunnable as written, it rewrites through the
-		// same ApplyEntry path a first-time setup uses, and `attempted` bounds
-		// it to one try per daemon life. A healthy row never reaches it,
-		// pinned by TestRepairIsIdempotent one package over.
+	}
+	reason, ok := d.reasonToApply(e, manifest)
+	if !ok || d.attempted[e.ID] {
 		return
-	case d.attempted[e.ID]:
+	}
+
+	// ⚠️ DO NOT REPAIR WHAT YOU CANNOT VERIFY. A REPAIR overwrites a value that
+	// is already on disk, unattended, from a background poll; writing one the
+	// running proxy has not accepted would replace a broken config with a
+	// differently broken config and announce it as fixed. `keld signal setup`
+	// treats "nothing answered" as a pass because a human is reading its output
+	// and because the daemon is started AFTER it runs — neither is true here.
+	//
+	// A first-time setup is deliberately NOT gated: there is no working value
+	// to lose, the tool's telemetry spools until onboarding completes, and
+	// refusing would leave a machine with the daemon down permanently
+	// unconfigured — the wedge `deterministicBackend` refuses one subsystem
+	// over.
+	if reason != ReasonFirstSetup && !d.repairVerified(e) {
 		return
 	}
 	d.attempted[e.ID] = true
@@ -243,14 +261,152 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		return // nothing changed; the adapter had nothing to write
 	}
 
+	if reason != ReasonFirstSetup {
+		// The row has to be able to say WHAT keld did, or a person watching a
+		// config get rewritten under them reads `restart_required` with no
+		// explanation — which is what `broken · otel` was on 2026-09-18, only
+		// quieter. The route is computed from scratch per request, so this is
+		// the only way the answer survives to reach it.
+		if err := RecordRepair(e.ID, reason, time.Now()); err != nil {
+			// The repair HAPPENED. Not recording it costs the sentence beside
+			// the restart instruction, never the fix.
+			d.logf("integrations: %s repaired but the note could not be recorded: %v", e.ID, err)
+		}
+	}
 	if d.Emit != nil {
 		d.Emit.Emit(EventConfigured, map[string]any{
 			"source":     e.ID,
 			"auto_setup": true,
 			"backup":     res.Backup != "",
+			// ⚠️ `reason` DISTINGUISHES A REPAIR FROM A FIRST SETUP, and until
+			// it existed a fleet view could not: both arrived as
+			// `integration.configured` and only one of them means a machine
+			// was found broken. The set is closed (ReasonFirstSetup /
+			// ReasonHookCommand / ReasonTelemetryDrift).
+			"reason": reason,
 		})
 	}
-	d.logf("integrations: configured %s automatically (backup %q) — restart it to finish", e.ID, res.Backup)
+	if reason == ReasonFirstSetup {
+		d.logf("integrations: configured %s automatically (backup %q) — restart it to finish", e.ID, res.Backup)
+		return
+	}
+	d.logf("integrations: repaired %s (%s, backup %q) — restart it to finish", e.ID, reason, res.Backup)
+}
+
+// reasonToApply answers WHY this entry should be written now, or that it should
+// not be.
+//
+// ⚠️ THE REFUSAL IT NARROWS IS RIGHT AND STAYS RIGHT: the daemon never edits the
+// PERSON'S OWN telemetry section of a config the manifest already records.
+// Overwriting that unasked from a background poll is the one edit no backup
+// makes acceptable. What it does not cover is KELD'S OWN BLOCK, which keld wrote
+// and owns — and leaving that unrepairable is what made 2026-09-18 a support
+// problem rather than a self-healing one: agent.json held telemetry secret
+// 26908e20… while ~/.codex/config.toml and ~/.claude/settings.json both held
+// a5629e92…; the daemon could see both the whole time, and the pane said
+// `broken · otel` while the repair waited on a human who had to know to re-run
+// setup.
+//
+// The two exceptions are the same shape and are both bounded the same way:
+// they fire only on something this keld can SEE is wrong inside its own block,
+// they rewrite through the one ApplyEntry path a first-time setup uses (backup,
+// manifest record and `configured_at` included), and `attempted` bounds them to
+// one try per daemon life.
+func (d *Detector) reasonToApply(e Entry, manifest *config.Manifest) (string, bool) {
+	if !Configured(e, manifest) {
+		return ReasonFirstSetup, true
+	}
+	// An upgrade preserves tool configs by design, so a keld that fixes the hook
+	// QUOTING can never reach a machine an older keld configured; without this
+	// the fix lands in the binary and the machine stays broken forever. Measured
+	// on windows-latest: upgrade completes, configs survive, enrichment dark.
+	// A healthy row never reaches it, pinned by TestRepairIsIdempotent one
+	// package over.
+	if d.hookCommandBroken(e) {
+		return ReasonHookCommand, true
+	}
+	if d.telemetryDrifted(e) {
+		return ReasonTelemetryDrift, true
+	}
+	return "", false
+}
+
+// telemetryDrifted reports whether keld's own block in this tool's config names
+// a different endpoint, or carries a different credential, from the one this
+// machine is paired with — the pair `Params` resolves, which is the daemon's own
+// loopback address and the LOCAL secret.
+//
+// It compares the VALUES keld wrote against the values keld would write now
+// (the adapter's own plan), never the files: the tools rewrite their own config
+// files, measured 2026-09-18, and a whole-file comparison would rewrite a
+// healthy config every time one of them did.
+func (d *Detector) telemetryDrifted(e Entry) bool {
+	if d.Params == nil {
+		return false
+	}
+	adapter, err := d.adapterFor(e.AdapterName)
+	if err != nil || adapter == nil {
+		return false
+	}
+	current := tools.ReadConfig(adapter)
+	if current == nil {
+		return false
+	}
+	p, err := d.Params()
+	if err != nil {
+		// No telemetry secret yet is a normal state on a daemon that has not
+		// finished onboarding. It is not evidence about the file.
+		return false
+	}
+	plan := adapter.Apply(current, p, false)
+	if plan.Conflict != "" {
+		// The person's own telemetry section is in that file. Whatever keld's
+		// block says, the adapter cannot write without replacing something keld
+		// does not own — so this is not drift keld may act on, and the pane's
+		// Set up button stays the path.
+		return false
+	}
+	return telemetryDrifted(e.AdapterName, *current, plan.AfterText)
+}
+
+// repairVerified asks the running proxy whether it accepts the credential the
+// repair is about to write, and reports rather than rewrites when it will not
+// say yes.
+//
+// Both refusals HOLD the work rather than quarantine it: `attempted` is not
+// consumed, so the next poll repairs the moment the proxy answers. That is the
+// reading `/attribute`'s route-unsupported and the enrichment gate already take
+// — the work becomes doable, so waiting is right.
+func (d *Detector) repairVerified(e Entry) bool {
+	if d.Params == nil {
+		return false
+	}
+	p, err := d.Params()
+	if err != nil {
+		return false
+	}
+	probe := d.Probe
+	if probe == nil {
+		probe = telemetry.ProbeSecret
+	}
+	switch outcome, code := probe(p.Endpoint, p.IngestToken); outcome {
+	case telemetry.ProbeOK:
+		return true
+	case telemetry.ProbeRejected:
+		d.reportOnce(e, "integrations: %s needs its telemetry settings repaired, but the running proxy REJECTED (%d) the credential to write — not rewriting", e.ID, code)
+	default:
+		d.reportOnce(e, "integrations: %s needs its telemetry settings repaired, but nothing answered on the loopback proxy to confirm the credential — not rewriting", e.ID)
+	}
+	return false
+}
+
+// reportOnce logs a refusal at most once per tool per daemon life.
+func (d *Detector) reportOnce(e Entry, format string, args ...any) {
+	if d.reported[e.ID] {
+		return
+	}
+	d.reported[e.ID] = true
+	d.logf(format, args...)
 }
 
 // ApplyEntry configures ONE catalogue entry through the adapter, the write

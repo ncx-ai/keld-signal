@@ -563,6 +563,19 @@ fieldset:disabled { opacity: .55; }
   line-height: 1.5;
   max-width: 70ch;
 }
+/* What Signal repaired, above the instruction it explains. Green rather than
+   amber: the amber block is something for the person to DO, and this is
+   something already done for them. */
+.intg-repair {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green-strong);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 70ch;
+}
 /* The stale session id, under the sentence that says to restart. Monospace
    because it is an identifier a person matches against a window title, and quiet
    because it qualifies the instruction rather than adding a second one. */

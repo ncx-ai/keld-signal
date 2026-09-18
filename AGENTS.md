@@ -119,6 +119,34 @@ flowchart LR
   detection; `version.Newer` orders pre-releases (`3.0.0-rc.3 < 3.0.0`) and
   answers **unknown** for `dev` or anything unparseable, so a source build never
   accuses anyone.
+  ⚠️ **AND THE DAEMON NOW REPAIRS ITS OWN BLOCK RATHER THAN REPORTING IT
+  BROKEN.** In that same incident the daemon could see BOTH values the whole
+  time — the live secret in its own file and the stale one in
+  `~/.codex/config.toml` and `~/.claude/settings.json` — and did nothing,
+  because the integrations detector never edits a config the manifest already
+  records. That refusal is right for the PERSON'S OWN telemetry section and
+  wrong for keld's own block, which keld wrote and owns; it generalises the
+  exception `HookCommandBroken` already made. The detector compares the VALUES
+  inside keld's markers (`integrations/drift.go`: Codex's marker block, Claude
+  Code's two `env` keys, Gemini's `otlpEndpoint`) against what the adapter
+  would write now, **never a hash of the file** — the tools rewrite their own
+  configs (Codex's `hooks.state` at session start, Claude Code's settings.json
+  unprompted, both measured the same day), so a whole-file comparison would
+  rewrite a healthy config every time one of them did. Drift outside the
+  markers, and a conflict in the person's own section, are left alone and keep
+  the pane's Set up path. The rewrite goes through `ApplyEntry` — the one
+  write path, with the backup and the `configured_at` stamp — is bounded to
+  one attempt per tool per daemon run by `attempted`, and ⚠️ **refuses
+  unless the running proxy CONFIRMS the credential it is about to write**
+  (`telemetry.ProbeSecret`, shared with setup's own post-write probe): writing
+  a value the daemon itself rejects would replace a broken config with a
+  differently broken one. That refusal HOLDS rather than quarantines — the
+  next poll repairs once the proxy answers. What it did is SAID: the
+  `integration.configured` event carries a closed `reason`
+  (`first_setup`/`hook_command`/`telemetry_drift`), one log line per repair
+  rather than per poll, and the row publishes `repaired` with the sentence the
+  pane prints — because `broken` with no explanation is what that row said for
+  the whole incident.
   ⚠️ **The proxy accepts that secret in THREE shapes, because the tools do not
   agree on one**: `x-keld-ingest-token` (Claude Code, Codex), `?token=` in the
   URL (Gemini — its OTLP SDK cannot send a custom header at all), and
