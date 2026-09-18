@@ -284,24 +284,54 @@ func ReadWiring(e Entry, d Deps) WiringFacts {
 	if info, err := os.Stat(adapter.ConfigPath()); err == nil {
 		w.ConfigMtime = info.ModTime().UTC()
 	}
-	w.NewestSessionStart = newestSessionStart(d.TranscriptDirs(e))
-	w.NewestSessionAdopted = sessionAdopted(d, e, w.ConfigMtime)
+	w.NewestSessionStart, w.NewestSessionAdopted = restartFacts(d, e, w.ConfigMtime)
 	return w
 }
 
-// sessionAdopted answers NewestSessionAdopted: did the newest session forward
-// telemetry after this config was written. A zero ConfigMtime is unknown, and
-// an unknown config instant can prove nothing either way.
-func sessionAdopted(d Deps, e Entry, configMtime time.Time) bool {
-	if configMtime.IsZero() {
-		return false
+// restartFacts answers row 3 over EVERY session this tool still has open, not
+// just the one whose transcript was written most recently.
+//
+// ⚠️ PICKING BY RECENCY MADE THE ROW FLICKER, and the flicker is what makes it
+// unreadable: a machine with two Claude Code windows — one restarted since the
+// config, one carried over from yesterday — reports whichever wrote last, so
+// the state changes every few seconds with nothing about the machine having
+// changed. Observed here: `working` and `restart_required` alternating between
+// a session started 15 minutes ago and a session started the previous day, both
+// live, as each took a turn being the newest file.
+//
+// The question a person acts on is "is any window of this tool still running on
+// the old config" — so a live session that predates the config and has not
+// adopted it WINS the report, whichever file is newest. That is stable while
+// the stale session is open, and it clears on its own once that session goes
+// quiet for sessionActiveWindow rather than sticking forever.
+//
+// With no stale session live, the newest session's own facts are reported
+// exactly as before — including the case where no session is live at all, which
+// is what keeps a machine nobody is using from claiming anything.
+func restartFacts(d Deps, e Entry, configMtime time.Time) (start time.Time, adopted bool) {
+	dirs := d.TranscriptDirs(e)
+	if !configMtime.IsZero() {
+		for _, path := range liveSessions(dirs, d.Now()) {
+			st := sessionStartOf(path)
+			if st.IsZero() || !st.Before(configMtime) {
+				continue // unknown, or started after the config: nothing to restart
+			}
+			if at := d.SessionForward(sessionIDOf(path)); at != nil && at.After(configMtime) {
+				continue // this one has demonstrably read the new config
+			}
+			return st, false
+		}
 	}
-	id := newestSessionID(d.TranscriptDirs(e))
+	start = newestSessionStart(dirs)
+	if configMtime.IsZero() {
+		return start, false
+	}
+	id := newestSessionID(dirs)
 	if id == "" {
-		return false
+		return start, false
 	}
 	at := d.SessionForward(id)
-	return at != nil && at.After(configMtime)
+	return start, at != nil && at.After(configMtime)
 }
 
 // sessionForward is the default per-session telemetry fact: teleproxy's record

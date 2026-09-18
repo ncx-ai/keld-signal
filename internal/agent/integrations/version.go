@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -102,19 +103,7 @@ func newestSessionStart(dirs []string) time.Time {
 	if !ok {
 		return time.Time{}
 	}
-	var start time.Time
-	scanHead(path, func(rec map[string]any) bool {
-		s, _ := rec["timestamp"].(string)
-		if s == "" {
-			return true
-		}
-		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-			start = t.UTC()
-			return false
-		}
-		return true
-	})
-	return start
+	return sessionStartOf(path)
 }
 
 // newestSessionTranscript is newestTranscript with SUBAGENT transcripts
@@ -132,6 +121,70 @@ func newestSessionTranscript(dirs []string) (string, bool) {
 	return newestTranscriptWhere(dirs, func(name string) bool {
 		return !strings.HasPrefix(name, "agent-")
 	})
+}
+
+// sessionActiveWindow is how recently a transcript must have been written for
+// its session to count as one the person still has open.
+//
+// ⚠️ It MIRRORS `localagent.sessionActiveWindow`, which asks the same question
+// for doctor. The two cannot share a constant — localagent imports this package
+// — so the value is restated here and named there, deliberately, rather than
+// each inventing its own idea of "open".
+const sessionActiveWindow = 30 * time.Minute
+
+// liveSessions lists the sessions this tool still has open: non-subagent
+// transcripts written inside sessionActiveWindow, newest first.
+func liveSessions(dirs []string, now time.Time) []string {
+	type row struct {
+		path string
+		mod  time.Time
+	}
+	var rows []row
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		_ = filepath.WalkDir(dir, func(p string, de fs.DirEntry, err error) error {
+			if err != nil || de.IsDir() || filepath.Ext(p) != ".jsonl" || strings.HasPrefix(de.Name(), "agent-") {
+				return nil
+			}
+			info, err := de.Info()
+			if err != nil || now.Sub(info.ModTime()) > sessionActiveWindow {
+				return nil
+			}
+			rows = append(rows, row{p, info.ModTime()})
+			return nil
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].mod.After(rows[j].mod) })
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.path)
+	}
+	return out
+}
+
+// sessionStartOf reads one transcript's own start instant. Zero is UNKNOWN —
+// no decodable top-level timestamp in the head — never "long ago".
+func sessionStartOf(path string) time.Time {
+	var start time.Time
+	scanHead(path, func(rec map[string]any) bool {
+		s, _ := rec["timestamp"].(string)
+		if s == "" {
+			return true
+		}
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			start = t.UTC()
+			return false
+		}
+		return true
+	})
+	return start
+}
+
+// sessionIDOf names one session as its tool's OTLP session id.
+func sessionIDOf(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
 // newestSessionID names the newest session this tool wrote, as the tool's own
