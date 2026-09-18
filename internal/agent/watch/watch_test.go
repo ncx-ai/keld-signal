@@ -76,7 +76,7 @@ func TestWatcherForwardOnly(t *testing.T) {
 		t.Fatalf("expected 1 new prompt; got %d", len(got))
 	}
 	p := got[0]
-	if p.Source.ID != "claude_code" || p.Source.Origin != "watch" || p.Correlation.ID != "NEW" ||
+	if p.Source.ID != "claude_code" || p.Source.Origin != spool.OriginWatch || p.Correlation.ID != "NEW" ||
 		p.Pointer == nil || p.Pointer.PromptID != "NEW" || p.Pointer.Cwd != "/w" || p.Pointer.TranscriptPath != path {
 		t.Fatalf("unexpected pointer: %+v", p)
 	}

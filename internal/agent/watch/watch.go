@@ -270,7 +270,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 	recs, consumed := scanFrom(path, off, w.extractorFor(source), observe)
 	for _, rec := range recs {
 		w.offer(spool.Pointer{
-			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
+			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: rec.PromptID, SessionID: rec.SessionID},
 			Pointer:     &spool.Ptr{TranscriptPath: path, PromptID: rec.PromptID, Cwd: rec.Cwd},
 		})
@@ -375,7 +375,7 @@ func (w *Watcher) scanDocument(source, path string) bool {
 	}
 	for _, p := range s.Prompts[done:] {
 		w.offer(spool.Pointer{
-			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
+			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: s.CorrID(p.Ordinal), SessionID: s.ID},
 			Pointer:     &spool.Ptr{TranscriptPath: path, PromptID: s.CorrID(p.Ordinal)},
 		})

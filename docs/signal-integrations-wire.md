@@ -151,11 +151,23 @@ calls `Compute` once. Neither may trigger a model load or a download.
 The lanes, and where each fact comes from:
 
 - **hook** — the tool runs `keld __hook`, which posts a prompt pointer. Last
-  pointer with `Origin: hook` for this source.
-- **otel** — the tool posts OTLP to the loopback telemetry proxy. Teleproxy last
-  forward for this source.
+  pointer with `Origin: spool.OriginHook` for this source.
+- **otel** — the tool posts OTLP to the loopback telemetry proxy. Teleproxy's
+  **per-source** last forward (`teleproxy.LastForwardForSource`). ⚠️ It used to
+  be the machine-wide instant answered for every source, which supplied the
+  ACTIVE half of `broken` out of a *different* tool's traffic: a tool nobody had
+  used read `broken · watcher` off Claude Code's telemetry. The machine-wide
+  instant survives only as the fallback while the per-source record is empty, or
+  while any forward on it is unattributed (an unrecognised service name) — both
+  err toward `idle`.
 - **watcher** — the daemon tails the transcripts the tool writes. Last pointer
-  with `Origin: watcher`.
+  with `Origin: spool.OriginWatch`. ⚠️ Recorded where the watcher OFFERS the
+  pointer, not where a worker picks the job up: on a machine whose hook is wired
+  the hook wins and the watcher's offer is a `Duplicate` that no worker ever
+  sees, so recording downstream left this lane silent forever on exactly the
+  machines where it worked. The origin constants live in `spool` for the same
+  reason — this record expected `"watcher"` while the watcher wrote `"watch"`,
+  and every fact was dropped as unrecognised.
 - **extension** — the tool loads a keld extension (Pi's shape; none shipped).
 - **reader** — the sidecar parses this tool's transcripts into store rows. Rows
   exist for the recent pointers of this source.

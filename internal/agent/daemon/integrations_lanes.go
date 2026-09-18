@@ -76,3 +76,25 @@ func bindPointerObserver() {
 		noteIntegrationLane(queue.Job{Source: p.Source.ID, Origin: p.Source.Origin})
 	}
 }
+
+// watchOffer is the transcript watcher's enqueue seam: record the lane, then
+// offer the pointer to the queue.
+//
+// ⚠️ THE RECORD DOES NOT CONSULT THE QUEUE'S ANSWER, AND THAT IS THE WHOLE
+// POINT. On a machine whose hook is wired the hook wins the race every time, so
+// the watcher's offer comes back `Duplicate` and the job never reaches the
+// worker — which was the only place a watcher lane fact was ever written. The
+// watcher lane therefore read silent on exactly the machines where it was
+// working correctly, and silence on an expected lane is one half of `broken`.
+// The hook↔watcher overlap is DESIGNED (queue.Complete exists for it); it must
+// no more read as a dead lane than it reads as overload.
+//
+// Recorded on arrival, before the offer, for the reason noteIntegrationLane
+// gives: "did the watcher see this prompt" is answered yes by a pointer the
+// daemon then chose not to enrich.
+func watchOffer(q *queue.Queue) func(spool.Pointer) {
+	return func(p spool.Pointer) {
+		noteIntegrationLane(queue.Job{Source: p.Source.ID, Origin: p.Source.Origin})
+		q.Offer(ingress.JobFrom(p))
+	}
+}

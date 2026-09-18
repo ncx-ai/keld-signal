@@ -18,6 +18,23 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
+// Origins a pointer can carry: which capture trigger produced it.
+//
+// ⚠️ THEY ARE CONSTANTS BECAUSE THE TWO PRODUCERS AND THEIR READER DRIFTED,
+// SILENTLY AND FOR EVERY WATCHED TOOL. The hook wrote "hook" and the watcher
+// wrote "watch", while the integrations lane record expected "watcher" — so
+// every watcher-origin fact was dropped as an unrecognised origin, the watcher
+// lane read silent forever, and an expected-lane-silent plus an active hook is
+// exactly the predicate for `broken`. Observed on a healthy machine: Claude
+// Code and Gemini both reported `broken · watcher` while enrichment published
+// normally. A shared constant is what makes that shape unwritable.
+const (
+	// OriginHook — the command hook posted this pointer.
+	OriginHook = "hook"
+	// OriginWatch — the on-device transcript watcher synthesized it.
+	OriginWatch = "watch"
+)
+
 type Source struct {
 	ID      string `json:"id"`
 	Origin  string `json:"origin"`

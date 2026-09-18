@@ -8,14 +8,24 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
-// Origins a lane fact can be recorded under. They are the spool pointer's
-// `Source.Origin` values, so the record joins to what the daemon already
-// writes rather than to a second vocabulary.
+// Origins a lane fact can be recorded under. They ARE the spool pointer's
+// `Source.Origin` values — taken from `spool`, not restated here, so the record
+// joins to what the daemon already writes rather than to a second vocabulary.
+//
+// ⚠️ THEY WERE RESTATED, AND THE COPY WAS WRONG THE WHOLE TIME: this file said
+// `OriginWatcher = "watcher"` while the watcher has always written "watch", so
+// `noteIntegrationLane` dropped every watcher fact as an unrecognised origin.
+// The watcher lane was therefore silent on every machine, which is one half of
+// `broken` — and the hook, working perfectly, supplied the other. Claude Code
+// and Gemini both read `broken · watcher` on a machine publishing enrichments
+// every few seconds. The comment promising one vocabulary is older than the
+// drift it was meant to prevent; the constants now make the promise true.
 const (
-	OriginHook    = "hook"
-	OriginWatcher = "watcher"
+	OriginHook    = spool.OriginHook
+	OriginWatcher = spool.OriginWatch
 )
 
 // maxLaneSources bounds the file. The catalogue is seven entries and the

@@ -110,11 +110,9 @@ type Deps struct {
 	// Lanes is the persistent lane record.
 	Lanes *Lanes
 	// TelemetryForward is the otel lane: when telemetry for this source last
-	// reached Atlas. Per-source is WS-C2's `teleproxy.persource`; until it
-	// lands the default falls back to the machine-wide last forward, which is
-	// STATED here rather than left to be discovered — it means a machine
-	// running two tools has one of them vouch for the other's otel lane, which
-	// is the exact shape SessionTelemetryState exists to correct one level up.
+	// reached Atlas. The default reads WS-C2's per-source record and falls
+	// back to the machine-wide instant only while that record is empty — see
+	// perSourceForward.
 	TelemetryForward func(source string) *time.Time
 	// RowsForRecentPointers is the reader lane. nil function ⇒ nil answer ⇒
 	// unknown ⇒ contributes neither half of broken.
@@ -138,18 +136,59 @@ func (d Deps) withDefaults() Deps {
 		d.HookCommandSubstr = telemetry.HookCommandSubstr
 	}
 	if d.TelemetryForward == nil {
-		d.TelemetryForward = machineWideForward
+		d.TelemetryForward = perSourceForward
 	}
 	return d
 }
 
-// machineWideForward is the fallback otel fact: teleproxy's single recorded
-// last-forward instant, answered for every source. It is deliberately COARSE
-// and deliberately not silent — a per-source record (WS-C2) replaces it, and
-// until then a machine with any telemetry flowing reports every configured
-// tool's otel lane as active, which can only make `broken` LESS likely, never
-// more. Erring toward idle is the direction AC-4 asks for.
-func machineWideForward(string) *time.Time {
+// perSourceForward is the otel fact, asked PER TOOL.
+//
+// ⚠️ THE MACHINE-WIDE FALLBACK IT REPLACES MADE `broken` MORE LIKELY, NOT
+// LESS, and its own comment claimed the opposite: "a machine with any
+// telemetry flowing reports every configured tool's otel lane as active, which
+// can only make `broken` LESS likely, never more." Active is one of the two
+// halves of `broken`. So Claude Code's telemetry vouched for the otel lane of
+// every OTHER configured tool, and any tool nobody had used — its watcher
+// silent because there was nothing to watch — was reported broken on the
+// strength of a different tool's traffic. Observed on a healthy machine:
+// `gemini_cli` read `broken · watcher` with no Gemini installed and its otel
+// instant equal, to the microsecond, to Claude Code's.
+//
+// The per-source record (WS-C2, `teleproxy.persource`) is what the rule always
+// wanted; it just was not read here. Three answers, and the middle one is the
+// refusal:
+//   - an entry for this tool ⇒ that instant;
+//   - an EMPTY record ⇒ the machine-wide instant, because a machine that
+//     upgraded into this code has forwards but no per-source history, and
+//     reading that as "no tool's telemetry has ever arrived" would report
+//     every configured tool broken on the day it shipped — the refusal
+//     SourcesOnDisk and SessionsOnDisk both make;
+//   - a non-empty record with no entry for this tool ⇒ nil, i.e. this tool's
+//     telemetry has genuinely never reached Atlas.
+//
+// ⚠️ UNATTRIBUTED TRAFFIC IS THE THIRD CASE AND IT READS AS NOT-KNOWN. A
+// payload whose service name teleproxy does not recognise is recorded under
+// `UnknownSource`, so a tool whose telemetry IS arriving under a name nobody
+// mapped has no entry of its own — and calling that silence would report it
+// broken on the strength of a naming gap. While anything sits under
+// UnknownSource the fallback stands, which is the coarse answer and errs
+// toward idle. Only a record in which every forward was attributable may say
+// a particular tool's otel lane is silent.
+func perSourceForward(source string) *time.Time {
+	if at, ok := teleproxy.LastForwardForSource(source); ok && !at.IsZero() {
+		return &at
+	}
+	known := teleproxy.SourcesOnDisk()
+	if _, unattributed := known[teleproxy.UnknownSource]; len(known) > 0 && !unattributed {
+		return nil
+	}
+	return machineWideForward()
+}
+
+// machineWideForward is teleproxy's single recorded last-forward instant, the
+// coarse fact perSourceForward falls back to while no per-source history
+// exists. It cannot distinguish tools, which is exactly why it is a fallback.
+func machineWideForward() *time.Time {
 	t, known := teleproxy.LastForwardOnDisk()
 	if !known || t.IsZero() {
 		return nil

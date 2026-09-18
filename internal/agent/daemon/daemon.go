@@ -1319,7 +1319,7 @@ func Run(ctx context.Context) error {
 		// default (it emits its own OTEL host-side). The watcher's observe hook
 		// feeds every new transcript line to the telemetry; offer handles enrichment.
 		tel := promptlog.New(logsEndpoint(cfg.Endpoint), metricsEndpoint(cfg.Endpoint), tok.Get, promptlog.SourcesFromEnv())
-		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
+		offer := watchOffer(q)
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
 		// Third use of the same detection: the watcher already knows when a
