@@ -116,6 +116,7 @@ func (r *Reporter) Flush(ctx context.Context) error {
 	if r.gate != nil && !r.gate() {
 		return nil
 	}
+	var first error
 	for start := 0; start < len(rows); start += batchRows {
 		end := start + batchRows
 		if end > len(rows) {
@@ -128,10 +129,27 @@ func (r *Reporter) Flush(ctx context.Context) error {
 			continue
 		}
 		if err := r.tr.Deliver(ctx, body); err != nil {
-			return err
+			// ⚠️ CONTINUE, DO NOT RETURN. The drain above emptied the whole
+			// buffer, so every chunk after this one is already out of it and
+			// returning here loses them outright — nothing puts them back.
+			// Measured: 200 buffered rows, one Deliver call, 136 rows drained
+			// and offered nowhere.
+			//
+			// Continuing is safe because Deliver SPOOLS before it reports a
+			// failure, so each chunk gets its own durable attempt. And on an
+			// unpaired machine this is not an occasional network case but the
+			// steady state: Deliver spools and then returns ErrNotPaired every
+			// single time, so a flush kept the first 64 rows and dropped the
+			// rest, on every flush. Same rule the telemetry drain already
+			// follows — continue past a refused payload, or one bad batch
+			// blocks every good one behind it.
+			if first == nil {
+				first = err
+			}
+			continue
 		}
 	}
-	return nil
+	return first
 }
 
 // NewTransport builds the delivery half against the features route. Split out
