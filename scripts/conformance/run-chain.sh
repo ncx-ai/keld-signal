@@ -389,9 +389,29 @@ step_after_prompts() {
 
 # --- chain B's own steps -----------------------------------------------------
 
+# ⚠️ A MISSING PREREQUISITE IS BLOCKED, NOT FAILED, AND THIS REPORTED IT AS
+# FAILED. Chain B upgrades FROM a previous release, so it needs one installed
+# with its frozen sidecar. A developer machine usually has neither — `make
+# sidecar` builds a venv wrapper, not a frozen tree — and the chain answered
+# "FAIL — chain B, stopped at step prev-install", which reads as a product
+# defect in a branch about to be released. Nothing had been exercised at all.
+#
+# `prev_resolve` now returns 2 for "cannot run here" against 1 for "tried and
+# it went wrong", and the two are reported in their own words. Same rule chain
+# C's steps already follow: blocked is not a pass and not a failure, and
+# collapsing it into either is how a chain lies.
 step_prev_install() {
   step_begin "prev-install"
-  prev_resolve "$PREVIOUS" || return 1
+  prev_resolve "$PREVIOUS"
+  case $? in
+    0) ;;
+    # Blocked, and everything after this depends on it: there is no previous
+    # release installed and no daemon running, so `pointer 0 / telemetry 0 /
+    # publish 0` downstream would be arithmetic about a machine that was never
+    # set up, not findings. prev_resolve has already said what is missing.
+    2) BLOCKED_PREREQ=$STEP; return 0 ;;
+    *) return 1 ;;
+  esac
   bin_use "$PREV_BIN_DIR"
   sidecar_point_at "$PREV_SIDECAR_DIR"
   say "previous release: keld $KELD_VERSION_SEEN, sidecar $SIDECAR_VERSION_SEEN (--previous $PREVIOUS)"
@@ -769,16 +789,15 @@ prev_resolve() {
         if [ -x "$d/keld-agent" ] && [ -x "$d/keld" ]; then PREV_BIN_DIR=$d; break; fi
       done
       [ -n "$PREV_BIN_DIR" ] || {
-        say "no installed Signal release found (looked in /usr/local/keld, ~/.local/bin, /usr/local/bin)."
-        say "  Pass --previous dir:<path> with a downloaded release instead."
-        return 1; }
+        blocked "no installed Signal release to upgrade FROM (looked in /usr/local/keld, ~/.local/bin, /usr/local/bin). Pass --previous dir:<path> with a downloaded release."
+        return 2; }
       PREV_SIDECAR_DIR=""
       for d in "$REAL_HOME/.local/bin/keld-agent-sidecar" "/usr/local/keld/keld-agent-sidecar"; do
         [ -x "$d/keld-agent-sidecar" ] && { PREV_SIDECAR_DIR=$d; break; }
       done
       [ -n "$PREV_SIDECAR_DIR" ] || {
-        say "the installed release has no frozen sidecar; chain B cannot compare the two halves."
-        return 1; }
+        blocked "the installed release has no FROZEN sidecar, so the two halves cannot be compared. A developer machine has the venv wrapper \`make sidecar\` builds, not a frozen tree; CI has the real release artifact."
+        return 2; }
       ;;
     *) say "--previous must be 'installed' or 'dir:<path>' (got $spec)"; return 1 ;;
   esac
@@ -842,7 +861,18 @@ KEEP_GOING=${KELD_CONFORM_KEEP_GOING:-0}
 FAILED_STEP=""
 FAILED_STEPS=""
 BLOCKED_STEPS=""
+# ⚠️ A BLOCKED PREREQUISITE STOPS THE CHAIN, AND KEEP_GOING DOES NOT OVERRIDE
+# IT. KEEP_GOING exists to survey a machine an earlier step BROKE; this is a
+# machine no step ever set up, where every later verdict is arithmetic about
+# nothing. Chain B without a previous release installed reported `pointer 0 /
+# telemetry 0 / publish 0` that way — three red checkpoints, none of them a
+# finding.
+BLOCKED_PREREQ=""
 for fn in $STEPS; do
+  if [ -n "$BLOCKED_PREREQ" ]; then
+    echo "conformance: SKIPPED ${fn#step_} (chain cannot run here: $BLOCKED_PREREQ was blocked, seed $SEED)"
+    continue
+  fi
   if [ -n "$FAILED_STEP" ] && [ "$KEEP_GOING" != "1" ]; then
     echo "conformance: SKIPPED ${fn#step_} (chain stopped at $FAILED_STEP, seed $SEED)"
     continue
@@ -876,6 +906,15 @@ if [ -n "$FAILED_STEP" ]; then
     say "FAIL — chain $CHAIN, seed $SEED, stopped at step $FAILED_STEP"
   fi
   exit 1
+fi
+# ⚠️ NOT PASS. Nothing downstream ran, so a green headline would claim coverage
+# this run does not have — and not FAIL either, because nothing was tried and
+# found wanting. Exit 2 so a caller can tell the three apart; in CI the
+# prerequisite exists, so this path does not fire there.
+if [ -n "$BLOCKED_PREREQ" ]; then
+  say "BLOCKED — chain $CHAIN, seed $SEED: $BLOCKED_PREREQ could not run here, so no later step was attempted."
+  say "  Nothing was proved and nothing was found wrong. Run it where a previous release is installed (CI), or pass --previous dir:<path>."
+  exit 2
 fi
 if [ -n "$BLOCKED_STEPS" ]; then
   say "PASS (with blocked steps) — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
