@@ -2212,11 +2212,20 @@ of 401s into one re-onboard. Token-only: an endpoint change instead logs a
 "restart to adopt" warning. If the CLI token itself is gone/revoked, the
 daemon writes `~/.keld/reauth-required` and logs loudly; `keld signal
 status`/`doctor` and `keld-agent status` surface it — recovery is `keld
-login` then `keld-agent restart`. **Known limitation (v1):** a job that hits
-the 401 mid-rotation isn't itself re-spooled (only the per-job timeout path
-re-spools, bounded by `KELD_ENRICH_MAX_ATTEMPTS`); the daemon still recovers
-forward for subsequent jobs — lossless re-spool of the 401'd job is a
-documented follow-up.
+login` then `keld-agent restart`. ⚠️ **Known limitation, and it is WIDER than this said.** It read "a job that
+hits the 401 mid-rotation isn't itself re-spooled", which named the case it was
+discovered in rather than the case the code has. `process` returns false on
+**any** failed `pub.Send` — a timeout, a 5xx, an unreachable Atlas — and the
+worker's re-spool/quarantine branch is reached only when a job missed its
+DEADLINE (`finished == false`). So no failed publish is re-spooled, whatever
+caused it, and the 401 is simply the one that was looked at. The prompt survives
+only because `queue.Complete` is marked on a real publish and not before, which
+leaves the watcher free to re-offer it.
+
+The daemon still recovers forward for subsequent jobs, and lossless re-spool of
+a failed publish remains the follow-up — now correctly scoped. Found while the
+durability document was citing the code for each of its claims, which is the
+argument for making a document cite its sources.
 
 **Client-events telemetry (`internal/agent/clientevents/`).** Separately from
 enrichment, the daemon emits structured **operational** events about itself —
