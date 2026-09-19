@@ -432,6 +432,7 @@ export const SETTINGS_ENV = {
   send_to_atlas: "KELD_ATLAS",
   dev_blocks: "KELD_DEV_BLOCKS",
   attribution: "KELD_ATTRIBUTION",
+  tool_otlp: "KELD_TOOL_OTLP",
 };
 
 /** validProjectTitle is the one rule for naming a project from a suggestion:
@@ -828,6 +829,33 @@ export function visibleHealth(health, settings) {
   return list.filter((h) => h.key !== "atlas");
 }
 
+/** The one sentence a person reading a red badge is actually asking about.
+ *
+ *  Kept VERBATIM in docs/durability.md (between the `page-copy:durability`
+ *  markers) and pinned against it from both sides — ui/e2e/durability.spec.ts
+ *  reads the file, test/durability.test.js reads it too — because the page and
+ *  the document are the same claim in two registers and a drift between them
+ *  is the page quietly promising something the lanes do not do.
+ *
+ *  ⚠️ **"usually" IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY.** Three lanes
+ *  genuinely lose things: a transcript-mirror observation made while unpaired
+ *  has no spool (promptlog.NewPending), client events emitted before the
+ *  reporter starts sit in a bounded ring, and a feature flush drops what it
+ *  drained past the first failing chunk. The word is what keeps this sentence
+ *  true; docs/durability.md names each case. */
+export const DURABILITY_NOTE =
+  "Work is recorded on this machine first and delivered when Atlas can be reached, " +
+  "so a red badge here usually means late rather than lost.";
+
+/** Shown only when a visible health cell is NOT ok — the same rule
+ *  serviceQueueNote follows one screen over: a healthy machine gets no
+ *  reassurance it did not ask for, and the sentence appears exactly where the
+ *  question it answers is being asked. */
+export function durabilityNote(health, settings) {
+  const cells = visibleHealth(health, settings);
+  return cells.some((h) => h && h.status !== "ok") ? DURABILITY_NOTE : "";
+}
+
 /** ---- The analysis service's own health, which is NOT the `health` array ----
  *
  *  `GET /v1/ledger` carries a top-level `service` block beside `health`:
@@ -1171,6 +1199,48 @@ export function rowInstructions(integration) {
     if (text && !out.includes(text)) out.push(text);
   }
   return out;
+}
+
+/**
+ * The window a person has to go and restart, named.
+ *
+ * ⚠️ "Restart this tool" is not an instruction once two windows are open — the
+ * server's own rule had to be widened to ask about every live session for that
+ * reason, and `stale_session_id` is the answer it already had. The id is
+ * SHORTENED the way `keld signal doctor` shortens it: eight characters is enough
+ * to pick the right window out of a handful, and both surfaces print the same
+ * prefix of the same id so a person reading one recognises the other.
+ *
+ * Absent means there is nothing to say — never a placeholder, and never a guess
+ * about which session the server meant. Decided on the FIELD's presence, never
+ * on the row's state: the server sends it only with the verdict it caused.
+ */
+export const STALE_SESSION_ID_CHARS = 8;
+export function staleSessionLabel(integration) {
+  const id = ((integration && integration.stale_session_id) || "").trim();
+  if (!id) return "";
+  return `session ${id.slice(0, STALE_SESSION_ID_CHARS)}`;
+}
+
+/**
+ * What Signal repaired in this tool's config, in the server's own words.
+ *
+ * ⚠️ A CONFIG CHANGING UNDER SOMEBODY WITH NO SENTENCE BESIDE IT IS THE SAME
+ * SILENCE THE REPAIR EXISTS TO END. Measured 2026-09-18 on the maintainer's
+ * machine: ~/.keld/agent.json held one telemetry secret while ~/.codex and
+ * ~/.claude held another, written by an older keld still on PATH; this pane read
+ * `broken · otel` and the fix waited on a human who had to know to re-run setup.
+ * The daemon now rewrites its own block — so the row has to say that it did, and
+ * that the tool needs one restart to pick it up.
+ *
+ * The SENTENCE is the server's (`integrations.RepairNotes`, beside the
+ * instruction sentences and there for the same reason): this prints it and maps
+ * nothing, so a reason a newer daemon invents cannot be rendered here as a raw
+ * enum. Absent means nothing to say — never a placeholder.
+ */
+export function repairLabel(integration) {
+  const r = (integration && integration.repaired) || null;
+  return ((r && r.note) || "").trim();
 }
 
 // A dash, never "unknown version": the version is read off the newest
@@ -1632,6 +1702,12 @@ if (typeof document !== "undefined") {
         `${healthLabel(h.key)}${detail ? " " + detail : ""}`
       );
     });
+    // The durability line sits INSIDE the strip, below the pills, and only when
+    // one of them is not ok — see durabilityNote. Its own row rather than a
+    // third flex item: the strip is `justify-content: space-between`, so a
+    // sentence sharing that row would be squeezed between the cells and the
+    // toggles at every width.
+    const note = durabilityNote(ledger ? ledger.health : [], settings);
     return el(
       "div",
       { class: "health-strip" },
@@ -1651,7 +1727,8 @@ if (typeof document !== "undefined") {
             route();
           },
         }))
-      )
+      ),
+      note ? el("div", { class: "durability-note" }, note) : null
     );
   }
 
@@ -2225,7 +2302,59 @@ if (typeof document !== "undefined") {
       dev ? el("div", { class: "settings-sep" }) : null,
       dev ? renderDevGenerate(settings) : null,
       dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null
+      dev ? renderDevAttribution(settings, readonly) : null,
+      dev ? el("div", { class: "settings-sep" }) : null,
+      dev ? renderDevToolOTLP(settings, readonly) : null
+    );
+  }
+
+  /** The copy for the OTLP row, hoisted out of the renderer so the page and its
+   *  Playwright assertions quote ONE string rather than two that drift. */
+  const TOOL_OTLP_TITLE = "Extended telemetry from the tool (OTLP)";
+  const TOOL_OTLP_BODY =
+    "Off. Signal reads usage from the tool's own transcript; this lane is scheduled for removal " +
+    "once we have confirmed nothing we need arrives only here. Turning it on writes into the " +
+    "tool's configuration, and the tool must be restarted once to pick it up.";
+  /** Shown only while the switch is on, and only once.
+   *
+   *  ⚠️ It is deliberately NOT a copy of the Integrations pane's `restart`
+   *  instruction. That sentence lives once, server-side, in
+   *  `integrations.Instructions`, and the pane prints what the server sent — a
+   *  second copy here would be a copy that drifts. This says the one thing the
+   *  person has to do after flipping the switch; the row that tracks whether
+   *  they have done it is the Integrations one, which arrives on its own once
+   *  the detector has written the config. */
+  const TOOL_OTLP_RESTART = "Restart the tool once to pick this up.";
+
+  /** renderDevToolOTLP is the tool-OTLP switch, a DEVELOPER control because the
+   *  lane is on its way out rather than because it is dangerous.
+   *
+   *  Signal reads a tool's usage from the tool's own transcript, so this export
+   *  adds nothing Atlas prices; what it does add is a credential inside a file
+   *  the tool reads once at startup, which is why it is the lane that keeps
+   *  breaking. It stays reachable, off by default, so someone can prove to
+   *  themselves that nothing needed arrives only here before it is removed.
+   *  The env pin (KELD_TOOL_OTLP) wins and renders read-only, like every other
+   *  row in this box. */
+  function renderDevToolOTLP(settings, readonly) {
+    const on = !!settings.tool_otlp;
+    return el(
+      "div",
+      {},
+      el(
+        "div",
+        { class: "settings-row" },
+        // ⚠️ The title is its OWN element rather than a bare text node beside
+        // the description, which is what every other row here uses. Both
+        // strings are asserted verbatim by the Playwright suite — a deprecation
+        // notice and a restart instruction are exactly the copy that must not
+        // drift unnoticed — and a bare text node cannot be matched exactly,
+        // because the span's text is then the title and the body run together.
+        el("span", {}, el("span", { class: "settings-title" }, TOOL_OTLP_TITLE), el("div", { class: "desc" }, TOOL_OTLP_BODY)),
+        switchEl({ checked: on, disabled: readonly.has("tool_otlp"), onChange: (v) => updateSettings({ tool_otlp: v }) })
+      ),
+      on ? el("div", { class: "settings-note tool-otlp-restart" }, TOOL_OTLP_RESTART) : null,
+      fieldNote("tool_otlp", readonly)
     );
   }
 
@@ -2718,9 +2847,20 @@ if (typeof document !== "undefined") {
       }
       if ((it.surfaces || []).length) body.appendChild(checks);
 
+      // What Signal repaired, FIRST — it explains why the restart below is being
+      // asked for at all, and a row that changed under someone without saying so
+      // is the silence the repair path exists to end.
+      const repair = repairLabel(it);
+      if (repair) body.appendChild(el("p", { class: "intg-repair" }, repair));
+
       for (const sentence of rowInstructions(it)) {
         body.appendChild(el("p", { class: "intg-instruction" }, sentence));
       }
+
+      // Which window, beside the sentence that tells you to restart one. Driven
+      // by the field's presence alone — the pane decides nothing about states.
+      const stale = staleSessionLabel(it);
+      if (stale) body.appendChild(el("p", { class: "intg-stale" }, stale));
     }
 
     const actions = el("div", { class: "intg-actions" });

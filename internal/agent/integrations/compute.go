@@ -17,6 +17,24 @@ const DefaultWindow = 24 * time.Hour
 // WindowEnv overrides it on one machine (a Go duration: "6h", "30m").
 const WindowEnv = "KELD_INTEGRATIONS_WINDOW"
 
+// settleWindow is how long a lane is given to report after the tool has been
+// seen on another one, before its silence counts as evidence of a break.
+//
+// ⚠️ WITHOUT IT A HEALTHY MACHINE READS `broken` SECONDS AFTER A PROMPT. The
+// lanes do not fire together: the hook posts its pointer as the prompt is
+// submitted, while the reader lane only reports once the watcher's poll
+// (`KELD_WATCH_POLL`, 5s) has signalled the sidecar and the sidecar has parsed
+// the tail into rows. `broken` needs one expected lane active and another
+// silent, and both halves are momentarily true on every prompt a working
+// machine serves. Observed by the day-three conformance chain on 2026-09-19,
+// which reported it rather than failing on it.
+//
+// Two minutes is generous against those mechanisms and cheap against the
+// detection it delays: a genuinely broken lane is still reported inside the
+// look-back, which is a day. It errs toward `working`, the direction AC-4 asks
+// for — a check that cries wolf on every prompt is one nobody reads.
+const settleWindow = 2 * time.Minute
+
 // Options are Compute's knobs. A zero Options is the shipped behaviour.
 type Options struct {
 	// Window is the lane look-back. Zero means DefaultWindow, honouring
@@ -24,6 +42,19 @@ type Options struct {
 	Window time.Duration
 	// AutoSetup is reported on the Response, not used by the rule.
 	AutoSetup bool
+	// ToolOTLP is the Developer switch (settings.Settings.ToolOTLPEnabled, off
+	// by default): whether this machine asks a tool to export OTLP at all.
+	//
+	// ⚠️ It reaches the rule ONLY as part of the SupportLevel Compute evaluates
+	// ExpectedLanes against — there is no second test for it anywhere in this
+	// file, and adding one would be the second copy AC-8 forbids. With the
+	// switch off keld writes no OTEL block, so the lane is not expected, and by
+	// the existing rule an unexpected lane contributes neither half of `broken`.
+	//
+	// The zero value is off, which matches the product default: a caller that
+	// has not resolved the setting gets the shipped behaviour rather than a
+	// lane it never wrote being blamed for silence.
+	ToolOTLP bool
 }
 
 // Window resolves the effective look-back: the explicit option, else the env
@@ -55,6 +86,10 @@ type Facts struct {
 	Lanes       LaneFacts
 	ToolVersion string
 	BackupPath  string
+	// Repair — what keld last repaired in this tool's config, nil when it has
+	// never repaired one. Read from disk (LoadRepairs), because the detector
+	// that repairs and the route that reports never share memory.
+	Repair *Repair
 }
 
 // Compute decides one state per tool. IT IS THE ONLY PLACE THAT DECIDES (AC-8):
@@ -76,20 +111,21 @@ func Compute(now time.Time, entries []Entry, facts map[string]Facts, opts Option
 	window := opts.window()
 	out := make([]Integration, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, computeOne(now, window, e, facts[e.ID]))
+		out = append(out, computeOne(now, window, e, facts[e.ID], opts.ToolOTLP))
 	}
 	return out
 }
 
-func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integration {
+func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP bool) Integration {
 	level := e.SupportLevel()
+	level.ToolOTLP = toolOTLP
 	expected := map[SurfaceKind]bool{}
 	for _, k := range e.ExpectedLanes(level) {
 		expected[k] = true
 	}
 	active := laneActivity(e, f, now, window)
 
-	state, brokenLane := decide(e, f, expected, active)
+	state, brokenLane := decide(now, e, f, expected, active)
 
 	in := Integration{
 		ID:           e.ID,
@@ -100,9 +136,15 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 		StorageClass: e.StorageClass,
 		State:        state,
 		BrokenLane:   brokenLane,
-		ToolVersion:  f.ToolVersion,
-		BackupPath:   f.BackupPath,
-		Surfaces:     make([]Surface, 0, len(e.Surfaces)),
+		// ⚠️ ONLY UNDER RestartRequired. The facts reader can name a stale
+		// session whenever it finds one, but a row that is `working` or `idle`
+		// carrying a "this session is stale" id would be stating a problem it
+		// had just decided there isn't. The verdict owns the evidence.
+		StaleSessionID: staleSessionID(state, f),
+		Repaired:       repaired(now, window, state, f),
+		ToolVersion:    f.ToolVersion,
+		BackupPath:     f.BackupPath,
+		Surfaces:       make([]Surface, 0, len(e.Surfaces)),
 	}
 	for _, spec := range e.Surfaces {
 		s := Surface{
@@ -117,6 +159,64 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 		in.Surfaces = append(in.Surfaces, s)
 	}
 	return in
+}
+
+// staleSessionID is the id the restart verdict was decided on, and "" for every
+// other verdict — see the field comment on Integration.StaleSessionID.
+func staleSessionID(state State, f Facts) string {
+	if state != RestartRequired {
+		return ""
+	}
+	return f.Wiring.StaleSessionID
+}
+
+// repaired is the note the pane prints: keld rewrote its own block in this
+// tool's config, and the tool needs one restart to pick it up.
+//
+// ⚠️ IT IS NOT SCOPED TO RestartRequired, AND THE FIRST DRAFT OF THIS FUNCTION
+// WAS. `broken` is the state the 2026-09-18 incident actually produced — the row
+// read `broken · otel` while both the stale credential and the live one sat on
+// disk in front of the daemon — and it is therefore the row that most needs the
+// sentence. Reproduced end to end on an isolated KELD_HOME: with no Codex
+// transcript on the machine there is no session to call stale, so the repaired
+// row reads `broken`, and under the narrow rule it published nothing at all.
+//
+// Two conditions instead, and each is a refusal the rest of this file already
+// makes:
+//
+//   - `working` CLEARS it. Every expected lane has carried something since the
+//     config was written, so the tool has demonstrably read it; a row that has
+//     just decided the tool is fine must not go on asking for a restart. (This
+//     is staleSessionID's rule, stated against the evidence rather than against
+//     one verdict.)
+//   - it AGES OUT at the row's own lane look-back, so a tool nobody opens does
+//     not carry "restart this once" forever — the permanent-instruction-with-
+//     nothing-to-do failure a zero NewestSessionStart is refused for. The bound
+//     is the window already in hand rather than a new constant: outside it
+//     nothing else on this row counts either. `restart_required` is EXEMPT,
+//     because that verdict is direct evidence the restart still has not
+//     happened, however long ago the repair was.
+//
+// The SENTENCE is attached here rather than stored with the record, so a
+// reworded note reaches every machine with the binary instead of only the ones
+// that repair again afterwards. A reason with no sentence (ReasonFirstSetup, or
+// one a newer daemon wrote and this one does not know) publishes nothing: the
+// pane maps nothing, so a note it cannot be handed is a note that does not
+// exist.
+func repaired(now time.Time, window time.Duration, state State, f Facts) *Repair {
+	if f.Repair == nil || state == Working {
+		return nil
+	}
+	if state != RestartRequired && f.Repair.At.Before(now.Add(-window)) {
+		return nil
+	}
+	note := RepairNotes[f.Repair.Reason]
+	if note == "" {
+		return nil
+	}
+	out := *f.Repair
+	out.Note = note
+	return &out
 }
 
 // laneState is a lane's answer inside the window. `unknown` exists because a
@@ -153,7 +253,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 	// UNREADABLE mtime (zero) falls back to the plain window rather than
 	// suppressing every break forever.
 	cut := now.Add(-window)
-	if m := f.Wiring.ConfigMtime; !m.IsZero() && m.After(cut) {
+	if m := f.Wiring.ConfiguredAt; !m.IsZero() && m.After(cut) {
 		cut = m
 	}
 	within := func(t *time.Time) laneState {
@@ -181,7 +281,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 }
 
 // decide walks spec §4's table in its own order.
-func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
+func decide(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
 	// Row 9, first: an unsupported entry is a catalogue row whatever else is
 	// true of the machine. Cursor with its config dir present is still
 	// `unsupported`, not `not_installed` — Signal names the tool and its
@@ -237,8 +337,8 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// process adopted it: the loopback proxy is what the config points at.
 	// Without this the instruction is unfollowable — restarting the tool does
 	// not clear it, and the row states a repair that cannot work.
-	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfigMtime.IsZero() &&
-		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfigMtime) &&
+	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfiguredAt.IsZero() &&
+		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfiguredAt) &&
 		!f.Wiring.NewestSessionAdopted {
 		return RestartRequired, ""
 	}
@@ -271,10 +371,31 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	if !anyActive {
 		return Idle, "" // row 4 — a quiet user is not a bug
 	}
-	if firstSilent != "" {
+	if firstSilent != "" && settled(now, e, f, expected) {
 		return Broken, firstSilent // rows 5, 6, 7
 	}
 	return Working, "" // rows 7b and 8
+}
+
+// settled reports whether enough time has passed since this tool was last seen
+// on ANY expected lane for a still-silent lane to mean something. See
+// settleWindow.
+func settled(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool) bool {
+	newest := time.Time{}
+	for _, spec := range e.Surfaces {
+		if !expected[spec.Kind] {
+			continue
+		}
+		if at := lastSeen(spec.Kind, f); at != nil && at.After(newest) {
+			newest = *at
+		}
+	}
+	// No instant at all: the active lane is the reader, which answers a
+	// yes/no rather than an instant. Nothing to wait for.
+	if newest.IsZero() {
+		return true
+	}
+	return now.Sub(newest) >= settleWindow
 }
 
 // wired answers, per lane, whether the configuration this lane needs is on

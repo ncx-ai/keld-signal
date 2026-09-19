@@ -26,7 +26,7 @@ func TestASecondDaemonReportsThePortRatherThanStealingIt(t *testing.T) {
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	t.Setenv(teleproxy.EnvPort, port)
 
-	p, err := startTelemetryProxy(context.Background(), nil, "https://atlas.example/v1/traces",
+	p, err := startTelemetryProxy(context.Background(), nil, constEndpoint("https://atlas.example/v1/logs"), constEndpoint("https://atlas.example/v1/metrics"),
 		func() string { return "tok" }, nil)
 	if err == nil {
 		t.Fatal("a taken port was accepted; the daemon would point tools at a listener it does not own")
@@ -52,7 +52,7 @@ func TestTelemetryProxyServesAndStops(t *testing.T) {
 	t.Setenv(teleproxy.EnvPort, port)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	p, err := startTelemetryProxy(ctx, nil, "https://atlas.example/v1/traces",
+	p, err := startTelemetryProxy(ctx, nil, constEndpoint("https://atlas.example/v1/logs"), constEndpoint("https://atlas.example/v1/metrics"),
 		func() string { return "tok" }, nil)
 	if err != nil {
 		t.Fatalf("startTelemetryProxy: %v", err)

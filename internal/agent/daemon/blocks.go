@@ -46,7 +46,12 @@ func signalBlocksEndpoint(ingest string) string {
 // because the block route is not the enrichments route: reusing the enrichment
 // publisher would post blocks at /v1/enrichments, where the envelope is not
 // even the same shape.
-func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint string,
+//
+// ⚠️ ingestEndpoint is a RESOLVER because the emitter starts before the machine
+// is paired: blocks are cut from the moment the daemon runs, and while it
+// answers "" SendBlocks fails with publish.ErrNotPaired, which HOLDS the
+// cursor — the sweep asks for the same ground again once a pairing arrives.
+func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint func() string,
 	token func() string, actor string, emitter *clientevents.Emitter, blocksConfigured bool,
 	atlasOn bool, onPublished func(rows []publish.BlockEnrichment, path string),
 	onCut func(rows []publish.BlockEnrichment, path string),
@@ -61,7 +66,7 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// which also meant it kept dialling after the worker, the tick, the
 	// settings poll and the reporter had all been routed through the boundary.
 	// Found by an end-to-end run with Send to Atlas off, not by a unit test.
-	var pub blocks.Sender = publish.New(signalBlocksEndpoint(ingestEndpoint), token, actor)
+	var pub blocks.Sender = publish.NewDeferred(deriveEndpoint(ingestEndpoint, signalBlocksEndpoint), token, actor)
 	if !atlasOn {
 		pub = &localOnlySender{}
 	}

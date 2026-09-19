@@ -37,6 +37,26 @@ func HookConfigPath() string  { return filepath.Join(KeldHome(), "hook.json") }
 func AgentInfoPath() string   { return filepath.Join(KeldHome(), "agent.json") }
 func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.json") }
 
+// TelemetrySecretPath is the machine's stable telemetry secret — the credential
+// `keld signal setup` writes into every AI tool's config so that no tool ever
+// holds an Atlas credential.
+//
+// ⚠️ IT HAS ITS OWN FILE BECAUSE agent.json IS REWRITTEN BY SEVERAL WRITERS, AND
+// THAT COST A REAL OUTAGE (2026-09-18, the maintainer's machine). agent.json held
+// telemetry secret 26908e20…; ~/.codex/config.toml and ~/.claude/settings.json
+// both held a5629e92…, written at 17:34 by a keld 3.0.0-rc.3 still on PATH at
+// /usr/local/keld/keld. A probe POST to the running proxy with the tools' token
+// returned 401 — Codex's telemetry was dead, and Claude Code survived only
+// because its running process still held the older, correct value in memory and
+// would have broken on its next restart. The value was protected only by a
+// preservation rule inside agentcfg.Write, i.e. by every writer remembering to
+// route through it. A file nothing else writes needs no such rule.
+//
+// ⚠️ NOT under StateDir(): `keld signal uninstall` removes that directory
+// wholesale, and a fresh secret after an uninstall strands every tool it did not
+// touch.
+func TelemetrySecretPath() string { return filepath.Join(KeldHome(), "telemetry-secret") }
+
 // AgentLockPath is the file the running daemon holds an exclusive OS lock on,
 // so a second `keld-agent run` against this KELD_HOME refuses to start.
 //

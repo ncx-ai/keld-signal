@@ -1,6 +1,9 @@
 package integrations
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestABrokenHookCommandReadsAsNotConfigured — the repair path for a machine an
 // OLDER keld configured. An upgrade preserves tool configs by design, so this
@@ -11,7 +14,7 @@ func TestABrokenHookCommandReadsAsNotConfigured(t *testing.T) {
 		Configured: true, // the manifest says configured, and it IS — badly
 		Wiring:     WiringFacts{ConfigPresent: true, HookCommandBroken: true},
 	}
-	if got, _ := decide(e, f, map[SurfaceKind]bool{}, map[SurfaceKind]laneState{}); got != NotConfigured {
+	if got, _ := decide(time.Now(), e, f, map[SurfaceKind]bool{}, map[SurfaceKind]laneState{}); got != NotConfigured {
 		t.Errorf("a broken hook command must read as %s, got %s", NotConfigured, got)
 	}
 }
@@ -25,7 +28,7 @@ func TestAHealthyHookCommandIsLeftAlone(t *testing.T) {
 		Configured: true,
 		Wiring:     WiringFacts{ConfigPresent: true, HookCommandBroken: false},
 	}
-	if got, _ := decide(e, f, map[SurfaceKind]bool{}, map[SurfaceKind]laneState{}); got == NotConfigured {
+	if got, _ := decide(time.Now(), e, f, map[SurfaceKind]bool{}, map[SurfaceKind]laneState{}); got == NotConfigured {
 		t.Errorf("a healthy row must not read as %s", NotConfigured)
 	}
 }

@@ -22,7 +22,7 @@ import (
 // not wired". It triggers no model load and no download.
 func IntegrationStates() integrations.Response {
 	set := settings.Load()
-	return integrations.Snapshot(integrations.Deps{}, integrations.Options{AutoSetup: set.AutoSetupEnabled()})
+	return integrations.Snapshot(integrations.Deps{}, integrations.Options{AutoSetup: set.AutoSetupEnabled(), ToolOTLP: set.ToolOTLPEnabled()})
 }
 
 // IntegrationLines renders the status listing: one line per catalogue entry,

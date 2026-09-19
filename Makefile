@@ -238,6 +238,7 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 #   make conformance TOOL=all                    both tools, halves split by seed
 #   make conformance TOOL=claude_code            one tool (it lands in the before half)
 #   make conformance TOOL=all CHAIN=B            the upgrade chain
+#   make conformance TOOL=claude_code CHAIN=C    the day-three chain (expected red)
 #   make conformance TOOL=all SEED=42 WORK=/tmp/xyz PREVIOUS=dir:/path/to/release
 #   make conformance TOOL=all ARTIFACT=dir:/path/to/artifacts   (AC-12: install
 #       the REAL pkg/tarball unattended first — needs a DISPOSABLE machine, see
@@ -253,12 +254,21 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 # release on this machine, the default) or `dir:<path>` (a downloaded release —
 # the seam CI uses).
 #
+# CHAIN=C is the DAY-THREE chain: it opens with chain A's own steps and then
+# puts the machine through the things that need a HISTORY — an older keld left
+# ahead on PATH, three daemon restarts under a tool holding a credential, a
+# setup re-run, a resumed session, a second live window, a wall-clock jump, an
+# unpaired pass, and the tool-OTLP switch. ⚠️ It is EXPECTED TO FAIL today; a
+# step it cannot even express reports `blocked` rather than a false pass.
+# KELD_CONFORM_KEEP_GOING=1 surveys every step instead of stopping at the first
+# failure — read those verdicts as a survey, never as a chain result.
+#
 # The tools are used AS INSTALLED on this machine, so a local run proves this
 # machine's versions; the container and VM legs (task A.4) set
 # KELD_CONFORM_INSTALL=1 to npm-install them at @latest instead.
 .PHONY: conformance
-conformance: ## Run a conformance chain against real tools (TOOL=all|claude_code|codex, CHAIN=A|B)
-	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=all [CHAIN=A|B] [SEED=n]"; exit 2; }
+conformance: ## Run a conformance chain against real tools (TOOL=all|claude_code|codex, CHAIN=A|B|C)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=all [CHAIN=A|B|C] [SEED=n]"; exit 2; }
 	@bash scripts/conformance/run-chain.sh \
 		--tool "$(TOOL)" \
 		$(if $(CHAIN),--chain "$(CHAIN)",) \

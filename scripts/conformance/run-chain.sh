@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # Run one conformance chain against real tools, a mock model and a mock Atlas.
 #
-#   scripts/conformance/run-chain.sh --tool all [--chain A|B] [--seed N] [--work DIR]
+#   scripts/conformance/run-chain.sh --tool all [--chain A|B|C] [--seed N] [--work DIR]
 #   scripts/conformance/run-chain.sh --tool claude_code
 #   scripts/conformance/run-chain.sh --tool all --chain B --previous installed
+#
+# ⚠️ A RUN NEEDS THE NETWORK, BECAUSE IT ISOLATES HOME. GOPATH follows HOME,
+# so every run starts with a COLD module cache and rebuilds the binaries from a
+# fresh download — one run died on `read: connection reset by peer` fetching
+# modernc.org/libc from proxy.golang.org, and reported it as the step that
+# happened to be building at the time. Share the developer's cache to make a run
+# offline and faster:
+#
+#   GOMODCACHE=$(go env GOMODCACHE) scripts/conformance/run-chain.sh ...
 #   scripts/conformance/run-chain.sh --tool all --artifact dir:./artifacts
 #
 # What it proves (AC-10): the packaged onboarding commands configure REAL tools,
@@ -35,6 +44,22 @@
 #   before half  ->  PREVIOUS release  ->  prompts  ->  the release under test
 #     installed OVER it  ->  configs preserved, sidecar replaced, no version skew
 #     ->  prompts  ->  after half  ->  detector  ->  prompts
+#
+# Chain C — the DAY-THREE chain: a machine that has a HISTORY.
+#
+#   chain A's install + first session  ->  an older keld left ahead on PATH
+#     ->  three daemon restarts under a tool holding a credential
+#     ->  a setup re-run  ->  a RESUMED session  ->  a SECOND live window
+#     ->  a wall-clock jump (sleep/wake)  ->  an UNPAIRED pass, then pairing
+#     ->  the tool-OTLP switch on
+#
+# Chains A and B prove a machine can be INSTALLED and work for ten minutes.
+# Every failure the maintainer hit on 2026-09-18 needed history instead, and a
+# fresh machine has none — so none of those six defects is reachable by either
+# chain. ⚠️ Chain C is EXPECTED TO FAIL today: its steps are written against
+# behaviour four other workstreams are landing, and a step that cannot even be
+# EXPRESSED on this build reports `blocked: <what is missing>` rather than a
+# false pass. See lib/chainc.sh for each step's incident and its measurement.
 #
 # Chain B is the chain that would have caught the three-week sidecar skew
 # (AGENTS.md → Gotchas): a 2.3.0 daemon against an Aug 11 sidecar, publishing
@@ -77,7 +102,7 @@ while [ $# -gt 0 ]; do
     --previous) PREVIOUS=$2; shift 2 ;;
     --artifact) ARTIFACT=$2; shift 2 ;;
     -h|--help)
-      sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,64p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "run-chain.sh: unknown flag $1" >&2; exit 2 ;;
   esac
@@ -104,14 +129,16 @@ LIB=$(cd "$(dirname "$0")/lib" && pwd)
 . "$LIB/tools.sh"
 # shellcheck source=lib/checkpoints.sh
 . "$LIB/checkpoints.sh"
+# shellcheck source=lib/chainc.sh
+. "$LIB/chainc.sh"
 
 # ⚠️ FIRST LINE.
 echo "seed: $SEED"
 echo "chain: $CHAIN   host: $(uname -s) $(uname -m)"
 
 case "$CHAIN" in
-  A|B) ;;
-  *) echo "run-chain.sh: unknown chain $CHAIN (A or B)" >&2; exit 2 ;;
+  A|B|C) ;;
+  *) echo "run-chain.sh: unknown chain $CHAIN (A, B or C)" >&2; exit 2 ;;
 esac
 
 # --- the tool list and the seeded split --------------------------------------
@@ -362,9 +389,29 @@ step_after_prompts() {
 
 # --- chain B's own steps -----------------------------------------------------
 
+# ⚠️ A MISSING PREREQUISITE IS BLOCKED, NOT FAILED, AND THIS REPORTED IT AS
+# FAILED. Chain B upgrades FROM a previous release, so it needs one installed
+# with its frozen sidecar. A developer machine usually has neither — `make
+# sidecar` builds a venv wrapper, not a frozen tree — and the chain answered
+# "FAIL — chain B, stopped at step prev-install", which reads as a product
+# defect in a branch about to be released. Nothing had been exercised at all.
+#
+# `prev_resolve` now returns 2 for "cannot run here" against 1 for "tried and
+# it went wrong", and the two are reported in their own words. Same rule chain
+# C's steps already follow: blocked is not a pass and not a failure, and
+# collapsing it into either is how a chain lies.
 step_prev_install() {
   step_begin "prev-install"
-  prev_resolve "$PREVIOUS" || return 1
+  prev_resolve "$PREVIOUS"
+  case $? in
+    0) ;;
+    # Blocked, and everything after this depends on it: there is no previous
+    # release installed and no daemon running, so `pointer 0 / telemetry 0 /
+    # publish 0` downstream would be arithmetic about a machine that was never
+    # set up, not findings. prev_resolve has already said what is missing.
+    2) BLOCKED_PREREQ=$STEP; return 0 ;;
+    *) return 1 ;;
+  esac
   bin_use "$PREV_BIN_DIR"
   sidecar_point_at "$PREV_SIDECAR_DIR"
   say "previous release: keld $KELD_VERSION_SEEN, sidecar $SIDECAR_VERSION_SEEN (--previous $PREVIOUS)"
@@ -742,16 +789,15 @@ prev_resolve() {
         if [ -x "$d/keld-agent" ] && [ -x "$d/keld" ]; then PREV_BIN_DIR=$d; break; fi
       done
       [ -n "$PREV_BIN_DIR" ] || {
-        say "no installed Signal release found (looked in /usr/local/keld, ~/.local/bin, /usr/local/bin)."
-        say "  Pass --previous dir:<path> with a downloaded release instead."
-        return 1; }
+        blocked "no installed Signal release to upgrade FROM (looked in /usr/local/keld, ~/.local/bin, /usr/local/bin). Pass --previous dir:<path> with a downloaded release."
+        return 2; }
       PREV_SIDECAR_DIR=""
       for d in "$REAL_HOME/.local/bin/keld-agent-sidecar" "/usr/local/keld/keld-agent-sidecar"; do
         [ -x "$d/keld-agent-sidecar" ] && { PREV_SIDECAR_DIR=$d; break; }
       done
       [ -n "$PREV_SIDECAR_DIR" ] || {
-        say "the installed release has no frozen sidecar; chain B cannot compare the two halves."
-        return 1; }
+        blocked "the installed release has no FROZEN sidecar, so the two halves cannot be compared. A developer machine has the venv wrapper \`make sidecar\` builds, not a frozen tree; CI has the real release artifact."
+        return 2; }
       ;;
     *) say "--previous must be 'installed' or 'dir:<path>' (got $spec)"; return 1 ;;
   esac
@@ -771,28 +817,108 @@ done
 # checkout's serve.py — the only "new" sidecar a local run has.
 UNDER_TEST_SIDECAR=${KELD_CONFORM_NEW_SIDECAR:-worktree}
 
-if [ "$CHAIN" = "A" ]; then
-  STEPS="step_before_install step_signal_install step_before_prompts step_detect step_after_prompts"
-else
-  STEPS="step_before_install step_prev_install step_prev_prompts step_skew_control step_upgrade step_upgraded_prompts step_detect step_after_prompts"
-fi
+case "$CHAIN" in
+  A) STEPS="step_before_install step_signal_install step_before_prompts step_detect step_after_prompts" ;;
+  B) STEPS="step_before_install step_prev_install step_prev_prompts step_skew_control step_upgrade step_upgraded_prompts step_detect step_after_prompts" ;;
+  # ⚠️ **CHAIN C OPENS WITH CHAIN A'S OWN STEPS, BY NAME, NOT WITH A COPY OF
+  # THEM.** Day three needs day one to have happened, and a second copy of
+  # "install Signal, configure a tool, drive a session, read the checkpoints"
+  # is precisely the drift this harness exists to prevent — the day one of them
+  # learned something the other did not, chain C would be proving day three
+  # against a machine nobody ships. Everything after those three is chain C's
+  # own, and lives in lib/chainc.sh.
+  C) STEPS="step_before_install step_signal_install step_before_prompts \
+            step_c_old_binary step_c_daemon_restarts step_c_setup_rerun \
+            step_c_resume step_c_second_window step_c_sleep_wake \
+            step_c_unpaired step_c_otlp_switch"
+     # ⚠️ **CHAIN C TURNS THE TOOL'S OWN OTLP LANE ON, AND HAS TO SAY SO.**
+     # Since WS3 it is opt-in (`tool_otlp`, default OFF), so on a default
+     # machine `keld signal setup` writes no OTEL block at all and the tool
+     # holds NO credential. Three of this chain's incidents are about a tool
+     # that holds one — the 18-minute silence after three daemon restarts, the
+     # setup re-run that left a secret the proxy 401s, and the switch's own step
+     # — and none of them exists on a machine without the lane. So the chain
+     # asks for the machine the incidents happened on.
+     #
+     # That the DEFAULT machine cannot have those three failures is WS3's
+     # mitigation working, not a gap in this chain, and it is worth stating
+     # rather than discovering: a reader who sees these steps pass should know
+     # they ran against the opt-in configuration.
+     export KELD_TOOL_OTLP=${KELD_TOOL_OTLP:-1}
+     echo "conformance: chain C runs with KELD_TOOL_OTLP=$KELD_TOOL_OTLP — the tool's own OTLP lane is opt-in since WS3, and three of this chain's incidents need it"
+     ;;
+esac
+
+# ⚠️ **KEEP_GOING IS OFF BY DEFAULT AND MUST STAY THAT WAY.** Stopping at the
+# first failure is what makes one break read as one break; a later step running
+# on a machine an earlier step left in a state no user is ever in produces
+# verdicts nobody can act on. It exists for ONE job — surveying a chain that is
+# expected to fail in several places at once, which chain C is today — and
+# every step it runs past a failure is labelled as such, so a report cannot
+# quietly present a survey as a chain.
+KEEP_GOING=${KELD_CONFORM_KEEP_GOING:-0}
 
 FAILED_STEP=""
+FAILED_STEPS=""
+BLOCKED_STEPS=""
+# ⚠️ A BLOCKED PREREQUISITE STOPS THE CHAIN, AND KEEP_GOING DOES NOT OVERRIDE
+# IT. KEEP_GOING exists to survey a machine an earlier step BROKE; this is a
+# machine no step ever set up, where every later verdict is arithmetic about
+# nothing. Chain B without a previous release installed reported `pointer 0 /
+# telemetry 0 / publish 0` that way — three red checkpoints, none of them a
+# finding.
+BLOCKED_PREREQ=""
 for fn in $STEPS; do
-  if [ -n "$FAILED_STEP" ]; then
+  if [ -n "$BLOCKED_PREREQ" ]; then
+    echo "conformance: SKIPPED ${fn#step_} (chain cannot run here: $BLOCKED_PREREQ was blocked, seed $SEED)"
+    continue
+  fi
+  if [ -n "$FAILED_STEP" ] && [ "$KEEP_GOING" != "1" ]; then
     echo "conformance: SKIPPED ${fn#step_} (chain stopped at $FAILED_STEP, seed $SEED)"
     continue
   fi
+  [ -n "$FAILED_STEP" ] && echo "conformance: ⚠️  ${fn#step_} runs AFTER a failed step (KELD_CONFORM_KEEP_GOING=1) — its verdict is a survey, not a chain result"
+  # ⚠️ Cleared per step, never per chain: a step that reports blocked must not
+  # make the next one look blocked too.
+  STEP_BLOCKED=""
   if ! "$fn"; then
-    FAILED_STEP=$STEP
-    echo "conformance: chain $CHAIN stopped at step $FAILED_STEP [seed $SEED]" >&2
+    [ -n "$FAILED_STEP" ] || FAILED_STEP=$STEP
+    FAILED_STEPS="${FAILED_STEPS}${FAILED_STEPS:+ }$STEP"
+    echo "conformance: chain $CHAIN step $STEP FAILED [seed $SEED]" >&2
   fi
 done
 
 echo
+# ⚠️ **BLOCKED IS REPORTED WHETHER THE CHAIN PASSED OR FAILED.** A step that
+# could not be EXPRESSED on this build proved nothing, and a headline that said
+# only PASS would be claiming coverage the run does not have — the same
+# confident-negative failure the checkpoints refuse one level down.
+if [ -n "$BLOCKED_STEPS" ]; then
+  say "BLOCKED steps (nothing was proved by these):"
+  printf '%s\n' "$BLOCKED_STEPS" | while IFS= read -r l; do say "  $l"; done
+fi
 if [ -n "$FAILED_STEP" ]; then
-  say "FAIL — chain $CHAIN, seed $SEED, stopped at step $FAILED_STEP"
+  if [ "$KEEP_GOING" = "1" ]; then
+    say "FAIL — chain $CHAIN, seed $SEED, failed steps: $FAILED_STEPS"
+    say "  (KELD_CONFORM_KEEP_GOING=1: every step after the first failure ran on a"
+    say "   machine an earlier step had already broken — read these as a survey.)"
+  else
+    say "FAIL — chain $CHAIN, seed $SEED, stopped at step $FAILED_STEP"
+  fi
   exit 1
 fi
-say "PASS — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+# ⚠️ NOT PASS. Nothing downstream ran, so a green headline would claim coverage
+# this run does not have — and not FAIL either, because nothing was tried and
+# found wanting. Exit 2 so a caller can tell the three apart; in CI the
+# prerequisite exists, so this path does not fire there.
+if [ -n "$BLOCKED_PREREQ" ]; then
+  say "BLOCKED — chain $CHAIN, seed $SEED: $BLOCKED_PREREQ could not run here, so no later step was attempted."
+  say "  Nothing was proved and nothing was found wrong. Run it where a previous release is installed (CI), or pass --previous dir:<path>."
+  exit 2
+fi
+if [ -n "$BLOCKED_STEPS" ]; then
+  say "PASS (with blocked steps) — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+else
+  say "PASS — chain $CHAIN, seed $SEED, before=[${BEFORE:-none}] after=[${AFTER:-none}]"
+fi
 for t in $TOOLS; do say "  $(tool_display "$t") $(tool_version_of "$t")"; done

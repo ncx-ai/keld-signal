@@ -59,6 +59,35 @@ var Exts = []string{".json", ".jsonl"}
 // telemetry, so keying on it leaves every Gemini enrichment orphaned.
 const PromptSep = "########"
 
+// Tokens is what one model turn cost, as Gemini CLI records it on the message.
+// ⚠️ `input` INCLUDES the cached prefix and `thoughts` bills as OUTPUT — the
+// same two conventions Atlas's Gemini parser folds in; a consumer that adds
+// `cached` to `input` counts the prefix twice.
+type Tokens struct {
+	Input    int `json:"input"`
+	Output   int `json:"output"`
+	Cached   int `json:"cached"`
+	Thoughts int `json:"thoughts"`
+	Tool     int `json:"tool"`
+	Total    int `json:"total"`
+}
+
+// Response is one model turn that reported a cost: the numbers Gemini CLI's own
+// `gemini_cli.api_response` event carries, and nothing else. No content, no
+// thoughts, no tool calls — this type exists so the usage mirror can read a chat
+// file without going near its text.
+type Response struct {
+	// RecordID is the message's own uuid.
+	RecordID  string
+	Timestamp string
+	Model     string
+	Tokens    Tokens
+	// PromptOrdinal is the ordinal of the most recent genuine user prompt at or
+	// before this turn, so a response can be correlated to the prompt id the
+	// watcher published. -1 when the session opens with a model turn.
+	PromptOrdinal int
+}
+
 // Prompt is one genuine user prompt: a turn a person typed.
 type Prompt struct {
 	// RecordID is the message's own uuid. Kept for the legacy pointers that
@@ -74,6 +103,8 @@ type Prompt struct {
 type Session struct {
 	ID      string
 	Prompts []Prompt
+	// Responses are the model turns that reported a cost, in file order.
+	Responses []Response
 }
 
 // CorrID is the correlation id for the ordinal-th prompt of this session — the
@@ -88,9 +119,12 @@ type doc struct {
 }
 
 type message struct {
-	ID      string          `json:"id"`
-	Type    string          `json:"type"`
-	Content json.RawMessage `json:"content"`
+	ID        string          `json:"id"`
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp"`
+	Model     string          `json:"model"`
+	Tokens    *Tokens         `json:"tokens"`
+	Content   json.RawMessage `json:"content"`
 }
 
 type contentBlock struct {
@@ -171,6 +205,16 @@ func parseLines(b []byte) (Session, bool) {
 func fromMessages(id string, msgs []message) (Session, bool) {
 	s := Session{ID: id}
 	for _, m := range msgs {
+		// A MODEL TURN THAT REPORTED A COST. Gated on the `tokens` block rather
+		// than on the type string, for the reason this package exists at all:
+		// the SHAPE is what stays stable across builds. Measured on 55 real chat
+		// files: 203 of 262 messages carry `tokens`, and no user turn does.
+		if m.ID != "" && m.Tokens != nil {
+			s.Responses = append(s.Responses, Response{
+				RecordID: m.ID, Timestamp: m.Timestamp, Model: m.Model,
+				Tokens: *m.Tokens, PromptOrdinal: len(s.Prompts) - 1,
+			})
+		}
 		// THE PREDICATE. Every consumer counts prompts through here, so there is
 		// one definition of "genuine user prompt" and ordinals cannot drift
 		// between the id a pointer is written under and the text resolved back

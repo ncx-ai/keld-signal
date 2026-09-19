@@ -88,6 +88,10 @@ type Proxy struct {
 	// answer it: on a machine running Claude Code and Codex, Claude Code's
 	// forwards vouch for Codex's silence.
 	sources *sourceRecord
+	// previous is the secret a deliberate rotation replaced, honoured for a
+	// bounded window so tools configured just before it are not stranded. Nil
+	// when nothing was rotated. See grace.go.
+	previous atomic.Pointer[retired]
 	// dropped counts trace exports accepted and thrown away. See Handler.
 	dropped atomic.Int64
 
@@ -102,10 +106,31 @@ type Proxy struct {
 // Logs and metrics get separate spool subdirectories: a poison metrics batch
 // must not be able to block logs behind it.
 func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+// NewPending is New for a daemon that is LISTENING BEFORE IT IS PAIRED.
+//
+// ⚠️ **THE PROXY HAS TO BE UP FROM THE FIRST SECOND, WHICH IS EARLIER THAN THE
+// ADDRESS IS KNOWN.** `keld signal setup` writes this port into every AI tool's
+// config, and a tool reads that config once at startup — so a daemon that binds
+// only after `hook.json` arrives leaves every already-configured tool posting
+// into a closed port for as long as nobody has finished signing in. The
+// endpoints are therefore resolved PER FORWARD, the same treatment `token`
+// already has, and while they answer "" a batch is spooled rather than lost.
+func NewPending(logsEndpoint, metricsEndpoint func() string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewPendingTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewPendingTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+func newProxy(secret, spoolDir string, logs, metric *clientevents.Transport) *Proxy {
 	p := &Proxy{
 		secret:    secret,
-		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
-		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
+		logs:      logs,
+		metric:    metric,
 		statePath: StatePath(),
 		// ⚠️ LOAD, don't start empty. The record is what tells doctor which
 		// running tools have never reached Atlas; a daemon restart that dropped
@@ -374,12 +399,16 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 // everything: ConstantTimeCompare("", "") is 1, so without the guard an
 // unconfigured proxy would authenticate any local caller — fail-open on the one
 // route that injects billable usage into the org.
+//
+// ⚠️ THE GRACE WINDOW APPLIES TO ALL THREE SHAPES, not to this package's own
+// header. A rotation honoured for Claude Code and Codex but not for Gemini is a
+// rotation that breaks one of a person's tools for reasons they cannot see; the
+// credential's LOCATION has nothing to do with which secret is valid.
 func (p *Proxy) authorized(r *http.Request) bool {
 	if p.secret == "" {
 		return false
 	}
-	want := []byte(p.secret)
-	for _, got := range []string{
+	presented := []string{
 		r.Header.Get("x-keld-telemetry-secret"),
 		r.Header.Get("x-keld-ingest-token"),
 		// The PATH form is what Gemini can actually deliver; see Handler.
@@ -389,8 +418,26 @@ func (p *Proxy) authorized(r *http.Request) bool {
 		// across an upgrade, and locking it out would be a second outage on top
 		// of the one it already has.
 		r.URL.Query().Get("token"),
-	} {
-		if got != "" && subtle.ConstantTimeCompare([]byte(got), want) == 1 {
+	}
+	if matchesAny(presented, p.secret) {
+		return true
+	}
+	// previousSecret answers "" once the window has closed, and "" can never
+	// match here — the empty-value guard below is what makes that safe.
+	return matchesAny(presented, p.previousSecret())
+}
+
+// matchesAny reports whether any presented credential equals want. An empty
+// want, or an empty presented value, never matches: ConstantTimeCompare("", "")
+// is 1, so without the guard an unconfigured proxy would authenticate any local
+// caller — fail-open on the one route that injects billable usage into the org.
+func matchesAny(presented []string, want string) bool {
+	if want == "" {
+		return false
+	}
+	w := []byte(want)
+	for _, got := range presented {
+		if got != "" && subtle.ConstantTimeCompare([]byte(got), w) == 1 {
 			return true
 		}
 	}

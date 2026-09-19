@@ -37,11 +37,38 @@ type kv struct {
 	Value anyVal `json:"value"`
 }
 
-// anyVal is an OTLP AnyValue. OTLP/JSON encodes integers as decimal strings under
-// "intValue"; only one field is set per value.
+// anyVal is an OTLP AnyValue. Only one field is set per value.
 type anyVal struct {
-	StringValue string `json:"stringValue,omitempty"`
-	IntValue    string `json:"intValue,omitempty"`
+	StringValue string  `json:"stringValue,omitempty"`
+	IntValue    otlpInt `json:"intValue,omitempty"`
+}
+
+// otlpInt is an OTLP integer attribute value.
+//
+// ⚠️ **OTLP/JSON PERMITS BOTH A DECIMAL STRING AND A BARE NUMBER FOR AN
+// `intValue`, AND THE REAL TOOLS USE BOTH.** This was a plain `string`, which is
+// what the protobuf-JSON mapping prescribes and what this package emits — but a
+// captured `claude_code.api_request` record writes `"event.sequence":
+// {"intValue": 237}` as a NUMBER, so decoding a real payload with the strict type
+// failed outright ("cannot unmarshal number into Go struct field ... of type
+// string"). Reading is therefore tolerant and writing stays strict: a value is
+// accepted in either form and always re-emitted as the decimal string, so a
+// mirrored payload is byte-stable regardless of what it was compared against.
+type otlpInt string
+
+func (o *otlpInt) UnmarshalJSON(b []byte) error {
+	if len(b) >= 2 && b[0] == '"' && b[len(b)-1] == '"' {
+		b = b[1 : len(b)-1]
+	}
+	if string(b) == "null" {
+		b = nil
+	}
+	*o = otlpInt(b)
+	return nil
+}
+
+func (o otlpInt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(o))
 }
 
 type otlpMetrics struct {
@@ -85,7 +112,11 @@ type metric struct {
 func attr(k, v string) kv { return kv{Key: k, Value: anyVal{StringValue: v}} }
 
 // attrInt builds an integer-valued OTLP attribute (encoded as a decimal string).
-func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: strconv.Itoa(n)}} }
+func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: otlpInt(itoa(n))}} }
+
+// itoa is strconv.Itoa under a shorter name, used wherever an id is composed
+// from a record's own ordinal.
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // logsPayload marshals an OTLP/HTTP logs export request for one resource.
 func logsPayload(res []kv, records []logRecord) ([]byte, error) {

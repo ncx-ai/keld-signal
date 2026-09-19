@@ -430,7 +430,7 @@ func TestFeatureAdvanceTriggersTheEncoderFetchOnlyWhenTheToggleIsOn(t *testing.T
 			on := func() bool { return true }
 			enc := newEncoderProvisioner(t.Context(), features.TextEmbedEnabled(), on, nil)
 			adv := startFeatureEmitter(t.Context(), fakeFeatureClient{},
-				"https://x/v1/enrichments", func() string { return "tok" },
+				constEndpoint("https://x/v1/enrichments"), func() string { return "tok" },
 				"actor", "inst", on, on, nil, enc)
 			if adv == nil {
 				t.Fatal("no advance observer")

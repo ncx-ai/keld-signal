@@ -34,31 +34,6 @@ type Info struct {
 	TelemetrySecret string `json:"telemetry_secret,omitempty"`
 }
 
-// EnsureTelemetrySecret returns the machine's stable telemetry secret,
-// generating and persisting one on first use.
-func EnsureTelemetrySecret() (string, error) {
-	info, err := Read()
-	if err != nil {
-		return "", err
-	}
-	if info != nil && info.TelemetrySecret != "" {
-		return info.TelemetrySecret, nil
-	}
-	sec, err := NewSecret()
-	if err != nil {
-		return "", err
-	}
-	next := Info{}
-	if info != nil {
-		next = *info
-	}
-	next.TelemetrySecret = sec
-	if err := Write(next); err != nil {
-		return "", err
-	}
-	return sec, nil
-}
-
 // NewSecret returns a 32-byte random secret as a 64-char hex string.
 func NewSecret() (string, error) {
 	b := make([]byte, 32)
@@ -70,18 +45,35 @@ func NewSecret() (string, error) {
 
 // Write persists info to ~/.keld/agent.json (mode 0600).
 //
-// ⚠️ A CALLER THAT OMITS TelemetrySecret DOES NOT ERASE IT. The daemon rewrites
-// this file on every start with a freshly generated ingress secret and no
-// telemetry secret in hand (daemon.go's Write(Info{Port, Secret})); without this
-// rule that write would destroy the stable secret sitting in every AI tool's
-// config, and the tools would go stale on the next daemon restart — the very bug
-// the telemetry proxy exists to remove, rebuilt one layer down and firing daily
-// instead of rarely. An explicit non-empty value still wins, so a deliberate
-// rotation remains possible.
+// ⚠️ A CALLER THAT OMITS TelemetrySecret DOES NOT ERASE IT, AND CANNOT TOUCH THE
+// SECRET FILE AT ALL. The daemon rewrites this file on every start with a freshly
+// generated ingress secret and no telemetry secret in hand (daemon.go's
+// Write(Info{Port, Secret})); without this rule that write would destroy the
+// stable secret sitting in every AI tool's config, and the tools would go stale
+// on the next daemon restart — the very bug the telemetry proxy exists to remove,
+// rebuilt one layer down and firing daily instead of rarely.
+//
+// The omitted value is refilled from paths.TelemetrySecretPath FIRST and only
+// then from the previous agent.json, because that file is the source of truth:
+// on 2026-09-18 a stale agent.json was exactly what disagreed with the tools on a
+// real machine, and a rule that trusted it would re-assert the wrong value here.
+//
+// An explicit non-empty value that DIFFERS from the file is a deliberate
+// rotation: the file is updated and the outgoing value retired into `previous`
+// with its instant, so teleproxy's grace window can keep already-configured
+// tools alive. Nothing in the product takes that path on its own.
 func Write(info Info) error {
-	if info.TelemetrySecret == "" {
-		if prev, err := Read(); err == nil && prev != nil {
+	cur, curErr := ReadTelemetrySecrets()
+	switch {
+	case info.TelemetrySecret == "":
+		if curErr == nil && cur.Secret != "" {
+			info.TelemetrySecret = cur.Secret
+		} else if prev, err := Read(); err == nil && prev != nil {
 			info.TelemetrySecret = prev.TelemetrySecret
+		}
+	case curErr == nil && info.TelemetrySecret != cur.Secret:
+		if err := rotateTo(cur, info.TelemetrySecret); err != nil {
+			return err
 		}
 	}
 	if err := os.MkdirAll(paths.KeldHome(), 0o755); err != nil {

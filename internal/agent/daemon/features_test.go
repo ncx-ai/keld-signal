@@ -70,7 +70,7 @@ func TestFeatureSourceForProbesTheCapability(t *testing.T) {
 // loop pays a nil check and nothing more.
 func TestNoSourceMeansNoEmitterAndNoObserver(t *testing.T) {
 	on := func() bool { return true }
-	if fn := startFeatureEmitter(t.Context(), nil, "https://x/v1/enrichments",
+	if fn := startFeatureEmitter(t.Context(), nil, constEndpoint("https://x/v1/enrichments"),
 		func() string { return "tok" }, "actor", "inst", on, on, nil, nil); fn != nil {
 		t.Fatal("a nil source still returned an advance observer")
 	}

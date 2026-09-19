@@ -29,8 +29,14 @@ const telemetryDrainInterval = time.Minute
 // path exists to remove. The realistic cause is a second daemon: a developer
 // running `keld-agent run` beside the installed service is ordinary, and this is
 // the failure mode a FIXED port introduces that the ephemeral ingress never had.
+// ⚠️ **IT BINDS BEFORE THE MACHINE IS PAIRED, WHICH IS WHY THE ENDPOINTS ARE
+// RESOLVERS.** `keld signal setup` writes this port into every tool's config and
+// a tool reads that config once at startup, so a proxy that only bound after
+// `hook.json` arrived left every already-configured tool posting into a closed
+// port. `logs`/`metrics` therefore answer "" until the pairing lands, and
+// teleproxy.NewPending spools what arrives meanwhile.
 func startTelemetryProxy(ctx context.Context, emitter *clientevents.Emitter,
-	ingestEndpoint string, token func() string, onAuthRejection func()) (*teleproxy.Proxy, error) {
+	logs, metrics func() string, token func() string, onAuthRejection func()) (*teleproxy.Proxy, error) {
 
 	addr := teleproxy.Addr()
 	ln, err := net.Listen("tcp", addr)
@@ -40,13 +46,17 @@ func startTelemetryProxy(ctx context.Context, emitter *clientevents.Emitter,
 			"set %s to move it)", addr, err, teleproxy.EnvPort)
 	}
 
-	secret, err := agentcfg.EnsureTelemetrySecret()
+	secrets, err := agentcfg.EnsureTelemetrySecrets()
 	if err != nil {
 		_ = ln.Close()
 		return nil, fmt.Errorf("telemetry secret: %w", err)
 	}
-	p := teleproxy.New(logsEndpoint(ingestEndpoint), metricsEndpoint(ingestEndpoint),
-		token, secret, paths.TelemetrySpoolDir())
+	p := teleproxy.NewPending(logs, metrics, token, secrets.Secret, paths.TelemetrySpoolDir())
+	// A rotation is survivable only if the outgoing secret keeps working while
+	// the machine is reconfigured: every tool already running holds the old value
+	// in memory and cannot be told otherwise from outside. Set BEFORE Serve, so
+	// no request can observe a proxy that has the new secret and not the grace.
+	p.AcceptPrevious(secrets.Previous, secrets.RotatedAt)
 	if onAuthRejection != nil {
 		p.OnAuthRejection(onAuthRejection)
 	}

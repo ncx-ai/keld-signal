@@ -324,6 +324,11 @@ body.pane-today .health-strip { margin-top: 12px; }
   gap: 10px;
 }
 .health-strip .cells { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Its own row under the pills. `flex-basis: 100%` inside the wrapping strip is
+   what puts it there without a second container — the strip is
+   space-between, so a sentence sharing the pills' row would be squeezed
+   against the toggles at every width. */
+.health-strip .durability-note { flex-basis: 100%; color: var(--muted); font-size: 12.5px; }
 .health-strip .toggles { display: flex; gap: 18px; align-items: center; font-size: 12.5px; color: var(--muted); }
 
 /* ---- Toggle switch ---- */
@@ -562,6 +567,27 @@ fieldset:disabled { opacity: .55; }
   font-size: 12.5px;
   line-height: 1.5;
   max-width: 70ch;
+}
+/* What Signal repaired, above the instruction it explains. Green rather than
+   amber: the amber block is something for the person to DO, and this is
+   something already done for them. */
+.intg-repair {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green-strong);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 70ch;
+}
+/* The stale session id, under the sentence that says to restart. Monospace
+   because it is an identifier a person matches against a window title, and quiet
+   because it qualifies the instruction rather than adding a second one. */
+.intg-stale {
+  margin: 6px 0 0;
+  font: 400 11.5px var(--mono);
+  color: var(--muted);
 }
 .intg-unsupported { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font-size: 12.5px; }
 .intg-storage { font: 600 11px var(--mono); color: var(--ink-2); }

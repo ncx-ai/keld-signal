@@ -38,10 +38,25 @@ import (
 //
 // What the pre-config handler serves is the subset that needs neither Atlas nor
 // a token: the page, the ledger and projects reads (both local files), settings
-// and `/v1/config` itself. `/enrich` is deliberately NOT among them — a pointer
+// and `/v1/config` itself.
+//
+// ⚠️ **THIS USED TO END "`/enrich` is deliberately NOT among them — a pointer
 // accepted before the daemon can publish is work with nowhere to go, and the
 // hook already spools durably when the daemon is unreachable, so dropping it
-// here costs nothing and inventing a queue to hold it would.
+// here costs nothing and inventing a queue to hold it would." THE QUEUE IT
+// DECLINED TO INVENT ALREADY EXISTED.** `internal/spool` is exactly a durable
+// pointer queue, and the daemon drains it — so "nowhere to go" was only true
+// while nothing before the pairing was running. Since the collectors start
+// first (see pairing.go) the real `/enrich` handler is installed from the
+// beginning: a pointer is accepted, held in that spool by the worker, and
+// published once the machine is paired. The hook's own spool covered the
+// HOOK's pointers; it never covered the transcript watcher's, which are the
+// hook-free surfaces and were simply lost.
+//
+// The handler swap below therefore no longer marks "the daemon can start
+// working" — it marks the ordinary transition from the onboarding subset to the
+// full route set, and everything that collects is already running on both sides
+// of it.
 
 // swapHandler is one http.Handler whose delegate can be replaced while the
 // server is running. Reads are lock-free because they happen on every request;

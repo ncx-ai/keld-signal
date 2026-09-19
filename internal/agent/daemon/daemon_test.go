@@ -1410,7 +1410,17 @@ func fakeAnalysisService(t *testing.T) (markerPath string, awaitPort func() int)
 
 	return marker, func() int {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
+		// ⚠️ THIS DEADLINE IS A HANG BACKSTOP, NOT A PERFORMANCE ASSERTION, AND
+		// AT 5s IT WAS BEING READ AS ONE. The wait returns the instant the marker
+		// appears -- 0.33s for the whole test on an idle machine -- so a generous
+		// bound costs nothing when the service does start. At 5s it failed
+		// reproducibly under `go test ./...` on a loaded machine (2026-09-19,
+		// five concurrent agents, load average ~5) while passing in isolation
+		// three times running, and the failure said "the analysis service was
+		// never spawned: deterministic mode did not start it" -- a sentence
+		// about the product, for a fact about the CPU. A gate that names the
+		// wrong cause is worse than a slow one.
+		deadline := time.Now().Add(60 * time.Second)
 		for time.Now().Before(deadline) {
 			b, err := os.ReadFile(marker)
 			if err == nil && len(b) > 0 {

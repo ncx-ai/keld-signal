@@ -466,7 +466,7 @@ func TestTheHealthStripAndTheServiceBlockCannotContradictEachOther(t *testing.T)
 			v := &v3{ledger: ledger.New(), atlasOn: false}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			startHealth(ctx, v, nil, false)
+			startHealth(ctx, v, nil, false, nil)
 			snap, _ := v.ledger.Read(time.Time{}, 10)
 			row := healthByKey(snap)["sidecar"]
 			if row.Status != string(tc.wantStatus) {

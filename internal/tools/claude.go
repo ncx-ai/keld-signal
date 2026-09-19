@@ -56,7 +56,18 @@ func (a *ClaudeAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 		}
 	}
 
-	envKeys := config.MergeEnv(obj, telemetry.ClaudeEnv(p))
+	// ⚠️ THE KEYS ARE THE SAME LIST IN BOTH POSITIONS, AND THAT IS WHAT MAKES
+	// THE SWITCH REVERSIBLE. With the lane on they are merged in; with it off
+	// they are taken back out, so a machine an earlier keld configured loses
+	// the block on its next apply rather than keeping a stale exporter nobody
+	// asked for. Either way the manifest records the full list, so
+	// `keld signal uninstall` strips it whichever position the machine was in.
+	envKeys := telemetry.ClaudeEnvKeys()
+	if p.ToolOTLP {
+		config.MergeEnv(obj, telemetry.ClaudeEnv(p))
+	} else {
+		config.RemoveSectionKeys(obj, "env", envKeys)
+	}
 
 	// Strip existing keld hooks before re-adding, so re-running setup is
 	// idempotent even when the command STRING changes (bare "keld" → pinned
@@ -76,13 +87,18 @@ func (a *ClaudeAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 		"created":     currentText == nil,
 	}
 
+	otel := otelOffSummary
+	if p.ToolOTLP {
+		otel = fmt.Sprintf("set %d OTEL env vars", len(envKeys))
+	}
+
 	return Plan{
 		Name:       a.Name(),
 		ConfigPath: a.ConfigPath(),
 		AfterText:  after,
 		Managed:    managed,
 		Summary: []string{
-			fmt.Sprintf("set %d OTEL env vars", len(envKeys)),
+			otel,
 			"add SessionStart + CwdChanged + UserPromptSubmit hooks",
 		},
 		Changed: after != (text),
@@ -138,8 +154,24 @@ func (a *ClaudeAdapter) Remove(currentText *string, managed map[string]any) Plan
 	}
 }
 
-// Status reports whether Claude Code is installed (Detect) and configured with
-// keld's OTEL env vars and hooks.
+// otelOffSummary is the line every adapter's setup summary prints for the OTLP
+// lane while the switch is off. Shared so the three adapters say the same
+// thing, and worded as the ACTION because that is what the apply performs on a
+// machine an earlier keld configured: a summary reading "set 6 OTEL env vars"
+// beside a write that removes them is the control-says-one-thing-does-another
+// failure this page exists to prevent.
+const otelOffSummary = "remove Keld's OTEL settings (extended tool telemetry is off)"
+
+// Status reports whether Claude Code is installed (Detect) and configured for
+// keld.
+//
+// ⚠️ **CONFIGURED IS THE HOOK, NOT THE OTEL BLOCK, SINCE THE OTLP LANE BECAME
+// OPT-IN.** It used to require both. With `tool_otlp` off — the default — keld
+// deliberately writes no OTEL block, so demanding one would report every
+// correctly-configured machine as unconfigured: the detector would re-apply the
+// adapter on every poll forever, and `keld signal doctor` would print a drift
+// finding on a healthy install. The OTLP lane is reported separately, in
+// ToolStatus.OTLP, which is a fact about the file rather than a verdict on it.
 func (a *ClaudeAdapter) Status(currentText *string, managed map[string]any) ToolStatus {
 	text := ""
 	if currentText != nil {
@@ -155,10 +187,10 @@ func (a *ClaudeAdapter) Status(currentText *string, managed map[string]any) Tool
 		}
 	}
 
-	// configured = OTEL_EXPORTER_OTLP_ENDPOINT present in env AND keld hook present
-	configured := false
+	configured := config.HasHookWithCommand(obj, telemetry.HookCommandSubstr)
+	otlp := false
 	if envVal, ok := obj.Get("env"); ok {
-		configured = hasOTLPEndpoint(envVal) && config.HasHookWithCommand(obj, telemetry.HookCommandSubstr)
+		otlp = hasOTLPEndpoint(envVal)
 	}
 
 	detail := "not configured"
@@ -170,6 +202,7 @@ func (a *ClaudeAdapter) Status(currentText *string, managed map[string]any) Tool
 		Name:       a.Name(),
 		Installed:  a.Detect(),
 		Configured: configured,
+		OTLP:       otlp,
 		Detail:     detail,
 	}
 }

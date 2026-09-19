@@ -122,6 +122,7 @@ var validReasons = map[Reason]bool{
 	ReasonSidecarOutdated: true, ReasonSidecarDown: true, ReasonSidecarBehind: true,
 	ReasonAttributeFailed: true, ReasonNoRuleMatched: true, ReasonConflict: true,
 	ReasonNoTokens: true, ReasonSpooled: true, ReasonWeightsUnavailable: true,
+	ReasonNotPaired: true,
 }
 
 func validReason(r Reason) Reason {

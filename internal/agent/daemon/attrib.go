@@ -70,13 +70,16 @@ func attribStoreDir() string { return filepath.Join(paths.SpoolDir(), "attrib") 
 // channel this run. See attrib.Attributor.WithProjects: it is what makes a
 // `skipped:no_projects` answer non-terminal.
 func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.AttributeClient,
-	ingestEndpoint string, token func() string, actor string,
+	ingestEndpoint func() string, token func() string, actor string,
 	emitter *clientevents.Emitter, attribConfigured bool,
 	projectsKnown func() bool, repostProjects func()) func(rows []publish.BlockEnrichment, path string) {
 	if !attrib.Enabled(attribConfigured) || dig == nil || cl == nil || token == nil {
 		return nil
 	}
-	pub := publish.New(signalBlocksEndpoint(ingestEndpoint), token, actor)
+	// A RESOLVER, like the block emitter's: attribution re-publishes a block, so
+	// on an unpaired machine the POST fails with publish.ErrNotPaired and the
+	// durable job is HELD rather than deleted.
+	pub := publish.NewDeferred(deriveEndpoint(ingestEndpoint, signalBlocksEndpoint), token, actor)
 	// Its own facts cache, mirroring startBlockEmitter's: a re-fetch through
 	// the Digester needs the same repository facts (repo/branch) the original
 	// publish did, and the two caches are cheap, bounded, per-transcript maps.
