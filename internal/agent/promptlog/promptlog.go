@@ -59,7 +59,22 @@ const (
 	sourceClaudeCode = "claude_code"
 	sourceCowork     = "cowork"
 	sourceCodex      = "codex"
-	sourceGemini     = "gemini"
+	// ⚠️ THE WATCHER CALLS IT `gemini_cli`, AND THIS SAID `gemini`. That one
+	// letter-for-letter difference made the whole Gemini mirror dead code: the
+	// hook fires `observeDoc(source, path)` with the watcher's own id
+	// (`roots.go` builds `Root{SourceID: "gemini_cli"}`, and `isDocumentSource`
+	// matches that), `eligible` looked it up in a set holding "gemini", missed,
+	// and returned in silence. Conformance chain A for gemini_cli: transcript
+	// PASS, pointer PASS, publish PASS, telemetry 0 — with `tokens: {input 42,
+	// output 3}` sitting in the chat file.
+	//
+	// This tool genuinely wears two names and AGENTS.md says so: the watcher,
+	// the reader and the conformance id say `gemini_cli`, while the hook keld
+	// writes says `--source gemini`. `resolve` already registers under both for
+	// exactly this reason. So does this, rather than picking a winner and
+	// leaving the other spelling to fail quietly somewhere else.
+	sourceGemini     = "gemini_cli"
+	sourceGeminiHook = "gemini"
 )
 
 // Telemetry emits OTLP logs + metrics for eligible captured sources.
@@ -189,7 +204,10 @@ func SourcesFor(toolOTLP bool) map[string]bool {
 	if !toolOTLP {
 		out[sourceClaudeCode] = true
 		out[sourceCodex] = true
+		// Both spellings: whichever half of the product hands us a source, it
+		// is in the set. See sourceGemini.
 		out[sourceGemini] = true
+		out[sourceGeminiHook] = true
 	}
 	return out
 }
@@ -244,7 +262,7 @@ func (t *Telemetry) ObserveFile(source, transcriptPath string) {
 	if !t.eligible(source) {
 		return
 	}
-	if source == sourceGemini {
+	if source == sourceGemini || source == sourceGeminiHook {
 		t.observeGeminiFile(source, transcriptPath)
 	}
 }

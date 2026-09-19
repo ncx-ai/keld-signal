@@ -56,3 +56,26 @@ func TestTheEnvOverrideWinsOverTheComplement(t *testing.T) {
 		t.Errorf("KELD_WATCH_TELEMETRY=off still mirrored %v", got)
 	}
 }
+
+// ⚠️ THE MIRROR MUST ANSWER TO THE ID THE WATCHER ACTUALLY EMITS. `watch`
+// builds `Root{SourceID: "gemini_cli"}` (roots.go) and `isDocumentSource`
+// matches that same string, so that is what reaches `ObserveFile`. This package
+// said "gemini", `eligible` missed, and the whole Gemini mirror was dead code —
+// silently, because a miss returns rather than errors. Chain A for gemini_cli
+// reported transcript PASS / pointer PASS / publish PASS / telemetry 0 while
+// the chat file held `tokens: {input 42, output 3}`.
+//
+// Pinned as a literal rather than by importing `watch`: this package must not
+// depend on the watcher to be testable, and the literal is the contract. If
+// roots.go ever renames the source, this fails and names the pair.
+func TestTheGeminiIdTheWatcherEmitsIsMirrored(t *testing.T) {
+	const watcherEmits = "gemini_cli" // watch/roots.go, watch.isDocumentSource
+	if !SourcesFor(false)[watcherEmits] {
+		t.Fatalf("the mirror does not answer to %q, which is the only id the watcher ever hands it — "+
+			"Gemini usage reaches Atlas on no lane at all", watcherEmits)
+	}
+	// The hook's spelling too: one tool, two names, both live in this product.
+	if !SourcesFor(false)["gemini"] {
+		t.Error(`the mirror does not answer to "gemini", the name the hook keld writes uses`)
+	}
+}
