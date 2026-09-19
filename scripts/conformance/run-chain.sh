@@ -4,6 +4,15 @@
 #   scripts/conformance/run-chain.sh --tool all [--chain A|B|C] [--seed N] [--work DIR]
 #   scripts/conformance/run-chain.sh --tool claude_code
 #   scripts/conformance/run-chain.sh --tool all --chain B --previous installed
+#
+# ⚠️ A RUN NEEDS THE NETWORK, BECAUSE IT ISOLATES HOME. GOPATH follows HOME,
+# so every run starts with a COLD module cache and rebuilds the binaries from a
+# fresh download — one run died on `read: connection reset by peer` fetching
+# modernc.org/libc from proxy.golang.org, and reported it as the step that
+# happened to be building at the time. Share the developer's cache to make a run
+# offline and faster:
+#
+#   GOMODCACHE=$(go env GOMODCACHE) scripts/conformance/run-chain.sh ...
 #   scripts/conformance/run-chain.sh --tool all --artifact dir:./artifacts
 #
 # What it proves (AC-10): the packaged onboarding commands configure REAL tools,
