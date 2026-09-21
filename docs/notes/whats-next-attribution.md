@@ -150,6 +150,15 @@ five were not in these arms and still need a gate before they score coding block
   GROUPS. Deferred 2026-09-17 for someone else to pick up — it is NOT part of the Atlas
   multi-group work and nothing in Atlas depends on it.**
 
+  ⚠️ **Updated 2026-09-21: it stops being optional the day Signal reads Atlas's rules.**
+  Atlas is moving Workstreams onto conjunctive RULES, and a block then legitimately matches
+  one Workstream per GROUP — so N groups means N matches means a permanent conflict here,
+  not an edge case. Atlas ships that inert for Signal (it serves an additive `rules` key
+  nothing on the device reads yet), so nothing breaks meanwhile. The handoff write-up,
+  including the one open question — Atlas serves no group id, only the `team` proxy — is
+  **`docs/notes/proposal-signal-conjunctive-rules.md`**. It recommends fixing THIS item
+  before the rules work, because it is the standing defect and depends on nothing shipping.
+
   *Context.* "Workstream" is an ATLAS construct. Atlas flattens every group's values into
   one flat `projects` list (`Organization.projects`) and Signal matches repos/ticket keys
   against it, knowing nothing about which group a value came from. Atlas's matcher dedup
