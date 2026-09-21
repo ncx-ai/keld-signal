@@ -1370,7 +1370,11 @@ func Run(ctx context.Context) error {
 		// usage mirror cannot ride the per-line observe hook — same telemetry,
 		// other seam. (WS3 owns which sources are mirrored, via tel.SetSources.)
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv()).
-			WithDocumentObserver(tel.ObserveFile)
+			WithDocumentObserver(tel.ObserveFile).
+			// The lane record's real seam: a first sighting offers no pointer,
+			// so without this a session that lived entirely between two polls
+			// read `broken · watcher` while capturing perfectly.
+			WithPromptObserver(watchPrompt())
 		// Third use of the same detection: the watcher already knows when a
 		// transcript grew, so it tells the sidecar, which brings its
 		// reference-series store up to date from its own byte offset. That is

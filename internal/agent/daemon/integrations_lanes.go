@@ -98,3 +98,30 @@ func watchOffer(q *queue.Queue) func(spool.Pointer) {
 		q.Offer(ingress.JobFrom(p))
 	}
 }
+
+// watchPrompt is the watcher's EXTRACTION seam (watch.WithPromptObserver): one
+// call per genuine user prompt the watcher read, whether or not a pointer was
+// offered for it.
+//
+// ⚠️ IT EXISTS BECAUSE watchOffer ABOVE IS NOT ENOUGH, AND THE GAP WAS A FALSE
+// `broken`. A transcript's FIRST SIGHTING under forward-only offers nothing —
+// the cursor jumps to EOF so a fresh install does not enrich a machine's whole
+// past — so `watchOffer` never runs for a session that is created, written and
+// finished between two 5-second polls. That is the ordinary shape of
+// `codex exec` and `claude -p`, and of any session whose first prompt lands
+// inside the poll gap. Measured on this machine: a live Codex session
+// capturing normally — its usage mirrored, its blocks cut and delivered —
+// while the pane reported `broken · watcher`, because the one fact the pane
+// reads was written only on a path that branch never takes.
+//
+// Both seams stay. They are two call sites of one definition, not two
+// definitions: the offer covers a pointer the queue then deduped, this covers a
+// prompt no pointer was ever built for, and the instant is idempotent so an
+// overlap costs nothing. The origin is fixed rather than read off a pointer
+// because there is no pointer here — an extraction by the watcher is a watcher
+// fact by construction.
+func watchPrompt() func(source, transcriptPath string) {
+	return func(source, _ string) {
+		noteIntegrationLane(queue.Job{Source: source, Origin: integrations.OriginWatcher})
+	}
+}

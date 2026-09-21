@@ -30,6 +30,10 @@ type Watcher struct {
 	// exist on `observe` alone. It is handed coordinates only — a source and a
 	// path — exactly like the ingest signal.
 	observeDoc func(source, transcriptPath string)
+	// notePrompt (may be nil) is told, with COORDINATES ONLY, that the watcher
+	// extracted one genuine user prompt. ⚠️ It is the lane record's seam, and it
+	// fires on EXTRACTION rather than on the offer — see WithPromptObserver.
+	notePrompt func(source, transcriptPath string)
 	// advanced reports whether the signal was TAKEN ON. A refused one must not be
 	// dropped — see drainFirstSight.
 	advanced func(source, transcriptPath string) bool
@@ -138,6 +142,30 @@ func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
 func (w *Watcher) WithDocumentObserver(fn func(source, transcriptPath string)) *Watcher {
 	w.observeDoc = fn
 	return w
+}
+
+// WithPromptObserver installs the lane record's seam: coordinates only, once
+// per genuine user prompt this watcher EXTRACTED from a transcript.
+//
+// ⚠️ ON EXTRACTION, NOT ON THE OFFER, AND THE DIFFERENCE IS A FALSE `broken`.
+// A first sighting under forward-only offers nothing — the cursor jumps to EOF
+// — so a session created and finished entirely between two polls recorded no
+// watcher lane at all, while the very same branch was replaying that file to
+// the usage mirror. Every `codex exec` and every `claude -p` has that shape,
+// and so does any session whose first prompt lands inside the 5s poll gap.
+// Silence on an expected lane is one half of `broken`, so the pane blamed a
+// watcher that had just read the prompt it was accused of missing. "Did the
+// watcher see this prompt" is answered yes by one it then chose not to enrich.
+func (w *Watcher) WithPromptObserver(fn func(source, transcriptPath string)) *Watcher {
+	w.notePrompt = fn
+	return w
+}
+
+// notePromptSeen reports one extracted prompt, if anyone is listening.
+func (w *Watcher) notePromptSeen(source, path string) {
+	if w.notePrompt != nil {
+		w.notePrompt(source, path)
+	}
 }
 
 func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string) bool) *Watcher {
@@ -276,13 +304,29 @@ func (w *Watcher) scanFile(source, path string) bool {
 				// worse than missing spend. Lines written before this watcher
 				// started were either already mirrored or belong to the tool's
 				// own lane; either way they are not ours to send again.
-				if w.observe != nil && w.startedBefore(path) {
+				//
+				// ⚠️ THE LANE RECORD IS THE FOURTH CONSUMER, and it was missing
+				// for the same reason the mirror was: this branch offers no
+				// pointer, and the offer was the only place a watcher lane fact
+				// was written. So the pane read `broken · watcher` about a
+				// session this very loop had just read. The freshness bound is
+				// the line's own instant, exactly as for the mirror — a lane
+				// vouched for by a prompt written before this watcher started
+				// would be reporting on somebody else's history.
+				if (w.observe != nil || w.notePrompt != nil) && w.startedBefore(path) {
+					ex := w.extractorFor(source)
 					fresh := func(line []byte) {
-						if lineWrittenAfter(line, w.started) {
+						if !lineWrittenAfter(line, w.started) {
+							return
+						}
+						if w.observe != nil {
 							w.observe(source, path, line)
 						}
+						if _, ok := ex.extract(path, line); ok {
+							w.notePromptSeen(source, path)
+						}
 					}
-					scanFrom(path, 0, w.extractorFor(source), fresh)
+					scanFrom(path, 0, ex, fresh)
 				}
 				w.cursors.Set(path, st.Size())
 				// ⚠️ THE TWO PATHS WANT DIFFERENT THINGS FROM THIS SIGHTING.
@@ -320,6 +364,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 	}
 	recs, consumed := scanFrom(path, off, w.extractorFor(source), observe)
 	for _, rec := range recs {
+		w.notePromptSeen(source, path)
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: rec.PromptID, SessionID: rec.SessionID},
@@ -433,6 +478,7 @@ func (w *Watcher) scanDocument(source, path string) bool {
 			int64(len(s.Prompts))-done, filepath.Base(path), done, len(s.Prompts))
 	}
 	for _, p := range s.Prompts[done:] {
+		w.notePromptSeen(source, path)
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: s.CorrID(p.Ordinal), SessionID: s.ID},
