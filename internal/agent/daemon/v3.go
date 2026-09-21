@@ -179,6 +179,10 @@ func (v *v3) routes() []ingress.Route {
 			Describe: describeIntegrationForReport,
 			Sink:     currentIntegrationSink(),
 		}),
+		// The analysis engine's own state and its install, driven from the page
+		// rather than from the macOS installer — see engineroute.go for the wedge
+		// that moved it here.
+		engineRoute(currentEngineManager()),
 		ui.Route(),
 	}
 }

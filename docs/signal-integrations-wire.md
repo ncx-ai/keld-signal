@@ -314,3 +314,48 @@ detector and the routes are WS-C1's files (`compute.go`, `facts.go`,
 The client-event codes and the report bundle are WS-C2's
 (`docs/signal-client-events.md`). This file freezes the shape all of them
 publish.
+
+## 7 · The analysis engine (`GET /v1/engine`, `POST /v1/engine/install`)
+
+Not an integration — it lives here because it is served by the same route list
+and gated by the same mounted-routes check.
+
+⚠️ **THIS MOVED OUT OF THE macOS INSTALLER ON 2026-09-21.** The wizard pane used
+to download the ~300 MB engine and hold Continue until the fetch settled. That
+put a large download in front of somebody who had not finished installing, on a
+release host measured answering **504 on three of four full pulls** with a
+30-minute client timeout per attempt; and rendering its progress from the
+XPC-hosted pane drove a layout pass that pegged the plugin's main thread —
+sampled on a real stuck install, **302 of 553 samples** in
+`updateNextEnabled → KeldPaneView layout → heightFor:width:`, with the download
+already finished and staged on disk. The daemon is the right owner: it knows
+whether an engine is needed, which version is on disk, and can fetch it with
+nothing blocked meanwhile.
+
+`GET /v1/engine` → `200`:
+
+```json
+{ "needed": true, "installed": true, "version": "v3.0.4", "expected": "3.0.5",
+  "outdated": true, "status": "idle", "received": 0, "total": 0, "error": "" }
+```
+
+- `needed` is false only under `ml_backend: "off"`. Both `"auto"` and
+  `"deterministic"` run the analysis service, so both need one.
+- `installed`/`version` are read from disk (`sidecarBinPath` + the tree's
+  `VERSION`), never by probing the running service — an engine that is present
+  but not yet up must not read as absent. A tree with no `VERSION` predates the
+  stamp: `installed` true, `version` empty.
+- `outdated` compares against this binary via `version.Skew`, so **`dev` on
+  either half answers false** — cannot-tell never renders as a problem.
+- `status` is `idle` | `running` | `done` | `failed`; `error` carries the
+  reason verbatim on `failed` (`http status 504` and `no space left on device`
+  are different actions).
+
+`POST /v1/engine/install` → `202` with the same body, **immediately**: it starts
+one install and the page polls. `409 not_needed` when `ml_backend` is `"off"` —
+that is a choice, and this must not be the one way to undo it. `409
+already_running` when one is in flight, so a second click cannot start a second
+300 MB fetch.
+
+The page renders this through `engineNotice()` (`ui/app.js`), which returns
+**null** for a healthy machine: no card, no button nobody needs to press.

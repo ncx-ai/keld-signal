@@ -137,23 +137,16 @@
     NSView *_view;
     KeldPaneView *_root;
     NSTextField *_codeStatus;
-    NSProgressIndicator *_engineBar;
-    NSButton *_engineRetryButton;
-    NSTextField *_engineStatus;
     KeldPaneView *_toolsPane;
     NSMutableArray<NSButton *> *_toolChecks;
     NSButton *_retryButton;
     BOOL _paired;
     NSString *_apiURL;
-    NSString *_stagedSidecar;
     // Keeps an in-flight NSTask/NSPipe pair alive for the life of the spawn —
     // neither block below is captured BY anything else, so without this ARC
     // could reclaim both moments after launchAndReturnError: returns and no
     // event, and no `done`, would ever arrive.
     NSMutableArray *_activeTasks;
-    // Guards startSidecarDownload so re-entering the pane (Back, then
-    // Continue) can't pile up a second concurrent ~190 MB download.
-    BOOL _sidecarDownloadStarted;
     // Same guard for the browser sign-in: re-entering the pane must not open a
     // second browser window or start a second polling child. Cleared when a
     // sign-in ends without pairing, so Try again can start a fresh one.
@@ -175,7 +168,6 @@
     // The three conditions Continue is computed from. Each is owned by exactly
     // one step, and only updateNextEnabled reads them together.
     BOOL _toolsLoaded;
-    BOOL _sidecarSettled;
     // The sections hidden while the approval page is up: an Installer pane has a
     // fixed height, so the web view has to borrow their space rather than push
     // the pane taller (which would simply clip).
@@ -323,7 +315,7 @@
     // edges are broken below: `t.terminationHandler = nil` once the handler
     // has what it needs from `t`, on every path that assigns the handler, and
     // a WEAK self capture matching the idiom already used in connect:,
-    // loadTools and startSidecarDownload.
+    // loadTools and connect:.
     task.terminationHandler = ^(NSTask *t) {
         // ⚠️ DO NOT clear `t.standardOutput` (or any other stream/launch
         // property) here. NSTask raises NSInvalidArgumentException
@@ -395,23 +387,6 @@
     _retryButton = [NSButton buttonWithTitle:@"Try again" target:self action:@selector(retryIdentity:)];
     _retryButton.hidden = YES;
 
-    NSTextField *engineHeader = [self labelWithText:@"Analysis engine" bold:YES];
-    // Shown only when the download fails. Continue is already available by then
-    // (the gate is on the download being finished, not on it succeeding), so
-    // this is an offer rather than the only way forward: someone on a flaky
-    // network gets the engine now instead of after the install.
-    _engineRetryButton = [NSButton buttonWithTitle:@"Try again"
-                                            target:self
-                                            action:@selector(retrySidecarDownload:)];
-    _engineRetryButton.hidden = YES;
-    _engineBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
-    _engineBar.style = NSProgressIndicatorStyleBar;
-    _engineBar.indeterminate = YES;
-    _engineBar.minValue = 0;
-    _engineBar.maxValue = 100;
-    [_engineBar startAnimation:nil];
-    _engineStatus = [self labelWithText:@"Preparing…" bold:NO];
-    _engineStatus.textColor = [NSColor secondaryLabelColor];
 
     NSTextField *toolsHeader = [self labelWithText:@"Your AI tools" bold:YES];
     // The tool rows are their own laid-out view for the same reason as the pane.
@@ -424,12 +399,10 @@
     _toolsPane.insetTop = 0;
 
     for (NSView *v in @[accountHeader, _codeStatus, _retryButton,
-                        engineHeader, _engineBar, _engineStatus, _engineRetryButton,
                         toolsHeader, _toolsPane]) {
         [pane addSubview:v];
     }
     pane.rows = @[accountHeader, _codeStatus, _retryButton,
-                  engineHeader, _engineBar, _engineStatus, _engineRetryButton,
                   toolsHeader, _toolsPane];
 
     _root = pane;
@@ -522,17 +495,33 @@ static void klog(NSString *fmt, ...) {
 //   _toolsLoaded    — the panel has finished filling itself in, so the button
 //                     becoming available means the pane is done rather than
 //                     lighting up over an empty list.
-//   _sidecarSettled — the analysis engine download has FINISHED.
 //
-// ⚠️ SETTLED, NOT SUCCEEDED. Gating on a successful fetch would make an offline
-// machine impossible to install — a captive portal, a VPN or a GitHub outage
-// would leave someone unable to finish at all — and the install is still worth
-// completing without it: telemetry works, enrichment spools, and postinstall's
-// launchd job fetches the engine later. What this gate buys is that nobody
-// clicks through MID-DOWNLOAD, which is what made that fallback the common path
-// rather than the exception.
+// ⚠️ THERE IS NO THIRD CONDITION ANY MORE, AND ITS REMOVAL IS THE POINT. This
+// pane used to download the ~300 MB analysis engine and hold Continue until the
+// fetch settled. Three things were wrong with that, and the third is what
+// finally broke a real install on 2026-09-21:
+//
+//   1. It puts a 300 MB download in front of somebody who has not finished
+//      installing, on a release host that answers 504 often enough to matter
+//      (three of four full pulls, measured the same day) with a 30-minute
+//      client timeout per attempt. The wizard can sit for the better part of an
+//      hour with no way to skip it.
+//   2. The engine is not needed to finish installing. Telemetry works without
+//      it and enrichment spools, so the gate bought nothing the install
+//      actually required.
+//   3. Rendering its progress from this XPC-hosted view drove a layout pass
+//      (updateNextEnabled -> KeldPaneView layout -> heightFor:width:) that
+//      pegged the plugin's main thread. Sampled on the stuck installer: 302 of
+//      553 samples in that one chain, with the download ALREADY finished and
+//      staged on disk. The person saw "Downloading the analysis engine" for as
+//      long as they were willing to wait for something that had succeeded.
+//
+// The daemon does it now, from the page: it already knows whether an engine is
+// present, which version it is and whether this machine needs one at all
+// (GET /v1/engine, engineroute.go), nothing is blocked while it downloads, and
+// a failure is a line of text beside a button instead of a stuck wizard.
 - (void)updateNextEnabled {
-    self.nextEnabled = _paired && _toolsLoaded && _sidecarSettled;
+    self.nextEnabled = _paired && _toolsLoaded;
 }
 
 #pragma mark - Pane lifecycle
@@ -554,10 +543,6 @@ static void klog(NSString *fmt, ...) {
     // Guarded: the pane can be re-entered (Back, then Continue again), and
     // without this a second entry would start a second concurrent ~190 MB
     // download rather than reusing the first.
-    if (!_sidecarDownloadStarted) {
-        _sidecarDownloadStarted = YES;
-        [self startSidecarDownload];
-    }
 
     // ⚠️ THE APPROVAL PAGE IS REBUILT ON RE-ENTRY RATHER THAN REUSED. Coming
     // back to this pane left the embedded page's fields unable to receive a
@@ -698,84 +683,6 @@ static void klog(NSString *fmt, ...) {
     [_root setNeedsLayout:YES];
 }
 
-// The download starts on its own and NEVER gates Continue: a late sidecar costs
-// nothing (jobs spool until it lands), while a blocked wizard costs a person
-// several minutes of staring on a slow connection.
-- (void)startSidecarDownload {
-    NSString *version = [self bundleVersion];
-    NSMutableArray<NSString *> *args = [@[@"signal", @"install-sidecar", @"--json", @"--stage-only"] mutableCopy];
-    // A dry-run build carries no real release tag; the Go side then resolves the
-    // latest release, which is what onboard.command already does.
-    if (version.length && [version rangeOfString:@"dryrun"].location == NSNotFound) {
-        // ⚠️ CFBundleShortVersionString is stamped verbatim from build-pkg.sh's
-        // own $VERSION, which CI sets from the release tag itself
-        // (installers.yml: VER="$TAG", e.g. "v3.0.0-rc.5") — it ALREADY carries
-        // the leading "v". Blindly prefixing another one here asked GitHub for
-        // "vv3.0.0-rc.5" on every tagged build, which 404s outright; it was
-        // invisible on a dry-run build only because "0.0.0-dryrun" takes the
-        // branch above instead of reaching this line. Strip any leading "v"
-        // first — so this is correct whether or not the bundle version happens
-        // to carry one — then add exactly one back.
-        NSString *bare = [version hasPrefix:@"v"] ? [version substringFromIndex:1] : version;
-        [args addObjectsFromArray:@[@"--tag", [@"v" stringByAppendingString:bare]]];
-    }
-    // Continue is held until this finishes, so the panel has to say why — a
-    // disabled button with no stated reason is the state this pane has already
-    // been corrected for twice.
-    _engineStatus.stringValue = @"Downloading the analysis engine — you can continue once it lands.";
-    __weak typeof(self) weakSelf = self;
-    __block NSString *failure = nil;
-    // The missing-published-hash warning (installsidecar.go, --json path):
-    // `console.Print` writes to the same stream as the NDJSON events, and the
-    // pane drops any line it can't parse as one, so under --json that warning
-    // reached nobody. The spec justifies the degraded policy on "a human is
-    // watching a progress bar" — this is what makes that true.
-    __block NSString *warning = nil;
-    [self runKeld:args onEvent:^(NSDictionary *e) {
-        typeof(self) s = weakSelf; if (!s) return;
-        NSString *kind = e[@"event"];
-        if ([kind isEqualToString:@"progress"]) {
-            long long got = [e[@"received"] longLongValue], total = [e[@"total"] longLongValue];
-            if (total > 0) {
-                s->_engineBar.indeterminate = NO;
-                s->_engineBar.doubleValue = (double)got * 100.0 / (double)total;
-                s->_engineStatus.stringValue = [NSString stringWithFormat:@"Downloading… %lld MB of %lld MB",
-                                                got / 1048576, total / 1048576];
-            }
-        } else if ([kind isEqualToString:@"staged"]) {
-            s->_stagedSidecar = e[@"path"];
-        } else if ([kind isEqualToString:@"error"]) {
-            failure = e[@"message"];
-        } else if ([kind isEqualToString:@"warning"]) {
-            warning = e[@"message"];
-            s->_engineStatus.stringValue = warning ?: s->_engineStatus.stringValue;
-        }
-    } done:^(int status) {
-        typeof(self) s = weakSelf; if (!s) return;
-        [s->_engineBar stopAnimation:nil];
-        s->_engineBar.indeterminate = NO;
-        if (s->_stagedSidecar.length) {
-            s->_engineBar.doubleValue = 100;
-            s->_engineStatus.stringValue = warning.length
-                ? [NSString stringWithFormat:@"Ready (%@).", warning]
-                : @"Ready.";
-        } else {
-            s->_engineBar.doubleValue = 0;
-            s->_engineStatus.stringValue = failure
-                ? [NSString stringWithFormat:@"Couldn't download it (%@) — Keld will fetch it in the background.", failure]
-                : @"Couldn't download it — Keld will fetch it in the background.";
-            s->_engineRetryButton.hidden = NO;
-        }
-        // ⚠️ SET ON BOTH BRANCHES. The gate is on the download being FINISHED,
-        // never on it having succeeded: a failed fetch that also blocked
-        // Continue would make an offline machine impossible to install, which is
-        // a worse outcome than installing without the engine — it arrives later
-        // either way.
-        s->_sidecarSettled = YES;
-        [s updateNextEnabled];
-    }];
-}
-
 #pragma mark - Identity
 
 // checkIdentity asks whether this machine is ALREADY connected, and does it by
@@ -906,19 +813,6 @@ static void klog(NSString *fmt, ...) {
             : @"Sign-in didn't finish. Try again.";
         s->_retryButton.hidden = NO;
     }];
-}
-
-// retrySidecarDownload re-runs the fetch after a failure, without leaving the
-// pane. `_sidecarDownloadStarted` is deliberately NOT consulted here — that
-// guard exists to stop pane RE-ENTRY starting a second concurrent download, and
-// a deliberate retry is the one case that should start another.
-- (void)retrySidecarDownload:(id)sender {
-    _engineRetryButton.hidden = YES;
-    _sidecarSettled = NO;
-    [self updateNextEnabled];
-    _engineBar.indeterminate = YES;
-    [_engineBar startAnimation:nil];
-    [self startSidecarDownload];
 }
 
 - (void)retryIdentity:(id)sender {
@@ -1199,7 +1093,6 @@ static void klog(NSString *fmt, ...) {
         @"paired": @(_paired),
         @"api_url": _apiURL ?: @"",
         @"tools": tools,
-        @"sidecar_staged": _stagedSidecar ?: @"",
     };
     NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".keld/state"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir

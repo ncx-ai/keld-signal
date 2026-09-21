@@ -2632,6 +2632,38 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   a throwaway keychain and **derives the identity names from it** (a hand-typed
   name fails at `productsign` with an opaque error). Bundle the **G2 intermediate**
   in each p12 or a clean runner can't build a chain to a trusted root.
+  ⚠️ **AND NOTHING IN THE INSTALLER DOWNLOADS IT ANY MORE — THE PAGE DOES.**
+  The wizard pane used to fetch the ~300 MB engine and hold Continue until the
+  fetch SETTLED (succeeded or failed). Three things were wrong, and the third
+  broke a real install on 2026-09-21: it puts a large download in front of
+  somebody who has not finished installing, on a release host measured
+  answering **504 on three of four full pulls** with a 30-minute client timeout
+  per attempt; the engine is not needed to FINISH installing (telemetry works
+  without it, enrichment spools); and rendering its progress from the
+  XPC-hosted pane drove a layout pass that pegged the plugin's main thread —
+  sampled on the stuck installer, **302 of 553 samples** in
+  `updateNextEnabled → KeldPaneView layout → heightFor:width:`, with the
+  download **already finished and staged on disk**. The person watched
+  "Downloading the analysis engine" for as long as they were willing to wait
+  for something that had succeeded.
+  The daemon owns it now: `GET /v1/engine` reports whether one is NEEDED
+  (`ml_backend` ≠ "off"), what is installed, and whether it is outdated — read
+  from DISK, never by probing the running service, so a present-but-starting
+  engine never reads as absent — and `POST /v1/engine/install` starts one fetch
+  and answers **202 immediately** while the page polls. `dev` on either half
+  answers "not outdated", the same cannot-tell refusal `version.Skew`,
+  `localagent.ModelState` and the doctor check all make. The page shows
+  **nothing at all** on a healthy machine (`ui/app.js` · `engineNotice`), so
+  nobody is handed a 300 MB button they have no reason to press. The install
+  logic itself moved to `internal/sidecarinstall` so the CLI command and the
+  daemon run ONE definition rather than the daemon shelling out to a binary.
+  ⚠️ **postinstall still fetches on a SILENT/MDM install** (`had_handoff`
+  false) — the same condition that decides whether to open `onboard.command` —
+  because a machine nobody will open the page on would otherwise publish no
+  blocks and never say why. A GUI install does not; the card is the
+  notification. `installers/macos/plugin_test.sh` INVERTS its three old
+  assertions rather than deleting them, so a download reintroduced into that
+  pane fails there.
   ⚠️ **The pkg ships WITHOUT the sidecar.** Apple's notary service scans every file
   in a submission, and the frozen sidecar is ~15k files / ~190MB of torch — which
   put a real submission **4+ hours** into an unbounded queue. The pkg payload is now

@@ -34,7 +34,7 @@ done
 
 # ── Finish what the wizard pane started ──────────────────────────────────────
 # The pane (installers/macos/plugin) ran BEFORE this, redeemed the setup code and
-# staged the analysis sidecar; it left a handoff file naming what it did. This
+# recorded what it did in a handoff file. This
 # script does everything that rewrites the user's files, which deliberately does
 # NOT happen in the pane: until the install is committed, a person can still
 # cancel, and a cancelled install must not leave rewritten tool configs behind.
@@ -49,7 +49,6 @@ HANDOFF="$userhome/.keld/state/installer-handoff.json"
 paired=false
 api_url=""
 tools=""
-staged=""
 had_handoff=false
 if [ -f "$HANDOFF" ]; then
   # ⚠️ A handoff can be LEFT BEHIND by a CANCELLED install: the pane writes it
@@ -70,27 +69,33 @@ if [ -f "$HANDOFF" ]; then
     had_handoff=true
     paired=$(/usr/bin/plutil -extract paired raw -o - "$HANDOFF" 2>/dev/null || echo false)
     api_url=$(/usr/bin/plutil -extract api_url raw -o - "$HANDOFF" 2>/dev/null || echo "")
-    staged=$(/usr/bin/plutil -extract sidecar_staged raw -o - "$HANDOFF" 2>/dev/null || echo "")
     tools=$(/usr/bin/plutil -extract tools json -o - "$HANDOFF" 2>/dev/null \
             | tr -d '[]"' | tr ',' ' ' || echo "")
   fi
 fi
 
-# 1. The analysis sidecar the pane already downloaded and verified: a rename into
-#    place, in the user's own ~/.local/bin (same filesystem, so ~15,000 files move
-#    atomically rather than being copied).
-if [ -n "$staged" ] && [ -d "$staged" ]; then
-  asuser "$PREFIX/keld" signal install-sidecar --commit "$staged" || true
-else
-  # No staged tree — no network in the pane, the pane never ran, or a person
-  # clicked Continue before a slow download finished. Retry in the background:
-  # enrichment spools until it lands, so this is late, not fatal.
-  #
-  # A Continue click mid-download can leave the pane's own spawned `keld` still
-  # writing into a `.keld-update.*` staging dir under ~/.local/bin
-  # (update.StageDir) — nothing ever commits or cleans it, and it would sit
-  # there concurrently with the fresh fetch started below. Sweep it first, as
-  # the user, best-effort.
+# 1. The analysis sidecar.
+#
+# ⚠️ THE WIZARD NO LONGER DOWNLOADS IT, AND THIS BLOCK NARROWED TO MATCH. The
+# pane used to fetch ~300 MB and hold Continue until it settled; on 2026-09-21 a
+# real install sat on "Downloading the analysis engine" with the download
+# ALREADY finished and staged on disk, because rendering its progress from the
+# XPC-hosted view wedged the plugin's main thread. The page owns it now
+# (GET/POST /v1/engine): the daemon knows whether an engine is needed, which
+# version is on disk, and can fetch it with nothing blocked meanwhile.
+#
+# So there is no staged tree to commit any more, and a GUI install does NOT
+# fetch here — the page shows a card the moment the daemon reports none, and
+# the person decides.
+#
+# ⚠️ EXCEPT WHERE NOBODY WILL EVER OPEN THE PAGE. A silent/MDM install runs with
+# no pane (had_handoff false), so leaving it to the page means those machines
+# publish no blocks and nothing ever says why. There the background fetch stays,
+# exactly as before. The condition is the SAME one that decides whether to open
+# onboard.command below: "did a human go through the wizard".
+if [ "$had_handoff" = false ]; then
+  # A staging dir left by an older pkg's pane has nothing to commit it now, and
+  # would sit beside the fetch below. Sweep it first, as the user, best-effort.
   asuser /bin/sh -c "rm -rf \"$userhome\"/.local/bin/.keld-update.* 2>/dev/null" || true
 
   # ⚠️ PINNED to this pkg's own release, the same way onboard.command's

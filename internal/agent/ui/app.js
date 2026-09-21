@@ -856,6 +856,68 @@ export function durabilityNote(health, settings) {
   return cells.some((h) => h && h.status !== "ok") ? DURABILITY_NOTE : "";
 }
 
+/** What the page should say about the analysis engine, from GET /v1/engine.
+ *
+ *  ⚠️ THIS USED TO HAPPEN IN THE macOS INSTALLER, AND IT WEDGED THE WIZARD.
+ *  The pane downloaded 315 MB before a person had finished installing, held
+ *  Continue until it settled, and rendered its progress from an XPC-hosted
+ *  view whose layout pass then pegged the plugin's main thread — with the
+ *  download already finished and staged on disk. Here the work is optional,
+ *  cancellable by walking away, and a failure is a line of text beside a
+ *  button.
+ *
+ *  Returns null when there is nothing to say — which is the common case and
+ *  the point: a machine with a current engine gets no card, the same rule
+ *  durabilityNote follows for a healthy strip. Four states earn one:
+ *  `missing` (needed, none on disk), `outdated` (present, older than this
+ *  daemon), `running` (a download in flight), `failed` (one that did not
+ *  land). `action` is the button's label, or "" where there is nothing to
+ *  press. */
+export function engineNotice(engine) {
+  if (!engine || !engine.needed) return null;
+  if (engine.status === "running") {
+    const pct = engine.total > 0 ? Math.floor((engine.received * 100) / engine.total) : null;
+    return {
+      kind: "running",
+      title: "Downloading the analysis engine",
+      // A percentage only when the server sent a total. "Downloading… 0%" for
+      // an indeterminate fetch is a number the page invented.
+      detail: pct === null ? "Starting…" : `${pct}% of ${Math.round(engine.total / 1048576)} MB`,
+      percent: pct,
+      action: "",
+    };
+  }
+  if (engine.status === "failed") {
+    return {
+      kind: "failed",
+      title: "The analysis engine did not download",
+      // The reason verbatim: "http status 504" is actionable (try later) and
+      // "no space left on device" is a different action entirely.
+      detail: engine.error || "No reason was reported.",
+      action: "Try again",
+    };
+  }
+  if (!engine.installed) {
+    return {
+      kind: "missing",
+      title: "The analysis engine is not installed",
+      detail: "Keld needs it to group your work into focus blocks. About 300 MB.",
+      action: "Download",
+    };
+  }
+  if (engine.outdated) {
+    return {
+      kind: "outdated",
+      title: "The analysis engine is out of date",
+      // Both versions, because "out of date" with no numbers is a claim the
+      // person cannot check — and the two halves ship on separate cadences.
+      detail: `Installed ${engine.version || "unknown"}, this version expects ${engine.expected}.`,
+      action: "Update",
+    };
+  }
+  return null;
+}
+
 /** ---- The analysis service's own health, which is NOT the `health` array ----
  *
  *  `GET /v1/ledger` carries a top-level `service` block beside `health`:
@@ -1325,6 +1387,9 @@ if (typeof document !== "undefined") {
     ledger: null,
     settings: null,
     projects: null,
+    // engine: GET /v1/engine — see engineNotice. Null until the first load,
+    // which renders as no card rather than as "not installed".
+    engine: null,
     offline: false,
     local: loadLocalPrefs(),
     // restart: the bar's own state machine (see nextRestartStatus/
@@ -1402,7 +1467,7 @@ if (typeof document !== "undefined") {
 
   async function loadAll() {
     try {
-      const [ledger, settings, projects] = await Promise.all([
+      const [ledger, settings, projects, engine] = await Promise.all([
         // ⚠️ **BOUNDED TO TODAY, AND IT USED TO BE UNBOUNDED.** This asked for
         // the whole ledger and the pane drew all of it: measured on a real
         // machine, 108 blocks across FOUR days under a heading reading
@@ -1411,10 +1476,12 @@ if (typeof document !== "undefined") {
         fetchJSON(todayLedgerURL(Date.now())),
         fetchJSON("/v1/settings"),
         fetchJSON("/v1/projects"),
+        fetchJSON("/v1/engine"),
       ]);
       state.ledger = ledger;
       state.settings = settings;
       state.projects = projects;
+      state.engine = engine;
       state.offline = false;
       writeJSONStorage(LEDGER_CACHE_KEY, ledger);
     } catch (err) {
@@ -1680,6 +1747,8 @@ if (typeof document !== "undefined") {
 
     root.appendChild(scroller);
     root.appendChild(renderHealthStrip());
+    const engineCard = renderEngineCard();
+    if (engineCard) root.appendChild(engineCard);
   }
 
   async function retryBlock(block) {
@@ -1688,6 +1757,55 @@ if (typeof document !== "undefined") {
     // lane can do today rather than pretend a retry button that does nothing.
     await loadAll();
     route();
+  }
+
+  // The engine card. Absent whenever engineNotice says there is nothing to
+  // say, which is every healthy machine — the page does not hand somebody a
+  // 300 MB button they have no reason to press.
+  function renderEngineCard() {
+    const n = engineNotice(state.engine);
+    if (!n) return null;
+    const kids = [
+      el("div", { class: "engine-title" }, n.title),
+      el("div", { class: "engine-detail" }, n.detail),
+    ];
+    if (n.kind === "running") {
+      const bar = el("div", { class: "engine-bar" });
+      const fill = el("div", { class: "engine-fill" });
+      // Width only when a percentage exists; an indeterminate fetch gets the
+      // striped track and no fill, never a bar creeping on invented numbers.
+      if (n.percent !== null) fill.style.width = `${n.percent}%`;
+      bar.appendChild(fill);
+      kids.push(bar);
+    }
+    if (n.action) {
+      kids.push(el("button", { class: "btn", type: "button", onclick: clickEngineInstall }, n.action));
+    }
+    return el("div", { class: `engine-card ${n.kind}` }, ...kids);
+  }
+
+  // ⚠️ THE POST ONLY STARTS IT. The daemon answers 202 and the page polls, so
+  // nothing here waits out a download — the mistake this whole path was moved
+  // out of the installer to avoid. A 409 means somebody already pressed it
+  // (or the machine wants no engine); either way the next poll tells the truth,
+  // so there is nothing to report from here.
+  async function clickEngineInstall() {
+    // Optimistic only as far as the spinner: the status still comes from the
+    // server, so a refused click falls straight back to what it was.
+    state.engine = { ...(state.engine || {}), status: "running", received: 0, total: 0, error: "" };
+    route();
+    await sendJSON("/v1/engine/install", "POST", {});
+    await loadEngine();
+    route();
+  }
+
+  async function loadEngine() {
+    try {
+      state.engine = await fetchJSON("/v1/engine");
+    } catch {
+      // Leave the last known state: an unreachable daemon is not an absent
+      // engine, and the offline banner already says the page cannot reach it.
+    }
   }
 
   function renderHealthStrip() {
@@ -3021,6 +3139,13 @@ if (typeof document !== "undefined") {
     // looked at: a person who has just restarted a tool or approved a hook is
     // waiting for the row to change, and 30s of staring at a stale row reads
     // as "it did not work".
+    // While the engine is downloading the page polls it on its own clock: the
+    // 30s loop above is fine for a ledger and useless for a progress bar.
+    setInterval(async () => {
+      if (!state.engine || state.engine.status !== "running") return;
+      await loadEngine();
+      route();
+    }, 1500);
     setInterval(async () => {
       if (state.pane !== "integrations") return;
       await loadIntegrations();

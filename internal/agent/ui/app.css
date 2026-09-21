@@ -621,3 +621,34 @@ fieldset:disabled { opacity: .55; }
   .intg-check .intg-lane { min-width: 0; }
   .intg-actions .btn { flex: 1 1 auto; }
 }
+
+/* The analysis-engine card. Shown only when engineNotice() has something to
+   say — a healthy machine sees nothing here at all. Built from the same tokens
+   as every other surface so it reads as part of the page rather than as an
+   installer that wandered in. */
+.engine-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  margin: 12px 0 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.engine-card .engine-title { font-weight: 600; color: var(--ink); }
+.engine-card .engine-detail { color: var(--ink-2); font-size: 13px; }
+.engine-card .btn { align-self: flex-start; }
+.engine-card.failed { border-color: var(--rule-strong); }
+.engine-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--deep);
+  overflow: hidden;
+}
+.engine-fill {
+  height: 100%;
+  width: 0;
+  background: var(--green);
+  transition: width .3s ease;
+}
