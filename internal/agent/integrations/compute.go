@@ -147,6 +147,23 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP 
 		Surfaces:       make([]Surface, 0, len(e.Surfaces)),
 	}
 	for _, spec := range e.Surfaces {
+		// ⚠️ A LANE THE PERSON SWITCHED OFF IS NOT A LANE OF THIS MACHINE, and
+		// publishing it made every tool carry an `otel` row nobody asked for.
+		// The switch ships OFF, so that was the default view: a lane rendered on
+		// every row, forever, for a thing deliberately not in use. Reported as
+		// "why would I care about otel if I know otel is turned off".
+		//
+		// This is NARROWER than "hide what is not expected", and the difference
+		// is who decided. A lane that cannot feed for STRUCTURAL reasons — Gemini
+		// runs no command hook, Codex has no sidecar reader yet — is still
+		// published and still rendered, because a lane with no traffic and a
+		// lane that could never have any must not look alike. That reasoning is
+		// about the TOOL. `tool_otlp` is about the PERSON, they can see its
+		// position in the Developer box, and they do not need it restated on
+		// every row.
+		if !expected[spec.Kind] && hiddenBySwitch(spec, level) {
+			continue
+		}
 		s := Surface{
 			Kind:       spec.Kind,
 			Documented: spec.Documented,
@@ -217,6 +234,21 @@ func repaired(now time.Time, window time.Duration, state State, f Facts) *Repair
 	out := *f.Repair
 	out.Note = note
 	return &out
+}
+
+// hiddenBySwitch reports whether the ONLY reason this lane is not expected is
+// that the person turned `tool_otlp` off — i.e. it would be expected with the
+// switch on. See the note at its call site.
+//
+// Expressed by asking the catalogue rather than by naming lanes here, so a
+// second switch-gated surface cannot be added without this following it.
+func hiddenBySwitch(spec SurfaceSpec, level SupportLevel) bool {
+	if level.ToolOTLP || spec.ExpectedWhen == nil {
+		return false
+	}
+	on := level
+	on.ToolOTLP = true
+	return spec.ExpectedWhen(on)
 }
 
 // laneState is a lane's answer inside the window. `unknown` exists because a

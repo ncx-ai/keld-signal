@@ -554,6 +554,11 @@ fieldset:disabled { opacity: .55; }
   color: var(--muted); min-width: 64px;
 }
 .intg-check[data-ok="false"] .intg-lane-verdict { color: var(--amber-strong); }
+/* Not applicable: a lane that cannot feed at this tool's support level, or one
+   the `tool_otlp` switch has turned off. It is not a fault and must not be
+   dressed as one — see the three-state note in app.js's lane render. */
+.intg-check[data-ok="n/a"] .intg-lane-verdict { color: var(--muted); }
+.intg-check[data-ok="n/a"] .intg-glyph { color: var(--muted); }
 .intg-muted { color: var(--muted); }
 
 /* The sentence a person acts on. It is the server's string, so it is given the

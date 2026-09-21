@@ -2837,7 +2837,18 @@ if (typeof document !== "undefined") {
         checks.appendChild(
           el(
             "div",
-            { class: "intg-check", "data-kind": c.kind, "data-ok": c.ok ? "true" : "false" },
+            // ⚠️ A LANE THAT CANNOT FEED IS NOT A LANE THAT IS FAILING, and both
+            // landed in `data-ok="false"`, which the stylesheet paints amber. So
+            // a machine with the `tool_otlp` switch OFF — the shipped default —
+            // showed "OTEL · config not written" in warning colour on every
+            // tool, for a lane deliberately not in use. Reported as "I don't
+            // like that I see OTEL not healthy".
+            //
+            // Three states, not two: fed, failing, and not applicable. The
+            // third is muted. Marking it ✓ instead would be the other error —
+            // a tick on a lane carrying nothing is the confident-wrong signal
+            // this pane exists to remove.
+            { class: "intg-check", "data-kind": c.kind, "data-ok": !c.expected ? "n/a" : c.ok ? "true" : "false" },
             el("span", { class: "intg-glyph" }, c.ok ? "✓" : "—"),
             el("span", { class: "intg-lane" }, c.kind),
             el("span", { class: "intg-lane-verdict" }, c.label),
