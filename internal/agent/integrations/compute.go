@@ -369,9 +369,31 @@ func decide(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool, acti
 	// process adopted it: the loopback proxy is what the config points at.
 	// Without this the instruction is unfollowable — restarting the tool does
 	// not clear it, and the row states a repair that cannot work.
+	//
+	// ⚠️ AND THERE MUST BE SOMETHING STALE TO FIX. The rule above asks only
+	// WHEN a session started; it never asks whether anything the tool reads at
+	// startup is actually not working. A tool reads two things from its config
+	// at launch — the hook command and the OTEL block — so if every one of those
+	// lanes that this machine expects has reported SINCE the config was written,
+	// the running session is delivering everything we depend on and a restart
+	// changes nothing.
+	//
+	// This became reachable the moment `tool_otlp` shipped off. The adoption
+	// escape above accepts only TELEMETRY as proof, and a machine with the
+	// switch off asks the tool for no telemetry at all — so it could never
+	// fire, and the row sat on `restart_required` with every lane ticked and no
+	// sentence under it. Seen on a real machine 2026-09-21: hook ✓ watcher ✓
+	// reader ✓, state restart_required, reported as "why is the restart
+	// required if everything is healthy now".
+	//
+	// The case this must keep catching is the one it was built for: a session
+	// started before setup that is posting nowhere. There the hook lane is
+	// silent since the config, `configReadLanesStale` is true, and the
+	// instruction stands.
 	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfiguredAt.IsZero() &&
 		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfiguredAt) &&
-		!f.Wiring.NewestSessionAdopted {
+		!f.Wiring.NewestSessionAdopted &&
+		configReadLanesStale(e, f, expected) {
 		return RestartRequired, ""
 	}
 	// Row 3b. Requires KNOWN trust: `known=false` is "we cannot tell", and
@@ -498,6 +520,42 @@ func waitingOn(e Entry, kind SurfaceKind, state State, expected bool, f Facts) W
 	default:
 		return WaitingOnNothing
 	}
+}
+
+// configReadLanesStale reports whether any lane the tool reads out of its own
+// config at startup — the hook command, the OTEL block — is EXPECTED on this
+// machine and has not been seen since keld wrote that config.
+//
+// No such lane expected at all (the switch off and no hook, as Gemini has)
+// means there is nothing a restart could fix, so it answers false.
+func configReadLanesStale(e Entry, f Facts, expected map[SurfaceKind]bool) bool {
+	// ⚠️ WITH THE OTLP LANE EXPECTED, THE NOTICE STILL WINS, AND THE REASON IS
+	// VOUCHING. Lane facts are per TOOL, not per session: with two windows open,
+	// a healthy one's traffic is indistinguishable from a stale one's silence.
+	// While the tool exports OTLP that difference costs data — the stale window
+	// posts with the credential it launched with — so suppressing the notice on
+	// another window's evidence would hide a real loss. The decision table's row
+	// 3 says "lanes are live; the restart notice still wins", and inside this
+	// branch it stays true.
+	//
+	// With the switch OFF the claim is structurally different, not merely
+	// weaker: nothing this machine collects depends on what the tool read at
+	// startup. The hook command is unchanged, so a "stale" window fires the same
+	// hook, and its transcript is read by the daemon regardless. There is
+	// nothing for a restart to fix, for any window — so the notice is not
+	// suppressed on one window's behalf, it is simply no longer true.
+	if expected[SurfaceOTel] {
+		return true
+	}
+	for _, kind := range []SurfaceKind{SurfaceHook, SurfaceOTel} {
+		if !expected[kind] {
+			continue
+		}
+		if !seenSinceConfigured(kind, f) {
+			return true
+		}
+	}
+	return false
 }
 
 // seenSinceConfigured reports whether this lane has carried something since
