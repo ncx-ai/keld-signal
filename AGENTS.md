@@ -155,6 +155,24 @@ flowchart LR
   chose rather than the ones `telemetry.ClaudeEnv`/`CodexBlockBody`/
   `GeminiTelemetry` emit. Widening where the credential may appear does not
   widen what is accepted.
+  ⚠️ **THE PROXY FORWARDS ONLY WHILE `tool_otlp` IS ON, READ PER REQUEST — AND
+  UNTIL 2026-09-21 IT DID NOT, WHICH DOUBLE-COUNTED EVERY RUNNING TOOL THE DAY
+  THE SWITCH WENT OFF.** A tool reads its telemetry config once, at startup, so
+  one configured before the switch went off keeps posting OTLP here from
+  memory for the rest of its session; the transcript mirror is on for exactly
+  that tool (`promptlog.SourcesFor` is the complement of the switch); and Atlas
+  keys a mirrored row (`request_id`) and a tool-sent row
+  (`session.id:event.sequence`) differently, so both landed and both were
+  priced. The PR that shipped the switch said the complement rule "enforces"
+  that the two lanes never both run for one tool — true of what keld WRITES
+  into configs, false of what a running tool still SENDS. `Proxy.Forwarding`
+  now reads the switch where the bytes arrive: off, an authenticated export is
+  answered 202 (the tool must not retry), never forwarded, never recorded as a
+  forward (the pane's otel lane must not read "arrived" off bytes that went
+  nowhere), counted in `DiscardedSwitchOff`, and announced once per source per
+  run as `telemetry.otlp_discarded`. Nothing is lost that the mirror does not
+  already carry. Pinned by `teleproxy/forwarding_test.go`, including that a
+  Proxy constructed with no hook still forwards — every existing test does.
   ⚠️ **THE TEXT GATE OVER-MATCHED `prompt.id` AND SILENTLY BROKE EVERY
   CORRELATION.** `teleproxy.textKey` matched an attribute key by SHAPE —
   `strings.Contains(k, "prompt")` and seven siblings — and its comment said "a

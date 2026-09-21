@@ -66,10 +66,19 @@ Atlas, the daemon mirrors its transcript as OTLP logs and metrics
 the endpoint resolves to `""` and the post is skipped
 (`promptlog/promptlog.go` · `doPost`), and a post that fails for any other reason
 is logged to the debug log and dropped on the same line. `NewPending`'s comment
-states this and bounds it: the default source set is `{cowork}`, Claude Code
-emits its own OTEL through the proxy above (which does spool), and a machine is
-unpaired only until somebody finishes signing in. Giving this path a spool would
-be a new durable queue, which was deliberately not added.
+states this and bounds it: a machine is unpaired only until somebody finishes
+signing in, and a post that fails against a reachable Atlas is one record, not a
+batch. Giving this path a spool would be a new durable queue, which was
+deliberately not added. ⚠️ **Since the OTLP switch shipped off by default this
+lane carries EVERY tool's usage, not Cowork's alone** (`promptlog.SourcesFor` is
+the complement of `tool_otlp`), so the loss is no longer bounded by one tool's
+share. **Counted, since 2026-09-21:** every undelivered post increments
+`Telemetry.Dropped()` under a closed reason — `not_paired`, `unreachable`,
+`rejected` (4xx), `unavailable` (5xx) — and the daemon emits ONE
+`telemetry.mirror_dropped` client event per reason per run carrying the count
+(`daemon/mirrordrop.go`), so a machine that is quietly losing usage says so
+within one prompt of starting to. Counted is not recovered: the records are
+still gone.
 
 ## Enrichment
 
