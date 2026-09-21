@@ -484,8 +484,19 @@ step_upgrade() {
   fi
   say "sidecar replaced: $PREV_SIDECAR_VERSION -> $SIDECAR_VERSION_SEEN"
 
-  local after
-  after=$(clientevent_count "sidecar.version_skew")
+  # ⚠️ GIVE THE EVENT TIME TO ARRIVE BEFORE DECLARING IT ABSENT. The skew
+  # detector fires on the first /health that answers, and the reporter flushes
+  # on KELD_CLIENTEVENTS_FLUSH (5 s here). Counting the instant after start read
+  # the mock before the batch landed and called a disagreeing pair "no skew" —
+  # measured on macOS in CI: the count taken 3 s after start, PASS, while the
+  # same pair on Linux (counted 60 s later) FAILED. A quiet period bounded at
+  # four flushes is what makes absence mean absence.
+  local after i
+  for i in $(seq 1 20); do
+    after=$(clientevent_count "sidecar.version_skew")
+    [ "$after" -gt "${SKEW_EVENTS_BEFORE_UPGRADE:-0}" ] && break
+    sleep 1
+  done
   if [ "$after" -gt "${SKEW_EVENTS_BEFORE_UPGRADE:-0}" ]; then
     say "sidecar.version_skew fired AFTER the upgrade ($after total): the two halves"
     say "  still disagree."

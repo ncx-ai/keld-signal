@@ -792,7 +792,19 @@ jobs:
           # env: entry — GitHub expressions cannot read the runner's HOME.
           if [ "$CHAIN" = "B" ] && [ -n "${NEW_SIDECAR:-}" ]; then
             export KELD_CONFORM_NEW_SIDECAR="$NEW_SIDECAR"
-            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
+            # ⚠️ STAMP THE BINARIES UNDER TEST WITH THE SIDECAR THEY UPGRADE TO.
+            # Chain B asserts two things about sidecar.version_skew: it FIRES
+            # with the old sidecar and is SILENT after the upgrade. The default
+            # stamp, 99.0.0-conform, can satisfy the first and never the second —
+            # no release sidecar will ever carry that string — so this leg
+            # failed at `upgrade` on every run since it existed (macOS passed
+            # only by counting events before the 5 s flush). Stamped as the
+            # release it upgrades to, both halves are real: 3.0.4 against 3.0.3
+            # must fire, 3.0.4 against 3.0.4 must not.
+            if [ -s "$NEW_SIDECAR/VERSION" ]; then
+              export KELD_CONFORM_VERSION="$(sed 's/^v//' "$NEW_SIDECAR/VERSION" | tr -d '[:space:]')"
+            fi
+            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?'), binaries stamped ${KELD_CONFORM_VERSION:-99.0.0-conform}"
           fi
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
             ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
@@ -850,7 +862,13 @@ jobs:
           if [ "$CHAIN" = "B" ] && [ -n "${PREVIOUS_WIN:-}" ]; then
             PREV_ARG="--previous dir:$(cygpath -u "$PREVIOUS_WIN")"
             export KELD_CONFORM_NEW_SIDECAR="$(cygpath -u "$NEW_SIDECAR_WIN")"
-            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN"
+            # Same stamp rule as the Linux/macOS leg above: the binaries under
+            # test report the version of the sidecar they upgrade to, so the
+            # post-upgrade "no skew" assertion is satisfiable and non-vacuous.
+            if [ -s "$KELD_CONFORM_NEW_SIDECAR/VERSION" ]; then
+              export KELD_CONFORM_VERSION="$(sed 's/^v//' "$KELD_CONFORM_NEW_SIDECAR/VERSION" | tr -d '[:space:]')"
+            fi
+            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN stamped ${KELD_CONFORM_VERSION:-99.0.0-conform}"
           fi
           mkdir -p "$work"
           echo "bash: $(bash --version | head -1)"
