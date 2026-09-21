@@ -653,7 +653,15 @@ config_normalise() {
   # upgrade must not touch content its OWNER put there — and it is strictly more
   # precise than any line rule, because reformatting, key order and comma
   # placement stop mattering while a single user key disappearing still fails.
-  if [ "${2:-}" = "gemini_cli" ]; then
+  # ⚠️ CLAUDE CODE TOO, SINCE THE OTLP SWITCH SHIPPED OFF. Keld keeps its
+  # telemetry there as six keys inside `env`; with the switch off (3.0.5) the
+  # upgraded daemon takes them back out, and config.RemoveSectionKeys drops the
+  # emptied `env` object with them. A line rule then sees `"env": {` and `},`
+  # vanish and reports the person's config trampled. Measured in CI, chain B,
+  # 2026-09-21: the very first seed that configured Claude Code BEFORE the
+  # upgrade failed exactly there. Same structural rule as Gemini: drop what keld
+  # manages, compare what is left.
+  if [ "${2:-}" = "gemini_cli" ] || [ "${2:-}" = "claude_code" ]; then
     python3 -c '
 import json, sys
 try:
@@ -669,6 +677,13 @@ if isinstance(d, dict):
     # The whole telemetry block is keld|s: it is written by the adapter and
     # every value in it moves with the daemon (a fresh loopback port each run).
     d.pop("telemetry", None)
+    env = d.get("env")
+    if isinstance(env, dict):
+        for k in list(env):
+            if k.startswith("OTEL_") or k == "CLAUDE_CODE_ENABLE_TELEMETRY":
+                del env[k]
+        if not env:
+            d.pop("env", None)
     # Only KELD|S hook entries, so a user|s own BeforeAgent hook still has to
     # survive the upgrade.
     hooks = d.get("hooks")
