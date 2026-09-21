@@ -93,9 +93,13 @@ type Telemetry struct {
 	// user_prompt for. See firstSightOfPrompt. Bounded: cleared when it reaches
 	// promptSeenCap, which costs at most one double-count per clear.
 	promptSeen map[string]struct{}
-	lastReq    map[string]string // per-transcript last assistant requestId (Claude Code)
-	codex      map[string]*codexState
-	gemini     map[string]int // per-chat count of model turns already mirrored
+	// onDrop is told about an observation this mirror could not deliver, with
+	// a closed reason. See OnDrop.
+	onDrop  func(reason string)
+	dropped map[string]int64
+	lastReq map[string]string // per-transcript last assistant requestId (Claude Code)
+	codex   map[string]*codexState
+	gemini  map[string]int // per-chat count of model turns already mirrored
 }
 
 // New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
@@ -127,6 +131,7 @@ func NewPending(logsURL, metricsURL func() string, token func() string, sources 
 		seq:        map[string]int64{},
 		lastPrompt: map[string]string{},
 		promptSeen: map[string]struct{}{},
+		dropped:    map[string]int64{},
 		lastReq:    map[string]string{},
 		codex:      map[string]*codexState{},
 		gemini:     map[string]int{},
@@ -294,11 +299,60 @@ func (t *Telemetry) postMetricList(res []kv, metrics []metric) {
 	t.doPost(t.metricsURL(), body)
 }
 
+// Drop reasons. Closed set: a client event carries one of these and nothing
+// else, and docs/durability.md names the same losses.
+const (
+	DropNotPaired   = "not_paired"  // no Atlas endpoint yet: nothing to post to
+	DropUnreachable = "unreachable" // the POST never got an answer
+	DropRejected    = "rejected"    // Atlas answered 4xx: this record will never land
+	DropUnavailable = "unavailable" // Atlas answered 5xx: it might have, and this mirror does not retry
+)
+
+// OnDrop installs the hook told about every observation this mirror could not
+// deliver, with a reason from the Drop* set.
+//
+// ⚠️ THIS MIRROR HAS NO SPOOL, AND UNTIL THIS THE LOSS WAS A SENTENCE IN A DOC.
+// Every other lane holds what it cannot send — the proxy spools, the block
+// emitter keeps its cursor, the enrich worker re-spools the pointer — and this
+// one posts once and forgets, by design: a batch here is one record, and a
+// spool that re-sent it would need the same restart-safe dedup the api_request
+// row already carries and user_prompt does not. docs/durability.md says so.
+// But a loss that is documented and not counted is invisible on every machine
+// it happens on; this hook is what turns it into a number the daemon can
+// report. It fires per dropped record; the daemon decides how loudly.
+func (t *Telemetry) OnDrop(fn func(reason string)) {
+	t.mu.Lock()
+	t.onDrop = fn
+	t.mu.Unlock()
+}
+
+// Dropped is how many records were lost, by reason, since this mirror started.
+func (t *Telemetry) Dropped() map[string]int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]int64, len(t.dropped))
+	for k, v := range t.dropped {
+		out[k] = v
+	}
+	return out
+}
+
+func (t *Telemetry) noteDrop(reason string) {
+	t.mu.Lock()
+	t.dropped[reason]++
+	fn := t.onDrop
+	t.mu.Unlock()
+	if fn != nil {
+		fn(reason)
+	}
+}
+
 func (t *Telemetry) doPost(url string, body []byte) {
 	// Not paired yet: no address to post to. See NewPending for why this is a
 	// skip rather than a spool.
 	if strings.TrimSpace(url) == "" {
 		debuglog.Append("promptlog: not paired yet — skipping one OTLP post")
+		t.noteDrop(DropNotPaired)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -314,11 +368,18 @@ func (t *Telemetry) doPost(url string, body []byte) {
 	resp, err := t.client.Do(req)
 	if err != nil {
 		debuglog.Append("promptlog: POST %s failed: %v", url, err)
+		t.noteDrop(DropUnreachable)
 		return
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	debuglog.Append("promptlog: POST %s -> HTTP %d", url, resp.StatusCode)
+	switch {
+	case resp.StatusCode >= 500:
+		t.noteDrop(DropUnavailable)
+	case resp.StatusCode >= 400:
+		t.noteDrop(DropRejected)
+	}
 }
 
 func (t *Telemetry) nextSeq(session string) int64 {

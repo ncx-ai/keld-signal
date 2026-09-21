@@ -326,7 +326,14 @@ test.describe("Integrations · live daemon", () => {
     const after = fs.readFileSync(CODEX_CONFIG(home), "utf8");
     expect(after).toContain('model = "gpt-5-codex"');
     expect(after).toContain("[[hooks.UserPromptSubmit]]");
-    expect(after).toContain("[otel]");
+    // ⚠️ NO `[otel]` BLOCK. The tool's own OTLP export sits behind the Developer
+    // switch, OFF by default (WS3): usage comes from the transcript, and a
+    // config that told the tool to post would make the two lanes count the same
+    // request twice. This line used to assert the block WAS written — the
+    // pre-switch contract — and failed on the branch that changed it, unnoticed
+    // because this suite is not a CI gate. The Go side pins the same fact in
+    // tools' TestApplyWritesNoOTLPBlockWhileTheSwitchIsOff.
+    expect(after).not.toContain("[otel]");
 
     // ⚠️ The new state comes from the NEXT POLL, out of `Compute`, never from
     // the button: the session on this machine started before the config was
@@ -367,8 +374,19 @@ test.describe("Integrations · live daemon", () => {
     // NO CLICK ANYWHERE IN THIS TEST. The detector's own poll is the only thing
     // that can move this row, and the budget is 90 s against its shipped 60 s.
     await expect(row.getByRole("button", { name: "Set up" })).toHaveCount(0, { timeout: 90_000 });
-    await expect(row.locator(".intg-state")).toHaveText("restart_required", { timeout: 90_000 });
-    await expect(row.locator(".intg-instruction", { hasText: INSTRUCTION_RESTART })).toHaveCount(1);
+    // ⚠️ `idle`, NOT `restart_required` — and the difference is the branch's
+    // whole point about restarts. A restart is asked for only when a lane the
+    // tool reads from its CONFIG is expected and has been silent since keld
+    // wrote it (`configReadLanesStale`). Gemini has no hook lane at all (its
+    // BeforeAgent event carries no prompt id — see the catalogue), and with the
+    // OTLP switch off the otel lane is not expected either, so there is nothing
+    // stale a restart would fix: the watcher reads the transcript regardless.
+    // This used to assert `restart_required`, which was the old rule — "a
+    // session older than its config must restart" — that told a person to
+    // restart a tool for no reason. Codex, which DOES have a hook lane, still
+    // reads restart_required in AC-2 above.
+    await expect(row.locator(".intg-state")).toHaveText("idle", { timeout: 90_000 });
+    await expect(row.locator(".intg-instruction", { hasText: INSTRUCTION_RESTART })).toHaveCount(0);
 
     // "configured with a backup" — read out of keld's own manifest, which is
     // what `configured` is computed from, and opened to prove it is the file.

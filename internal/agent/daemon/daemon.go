@@ -1370,6 +1370,11 @@ func Run(ctx context.Context) error {
 		tel := promptlog.NewPending(deriveEndpoint(pr.ingest, logsEndpoint),
 			deriveEndpoint(pr.ingest, metricsEndpoint), tok.Get,
 			promptlog.SourcesFor(set.ToolOTLPEnabled()))
+		// A record the mirror could not deliver is LOST — it has no spool (see
+		// promptlog.OnDrop and docs/durability.md). Counted here as one client
+		// event per reason per run rather than per record: unpaired for an
+		// hour is one fact, not three hundred, and the count rides `fields`.
+		tel.OnDrop(mirrorDropReporter(emitter, tel.Dropped))
 		offer := watchOffer(q)
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
 		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its

@@ -632,3 +632,106 @@ test.describe("Developer · extended tool telemetry (OTLP)", () => {
     }
   });
 });
+
+/**
+ * ⚠️ TWO THINGS NO SPEC HERE HAD SEEN: THE PANE UNDER A DARK SYSTEM THEME, AND
+ * THE PANE DRIVEN FROM THE KEYBOARD. The state matrix above proves every state
+ * renders its own name at two widths — with a mouse, in light. The deployment
+ * review scored UX at 65 for exactly these two gaps.
+ *
+ * Dark: app.css declares `color-scheme: only light` on :root and defines no dark
+ * tokens, so the CONTRACT under a dark OS theme is "unchanged" — the light
+ * surface, the ink, readable — not "inverted". A page that leaked the UA's dark
+ * defaults (transparent body over a black canvas, grey form controls) would
+ * pass every other spec here and be unreadable on half the machines it ships to.
+ * So the assertion is that the body paints the light `--bg` and the row's ink is
+ * the light `--ink`, under `colorScheme: "dark"` emulation.
+ *
+ * Keyboard: the one thing a person DOES on this pane is press Set up. It must be
+ * reachable by Tab alone, be a real button with its name as its accessible name,
+ * and fire on Enter — asserted by the result the page renders from the shell's
+ * setup reply, so the check is the outcome and not the focus ring.
+ */
+test.describe("Integrations pane · dark system theme", () => {
+  test.use({ colorScheme: "dark" });
+
+  test("under a dark OS theme the pane keeps its light surface and ink (color-scheme: only light)", async ({
+    page,
+    shell,
+  }) => {
+    shell.serve(fixture("not_configured"));
+    await openPane(page, shell, WIDTHS[0]);
+    await expect(row(page, "codex")).toBeVisible();
+
+    const paint = await page.evaluate(() => {
+      const cs = (el: Element) => getComputedStyle(el);
+      const rowEl = document.querySelector(".intg-row") as Element;
+      return {
+        scheme: cs(document.documentElement).colorScheme,
+        body: cs(document.body).backgroundColor,
+        ink: cs(rowEl).color,
+        matchesDark: matchMedia("(prefers-color-scheme: dark)").matches,
+      };
+    });
+    expect(paint.matchesDark, "the test must actually be running under a dark theme").toBe(true);
+    // Engines serialise the computed value in their own token order ("light
+    // only" on both Chromium and WebKit) — compare the token set, not the string.
+    expect(paint.scheme.split(/\s+/).sort()).toEqual(["light", "only"]);
+    // --bg #FEFCF6 and --ink #0E1A12, as app.css declares them. A body that
+    // came back transparent (rgba(0, 0, 0, 0)) is the UA canvas showing through.
+    expect(paint.body).toBe("rgb(254, 252, 246)");
+    expect(paint.ink).toBe("rgb(14, 26, 18)");
+  });
+});
+
+test.describe("Integrations pane · keyboard", () => {
+  test("Set up is reachable by Tab, is a named button, and fires on Enter", async ({ page, shell, browserName }) => {
+    shell.serve(fixture("not_configured"));
+    await openPane(page, shell, WIDTHS[0]);
+    const setUp = row(page, "codex").getByRole("button", { name: "Set up" });
+    await expect(setUp).toBeVisible();
+
+    // Tab from the document until the Set up button holds focus. Bounded: a
+    // pane that needs more than 40 stops to reach its one action has a
+    // different problem, and an unbounded loop would hide it as a timeout.
+    // ⚠️ WebKit on macOS follows Safari's "Press Tab to highlight each item"
+    // default, which is OFF: plain Tab skips buttons and Option+Tab is the
+    // keystroke that visits them. That is the platform's convention, not a
+    // property of this page — a native Mac user tabbing through Safari presses
+    // the same thing — so the test presses what the platform's keyboard user
+    // presses.
+    const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
+    await page.locator("body").focus();
+    let reached = false;
+    for (let i = 0; i < 40 && !reached; i++) {
+      await page.keyboard.press(tab);
+      reached = await setUp.evaluate((el) => el === document.activeElement);
+    }
+    expect(reached, "Set up was not reachable by Tab within 40 stops").toBe(true);
+
+    await page.keyboard.press("Enter");
+    // The shell answers every setup POST with a backup path; the page renders
+    // it. That sentence appearing is the click having happened — from the
+    // keyboard, with no pointer involved.
+    await expect(row(page, "codex").locator(".intg-result")).toContainText("Previous config saved to", {
+      timeout: 10_000,
+    });
+  });
+
+  test("every state pill and every action carries a readable name", async ({ page, shell }) => {
+    shell.serve(fixture("catalogue"));
+    await openPane(page, shell, WIDTHS[1]);
+    const buttons = page.locator(".intg-row button");
+    const n = await buttons.count();
+    for (let i = 0; i < n; i++) {
+      const name = ((await buttons.nth(i).textContent()) || "").trim();
+      expect(name, `button #${i} in the pane has no text — a screen reader announces it as "button"`).not.toBe("");
+    }
+    const pills = page.locator(".intg-state");
+    const m = await pills.count();
+    expect(m).toBeGreaterThan(0);
+    for (let i = 0; i < m; i++) {
+      expect(((await pills.nth(i).textContent()) || "").trim()).not.toBe("");
+    }
+  });
+});
