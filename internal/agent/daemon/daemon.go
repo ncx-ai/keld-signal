@@ -1245,6 +1245,12 @@ func Run(ctx context.Context) error {
 		// job, and its own writes are fire-and-forget — the window onto the
 		// collector must never be able to stop the collector.
 		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordDelivered)
+		// ⚠️ AND THE SAME DELIVERY IS THE HEALTH STRIP'S ONLY EVIDENCE THAT
+		// ATLAS IS REACHABLE. The emitter publishes through its own publisher,
+		// never through the atlas connector, so without this the connector's
+		// LastResponse stays zero on a machine delivering every sweep — and a
+		// zero reading is what makes the `atlas` row decline to write at all.
+		onBlockPublished = chainOnPublished(onBlockPublished, sig.noteAtlasDelivered)
 		// B2 — Send to Atlas: with Atlas off, sig.recordCut is the ONLY record
 		// of a block that will ever exist — the emitter's own Sender is
 		// localOnlySender here (see daemon/blocks.go), which discards and

@@ -186,6 +186,26 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 				} else {
 					sig.noteHealth(ledger.HealthAtlas, ledger.StatusFailed, string(classifyAtlasStatus(status)))
 				}
+			} else {
+				// ⚠️ **"SAY NOTHING" IS ONLY SAFE WHEN NOTHING WAS SAID BEFORE,
+				// AND HERE SOMETHING ALWAYS WAS.** The health rows are a stored
+				// table, not a fresh reading: declining to write leaves whatever
+				// the last pass wrote standing as a current assertion. And the
+				// branch above ALWAYS runs first on a paired machine, because
+				// startHealth's first pass happens before the pairing goroutine
+				// lands — so every restart stamped `not_paired`, and this branch
+				// then refused to correct it for the rest of the run.
+				//
+				// Measured on a live machine: `atlas n/a not_paired` frozen at
+				// the exact second the daemon logged `PAIRED with
+				// http://localhost:8000`, while `daemon`, `sidecar` and `store`
+				// had refreshed 25 minutes later and blocks were being delivered
+				// and confirmed throughout.
+				//
+				// So the absence is STATED rather than implied. Not `ok` — the
+				// pairing is not a reachability check and nothing has come back
+				// yet — and not `failed`, which would accuse a healthy machine.
+				sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, "")
 			}
 		}
 		sig.noteHealth(ledger.HealthStore, ledger.StatusOK, "")

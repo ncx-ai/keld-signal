@@ -36,6 +36,9 @@ func (l *Live) note(status int) {
 	l.mu.Unlock()
 }
 
+// Note records a response observed elsewhere. See Client.Note.
+func (l *Live) Note(status int) { l.note(status) }
+
 func (l *Live) LastResponse() (int, time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

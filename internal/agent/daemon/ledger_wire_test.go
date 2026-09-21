@@ -65,6 +65,7 @@ func (f *ledgerFakeAtlasClient) Settings(context.Context) (settings.Remote, erro
 	return settings.Remote{}, nil
 }
 func (f *ledgerFakeAtlasClient) LastResponse() (int, time.Time) { return f.status, f.at }
+func (f *ledgerFakeAtlasClient) Note(status int)                { f.status, f.at = status, time.Now() }
 
 var _ atlas.Client = (*ledgerFakeAtlasClient)(nil)
 
@@ -405,7 +406,21 @@ func TestAtlasHealthReflectsLastResponseWhenOn(t *testing.T) {
 		}
 	})
 
-	t.Run("absent when never tried", func(t *testing.T) {
+	// ⚠️ **THIS SUBTEST ASSERTED THE OPPOSITE, AND THE PREMISE WAS WRONG.** It
+	// read "absent when never tried … never tried is unknown, not broken", on
+	// the reasoning that writing nothing leaves the row unknown. That holds only
+	// if nothing was ever written — and on a paired machine something ALWAYS
+	// was: startHealth's first pass runs before the pairing goroutine lands, so
+	// the not_paired branch above fires on every single restart, and this branch
+	// then declined to correct it for the rest of the run.
+	//
+	// Measured on a live machine: `atlas n/a not_paired` frozen at the exact
+	// second the daemon logged `PAIRED with http://localhost:8000`, while
+	// `daemon`, `sidecar` and `store` had refreshed 25 minutes later and blocks
+	// were being delivered and confirmed throughout. The health rows are a
+	// stored table, so silence is not neutrality — it is the previous claim,
+	// still standing.
+	t.Run("stated, not silent, when never tried", func(t *testing.T) {
 		t.Setenv("KELD_HOME", t.TempDir())
 		v := &v3{ledger: ledger.New(), atlasOn: true,
 			atlas: &ledgerFakeAtlasClient{enabled: true, status: 0, at: time.Time{}}}
@@ -414,9 +429,44 @@ func TestAtlasHealthReflectsLastResponseWhenOn(t *testing.T) {
 		startHealth(ctx, v, nil, true, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
-		health := healthByKey(snap)
-		if got, ok := health["atlas"]; ok {
-			t.Fatalf("atlas = %#v, want ABSENT — never tried is unknown, not broken", got)
+		got := healthByKey(snap)["atlas"]
+		if got.Status != string(ledger.StatusNA) || got.Detail != "" {
+			t.Fatalf("atlas = %#v, want n/a with no reason — never tried is neither ok nor broken, "+
+				"and must overwrite whatever the previous pass asserted", got)
+		}
+	})
+
+	// The whole point of the change above: a pass that finds the machine
+	// unpaired, followed by one that finds it paired, must not leave the first
+	// pass's verdict standing. This is the live defect in miniature.
+	t.Run("a pairing that lands clears the not_paired the first pass wrote", func(t *testing.T) {
+		t.Setenv("KELD_HOME", t.TempDir())
+		l := ledger.New()
+		cl := &ledgerFakeAtlasClient{enabled: true, status: 0, at: time.Time{}}
+		v := &v3{ledger: l, atlasOn: true, atlas: cl}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		paired := false
+		startHealth(ctx, v, nil, true, func() bool { return paired })
+		snap, _ := l.Read(time.Time{}, 10)
+		if got := healthByKey(snap)["atlas"]; got.Detail != string(ledger.ReasonNotPaired) {
+			t.Fatalf("first pass: atlas = %#v, want not_paired", got)
+		}
+
+		// The pairing lands, exactly as startSenders does it, and a block is
+		// delivered — which is the only reachability fact this connector ever
+		// gets, since the emitter publishes through its own publisher.
+		paired = true
+		v.noteAtlasDelivered(nil, "")
+		if f := healthRefresh.Load(); f != nil {
+			(*f)()
+		}
+
+		snap, _ = l.Read(time.Time{}, 10)
+		if got := healthByKey(snap)["atlas"]; got.Status != string(ledger.StatusOK) {
+			t.Fatalf("after pairing and a delivery: atlas = %#v, want ok — the strip said `not_paired` "+
+				"on a machine delivering every sweep", got)
 		}
 	})
 }
