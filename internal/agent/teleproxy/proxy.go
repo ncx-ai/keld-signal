@@ -22,6 +22,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -94,6 +95,14 @@ type Proxy struct {
 	previous atomic.Pointer[retired]
 	// dropped counts trace exports accepted and thrown away. See Handler.
 	dropped atomic.Int64
+
+	// forwarding answers whether the tool's OWN OTLP lane is on. nil means
+	// always (every existing caller and test); false means accept-and-discard.
+	// See Forwarding.
+	forwarding      atomic.Pointer[func() bool]
+	discardedOff    atomic.Int64
+	discardAnnounce sync.Map // source -> struct{}: one log line per source per run
+	onDiscard       atomic.Pointer[func(source string)]
 
 	wg sync.WaitGroup
 }
@@ -286,6 +295,55 @@ func (p *Proxy) Handler() http.Handler {
 	return mux
 }
 
+// Forwarding installs the switch the proxy consults PER REQUEST before it
+// forwards anything: the daemon hands it settings.Load().ToolOTLPEnabled.
+//
+// ⚠️ WITHOUT THIS, TURNING THE SWITCH OFF DOUBLE-COUNTED EVERY RUNNING TOOL
+// UNTIL A HUMAN RESTARTED IT. A tool reads its telemetry config ONCE at
+// startup, so one that was configured before the switch went off keeps posting
+// OTLP to this proxy from memory for the rest of its session. Meanwhile the
+// transcript mirror is on for exactly that tool (promptlog.SourcesFor is the
+// COMPLEMENT of the switch), and Atlas keys a mirrored row and a tool-sent row
+// differently (`session.id:event.sequence` vs `request_id`), so both landed
+// and both were priced. The PR that shipped the switch said the complement
+// rule "enforces" that the two lanes never both run for one tool — true of
+// what keld WRITES, false of what a running tool still SENDS.
+//
+// So the rule is read where the bytes arrive: forward iff the switch is on.
+// When it is off every tool source is mirrored, so anything reaching this port
+// is a duplicate by construction and is accepted (202 — the tool must not
+// retry) and DISCARDED, counted in DiscardedSwitchOff and announced once per
+// source per run. Nothing is lost that the mirror does not have: the mirror
+// reads from its cursor, and the only lines it never sees are those written
+// while the daemon was down, which reached no proxy either.
+func (p *Proxy) Forwarding(fn func() bool) {
+	if fn == nil {
+		p.forwarding.Store(nil)
+		return
+	}
+	p.forwarding.Store(&fn)
+}
+
+// OnDiscard is told, once per source per daemon run, that a tool is still
+// posting OTLP this proxy is discarding because the switch is off — the fact
+// the daemon turns into a client event.
+func (p *Proxy) OnDiscard(fn func(source string)) {
+	if fn == nil {
+		p.onDiscard.Store(nil)
+		return
+	}
+	p.onDiscard.Store(&fn)
+}
+
+// DiscardedSwitchOff is how many authenticated exports were accepted and
+// thrown away because the tool's OTLP lane is switched off.
+func (p *Proxy) DiscardedSwitchOff() int64 { return p.discardedOff.Load() }
+
+func (p *Proxy) forwardsNow() bool {
+	fn := p.forwarding.Load()
+	return fn == nil || (*fn)()
+}
+
 // discard authenticates a signal this daemon does not forward, answers 200, and
 // counts it. See Handler for why /v1/traces is here rather than absent.
 func (p *Proxy) discard() http.HandlerFunc {
@@ -363,6 +421,23 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		// not be walked concurrently with it.
 		ids := SessionIDs(body)
 		src := SourceOf(body)
+
+		if !p.forwardsNow() {
+			// Accepted so the tool does not retry; never forwarded, never
+			// recorded as a forward (the pane's otel lane must not read
+			// "arrived" off bytes that went nowhere). See Forwarding.
+			p.discardedOff.Add(1)
+			if _, seen := p.discardAnnounce.LoadOrStore(src, struct{}{}); !seen {
+				log.Printf("keld-agent: telemetry proxy: %s is still posting its own OTLP while the tool_otlp "+
+					"switch is off — discarding it, because the transcript mirror already carries this usage "+
+					"and forwarding both would count it twice. It stops when the tool is next restarted.", src)
+				if fn := p.onDiscard.Load(); fn != nil {
+					(*fn)(src)
+				}
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 
 		p.wg.Add(1)
 		go func() {

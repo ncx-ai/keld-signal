@@ -10,6 +10,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/teleproxy"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -57,6 +58,19 @@ func startTelemetryProxy(ctx context.Context, emitter *clientevents.Emitter,
 	// in memory and cannot be told otherwise from outside. Set BEFORE Serve, so
 	// no request can observe a proxy that has the new secret and not the grace.
 	p.AcceptPrevious(secrets.Previous, secrets.RotatedAt)
+	// Forward iff the tool's OTLP lane is ON, read per request. Off, the mirror
+	// carries every tool and anything still arriving here is a duplicate — see
+	// teleproxy.Forwarding for the double-count this closes. Said once per
+	// source per run as a client event: a tool still posting from memory is a
+	// restart the person has not done yet, and the fleet should be able to see
+	// how many machines sit in that window.
+	p.Forwarding(func() bool { return settings.Load().ToolOTLPEnabled() })
+	if emitter != nil {
+		p.OnDiscard(func(source string) {
+			emitter.Emit("telemetry.otlp_discarded", clientevents.SevInfo, map[string]any{
+				"source": source, "reason": "tool_otlp_off"})
+		})
+	}
 	if onAuthRejection != nil {
 		p.OnAuthRejection(onAuthRejection)
 	}
