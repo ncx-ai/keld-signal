@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/debuglog"
 )
@@ -127,6 +128,44 @@ func codexHumanTurn(p codexEventMsgPayload) (turnID string, ok bool) {
 		return "", false
 	}
 	return "", false
+}
+
+// CodexHumanTurn is codexHumanTurn over the raw `event_msg` payload, for the
+// usage mirror (internal/agent/promptlog). ONE predicate decides what a genuine
+// Codex prompt is — the watcher offers it for enrichment and the mirror counts
+// it as a prompt — because two copies of a genuineness rule are how the two
+// halves of this product come to disagree about one machine (the geminichat
+// lesson). It returns the turn id the line carries, or "" for the classic
+// shape, and never the text.
+func CodexHumanTurn(payload json.RawMessage) (turnID string, ok bool) {
+	var p codexEventMsgPayload
+	if json.Unmarshal(payload, &p) != nil {
+		return "", false
+	}
+	return codexHumanTurn(p)
+}
+
+// CodexHumanTurnLength is the rune count of the human text a genuine turn
+// carries — a MEASUREMENT of text, the same class Claude Code's `prompt_length`
+// already publishes. Zero when the payload is not a human turn.
+func CodexHumanTurnLength(payload json.RawMessage) int {
+	var p codexEventMsgPayload
+	if json.Unmarshal(payload, &p) != nil {
+		return 0
+	}
+	if _, ok := codexHumanTurn(p); !ok {
+		return 0
+	}
+	if p.Message != "" {
+		return utf8.RuneCountInString(p.Message)
+	}
+	n := 0
+	if p.Item != nil {
+		for _, c := range p.Item.Content {
+			n += utf8.RuneCountInString(c.Text)
+		}
+	}
+	return n
 }
 
 // extract implements promptExtractor for Codex rollout lines. It never

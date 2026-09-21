@@ -3,6 +3,7 @@ package promptlog
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"os"
 	"strings"
 )
@@ -19,6 +20,11 @@ import (
 
 const eventCodexSSE = "codex.sse_event"
 
+// eventCodexUserPrompt is the human turn. Atlas strips the `codex.` prefix and
+// stores `user_prompt`, the same name its OTLP lane produced — which is what the
+// Prompts KPI counts.
+const eventCodexUserPrompt = "codex.user_prompt"
+
 // codexState is what a rollout's later lines need from its earlier ones.
 type codexState struct {
 	sessionID  string
@@ -30,6 +36,10 @@ type codexState struct {
 	// record this mirror priced. See observeCodexLine for why it is the gate.
 	lastTotal int
 	seeded    bool
+	// subagent marks a rollout Codex spawned for a sub-agent. Its `user_message`
+	// lines are the PARENT AGENT'S instructions, not a person's prompts — see
+	// observeCodexLine.
+	subagent bool
 }
 
 type codexLine struct {
@@ -44,6 +54,10 @@ type codexSessionMeta struct {
 	SessionID  string `json:"session_id"`
 	CLIVersion string `json:"cli_version"`
 	Originator string `json:"originator"`
+	// ThreadSource is "user" for a person's session and "subagent" for a
+	// rollout Codex spawned itself (measured 2026-09-21: 3 of 4 rollouts in one
+	// afternoon, each carrying the PARENT's `session_id`).
+	ThreadSource string `json:"thread_source"`
 }
 
 type codexTurnContext struct {
@@ -89,6 +103,7 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 		t.mu.Lock()
 		st := t.codexStateLocked(path)
 		st.sessionID, st.cliVersion, st.originator, st.seeded = id, p.CLIVersion, p.Originator, true
+		st.subagent = p.ThreadSource == "subagent"
 		t.mu.Unlock()
 		return
 	case "turn_context":
@@ -110,6 +125,11 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 		return
 	}
 
+	if _, ok := watch.CodexHumanTurn(ln.Payload); ok {
+		t.observeCodexPrompt(path, line, ln)
+		return
+	}
+
 	var ev codexEventMsg
 	if json.Unmarshal(ln.Payload, &ev) != nil || ev.Type != "token_count" {
 		return
@@ -127,21 +147,7 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 	}
 
 	t.mu.Lock()
-	st := t.codexStateLocked(path)
-	if !st.seeded {
-		// Started reading mid-file: recover the session, the model and the
-		// running total from the head, the way watch/codex.go recovers its
-		// session_meta. Without the running total the first record after a
-		// daemon restart cannot be told from a re-emission.
-		t.mu.Unlock()
-		head := codexHead(path, line)
-		t.mu.Lock()
-		st = t.codexStateLocked(path)
-		if !st.seeded {
-			*st = head
-			st.seeded = true
-		}
-	}
+	st := t.codexSeededLocked(path, line)
 	// ⚠️ **936 OF 10,061 REAL `token_count` RECORDS ARE RE-EMISSIONS.** Measured
 	// over the 23 most recent rollouts on this machine, 936 records (9.3%) repeat
 	// the previous record's `total_token_usage` EXACTLY while still carrying a
@@ -209,6 +215,81 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 	// no captured Codex metric name to mirror — inventing one would be a guess.
 }
 
+// codexSeededLocked returns the rollout's state, seeding it from the file head
+// when this mirror started reading mid-file — the way watch/codex.go recovers
+// its session_meta. Without the running total the first record after a daemon
+// restart cannot be told from a re-emission. Called with t.mu held; releases
+// and re-acquires it around the file read.
+func (t *Telemetry) codexSeededLocked(path string, line []byte) *codexState {
+	st := t.codexStateLocked(path)
+	if st.seeded {
+		return st
+	}
+	t.mu.Unlock()
+	head := codexHead(path, line)
+	t.mu.Lock()
+	st = t.codexStateLocked(path)
+	if !st.seeded {
+		*st = head
+		st.seeded = true
+	}
+	return st
+}
+
+// observeCodexPrompt mirrors one genuine human turn as `codex.user_prompt`.
+//
+// ⚠️ THIS IS WHAT THE OTLP LANE SENT AND THE MIRROR DID NOT, and the Prompts
+// KPI read ZERO for Codex because of it. Under tool OTLP Codex emitted a
+// `user_prompt` record per human turn; the mirror priced `response.completed`
+// only, so the moment a machine moved to transcript-first its Codex prompt
+// count went from real numbers to a flat 0 while its spend stayed exact.
+//
+// ⚠️ A SUB-AGENT ROLLOUT'S `user_message` IS NOT A PERSON. Codex writes one
+// rollout per sub-agent it spawns, with `thread_source: "subagent"` and the
+// PARENT's `session_id`, and its "user" messages are the parent agent's
+// instructions. Measured on 2026-09-21: one person's afternoon was 4 rollouts,
+// 3 of them sub-agents carrying 10 `user_message` lines against the person's
+// own 9 — counting them would report 19 prompts for 9. Their SPEND is real and
+// still priced under the parent session; only the prompt count excludes them.
+//
+// Never the text: the predicate and the rune count come from the watcher's own
+// exported helpers, and privacy_test.go's Codex canary rides this path.
+func (t *Telemetry) observeCodexPrompt(path string, line []byte, ln codexLine) {
+	t.mu.Lock()
+	st := t.codexSeededLocked(path, line)
+	sessionID, model, cliVersion, originator, turnID, sub := st.sessionID, st.model, st.cliVersion, st.originator, st.turnID, st.subagent
+	t.mu.Unlock()
+	if sessionID == "" || sub {
+		return
+	}
+	if id, _ := watch.CodexHumanTurn(ln.Payload); id != "" {
+		turnID = id
+	}
+	requestID := sessionID + "@" + ln.Timestamp
+	if ln.Ordinal != nil {
+		requestID += "#" + itoa(*ln.Ordinal)
+	}
+	attrs := []kv{
+		attr("event.name", eventCodexUserPrompt),
+		attr("event.timestamp", ln.Timestamp),
+		attr("conversation.id", sessionID),
+		attr("request_id", requestID),
+		attr("model", model),
+		attrInt("prompt_length", watch.CodexHumanTurnLength(ln.Payload)),
+	}
+	if cliVersion != "" {
+		attrs = append(attrs, attr("app.version", cliVersion))
+	}
+	if turnID != "" {
+		attrs = append(attrs, attr("turn.id", turnID))
+	}
+	ns := timeNano(ln.Timestamp)
+	t.postLogs(codexResource(originator, cliVersion), []logRecord{{
+		TimeUnixNano: ns, ObservedTimeUnixNano: ns, SeverityNumber: 9, SeverityText: "INFO",
+		Attributes: pruneEmpty(attrs),
+	}})
+}
+
 func (t *Telemetry) codexStateLocked(path string) *codexState {
 	st := t.codex[path]
 	if st == nil {
@@ -251,6 +332,7 @@ func codexHead(path string, target []byte) codexState {
 					st.sessionID = p.SessionID
 				}
 				st.cliVersion, st.originator = p.CLIVersion, p.Originator
+				st.subagent = p.ThreadSource == "subagent"
 			}
 		case "turn_context":
 			var p codexTurnContext

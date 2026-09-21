@@ -77,6 +77,12 @@ func (t *Telemetry) observeClaudeLine(source, transcriptPath string, line []byte
 			return
 		}
 		t.setLastPrompt(r.SessionID, r.PromptID) // for prompt.id linkage on later assistant events
+		// One row per PROMPT, not per line — see firstSightOfPrompt. The linkage
+		// above is refreshed on every line regardless, so a continuation line
+		// still re-anchors later api_requests to this prompt.
+		if !t.firstSightOfPrompt(r.SessionID, r.PromptID) {
+			return
+		}
 		// user_prompt carries no priced field and Claude Code sends no request_id
 		// on it, so it keeps the per-session counter it has always had. It is
 		// deliberately NOT part of the dedup contract: a duplicate here costs a

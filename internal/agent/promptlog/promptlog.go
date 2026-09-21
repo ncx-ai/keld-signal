@@ -89,6 +89,10 @@ type Telemetry struct {
 	sources    map[string]bool
 	seq        map[string]int64  // per-session event.sequence counter (unpriced events only)
 	lastPrompt map[string]string // per-session last user prompt id, for prompt.id linkage
+	// promptSeen is every (session, promptId) this mirror has already emitted a
+	// user_prompt for. See firstSightOfPrompt. Bounded: cleared when it reaches
+	// promptSeenCap, which costs at most one double-count per clear.
+	promptSeen map[string]struct{}
 	lastReq    map[string]string // per-transcript last assistant requestId (Claude Code)
 	codex      map[string]*codexState
 	gemini     map[string]int // per-chat count of model turns already mirrored
@@ -122,6 +126,7 @@ func NewPending(logsURL, metricsURL func() string, token func() string, sources 
 		sources:    copySources(sources),
 		seq:        map[string]int64{},
 		lastPrompt: map[string]string{},
+		promptSeen: map[string]struct{}{},
 		lastReq:    map[string]string{},
 		codex:      map[string]*codexState{},
 		gemini:     map[string]int{},
@@ -321,6 +326,39 @@ func (t *Telemetry) nextSeq(session string) int64 {
 	defer t.mu.Unlock()
 	t.seq[session]++
 	return t.seq[session]
+}
+
+// promptSeenCap bounds promptSeen. 4,096 prompts is weeks of one person's work;
+// a daemon runs for days, not months.
+const promptSeenCap = 4096
+
+// firstSightOfPrompt reports whether (session, promptId) has NOT been emitted
+// yet, and records it.
+//
+// ⚠️ A CLAUDE CODE HUMAN TURN IS SEVERAL USER LINES SHARING ONE promptId, AND
+// EMITTING PER LINE COUNTED THE SAME PROMPT TWICE. The meta line, the text line,
+// and any continuation the turn produces all carry the same `promptId` (AGENTS.md
+// measured one spanning 7 lines across 8 minutes), and two of them routinely pass
+// the genuine-prompt filter: measured 2026-09-21 in Atlas, 19 user_prompt rows for
+// 16 distinct prompt.ids on one machine — the Prompts KPI over-counting by 19%.
+// The watcher already dedups on promptId (queue.Offer answers Duplicate); the
+// mirror had no such memory, so every line it was handed became a row.
+//
+// Atlas could not collapse them either: user_prompt's dedup key is
+// `session.id:event.sequence`, a fresh per-line counter, and the unique index is
+// (event_ts, dedup_key) besides. Deduping at the source is the only place it works.
+func (t *Telemetry) firstSightOfPrompt(session, promptID string) bool {
+	key := session + "\x00" + promptID
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, seen := t.promptSeen[key]; seen {
+		return false
+	}
+	if len(t.promptSeen) >= promptSeenCap {
+		t.promptSeen = map[string]struct{}{}
+	}
+	t.promptSeen[key] = struct{}{}
+	return true
 }
 
 func (t *Telemetry) setLastPrompt(session, promptID string) {
