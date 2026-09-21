@@ -154,7 +154,7 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP 
 			Expected:   expected[spec.Kind],
 			LastSeen:   lastSeen(spec.Kind, f),
 		}
-		s.WaitingOn = waitingOn(e, spec.Kind, state, expected[spec.Kind])
+		s.WaitingOn = waitingOn(e, spec.Kind, state, expected[spec.Kind], f)
 		s.Instruction = Instructions[s.WaitingOn]
 		in.Surfaces = append(in.Surfaces, s)
 	}
@@ -440,19 +440,42 @@ func lastSeen(kind SurfaceKind, f Facts) *time.Time {
 // waitingOn names what one lane is waiting for. The sentences are
 // Instructions'; they live once, in vocabulary.go, because the pane, doctor
 // and the wire doc all quote them.
-func waitingOn(e Entry, kind SurfaceKind, state State, expected bool) WaitingOn {
+func waitingOn(e Entry, kind SurfaceKind, state State, expected bool, f Facts) WaitingOn {
 	switch {
 	case state == ApprovalRequired && kind == SurfaceHook:
 		return WaitingOnApproval
-	case state == RestartRequired && expected && (kind == SurfaceHook || kind == SurfaceOTel):
+	case state == RestartRequired && expected && (kind == SurfaceHook || kind == SurfaceOTel) &&
+		!seenSinceConfigured(kind, f):
 		// Only the lanes the tool reads out of its own config at startup. A
 		// restart does not change what the daemon can tail.
+		//
+		// ⚠️ AND ONLY THE ONES THAT HAVE NOT REPORTED SINCE. This was decided
+		// from the tool's STATE alone, so every expected lane carried "not
+		// restarted since" whenever the tool read `restart_required` — including
+		// a lane that had just delivered. Seen on a real machine 2026-09-21: the
+		// hook lane labelled "not restarted since" while its last pointer was 31
+		// SECONDS old against a config written 11 minutes earlier. The tool row
+		// was right (a session did predate the config); the lane label was a
+		// statement about that lane, and it was false.
+		//
+		// The restart belongs to the TOOL. A lane that has been seen since the
+		// config has visibly adopted it and has nothing to wait for.
 		return WaitingOnRestart
 	case kind == SurfaceReader && e.Supported && !expected:
 		return WaitingOnReader
 	default:
 		return WaitingOnNothing
 	}
+}
+
+// seenSinceConfigured reports whether this lane has carried something since
+// keld last wrote the tool's config. See waitingOn.
+func seenSinceConfigured(kind SurfaceKind, f Facts) bool {
+	if f.Wiring.ConfiguredAt.IsZero() {
+		return false
+	}
+	at := lastSeen(kind, f)
+	return at != nil && at.After(f.Wiring.ConfiguredAt)
 }
 
 // Respond wraps computed rows in the route's body, with the closed

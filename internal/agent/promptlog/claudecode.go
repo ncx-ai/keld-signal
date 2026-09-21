@@ -171,7 +171,7 @@ func claudeRecord(ts, event string, attrs []kv) logRecord {
 		SeverityNumber:       9,
 		SeverityText:         "INFO",
 		Body:                 anyVal{StringValue: "claude_code." + event},
-		Attributes:           attrs,
+		Attributes:           pruneEmpty(attrs),
 	}
 }
 

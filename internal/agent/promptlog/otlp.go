@@ -111,6 +111,40 @@ type metric struct {
 // attr builds a string-valued OTLP attribute.
 func attr(k, v string) kv { return kv{Key: k, Value: anyVal{StringValue: v}} }
 
+// pruneEmpty drops attributes whose VALUE object would serialise to `{}`.
+//
+// ⚠️ AN ATTRIBUTE WITH NO VALUE IS NOT AN EMPTY STRING ON THE WIRE, AND IT
+// BROKE THE WHOLE USAGE LANE AGAINST A REAL ATLAS. `anyVal.StringValue` carries
+// `omitempty`, so `attr("prompt.id", "")` marshals as
+// `{"key":"prompt.id","value":{}}`. Atlas flattens that to a Python dict and
+// the insert fails on the column it lands in:
+//
+//	invalid input for query argument $13: {} (expected str, got dict)
+//
+// $13 is `prompt_id`. Every batch carrying one killed the ingest consumer, so
+// NOTHING was stored — while the POST answered 200 and the client had no way to
+// know. Measured on a real machine 2026-09-21: the mirror posting correct rows
+// (claude-opus-5, 2 in / 887 out / 880,949 cache-read, $0.48) and Atlas holding
+// none of them.
+//
+// An empty prompt id is legitimate and common: the mirror learns it from a
+// `user_prompt` it observed, so a daemon that starts mid-session has none for
+// that session. The attribute simply should not be there.
+//
+// ⚠️ The conformance chains could not catch this: `mockatlas` accepts any
+// payload, so a row the real Atlas refuses passes there. A mock is a transport
+// check, not a schema one.
+func pruneEmpty(attrs []kv) []kv {
+	out := attrs[:0:0]
+	for _, a := range attrs {
+		if a.Value == (anyVal{}) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // attrInt builds an integer-valued OTLP attribute (encoded as a decimal string).
 func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: otlpInt(itoa(n))}} }
 

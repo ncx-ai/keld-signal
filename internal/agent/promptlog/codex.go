@@ -202,7 +202,7 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 		ObservedTimeUnixNano: ns,
 		SeverityNumber:       9,
 		SeverityText:         "INFO",
-		Attributes:           attrs,
+		Attributes:           pruneEmpty(attrs),
 	}
 	t.postLogs(codexResource(originator, cliVersion), []logRecord{rec})
 	// No metrics: Atlas prices Codex entirely off this log record, and there is

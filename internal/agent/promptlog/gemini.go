@@ -83,7 +83,7 @@ func (t *Telemetry) observeGeminiFile(source, path string) {
 			ObservedTimeUnixNano: ns,
 			SeverityNumber:       9,
 			SeverityText:         "INFO",
-			Attributes:           attrs,
+			Attributes:           pruneEmpty(attrs),
 		})
 	}
 	t.postLogs(res, recs)
