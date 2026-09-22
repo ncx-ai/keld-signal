@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { engineNotice, REASON_TEXT } from "../app.js";
+import { engineNotice, REASON_TEXT, ENGINE_DONE_LINGER_MS } from "../app.js";
 
 // A healthy machine gets NOTHING. The whole direction of travel here — wizard
 // pane, then card with a button, then this — has been removing decisions
@@ -115,4 +115,39 @@ test("a stale running state is not a fact once the page is offline", () => {
   // guard; this test names the contract so removing that guard has a stated
   // cost rather than a silent one.
   assert.equal(n.kind, "running");
+});
+
+// ⚠️ THE RECEIPT IS NOT A STATE. The daemon keeps `status: "done"` until it next
+// restarts — correct for /v1/engine, whose readers want to know what happened —
+// but on the page that pinned a green bar to the bottom of the screen for the
+// rest of the day, announcing work that finished hours ago.
+test("the updated line clears itself after five seconds", () => {
+  const done = { needed: true, installed: true, outdated: false, status: "done", version: "v3.0.5-rc.5" };
+  const at = 1_000_000;
+
+  // Long enough to read one short sentence and see which version landed.
+  assert.notEqual(engineNotice(done, { doneSince: at, now: at }), null);
+  assert.notEqual(engineNotice(done, { doneSince: at, now: at + 4_999 }), null);
+  // Then gone — a receipt that never clears is furniture.
+  assert.equal(engineNotice(done, { doneSince: at, now: at + ENGINE_DONE_LINGER_MS }), null);
+  assert.equal(engineNotice(done, { doneSince: at, now: at + 60_000 }), null);
+});
+
+// A caller with no clock (every pure test of the copy above) must still see the
+// message: a missing timestamp cannot silently suppress it.
+test("no clock means the line stays, rather than vanishing", () => {
+  const done = { needed: true, installed: true, outdated: false, status: "done", version: "v3.0.5-rc.5" };
+  assert.notEqual(engineNotice(done), null);
+  assert.notEqual(engineNotice(done, { doneSince: 0, now: 9_999_999 }), null);
+});
+
+// ⚠️ ONLY THE RECEIPT EXPIRES. A download still running, and a failure still
+// needing a decision, are states rather than receipts — they must survive any
+// amount of time on screen.
+test("a running download and a failure never time out", () => {
+  const at = 1_000_000, late = { doneSince: at, now: at + 600_000 };
+  const running = engineNotice({ needed: true, installed: true, outdated: true, status: "running", received: 1, total: 2 }, late);
+  const failed = engineNotice({ needed: true, installed: false, status: "failed", error: "http status 504" }, late);
+  assert.equal(running.kind, "running");
+  assert.equal(failed.kind, "failed");
 });

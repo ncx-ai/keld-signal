@@ -902,7 +902,18 @@ export function durabilityNote(health, settings) {
  *  Returns null when there is nothing to say — every healthy machine. `action`
  *  is "" except on `failed`, where a human choice genuinely exists again
  *  (retry now, or leave it to the next daemon start). */
-export function engineNotice(engine) {
+/** How long the "updated" line stays after a swap lands.
+ *
+ *  ⚠️ IT IS A RECEIPT, NOT A STATE. The daemon keeps `status: "done"` until it
+ *  next restarts — correct for /v1/engine, whose readers want to know what
+ *  happened — but on the page that meant a green bar pinned to the bottom of
+ *  the screen for the rest of the day, announcing work that finished hours ago.
+ *  Long enough to read one short sentence and see which version landed; short
+ *  enough that it never becomes furniture. The daemon's own answer is
+ *  unchanged: this is purely how long the page shows it. */
+export const ENGINE_DONE_LINGER_MS = 5000;
+
+export function engineNotice(engine, { doneSince = 0, now = 0 } = {}) {
   if (!engine || !engine.needed) return null;
   if (engine.status === "running") {
     const pct = engine.total > 0 ? Math.floor((engine.received * 100) / engine.total) : null;
@@ -937,7 +948,11 @@ export function engineNotice(engine) {
   if (engine.status === "done") {
     // Said once, after an update lands: the version is the whole point of
     // having watched it happen, and a bar that just disappears leaves somebody
-    // wondering whether it worked.
+    // wondering whether it worked — then it goes, because a receipt that never
+    // clears is furniture. `doneSince` 0 means the caller is not tracking it
+    // (every pure test of the copy), so the line stays: a missing clock must
+    // not silently hide the message.
+    if (doneSince && now - doneSince >= ENGINE_DONE_LINGER_MS) return null;
     return {
       kind: "done",
       title: "Analysis service updated",
@@ -1862,6 +1877,12 @@ if (typeof document !== "undefined") {
     route();
   }
 
+  // When this page first SAW the swap finish. Not the daemon's instant: the
+  // receipt is for whoever is looking, so the five seconds start when it could
+  // first have been read. 0 until a `done` actually arrives.
+  let engineDoneAt = 0;
+  let engineDoneTimer = null;
+
   // The engine bar: one line under the health strip, not a card with a button.
   // It reports work the daemon has already started — see engineNotice.
   function renderEngineCard() {
@@ -1874,7 +1895,7 @@ if (typeof document !== "undefined") {
     // had actually succeeded. The offline banner already says the page cannot
     // reach the daemon; this must not talk over it.
     if (state.offline) return null;
-    const n = engineNotice(state.engine);
+    const n = engineNotice(state.engine, { doneSince: engineDoneAt, now: Date.now() });
     if (!n) return null;
     const text = el("div", { class: "engine-text" },
       el("span", { class: "engine-title" }, n.title),
@@ -1903,15 +1924,32 @@ if (typeof document !== "undefined") {
   // next poll shows; there is nothing to report from here.
   async function clickEngineInstall() {
     state.engine = { ...(state.engine || {}), status: "running", received: 0, total: 0, error: "" };
+    engineDoneAt = 0;
     route();
     await sendJSON("/v1/engine/install", "POST", {});
     await loadEngine();
     route();
   }
 
+  /** Note a status transition into `done` and schedule the single re-render
+   *  that clears the receipt — without it the bar would sit there until the
+   *  next 30s poll happened to redraw, which is not the five seconds promised. */
+  function noteEngineDone(next) {
+    const wasDone = !!(state.engine && state.engine.status === "done");
+    const isDone = !!(next && next.status === "done");
+    if (isDone && !wasDone) {
+      engineDoneAt = Date.now();
+      clearTimeout(engineDoneTimer);
+      engineDoneTimer = setTimeout(route, ENGINE_DONE_LINGER_MS + 100);
+    }
+    if (!isDone) engineDoneAt = 0;
+  }
+
   async function loadEngine() {
     try {
-      state.engine = await fetchJSON("/v1/engine");
+      const next = await fetchJSON("/v1/engine");
+      noteEngineDone(next);
+      state.engine = next;
     } catch {
       // Includes a daemon with no /v1/engine route at all — an older build, or
       // a harness serving the page without it. That is "nothing to say about
