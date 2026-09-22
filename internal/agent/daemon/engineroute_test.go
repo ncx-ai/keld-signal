@@ -314,3 +314,122 @@ func TestTheTagCarriesExactlyOneLeadingV(t *testing.T) {
 	}
 	version.CLI = "dev"
 }
+
+// ⚠️ THE DAEMON FIXES ITS OWN ENGINE, IT DOES NOT ASK. A mismatched engine is
+// version SKEW — the failure that cost three silent weeks (a 2.3.0 daemon
+// against an Aug-11 sidecar: /blocks 404s, zero blocks, doctor reporting no
+// problems) — and there is no decision in it for a person to make. Every hour a
+// button goes unclicked is an hour of work that cuts no blocks.
+func TestAutoStartFixesAMismatchedEngineUnasked(t *testing.T) {
+	version.CLI = "3.0.5"
+	t.Cleanup(func() { version.CLI = "dev" })
+
+	for _, tc := range []struct {
+		name    string
+		locate  func(*testing.T) func() (string, bool)
+		wantRun bool
+	}{
+		{"absent", func(*testing.T) func() (string, bool) { return func() (string, bool) { return "", false } }, true},
+		{"outdated", func(t *testing.T) func() (string, bool) { return fakeEngine(t, "v3.0.4") }, true},
+		{"current", func(t *testing.T) func() (string, bool) { return fakeEngine(t, "v3.0.5") }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ran bool
+			done := make(chan struct{}, 1)
+			m := newEngineManager()
+			m.locate = tc.locate(t)
+			m.mode = func() string { return "deterministic" }
+			m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+				ran = true
+				done <- struct{}{}
+				return sidecarinstall.Result{}, nil
+			}
+			m.autoStart()
+			if tc.wantRun {
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("autoStart did not fetch for a mismatched engine")
+				}
+			} else {
+				time.Sleep(150 * time.Millisecond)
+			}
+			if ran != tc.wantRun {
+				t.Fatalf("install ran = %v, want %v", ran, tc.wantRun)
+			}
+		})
+	}
+}
+
+// ml_backend "off" is a choice, and self-healing must not be the one thing that
+// quietly overrides it.
+func TestAutoStartRespectsAMachineThatWantsNoEngine(t *testing.T) {
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "off" }
+	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		t.Fatal("autoStart fetched an engine on a machine with ml_backend off")
+		return sidecarinstall.Result{}, nil
+	}
+	m.autoStart()
+	time.Sleep(150 * time.Millisecond)
+}
+
+// ⚠️ ONCE PER RUN, NOT ON A TIMER. A fetch that failed will fail the same way in
+// thirty seconds, and retrying on a clock turns a flaky release host into a
+// download loop. The state keeps its reason, the page offers Try again, and the
+// next daemon start tries once more.
+func TestAutoStartDoesNotRetryAFailureOnItsOwn(t *testing.T) {
+	version.CLI = "3.0.5"
+	t.Cleanup(func() { version.CLI = "dev" })
+	var calls int
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "deterministic" }
+	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		calls++
+		return sidecarinstall.Result{}, errors.New("http status 504")
+	}
+	m.autoStart()
+	waitFor(t, 5*time.Second, func() bool { return m.state().Status == "failed" })
+	m.autoStart() // a second run of the same daemon must not pile on
+	time.Sleep(150 * time.Millisecond)
+	if calls != 1 {
+		t.Fatalf("the installer ran %d times after a failure, want 1 — a failed fetch must not loop", calls)
+	}
+	if m.state().Error == "" {
+		t.Fatal("the failure lost its reason; the page would show a bar with nothing to act on")
+	}
+}
+
+// The automatic attempt is bounded; a person pressing Try again is not. Both
+// halves matter: without the first a flaky host loops, without the second a
+// failed machine has no way back except a restart.
+func TestTryAgainStillWorksAfterTheAutomaticAttemptIsSpent(t *testing.T) {
+	version.CLI = "3.0.5"
+	t.Cleanup(func() { version.CLI = "dev" })
+	var calls int
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "deterministic" }
+	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		calls++
+		if calls == 1 {
+			return sidecarinstall.Result{}, errors.New("http status 504")
+		}
+		return sidecarinstall.Result{Version: "v3.0.5"}, nil
+	}
+	m.autoStart()
+	waitFor(t, 5*time.Second, func() bool { return m.state().Status == "failed" })
+
+	srv := engineServer(t, m)
+	resp, err := http.Post(srv.URL+"/v1/engine/install", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
+	if calls != 2 {
+		t.Fatalf("installer ran %d times, want 2 (one automatic, one by hand)", calls)
+	}
+}

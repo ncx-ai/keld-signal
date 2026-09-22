@@ -351,11 +351,34 @@ nothing blocked meanwhile.
   reason verbatim on `failed` (`http status 504` and `no space left on device`
   are different actions).
 
+⚠️ **THE DAEMON FIXES THIS ITSELF, ONCE PER RUN** (`engineManager.autoStart`,
+called from `Run`). An engine that does not match the daemon is version SKEW,
+not a preference, so nothing asks first — the page REPORTS the fetch, it does
+not offer it. Once per run and not on a timer: a fetch that failed will fail the
+same way in thirty seconds, and retrying on a clock turns a flaky release host
+into a download loop. A failure keeps its reason, the page offers **Try again**
+(which is not bounded), and the next daemon start tries once more.
+
+⚠️ **THE FETCH IS PINNED TO THE DAEMON'S OWN RELEASE**, and shipping it
+unpinned in `v3.0.5-rc.4` installed a stale engine within the hour: an empty tag
+resolves `releases/latest`, GoReleaser marks every `-rc.N` a PRERELEASE, and
+that endpoint excludes them — so a 3.0.5-rc.4 daemon fetched **v3.0.4** and the
+card then correctly reported the engine it had just installed as out of date.
+`postinstall` and `onboard.command` already pinned; this was the one path that
+did not. A `dev` build stays unpinned, because it names no release.
+
 `POST /v1/engine/install` → `202` with the same body, **immediately**: it starts
-one install and the page polls. `409 not_needed` when `ml_backend` is `"off"` —
+one install and the page polls. On the ordinary path nothing calls it — the
+daemon has already started — so it exists for the failed state's Try again. `409 not_needed` when `ml_backend` is `"off"` —
 that is a choice, and this must not be the one way to undo it. `409
 already_running` when one is in flight, so a second click cannot start a second
 300 MB fetch.
 
 The page renders this through `engineNotice()` (`ui/app.js`), which returns
-**null** for a healthy machine: no card, no button nobody needs to press.
+**null** for a healthy machine and otherwise an information bar under the health
+strip — the verb distinguishes a first install from an update, a percentage
+appears only when the server sent a total (a bar at 0% while bytes arrive is the
+indicator lying), and a finished update NAMES the version it landed on. `action`
+is empty except on `failed`. The strip's own `sidecar_outdated` copy changed
+with it: it used to read "reinstall to update it", an instruction for work the
+daemon is already doing, printed directly above a bar showing it happen.

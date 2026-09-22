@@ -60,6 +60,13 @@ type engineManager struct {
 	received int64
 	total    int64
 	errMsg   string
+	// autoAttempted records that this daemon run has already tried on its own.
+	// ⚠️ It is NOT the same as `status == "running"`: a FAILED fetch leaves the
+	// status "failed", and without this flag anything that calls autoStart again
+	// would retry immediately — a flaky release host turned into a download
+	// loop. The page's Try again goes through start() and is unaffected, which
+	// is the point: automatic once, by hand as often as a person likes.
+	autoAttempted bool
 	// install is the seam tests replace. Nil means the real one.
 	install func(sidecarinstall.Opts) (sidecarinstall.Result, error)
 	// locate and mode are the two facts about this machine, as seams for the
@@ -144,6 +151,44 @@ func (m *engineManager) start() bool {
 		m.mu.Unlock()
 	}()
 	return true
+}
+
+// autoStart installs or updates the engine WITHOUT being asked, once per daemon
+// run.
+//
+// ⚠️ THERE IS NO DECISION HERE TO GIVE SOMEBODY. The daemon knows which version
+// it needs — its own — and an engine that does not match it is not a preference,
+// it is the version-skew failure this project has already paid for twice (a
+// 2.3.0 daemon against an Aug-11 sidecar: /blocks 404s, zero blocks published,
+// doctor reporting no problems for three weeks). A button asking permission to
+// fix that is friction in front of a question with one answer, and every hour
+// it goes unclicked is an hour of work that cuts no blocks.
+//
+// Once per daemon run, not on a timer: a fetch that failed will fail the same
+// way in thirty seconds, and a page that retried on its own schedule would turn
+// a flaky release host into a download loop. The state stays `failed` with its
+// reason, the page offers a Try again, and the next daemon start tries once
+// more. That is the same shape KELD_ENRICH_MAX_ATTEMPTS and the update loop's
+// failed_versions already take: bounded, stated, and recoverable by hand.
+func (m *engineManager) autoStart() {
+	m.mu.Lock()
+	if m.autoAttempted {
+		m.mu.Unlock()
+		return
+	}
+	m.autoAttempted = true
+	m.mu.Unlock()
+
+	st := m.state()
+	if !st.Needed {
+		return
+	}
+	// Outdated OR absent. Both are "the engine on this disk is not the one this
+	// daemon needs", and neither is a choice.
+	if st.Installed && !st.Outdated {
+		return
+	}
+	m.start()
 }
 
 // engineRoute serves the page's two calls. GET is safe to poll; POST starts one

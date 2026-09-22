@@ -579,7 +579,11 @@ export const REASON_TEXT = {
   atlas_unavailable: "Couldn't reach Atlas — Signal will retry.",
   captive_portal: "Got a login page back instead of Atlas — check the network.",
   atlas_off: "Send to Atlas is off.",
-  sidecar_outdated: "The local analysis service is out of date — reinstall to update it.",
+  // ⚠️ NOT "reinstall to update it" ANY MORE. The daemon updates the engine
+  // itself, unasked (engineManager.autoStart), so telling somebody to do it by
+  // hand is an instruction for work already in progress — and the bar under
+  // this strip is showing that work.
+  sidecar_outdated: "The analysis service is updating itself.",
   sidecar_down: "The local analysis service isn't responding.",
   sidecar_behind: "The local analysis service is still catching up.",
   attribute_failed: "Couldn't work out a project for this block after several tries.",
@@ -858,31 +862,37 @@ export function durabilityNote(health, settings) {
 
 /** What the page should say about the analysis engine, from GET /v1/engine.
  *
- *  ⚠️ THIS USED TO HAPPEN IN THE macOS INSTALLER, AND IT WEDGED THE WIZARD.
- *  The pane downloaded 315 MB before a person had finished installing, held
- *  Continue until it settled, and rendered its progress from an XPC-hosted
- *  view whose layout pass then pegged the plugin's main thread — with the
- *  download already finished and staged on disk. Here the work is optional,
- *  cancellable by walking away, and a failure is a line of text beside a
- *  button.
+ *  ⚠️ IT REPORTS, IT DOES NOT ASK. The daemon keeps the engine in step with
+ *  itself (engineManager.autoStart) because a mismatched engine is version
+ *  SKEW, not a preference — the failure this project already paid three silent
+ *  weeks for. So there is no "Update" button on the normal path: by the time
+ *  the page renders, the fetch is already running. What is left to do is say
+ *  what is happening, show how far along it is, and name the version when it
+ *  lands.
  *
- *  Returns null when there is nothing to say — which is the common case and
- *  the point: a machine with a current engine gets no card, the same rule
- *  durabilityNote follows for a healthy strip. Four states earn one:
- *  `missing` (needed, none on disk), `outdated` (present, older than this
- *  daemon), `running` (a download in flight), `failed` (one that did not
- *  land). `action` is the button's label, or "" where there is nothing to
- *  press. */
+ *  This used to be a card with a Download button, and before that it was a
+ *  wizard pane that held the macOS installer hostage to the same 300 MB. Each
+ *  move removed a decision nobody had the information to make.
+ *
+ *  Returns null when there is nothing to say — every healthy machine. `action`
+ *  is "" except on `failed`, where a human choice genuinely exists again
+ *  (retry now, or leave it to the next daemon start). */
 export function engineNotice(engine) {
   if (!engine || !engine.needed) return null;
   if (engine.status === "running") {
     const pct = engine.total > 0 ? Math.floor((engine.received * 100) / engine.total) : null;
+    // "Updating" and "Installing" are different facts to somebody reading this:
+    // one is a machine catching up with itself, the other is a machine getting
+    // the thing for the first time.
+    const verb = engine.installed ? "Updating" : "Installing";
     return {
       kind: "running",
-      title: "Downloading the analysis engine",
-      // A percentage only when the server sent a total. "Downloading… 0%" for
-      // an indeterminate fetch is a number the page invented.
-      detail: pct === null ? "Starting…" : `${pct}% of ${Math.round(engine.total / 1048576)} MB`,
+      title: `${verb} the analysis service…`,
+      // A percentage only when the server sent a total. "0%" for an
+      // indeterminate fetch is a number the page invented, and a bar sitting at
+      // zero while bytes arrive is the progress indicator lying — which is
+      // exactly how the installer pane read while its download had finished.
+      detail: pct === null ? "Starting…" : `${pct}%`,
       percent: pct,
       action: "",
     };
@@ -890,29 +900,37 @@ export function engineNotice(engine) {
   if (engine.status === "failed") {
     return {
       kind: "failed",
-      title: "The analysis engine did not download",
-      // The reason verbatim: "http status 504" is actionable (try later) and
-      // "no space left on device" is a different action entirely.
-      detail: engine.error || "No reason was reported.",
+      title: "The analysis service couldn't update",
+      // The reason verbatim: "http status 504" means try later and "no space
+      // left on device" is a different action entirely. Signal retries on its
+      // own at the next start, so say that rather than leaving it looking
+      // abandoned.
+      detail: `${engine.error || "No reason was reported."} Signal will try again when it next starts.`,
       action: "Try again",
     };
   }
-  if (!engine.installed) {
+  if (engine.status === "done") {
+    // Said once, after an update lands: the version is the whole point of
+    // having watched it happen, and a bar that just disappears leaves somebody
+    // wondering whether it worked.
     return {
-      kind: "missing",
-      title: "The analysis engine is not installed",
-      detail: "Keld needs it to group your work into focus blocks. About 300 MB.",
-      action: "Download",
+      kind: "done",
+      title: "Analysis service updated",
+      detail: engine.version ? `Now running ${engine.version}.` : "Now up to date.",
+      percent: 100,
+      action: "",
     };
   }
-  if (engine.outdated) {
+  // Idle and not yet matching: the daemon starts its own fetch once per run, so
+  // this is the moment before that lands — or a machine whose one attempt is
+  // done and failed, which the branch above already owns.
+  if (!engine.installed || engine.outdated) {
     return {
-      kind: "outdated",
-      title: "The analysis engine is out of date",
-      // Both versions, because "out of date" with no numbers is a claim the
-      // person cannot check — and the two halves ship on separate cadences.
-      detail: `Installed ${engine.version || "unknown"}, this version expects ${engine.expected}.`,
-      action: "Update",
+      kind: "pending",
+      title: engine.installed ? "Updating the analysis service…" : "Installing the analysis service…",
+      detail: "Starting…",
+      percent: null,
+      action: "",
     };
   }
   return null;
@@ -1759,39 +1777,37 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  // The engine card. Absent whenever engineNotice says there is nothing to
-  // say, which is every healthy machine — the page does not hand somebody a
-  // 300 MB button they have no reason to press.
+  // The engine bar: one line under the health strip, not a card with a button.
+  // It reports work the daemon has already started — see engineNotice.
   function renderEngineCard() {
     const n = engineNotice(state.engine);
     if (!n) return null;
-    const kids = [
-      el("div", { class: "engine-title" }, n.title),
-      el("div", { class: "engine-detail" }, n.detail),
-    ];
-    if (n.kind === "running") {
+    const text = el("div", { class: "engine-text" },
+      el("span", { class: "engine-title" }, n.title),
+      el("span", { class: "engine-detail" }, n.detail)
+    );
+    const kids = [text];
+    if (n.percent !== null && n.kind !== "failed") {
       const bar = el("div", { class: "engine-bar" });
       const fill = el("div", { class: "engine-fill" });
-      // Width only when a percentage exists; an indeterminate fetch gets the
-      // striped track and no fill, never a bar creeping on invented numbers.
-      if (n.percent !== null) fill.style.width = `${n.percent}%`;
+      fill.style.width = `${n.percent}%`;
       bar.appendChild(fill);
       kids.push(bar);
+    } else if (n.kind !== "failed") {
+      // Indeterminate: a striped track and no fill, because the width would be
+      // a number nobody sent.
+      kids.push(el("div", { class: "engine-bar indeterminate" }, el("div", { class: "engine-fill" })));
     }
     if (n.action) {
       kids.push(el("button", { class: "btn", type: "button", onclick: clickEngineInstall }, n.action));
     }
-    return el("div", { class: `engine-card ${n.kind}` }, ...kids);
+    return el("div", { class: `engine-bar-row ${n.kind}` }, ...kids);
   }
 
-  // ⚠️ THE POST ONLY STARTS IT. The daemon answers 202 and the page polls, so
-  // nothing here waits out a download — the mistake this whole path was moved
-  // out of the installer to avoid. A 409 means somebody already pressed it
-  // (or the machine wants no engine); either way the next poll tells the truth,
-  // so there is nothing to report from here.
+  // Only ever reached from the failed state's Try again — the ordinary path is
+  // the daemon's own autoStart. A 409 means it is already running, which the
+  // next poll shows; there is nothing to report from here.
   async function clickEngineInstall() {
-    // Optimistic only as far as the spinner: the status still comes from the
-    // server, so a refused click falls straight back to what it was.
     state.engine = { ...(state.engine || {}), status: "running", received: 0, total: 0, error: "" };
     route();
     await sendJSON("/v1/engine/install", "POST", {});
@@ -3142,7 +3158,13 @@ if (typeof document !== "undefined") {
     // While the engine is downloading the page polls it on its own clock: the
     // 30s loop above is fine for a ledger and useless for a progress bar.
     setInterval(async () => {
-      if (!state.engine || state.engine.status !== "running") return;
+      // Poll while a fetch is in flight AND while one is expected but has not
+      // started reporting yet — the daemon kicks its own off at startup, so the
+      // page must not sit on a stale "Starting…" for 30 seconds.
+      const st = state.engine;
+      if (!st || !st.needed) return;
+      const busy = st.status === "running" || (st.status === "idle" && (!st.installed || st.outdated));
+      if (!busy) return;
       await loadEngine();
       route();
     }, 1500);

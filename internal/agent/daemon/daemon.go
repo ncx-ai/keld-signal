@@ -1001,6 +1001,11 @@ func Run(ctx context.Context) error {
 	// than rebuilt from the ledger's own delivery-cell schema.
 	startRepublisher(ctx, sig.ledger, atlasCl)
 
+	// The analysis engine keeps ITSELF in step with this daemon: an engine that
+	// does not match is skew, not a preference, so nothing asks first. Once per
+	// run, in the background — see engineManager.autoStart.
+	go currentEngineManager().autoStart()
+
 	v3Routes := append(sig.routes(),
 		// SettingsRoute's restart function is service.Restart() — the SAME
 		// mechanism internal/agent/update already uses to restart the daemon

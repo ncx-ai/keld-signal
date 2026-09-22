@@ -622,27 +622,35 @@ fieldset:disabled { opacity: .55; }
   .intg-actions .btn { flex: 1 1 auto; }
 }
 
-/* The analysis-engine card. Shown only when engineNotice() has something to
-   say — a healthy machine sees nothing here at all. Built from the same tokens
-   as every other surface so it reads as part of the page rather than as an
-   installer that wandered in. */
-.engine-card {
+/* The analysis-engine bar: ONE LINE under the health strip, not a card. It
+   reports a fetch the daemon has already started, so there is nothing to press
+   on the ordinary path and nothing that should take a card's worth of room.
+   Built from the same tokens as the strip above it. */
+.engine-bar-row {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  margin: 12px 0 0;
-  background: var(--surface);
+  gap: 6px;
+  padding: 10px 14px;
+  margin: 8px 0 0;
+  background: var(--nested);
   border: 1px solid var(--rule);
-  border-radius: 10px;
+  border-radius: 8px;
+  font-size: 13px;
 }
-.engine-card .engine-title { font-weight: 600; color: var(--ink); }
-.engine-card .engine-detail { color: var(--ink-2); font-size: 13px; }
-.engine-card .btn { align-self: flex-start; }
-.engine-card.failed { border-color: var(--rule-strong); }
+.engine-bar-row .engine-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.engine-bar-row .engine-title { font-weight: 600; color: var(--ink); }
+.engine-bar-row .engine-detail { color: var(--ink-2); }
+.engine-bar-row .btn { align-self: flex-start; margin-top: 2px; }
+.engine-bar-row.failed { border-color: var(--rule-strong); }
+.engine-bar-row.done { border-color: var(--green-soft); }
 .engine-bar {
-  height: 6px;
-  border-radius: 3px;
+  height: 4px;
+  border-radius: 2px;
   background: var(--deep);
   overflow: hidden;
 }
@@ -651,4 +659,14 @@ fieldset:disabled { opacity: .55; }
   width: 0;
   background: var(--green);
   transition: width .3s ease;
+}
+/* Indeterminate: a sliding sliver, never a fill at 0% pretending to be
+   progress nobody reported. */
+.engine-bar.indeterminate .engine-fill {
+  width: 30%;
+  animation: engine-slide 1.2s ease-in-out infinite;
+}
+@keyframes engine-slide {
+  0%   { margin-left: -30%; }
+  100% { margin-left: 100%; }
 }

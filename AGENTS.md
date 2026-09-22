@@ -2646,6 +2646,23 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   download **already finished and staged on disk**. The person watched
   "Downloading the analysis engine" for as long as they were willing to wait
   for something that had succeeded.
+  ⚠️ **AND IT IS AUTOMATIC — THE PAGE REPORTS, IT DOES NOT ASK.** The first cut
+  of this put a Download/Update button on the page, which is the installer's
+  question moved one screen along: a mismatched engine is version SKEW, not a
+  preference, and every hour that button goes unclicked is an hour of work that
+  cuts no blocks. `engineManager.autoStart` fetches once per daemon run
+  (bounded, because a fetch that failed will fail the same way in thirty seconds
+  and a clock would turn a flaky host into a download loop); the page shows a
+  one-line bar with progress and names the version when it lands; only a
+  FAILURE offers Try again, which is the one place a human choice exists again.
+  ⚠️ **The fetch is PINNED to the daemon's own release**, and shipping it
+  unpinned in `v3.0.5-rc.4` installed a stale engine within the hour: an empty
+  tag resolves `releases/latest`, every `-rc.N` is a PRERELEASE, and that
+  endpoint excludes them — so a 3.0.5-rc.4 daemon fetched **v3.0.4** and the
+  page then correctly reported the engine it had just installed as out of date.
+  `postinstall` and `onboard.command` already pinned; this was the fourth caller
+  of a rule the other three encoded privately, which is the argument for
+  `internal/sidecarinstall` owning it.
   The daemon owns it now: `GET /v1/engine` reports whether one is NEEDED
   (`ml_backend` ≠ "off"), what is installed, and whether it is outdated — read
   from DISK, never by probing the running service, so a present-but-starting
