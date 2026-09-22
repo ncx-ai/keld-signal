@@ -338,17 +338,22 @@ fn main() {
                 }
             });
 
-            // Tray icon: a MONOCHROME template mark, not the coloured app
-            // icon. macOS recolors a "template" image's alpha shape per
-            // menu-bar theme (light/dark/highlighted); the coloured 3-tone
-            // logo (`icons/icon.png`) would render as flat, wrong-looking
-            // color swatches instead. `icons/tray-icon.png` is generated from
-            // it: the logo's flat green background dropped, the gold+white
-            // mark kept as solid black with the original antialiasing as
-            // alpha, cropped to the mark's own bounding box (27x44 — narrow
-            // and tall, not padded to a square) rather than shrinking the
-            // full square canvas, which at menu-bar size read as a
-            // featureless block.
+            // Tray icon: a MONOCHROME template mark, not the app icon. macOS
+            // recolors a "template" image's alpha shape per menu-bar theme
+            // (light/dark/highlighted), so it reads only the alpha and paints
+            // the mark itself — white on a dark menu bar, black on a light
+            // one. The app icon (`icons/icon.png`) would render here as a
+            // featureless black blob, because its black rounded plate is
+            // opaque and the plate is what the alpha would describe.
+            //
+            // `icons/tray-icon.png` is therefore the Keld K on its own, with
+            // no plate: the SAME source mark the app icon is drawn from,
+            // rendered by the same `icons/src/render-icon.mjs` — which is the
+            // point, since the two used to come from different artwork and
+            // the menu bar kept showing the old logo after the app icon
+            // changed. It is 39x44 with the artwork inset to 36px tall
+            // (~18pt of 22pt, Apple's menu-bar guidance); full-bleed, the
+            // mark's vertical stroke stands taller than the clock beside it.
             let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
                 .expect("tray-icon.png must decode");
 
