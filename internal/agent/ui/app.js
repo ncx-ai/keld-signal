@@ -624,6 +624,27 @@ export function todayLedgerURL(now) {
  *  that is the number people already know from Android's build-number gesture —
  *  a hidden control is only useful if someone can be TOLD how to reach it, and
  *  the familiar number is the instruction. */
+/** Panes behind the Developer box. The Integrations pane is here while its
+ *  state machine settles: it is the surface that has cried wolf most — a
+ *  healthy machine reporting six different failures in one afternoon, every one
+ *  of them Signal misreading itself — and a pane nobody can trust is worse than
+ *  a pane nobody can see. Hidden is a decision to revisit, not a deletion: the
+ *  routes, the detector and their tests all stay live, so turning it back on is
+ *  removing a name from this list.
+ *
+ *  ⚠️ Hiding the LINK is not hiding the PANE. A bookmark, a reload on
+ *  `#/integrations`, or the hash left over from before the toggle flipped would
+ *  all still land there, and a pane reached that way renders with no way back
+ *  to it — which is worse than either state on purpose. paneFromHash consults
+ *  this too, so there is one rule and both callers read it. */
+export const DEV_ONLY_PANES = ["integrations"];
+
+/** paneVisible reports whether a pane may be shown at all. Pure so the rule can
+ *  be tested without a DOM, and so the nav and the router cannot drift. */
+export function paneVisible(pane, devMode) {
+  return devMode || !DEV_ONLY_PANES.includes(pane);
+}
+
 export const DEV_TAPS = 7;
 
 /** How long a tap streak survives without another tap.
@@ -1485,7 +1506,7 @@ if (typeof document !== "undefined") {
 
   async function loadAll() {
     try {
-      const [ledger, settings, projects, engine] = await Promise.all([
+      const [ledger, settings, projects] = await Promise.all([
         // ⚠️ **BOUNDED TO TODAY, AND IT USED TO BE UNBOUNDED.** This asked for
         // the whole ledger and the pane drew all of it: measured on a real
         // machine, 108 blocks across FOUR days under a heading reading
@@ -1494,12 +1515,10 @@ if (typeof document !== "undefined") {
         fetchJSON(todayLedgerURL(Date.now())),
         fetchJSON("/v1/settings"),
         fetchJSON("/v1/projects"),
-        fetchJSON("/v1/engine"),
       ]);
       state.ledger = ledger;
       state.settings = settings;
       state.projects = projects;
-      state.engine = engine;
       state.offline = false;
       writeJSONStorage(LEDGER_CACHE_KEY, ledger);
     } catch (err) {
@@ -1509,11 +1528,32 @@ if (typeof document !== "undefined") {
       // is nothing to show, and the empty state below says so honestly.
       state.ledger = state.ledger || readJSONStorage(LEDGER_CACHE_KEY, null);
     }
+    // ⚠️ DELIBERATELY NOT IN THE Promise.all ABOVE. That set decides whether the
+    // page says "Signal is not running on this machine", and the engine is
+    // supplementary to every one of them — so a daemon without the route (an
+    // older build, or any harness serving the page without it) would have
+    // declared the whole machine down over a missing progress bar. Caught by
+    // the mock-shell specs, which is exactly the shape an older daemon has.
+    await loadEngine();
   }
 
   function paneFromHash() {
     const h = (location.hash || "#/today").replace(/^#\//, "");
-    return ["today", "projects", "integrations", "settings"].includes(h) ? h : "today";
+    if (!["today", "projects", "integrations", "settings"].includes(h)) return "today";
+    // A hidden pane is not reachable by hash either — see DEV_ONLY_PANES.
+    return paneVisible(h, devModeOn()) ? h : "today";
+  }
+
+  /** Show or hide the nav links for dev-only panes. Called from route(), so
+   *  flipping the Developer toggle takes effect on the same click that flips
+   *  it — the toggle already calls route(). */
+  function syncNavVisibility() {
+    const dev = devModeOn();
+    document.querySelectorAll("nav[aria-label='Panes'] a").forEach((a) => {
+      const p = a.dataset.pane;
+      if (!p) return;
+      a.hidden = !paneVisible(p, dev);
+    });
   }
 
   const PANE_TITLE = {
@@ -1828,6 +1868,9 @@ if (typeof document !== "undefined") {
     try {
       state.engine = await fetchJSON("/v1/engine");
     } catch {
+      // Includes a daemon with no /v1/engine route at all — an older build, or
+      // a harness serving the page without it. That is "nothing to say about
+      // the engine", never "this machine is down": see the note in loadAll.
       // Leave the last known state: an unreachable daemon is not an absent
       // engine, and the offline banner already says the page cannot reach it.
     }
@@ -3123,6 +3166,7 @@ if (typeof document !== "undefined") {
     renderServiceBanner(alert);
     renderNavHealth(alert);
     renderNavVersion();
+    syncNavVisibility();
     document.getElementById("offlineBanner").hidden = !state.offline;
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the

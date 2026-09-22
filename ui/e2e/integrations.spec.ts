@@ -225,7 +225,7 @@ test.describe("Integrations · live daemon", () => {
 
   test("the pane lists this machine's tools with the states the daemon computed", async ({ signal, page, state }) => {
     fixtureHome(state); // the same refusal, asserted before anything reads a row
-    await signal.open("integrations");
+    await signal.openDev("integrations");
 
     const rows = page.locator(".intg-row");
     await expect(rows.first()).toBeVisible();
@@ -294,7 +294,7 @@ test.describe("Integrations · live daemon", () => {
     writeFile(CODEX_CONFIG(home), CODEX_CONFIG_BEFORE, minutesAgo(120));
     writeFile(CODEX_SESSION(home), codexSessionMeta(minutesAgo(120)), minutesAgo(120));
 
-    await signal.open("integrations");
+    await signal.openDev("integrations");
     const row = page.locator('.intg-row[data-integration="codex"]');
 
     // ⚠️ This is also AC-3's OTHER half — "with `auto_setup_integrations` off,
@@ -365,7 +365,7 @@ test.describe("Integrations · live daemon", () => {
     writeFile(path.join(home, ".gemini", "settings.json"), GEMINI_SETTINGS_BEFORE, minutesAgo(120));
     writeFile(path.join(home, ".gemini", "tmp", "e2e", "chats", "session.jsonl"), geminiChat(minutesAgo(120)), minutesAgo(120));
 
-    await signal.open("integrations");
+    await signal.openDev("integrations");
     const row = page.locator('.intg-row[data-integration="gemini_cli"]');
 
     // The pane says so, off the server's own `auto_setup` boolean.
@@ -421,7 +421,7 @@ test.describe("Integrations · live daemon", () => {
     writeFile(CODEX_SESSION(home), codexSessionMeta(sessionAt), sessionAt);
     writeFile(CODEX_CONFIG(home), written + HOOKS_STATE_UNTRUSTED, new Date(sessionAt.getTime() - 60_000));
 
-    await signal.open("integrations");
+    await signal.openDev("integrations");
     const row = page.locator('.intg-row[data-integration="codex"]');
 
     await expect(row.locator(".intg-state")).toHaveText("approval_required", { timeout: 90_000 });
@@ -449,7 +449,7 @@ test.describe("Integrations · live daemon", () => {
 
   test("Report a problem writes a bundle and names where it went", async ({ signal, page, state }) => {
     const home = fixtureHome(state);
-    await signal.open("integrations");
+    await signal.openDev("integrations");
 
     // ⚠️ CODEX, WHERE THIS USED TO SAY CLAUDE CODE. `Report a problem` is
     // offered on a CONFIGURED row, and Codex is the one tool this suite

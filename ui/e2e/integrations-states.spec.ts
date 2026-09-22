@@ -232,6 +232,19 @@ test.beforeAll(async () => {
 
 async function openPane(page: Page, shell: Shell, size: { width: number; height: number }): Promise<void> {
   await page.setViewportSize({ width: size.width, height: size.height });
+  // The Integrations pane is behind the Developer box (DEV_ONLY_PANES in
+  // app.js) while its state machine settles, and paneFromHash refuses a hidden
+  // pane — so a bookmark cannot reach one either. Seed the same per-browser
+  // preference the seven taps write, before the first script runs.
+  await page.addInitScript(() => {
+    try {
+      const key = "keld_signal_local_prefs";
+      const prev = JSON.parse(localStorage.getItem(key) || "{}");
+      localStorage.setItem(key, JSON.stringify({ ...prev, devMode: true }));
+    } catch {
+      /* storage blocked: the assertions below fail on the pane, not here */
+    }
+  });
   await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
   // ⚠️ **THE NONCE IS LOAD-BEARING.** A `goto` to a URL that differs only in
   // its hash is a SAME-DOCUMENT navigation: the page is not re-fetched, so a
