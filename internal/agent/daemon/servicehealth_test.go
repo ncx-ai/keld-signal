@@ -110,14 +110,22 @@ func TestOneFailedProbeRestartsNothing(t *testing.T) {
 		t.Fatalf("sidecar restarts = %d after ONE failure, want 0", restarts)
 	}
 	got := h.Snapshot()
-	if got.State != string(serviceDegraded) {
-		t.Fatalf("state = %q after one failure, want %q", got.State, serviceDegraded)
+	// ⚠️ SETTLING, NOT DEGRADED — the contract changed on 2026-09-22 and this
+	// assertion moved with it. The intent is unchanged and still enforced
+	// below: one miss must be REPORTED, with a reason, never swallowed. What
+	// changed is that reporting it no longer ALARMS, because the page alarms on
+	// `degraded` and this branch's own sentence says nothing has been restarted
+	// since one missed check is usually noise. Seen live seconds after a good
+	// sidecar swap: a banner offering Restart above text saying nothing was
+	// wrong, cleared on its own moments later.
+	if got.State != string(serviceSettling) {
+		t.Fatalf("state = %q after one failure, want %q", got.State, serviceSettling)
 	}
 	if got.Failures != 1 {
 		t.Fatalf("failures = %d, want 1", got.Failures)
 	}
 	if got.Reason == "" {
-		t.Fatal("degraded must carry a reason; a state with no sentence is unreadable on the page")
+		t.Fatal("settling must carry a reason; a state with no sentence is unreadable on the page")
 	}
 	if rec.count("service.restarted") != 0 {
 		t.Fatal("no restart happened, so no service.restarted may be emitted")
@@ -136,7 +144,7 @@ func TestTwoFailedProbesStillRestartNothing(t *testing.T) {
 	if restarts != 0 {
 		t.Fatalf("sidecar restarts = %d after TWO failures, want 0 — the rung is three", restarts)
 	}
-	if got := h.Snapshot(); got.State != string(serviceDegraded) || got.Failures != 2 {
+	if got := h.Snapshot(); got.State != string(serviceSettling) || got.Failures != 2 {
 		t.Fatalf("snapshot = %#v, want degraded with 2 failures", got)
 	}
 }
@@ -448,7 +456,11 @@ func TestTheHealthStripAndTheServiceBlockCannotContradictEachOther(t *testing.T)
 		wantStatus ledger.Status
 	}{
 		{"answering", []bool{true}, 1, serviceOK, ledger.StatusOK},
-		{"one miss", []bool{false}, 1, serviceDegraded, ledger.StatusFailed},
+		// Both halves move together — which is the whole point of this test.
+		// A miss the ladder has not acted on is `settling` in the service block
+		// and n/a `sidecar_starting` in the strip; neither alarms, and they
+		// still cannot contradict each other.
+		{"one miss", []bool{false}, 1, serviceSettling, ledger.StatusNA},
 		{"restarting", []bool{false}, 3, serviceRestarting, ledger.StatusFailed},
 		{"stuck", []bool{false}, 9, serviceStuck, ledger.StatusFailed},
 	} {
@@ -517,8 +529,11 @@ func TestTheStartupGraceSuppressesEscalationButNotReporting(t *testing.T) {
 		t.Fatalf("sidecar restarts = %d inside the startup grace, want 0", got)
 	}
 	got := h.Snapshot()
-	if got.State != string(serviceDegraded) {
-		t.Fatalf("state = %q inside the grace after failed probes, want %q — the page must not be blank", got.State, serviceDegraded)
+	// Reported, not blank — and reported as the NON-ALARMING state, since
+	// nothing has been done about it. "Must not be blank" is the invariant this
+	// test was written for; "must be degraded" was only ever how it was spelled.
+	if got.State != string(serviceSettling) {
+		t.Fatalf("state = %q inside the grace after failed probes, want %q — the page must not be blank", got.State, serviceSettling)
 	}
 	if got.Failures != 0 {
 		t.Fatalf("failures = %d inside the grace, want 0 — no streak has started", got.Failures)
@@ -600,5 +615,63 @@ func TestRequestRestartRefusesWhenTheSupervisorIsNotRunning(t *testing.T) {
 	waitFor(t, 6*time.Second, func() bool { return s.AwaitStopped(10 * time.Millisecond) })
 	if err := s.RequestRestart(); !errors.Is(err, ErrSupervisorStopped) {
 		t.Fatalf("RequestRestart after shutdown = %v, want ErrSupervisorStopped", err)
+	}
+}
+
+// ⚠️ NOTHING ALARMS BEFORE THE LADDER ACTS. Observed 2026-09-22, seconds after
+// a perfectly good sidecar swap: a banner reading "The analysis service isn't
+// healthy" with a Restart button, sitting directly above the daemon's own
+// sentence "(1 in a row). Nothing has been restarted — one missed check is
+// usually noise" — and it cleared on its own moments later. A page that offers
+// a remedy for something that self-heals, while saying so, teaches people to
+// ignore the page.
+func TestMissesBelowTheFirstRungReportSettlingNotDegraded(t *testing.T) {
+	h := newTestHealth(t, (&probeStub{answers: []bool{false}}).probe, func() error { return nil }, func() error { return nil }, nil)
+
+	for n := 1; n < serviceRestartSidecarAt; n++ {
+		h.onFailure()
+		if got := h.Snapshot().State; got != string(serviceSettling) {
+			t.Fatalf("after %d miss(es): state = %q, want %q — the ladder has not acted yet",
+				n, got, serviceSettling)
+		}
+		if !h.Settling() {
+			t.Fatalf("after %d miss(es): Settling() = false", n)
+		}
+	}
+
+	// The rung itself still fires, and what it reports is NOT settling: an
+	// action has been taken, which is exactly when a person may need to know.
+	h.onFailure()
+	if got := h.Snapshot().State; got == string(serviceSettling) {
+		t.Fatalf("at the restart rung the state is still %q; an action taken must be reported", got)
+	}
+	if h.Settling() {
+		t.Fatal("Settling() is still true once the ladder has acted")
+	}
+}
+
+// A daemon that has never probed is not a verdict either — and `ok` would be a
+// confident answer from a check that did not run.
+func TestBeforeTheFirstProbeTheServiceIsSettling(t *testing.T) {
+	h := newTestHealth(t, (&probeStub{answers: []bool{false}}).probe, func() error { return nil }, func() error { return nil }, nil)
+	if got := h.Snapshot().State; got != string(serviceSettling) {
+		t.Fatalf("before any probe: state = %q, want %q", got, serviceSettling)
+	}
+}
+
+// Settling must clear the moment the service answers, or the page would sit on
+// "starting" over a service that is up.
+func TestASuccessfulProbeEndsSettling(t *testing.T) {
+	h := newTestHealth(t, (&probeStub{answers: []bool{false}}).probe, func() error { return nil }, func() error { return nil }, nil)
+	h.onFailure()
+	if !h.Settling() {
+		t.Fatal("one miss should be settling")
+	}
+	h.onSuccess()
+	if h.Settling() {
+		t.Fatal("Settling() is still true after the service answered")
+	}
+	if got := h.Snapshot().State; got != string(serviceOK) {
+		t.Fatalf("state = %q, want ok", got)
 	}
 }

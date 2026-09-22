@@ -590,6 +590,9 @@ export const REASON_TEXT = {
   // this strip is showing that work.
   sidecar_outdated: "The analysis service is updating itself.",
   sidecar_down: "The local analysis service isn't responding.",
+  // Not answering YET, nothing done about it — start-up or a missed check the
+  // daemon's own ladder calls noise. Never a fault. See SERVICE_SETTLING.
+  sidecar_starting: "The analysis service is starting.",
   // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
   sidecar_updating: "Signal is updating the analysis service.",
   sidecar_behind: "The local analysis service is still catching up.",
@@ -830,6 +833,7 @@ const HEALTH_DETAIL_SHORT = {
   sidecar_outdated: "out of date",
   not_paired: "not paired",
   sidecar_down: "not responding",
+  sidecar_starting: "starting",
   // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
   sidecar_updating: "updating",
   sidecar_behind: "catching up",
@@ -1010,6 +1014,10 @@ export const SERVICE_OK = "ok";
 export const SERVICE_DEGRADED = "degraded";
 export const SERVICE_RESTARTING = "restarting";
 export const SERVICE_STUCK = "stuck";
+/** The service has not answered and NOTHING HAS BEEN DONE about it — start-up,
+ *  or a missed check or two the daemon itself calls noise. Deliberately NOT an
+ *  alarm state: see SERVICE_ALARM_STATES. */
+export const SERVICE_SETTLING = "settling";
 export const SERVICE_NOT_APPLICABLE = "not_applicable";
 
 /** The three states that put something on screen. `ok` and `not_applicable`
@@ -1017,6 +1025,14 @@ export const SERVICE_NOT_APPLICABLE = "not_applicable";
  *  machine that legitimately has no analysis service installed is not broken
  *  (the daemon's own `noAnalysisService` path — see AGENTS.md's Model
  *  backends) and must never be reported as if it were. */
+//  ⚠️ `settling` IS ABSENT ON PURPOSE. It means the service has not answered and
+//  the daemon has not acted — start-up, or one or two missed checks its own
+//  ladder calls noise. Alarming there put a banner reading "The analysis service
+//  isn't healthy", with a Restart button, directly above the daemon's sentence
+//  "Nothing has been restarted — one missed check is usually noise" (seen
+//  2026-09-22, seconds after a good sidecar swap, cleared on its own moments
+//  later). A banner offering a remedy for something that self-heals, while
+//  saying so, teaches people to ignore the banner.
 const SERVICE_ALARM_STATES = [SERVICE_DEGRADED, SERVICE_RESTARTING, SERVICE_STUCK];
 
 /**
@@ -1060,7 +1076,7 @@ export function serviceAlert(ledger, { offline = false, replacing = false } = {}
 /** Reasons that mean "Signal is working on this right now", and reasons that
  *  mean "there is something for YOU to do". Both earn amber; everything else
  *  that is not a failure does not. */
-export const HEALTH_IN_FLIGHT_REASONS = ["sidecar_updating", "sidecar_behind"];
+export const HEALTH_IN_FLIGHT_REASONS = ["sidecar_updating", "sidecar_behind", "sidecar_starting"];
 export const HEALTH_ACTION_REASONS = ["not_paired"];
 
 /** The pill's colour, from the row's status AND its reason.

@@ -126,6 +126,11 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 			// given the analysis service, the second is a machine whose service
 			// is down. Only the second is a problem to report.
 			sig.noteHealth(ledger.HealthSidecar, ledger.StatusNA, "")
+		} else if currentServiceHealth.Load().Settling() {
+			// Not answering YET, and the ladder has not acted. Reporting this
+			// as `failed`/`sidecar_down` is what put a red "not responding"
+			// pill on screen seconds after a good swap — see Settling().
+			sig.noteHealth(ledger.HealthSidecar, ledger.StatusNA, string(ledger.ReasonSidecarStarting))
 		} else if !sidecarHealthy() {
 			sig.noteHealth(ledger.HealthSidecar, ledger.StatusFailed, string(ledger.ReasonSidecarDown))
 		} else {

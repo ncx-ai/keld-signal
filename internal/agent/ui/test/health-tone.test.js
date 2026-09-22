@@ -49,3 +49,22 @@ test("both amber reasons carry copy in both tables", () => {
 test("a reason this page has never heard of is not a fault", () => {
   assert.equal(healthTone("n/a", "something_new_from_a_later_daemon"), "ok");
 });
+
+// ⚠️ "STARTING" IS NOT "DOWN". Seconds after a good sidecar swap the strip drew
+// a red "Analysis service not responding" pill beside a banner whose own text
+// read "Nothing has been restarted — one missed check is usually noise", and it
+// cleared itself moments later. The daemon now reports `sidecar_starting` until
+// its ladder actually acts.
+test("a service that has not answered yet is amber, not red", () => {
+  assert.equal(healthTone("n/a", "sidecar_starting"), "wait");
+  assert.notEqual(healthTone("n/a", "sidecar_starting"), "no");
+  assert.equal(healthDetailText("sidecar_starting"), "starting");
+  assert.ok(REASON_TEXT.sidecar_starting);
+  assert.doesNotMatch(REASON_TEXT.sidecar_starting, /isn't responding/i);
+});
+
+// And a service the ladder HAS acted on is still red — the distinction is the
+// whole point, not a blanket softening.
+test("a service the ladder acted on is still red", () => {
+  assert.equal(healthTone("failed", "sidecar_down"), "no");
+});
