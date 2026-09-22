@@ -585,6 +585,8 @@ export const REASON_TEXT = {
   // this strip is showing that work.
   sidecar_outdated: "The analysis service is updating itself.",
   sidecar_down: "The local analysis service isn't responding.",
+  // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
+  sidecar_updating: "Signal is updating the analysis service.",
   sidecar_behind: "The local analysis service is still catching up.",
   attribute_failed: "Couldn't work out a project for this block after several tries.",
   no_rule_matched: "No project rule matched this yet.",
@@ -822,6 +824,8 @@ const HEALTH_DETAIL_SHORT = {
   atlas_off: "off",
   sidecar_outdated: "out of date",
   sidecar_down: "not responding",
+  // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
+  sidecar_updating: "updating",
   sidecar_behind: "catching up",
 };
 
@@ -1007,8 +1011,13 @@ const SERVICE_ALARM_STATES = [SERVICE_DEGRADED, SERVICE_RESTARTING, SERVICE_STUC
  * reach anything anyway. The offline banner already says the true thing, so
  * this one stands down rather than double-reporting it.
  */
-export function serviceAlert(ledger, { offline = false } = {}) {
+export function serviceAlert(ledger, { offline = false, replacing = false } = {}) {
   if (offline) return null;
+  // ⚠️ Signal stopped the service to replace it. It is not answering BECAUSE of
+  // that, the engine bar is already saying so, and a Restart button here invites
+  // somebody to interrupt the swap that is fixing it. Same stand-down the
+  // `offline` branch above makes, for the same reason. See engineReplacing.
+  if (replacing) return null;
   const s = ledger && ledger.service;
   if (!s || typeof s !== "object") return null;
   if (!SERVICE_ALARM_STATES.includes(s.state)) return null;
@@ -1025,6 +1034,42 @@ export function serviceAlert(ledger, { offline = false } = {}) {
     // a meaning for a number in order to have something to print.
     failures: typeof s.failures === "number" ? s.failures : 0,
   };
+}
+
+/** Is Signal itself replacing the analysis service right now?
+ *
+ *  ⚠️ AN ENGINE BEING REPLACED IS NOT AN ENGINE THAT FAILED, and until this the
+ *  page said all three at once: a banner reading "The analysis service isn't
+ *  healthy" with a Restart button, a red "Analysis service not responding"
+ *  pill, and "service unhealthy" in the sidebar — directly above a progress bar
+ *  reading "Updating the analysis service… 47%". Every one of those was
+ *  literally true and the composite was a lie: the service was not answering
+ *  because Signal had stopped it to swap it, on purpose, and offering Restart
+ *  mid-swap invites somebody to interrupt the thing that is fixing it.
+ *
+ *  This is the same call serviceAlert already makes for `offline` — "the
+ *  offline banner already says the true thing, so this one stands down rather
+ *  than double-reporting it". The engine bar is that true thing here. */
+export function engineReplacing(engine) {
+  return !!engine && engine.needed && engine.status === "running";
+}
+
+/** The health rows as they should READ while the engine is being replaced.
+ *
+ *  The sidecar row is rewritten rather than dropped: a row that vanishes is a
+ *  fact nobody can see, and "we cannot reach it" is still worth showing — it
+ *  is the REASON that changes, from a fault to a step. Pending, not failed, so
+ *  the nav dot reads "catching up" instead of "needs attention".
+ *
+ *  Every other row is untouched: Atlas, Records and Telemetry have nothing to
+ *  do with the engine and must keep their own verdicts. */
+export function healthWhileReplacing(health, engine) {
+  if (!engineReplacing(engine)) return health || [];
+  return (health || []).map((h) =>
+    h && h.key === "sidecar" && h.status !== "ok"
+      ? { ...h, status: "pending", detail: "sidecar_updating" }
+      : h
+  );
 }
 
 /** The headline, per state. Names the thing the way the health strip already
@@ -1876,9 +1921,16 @@ if (typeof document !== "undefined") {
     }
   }
 
+  /** The health rows every surface reads: the ledger's, adjusted for an engine
+   *  Signal is currently replacing. One accessor so the strip, the nav dot and
+   *  the durability line cannot disagree about the same machine. */
+  function currentHealth() {
+    return healthWhileReplacing(state.ledger ? state.ledger.health : [], state.engine);
+  }
+
   function renderHealthStrip() {
     const { ledger, settings } = state;
-    const health = visibleHealth(ledger ? ledger.health : [], settings);
+    const health = visibleHealth(currentHealth(), settings);
     const cells = health.map((h) => {
       const detail = healthDetailText(h.detail);
       return el(
@@ -1893,7 +1945,7 @@ if (typeof document !== "undefined") {
     // third flex item: the strip is `justify-content: space-between`, so a
     // sentence sharing that row would be squeezed between the cells and the
     // toggles at every width.
-    const note = durabilityNote(ledger ? ledger.health : [], settings);
+    const note = durabilityNote(currentHealth(), settings);
     return el(
       "div",
       { class: "health-strip" },
@@ -2843,7 +2895,7 @@ if (typeof document !== "undefined") {
     const s = navHealthState({
       offline: state.offline,
       alert,
-      health: state.ledger ? state.ledger.health : [],
+      health: currentHealth(),
       settings: state.settings,
     });
     dot.classList.add(s.tone);
@@ -2940,7 +2992,7 @@ if (typeof document !== "undefined") {
    * failure this whole piece of work exists to remove.
    */
   async function clickServiceRestart() {
-    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    const alert = serviceAlert(state.ledger, { offline: state.offline, replacing: engineReplacing(state.engine) });
     if (!alert) return;
     state.serviceRestart = {
       status: nextServiceRestart(state.serviceRestart.status, "clicked"),
@@ -3162,7 +3214,7 @@ if (typeof document !== "undefined") {
     state.pane = pane;
     setActiveNav(pane);
     renderEnvPill();
-    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    const alert = serviceAlert(state.ledger, { offline: state.offline, replacing: engineReplacing(state.engine) });
     renderServiceBanner(alert);
     renderNavHealth(alert);
     renderNavVersion();
