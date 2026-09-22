@@ -245,3 +245,72 @@ func TestAFailedInstallKeepsItsReason(t *testing.T) {
 		t.Fatal("a failed install reported no reason; the page would show a dead button")
 	}
 }
+
+// ⚠️ THE FETCH MUST NAME THIS DAEMON'S OWN RELEASE. Unpinned,
+// sidecarinstall.Install resolves `releases/latest`, and GoReleaser marks every
+// `-rc.N` a PRERELEASE — which that endpoint excludes. Shipped that way in
+// v3.0.5-rc.4 and measured the same day: a 3.0.5-rc.4 daemon installed v3.0.4
+// and the page then reported, correctly, that the engine it had just fetched was
+// out of date. Pinning is what postinstall and onboard.command already do.
+func TestTheInstallIsPinnedToThisDaemonsOwnRelease(t *testing.T) {
+	version.CLI = "3.0.5-rc.4"
+	t.Cleanup(func() { version.CLI = "dev" })
+
+	var got string
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "deterministic" }
+	m.install = func(o sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		got = o.Tag
+		return sidecarinstall.Result{}, nil
+	}
+	srv := engineServer(t, m)
+	resp, err := http.Post(srv.URL+"/v1/engine/install", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
+
+	if got != "v3.0.5-rc.4" {
+		t.Fatalf("Opts.Tag = %q, want v3.0.5-rc.4 — an empty tag resolves releases/latest, which "+
+			"excludes pre-releases and installs a STALE engine under this daemon", got)
+	}
+}
+
+// A source build names no release, so there is nothing to pin to and
+// releases/latest is the only answer available — the same branch the installer
+// pane took for its "dryrun" version. Nothing to pin to is not a missing pin.
+func TestADevBuildLeavesTheTagUnpinned(t *testing.T) {
+	version.CLI = "dev"
+	var got = "unset"
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "deterministic" }
+	m.install = func(o sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		got = o.Tag
+		return sidecarinstall.Result{}, nil
+	}
+	srv := engineServer(t, m)
+	resp, err := http.Post(srv.URL+"/v1/engine/install", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
+	if got != "" {
+		t.Fatalf("Opts.Tag = %q on a dev build, want empty", got)
+	}
+}
+
+// The tag carries exactly one leading "v" whether or not version.CLI has one —
+// the pane's own "vv3.0.0-rc.5" 404 was this mistake in the other direction.
+func TestTheTagCarriesExactlyOneLeadingV(t *testing.T) {
+	for _, in := range []string{"3.0.5-rc.4", "v3.0.5-rc.4"} {
+		version.CLI = in
+		if got := engineTag(); got != "v3.0.5-rc.4" {
+			t.Errorf("version.CLI %q -> tag %q, want v3.0.5-rc.4", in, got)
+		}
+	}
+	version.CLI = "dev"
+}

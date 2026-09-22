@@ -134,7 +134,7 @@ func (m *engineManager) start() bool {
 			m.received, m.total = received, total
 			m.mu.Unlock()
 		})
-		_, err := m.installer()(sidecarinstall.Opts{Progress: progress})
+		_, err := m.installer()(sidecarinstall.Opts{Tag: engineTag(), Progress: progress})
 		m.mu.Lock()
 		if err != nil {
 			m.status, m.errMsg = "failed", err.Error()
@@ -190,6 +190,33 @@ func engineRoute(m *engineManager) ingress.Route {
 // the version off the wrong directory is the failure that makes every
 // comparison silently say "no version" (see the stamp note in AGENTS.md).
 func sidecarTreeOf(bin string) string { return filepath.Dir(bin) }
+
+// engineTag pins the fetch to THIS daemon's own release.
+//
+// ⚠️ UNPINNED IT INSTALLS A STALE ENGINE, AND THIS SHIPPED THAT WAY IN
+// v3.0.5-rc.4. `sidecarinstall.Install` with an empty Tag resolves
+// `releases/latest`, and GoReleaser marks every `-rc.N` tag a PRERELEASE, which
+// that endpoint excludes by definition — so on a machine running 3.0.5-rc.4 it
+// answered **v3.0.4** and the page cheerfully installed it. Measured on the
+// maintainer's machine the day rc.4 shipped: daemon 3.0.5-rc.4, sidecar v3.0.4,
+// and the card correctly reporting "Installed v3.0.4, this version expects
+// 3.0.5-rc.4" — the detector working perfectly over an install target that was
+// wrong. It is the version-skew failure AGENTS.md documents at length (a 2.3.0
+// daemon against an Aug-11 sidecar: /blocks 404s, zero blocks published), and
+// both `postinstall` and `onboard.command` already pin against it. This was the
+// one fetch path that did not.
+//
+// A source build reports "dev", which names no release: there the tag stays
+// empty and `releases/latest` is the only answer available — the same branch
+// the installer pane took for its "dryrun" version. Nothing to pin to is not
+// the same as a pin nobody set.
+func engineTag() string {
+	v := version.Normalize(version.CLI)
+	if v == "" || v == version.Unknown {
+		return ""
+	}
+	return "v" + v
+}
 
 // currentEngineManager is the one manager this process uses, so the page's GET
 // and POST see the same install. A package-level value rather than a field for
