@@ -1045,6 +1045,164 @@ export function navHealthState({ offline = false, alert = null, health = [], set
   return { tone: "ok", text: "all good" };
 }
 
+// ---- Integrations: pure ----
+
+/**
+ * ⚠️ **THE PANE RENDERS A STATE. IT NEVER DECIDES ONE, AND NOTHING BELOW MAY
+ * COMPARE AGAINST A STATE VALUE.**
+ *
+ * A tool's state is decided in exactly one place — `integrations.Compute`, Go
+ * side (AC-8, docs/signal-integrations-wire.md §"One rule, one place"). A
+ * second copy of that rule in JavaScript would be a copy that drifts: the
+ * daemon's decision table changes on the daemon's cadence and this page ships
+ * inside the binary, so the two would disagree silently and the page would be
+ * the one lying.
+ *
+ * Three consequences, each deliberate and each pinned by
+ * `ui/e2e/integrations-states.spec.ts`:
+ *
+ *  1. `integrationStateLabel` prints the server's string VERBATIM. The only
+ *     thing it decides is whether that string is IN the vocabulary the server
+ *     sent beside it — a membership test against a list, not a literal — and a
+ *     value outside it renders as `unknown state: <value>` rather than being
+ *     mapped to the nearest thing this file happens to know about. A ninth
+ *     state therefore arrives readable rather than as nothing.
+ *  2. The state's COLOUR is chosen in CSS, keyed on `data-state`, so even the
+ *     "which class do I attach" branch does not exist here.
+ *  3. Where the pane needs an AFFORDANCE it reads the server's own booleans —
+ *     `installed`, `configured`, `supported` — never the state string. The two
+ *     can never disagree, because the pill is still whatever the server said.
+ *
+ * `ui/e2e/integrations-states.spec.ts` greps this section for any quoted state
+ * literal and fails on one. Keep it that way.
+ */
+
+// The pane polls at the health dot's cadence rather than the ledger's 30s: a
+// person who has just restarted a tool or approved a hook is watching this
+// page for the row to change, and the route is cheap (no model, no download —
+// the wire doc says so explicitly).
+export const INTEGRATIONS_POLL_MS = 10000;
+
+// The one refusal. Everything else here is a pass-through.
+export const UNKNOWN_STATE_PREFIX = "unknown state: ";
+
+export function integrationStateLabel(state, vocabulary) {
+  const known = !!vocabulary && Array.isArray(vocabulary.states) && vocabulary.states.includes(state);
+  return known ? String(state) : `${UNKNOWN_STATE_PREFIX}${state}`;
+}
+
+/**
+ * What a WIRED lane means, per lane kind. Keyed on `surfaces[].kind`, which is
+ * a closed vocabulary of its own — never on the tool's state. An unknown kind
+ * falls back to the generic phrase rather than rendering blank.
+ */
+export const LANE_WIRED_LABEL = {
+  hook: "config written",
+  otel: "points at Signal",
+  watcher: "transcripts readable",
+  extension: "extension loaded",
+  reader: "transcripts parsed",
+};
+export const LANE_WIRED_FALLBACK = "config written";
+export const LANE_UNWIRED_LABEL = "config not written";
+
+/**
+ * What a lane is waiting for, in the four words a checklist can carry. The
+ * SENTENCE a person acts on is never written here — it comes from the server
+ * as `surfaces[].instruction`, so it stays one string in one place
+ * (`integrations.Instructions`). This is the tick beside it.
+ *
+ * Keyed on `waiting_on`, and a value outside the published `waiting_on`
+ * vocabulary gets the same treatment an unknown state does: said out loud,
+ * never mapped.
+ */
+export const LANE_WAITING_LABEL = {
+  restart: "not restarted since",
+  approval: "not trusted yet",
+  reader: "no reader yet",
+};
+
+// The silent lane of a row the server called broken. `broken_lane` names it;
+// this compares a lane kind to that field, never a state to a literal.
+export const LANE_SILENT_LABEL = "nothing arrived on this lane";
+
+// A lane that cannot feed at this tool's support level. Shown so that a lane
+// with no traffic and a lane that could never have any do not look alike.
+export const LANE_NOT_EXPECTED = "not expected";
+
+export function laneCheck(surface, integration, vocabulary) {
+  const kind = (surface && surface.kind) || "";
+  const waitingOn = (surface && surface.waiting_on) || "";
+  const brokenLane = (integration && integration.broken_lane) || "";
+  const expected = !!(surface && surface.expected);
+
+  let ok = false;
+  let label = LANE_UNWIRED_LABEL;
+  if (waitingOn) {
+    const known =
+      !!vocabulary && Array.isArray(vocabulary.waiting_on) && vocabulary.waiting_on.includes(waitingOn);
+    label = (known && LANE_WAITING_LABEL[waitingOn]) || `waiting on ${waitingOn}`;
+  } else if (!surface || !surface.wired) {
+    label = LANE_UNWIRED_LABEL;
+  } else if (brokenLane && brokenLane === kind) {
+    label = LANE_SILENT_LABEL;
+  } else {
+    ok = true;
+    label = LANE_WIRED_LABEL[kind] || LANE_WIRED_FALLBACK;
+  }
+  return { kind, ok, label, expected, waitingOn };
+}
+
+/**
+ * The sentences to print under a row: every DISTINCT non-empty instruction the
+ * server attached to a waiting lane, in the order the lanes came in.
+ *
+ * Distinct because two lanes routinely wait on the same thing — a tool whose
+ * config was just written has both its hook and its otel lane waiting on the
+ * same restart — and printing one sentence twice reads as two problems.
+ * Nothing is invented: a waiting lane the server sent no sentence for
+ * contributes nothing rather than a guess.
+ */
+export function rowInstructions(integration) {
+  const out = [];
+  for (const s of (integration && integration.surfaces) || []) {
+    if (!s || !s.waiting_on) continue;
+    const text = (s.instruction || "").trim();
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
+}
+
+// A dash, never "unknown version": the version is read off the newest
+// transcript and is "" when there is nothing to read it from (AC-7). A word
+// where a number goes reads as a fact about the tool rather than about us.
+export function toolVersionLabel(version) {
+  const v = (version || "").trim();
+  return v || "—";
+}
+
+/**
+ * The two affordances, decided from the server's booleans alone.
+ *
+ * `offersSetup` is "installed, claimed, and the manifest does not record it",
+ * which is the same population as the state the wire doc says shows Set up —
+ * arrived at without naming it, so this cannot drift when the decision table
+ * does. Under auto-setup the daemon has already written the config and
+ * `configured` is true, so the button correctly disappears.
+ */
+export function offersSetup(integration) {
+  return !!integration && !!integration.installed && !!integration.supported && !integration.configured;
+}
+export function offersReport(integration) {
+  return !!integration && !!integration.configured;
+}
+
+// What an unsupported row says, and the whole of it: a name, a storage class,
+// and no claim.
+export const NOT_YET_SUPPORTED = "not yet supported";
+
+// ---- /Integrations: pure ----
+
 export { CELL_STAGES };
 
 // =====================================================================
@@ -1128,6 +1286,17 @@ if (typeof document !== "undefined") {
     // doesn't persist must not make the confirmation flicker away on the next
     // poll.
     confirmations: new Map(),
+    // integrations: the last GET /v1/integrations body, verbatim. Nothing is
+    // derived from it on the way in — the pane reads it as the server wrote
+    // it. `integrationsError` is why there is none, which is a different fact
+    // from "no tool is wired" and must never render as it.
+    integrations: null,
+    integrationsError: "",
+    // What the Set up / Report a problem buttons last wrote, per integration
+    // id. Held here rather than in the DOM because route() re-renders the
+    // whole pane on every 10s poll, and a confirmation that vanished on the
+    // next tick would be unreadable.
+    integrationResults: new Map(),
   };
 
   async function fetchJSON(path, opts) {
@@ -1189,15 +1358,21 @@ if (typeof document !== "undefined") {
 
   function paneFromHash() {
     const h = (location.hash || "#/today").replace(/^#\//, "");
-    return ["today", "projects", "settings"].includes(h) ? h : "today";
+    return ["today", "projects", "integrations", "settings"].includes(h) ? h : "today";
   }
+
+  const PANE_TITLE = {
+    today: "Today",
+    projects: "Projects",
+    integrations: "Integrations",
+    settings: "Settings",
+  };
 
   function setActiveNav(pane) {
     document.querySelectorAll("nav[aria-label='Panes'] a").forEach((a) => {
       a.classList.toggle("on", a.dataset.pane === pane);
     });
-    document.getElementById("topbarTitle").textContent =
-      pane === "today" ? "Today" : pane === "projects" ? "Projects" : "Settings";
+    document.getElementById("topbarTitle").textContent = PANE_TITLE[pane] || "Today";
   }
 
   function el(tag, attrs, ...children) {
@@ -2466,6 +2641,185 @@ if (typeof document !== "undefined") {
     if (res.ok) watchServiceBack();
   }
 
+  // ---- Integrations ----
+
+  /**
+   * One row per tool Signal knows about: what it is, how it is wired, what it
+   * is waiting for, and the one or two things a person can do about it.
+   *
+   * Everything on screen came off the wire. The pill is the server's `state`
+   * string; the checklist is `surfaces[].wired` and `surfaces[].waiting_on`;
+   * the sentence is `surfaces[].instruction`. See the block of pure functions
+   * above for why none of it is computed here.
+   */
+
+  let integrationsLoading = false;
+
+  async function loadIntegrations() {
+    try {
+      state.integrations = await fetchJSON("/v1/integrations");
+      state.integrationsError = "";
+    } catch (err) {
+      // Kept honest rather than blank: an older daemon has no such route, and
+      // "we could not ask" must never render as "nothing is wired".
+      state.integrationsError = String((err && err.message) || err);
+    }
+  }
+
+  function integrationRow(it, vocabulary) {
+    const id = it.id || "";
+    const pill = el(
+      "span",
+      { class: "pill intg-state", "data-state": it.state || "" },
+      el("span", { class: "dot" }),
+      integrationStateLabel(it.state, vocabulary)
+    );
+
+    const head = el(
+      "div",
+      { class: "intg-head" },
+      el(
+        "div",
+        { class: "intg-title" },
+        el("span", { class: "intg-name" }, it.display_name || id),
+        el("span", { class: "intg-version" }, toolVersionLabel(it.tool_version))
+      ),
+      pill
+    );
+
+    const body = el("div", { class: "intg-body" });
+
+    // An unsupported row is a catalogue row: the storage class is the whole of
+    // what Signal can honestly say about it, so there is no checklist and no
+    // action. `supported` is the server's own boolean.
+    if (!it.supported) {
+      body.appendChild(
+        el(
+          "div",
+          { class: "intg-unsupported" },
+          el("span", { class: "intg-storage" }, it.storage_class || ""),
+          el("span", {}, NOT_YET_SUPPORTED)
+        )
+      );
+    } else {
+      const checks = el("div", { class: "intg-checks" });
+      for (const s of it.surfaces || []) {
+        const c = laneCheck(s, it, vocabulary);
+        checks.appendChild(
+          el(
+            "div",
+            { class: "intg-check", "data-kind": c.kind, "data-ok": c.ok ? "true" : "false" },
+            el("span", { class: "intg-glyph" }, c.ok ? "✓" : "—"),
+            el("span", { class: "intg-lane" }, c.kind),
+            el("span", { class: "intg-lane-verdict" }, c.label),
+            c.expected ? null : el("span", { class: "intg-muted" }, `· ${LANE_NOT_EXPECTED}`)
+          )
+        );
+      }
+      if ((it.surfaces || []).length) body.appendChild(checks);
+
+      for (const sentence of rowInstructions(it)) {
+        body.appendChild(el("p", { class: "intg-instruction" }, sentence));
+      }
+    }
+
+    const actions = el("div", { class: "intg-actions" });
+    if (offersSetup(it)) {
+      actions.appendChild(
+        el("button", { class: "btn", type: "button", onclick: () => clickIntegrationSetup(id) }, "Set up")
+      );
+    }
+    if (offersReport(it)) {
+      actions.appendChild(
+        el(
+          "button",
+          { class: "btn btn-quiet", type: "button", onclick: () => clickIntegrationReport(id) },
+          "Report a problem"
+        )
+      );
+    }
+    if (actions.childNodes.length) body.appendChild(actions);
+
+    const result = state.integrationResults.get(id);
+    if (result) body.appendChild(el("p", { class: "intg-result" }, result));
+
+    return el("div", { class: "intg-row", "data-integration": id }, head, body);
+  }
+
+  function renderIntegrations(root) {
+    root.innerHTML = "";
+    const data = state.integrations;
+    if (!data) {
+      root.appendChild(
+        el(
+          "p",
+          { class: "loading" },
+          state.integrationsError
+            ? "Signal did not answer when asked about this machine's tools, so this page cannot say how any of them are wired."
+            : "Looking at what this machine has…"
+        )
+      );
+      return;
+    }
+    const vocabulary = data.vocabulary || { states: [], waiting_on: [] };
+    const rows = data.integrations || [];
+    root.appendChild(
+      el(
+        "p",
+        { class: "pane-sub" },
+        `Every tool Signal knows about, read off this machine${
+          data.auto_setup ? " · new tools are configured automatically" : ""
+        }`
+      )
+    );
+    if (!rows.length) {
+      root.appendChild(el("p", { class: "loading" }, "Signal's catalogue is empty on this machine."));
+      return;
+    }
+    const list = el("div", { class: "intg-list" });
+    for (const it of rows) list.appendChild(integrationRow(it, vocabulary));
+    root.appendChild(list);
+  }
+
+  /**
+   * ⚠️ **A SETUP RESPONSE SAYS WHAT IT WROTE, NOT WHAT THE TOOL IS NOW.** The
+   * row's new state arrives on the next poll, from `Compute`, like every other
+   * state — and with it whichever instruction sentence the server decides the
+   * person now needs. So this prints the backup path and the fact that a
+   * restart is required, and then re-reads the route rather than rewriting the
+   * row itself.
+   */
+  async function clickIntegrationSetup(id) {
+    const res = await sendJSON(`/v1/integrations/${encodeURIComponent(id)}/setup`, "POST", {});
+    const body = res.body || {};
+    if (!res.ok) {
+      state.integrationResults.set(id, "Signal could not write this tool's config. Nothing was changed.");
+    } else {
+      const parts = [];
+      if (body.backup) parts.push(`Previous config saved to ${body.backup}`);
+      if (body.restart_required) parts.push("Restart the tool to finish.");
+      state.integrationResults.set(id, parts.join(" · ") || "Configured.");
+    }
+    await loadIntegrations();
+    route();
+  }
+
+  async function clickIntegrationReport(id) {
+    const res = await sendJSON(`/v1/integrations/${encodeURIComponent(id)}/report`, "POST", {});
+    const body = res.body || {};
+    if (!res.ok) {
+      state.integrationResults.set(id, "Signal could not write a report bundle.");
+    } else {
+      state.integrationResults.set(
+        id,
+        body.report_path ? `Report written to ${body.report_path}` : "Report written."
+      );
+    }
+    route();
+  }
+
+  // ---- /Integrations ----
+
   function route() {
     const pane = paneFromHash();
     state.pane = pane;
@@ -2486,7 +2840,19 @@ if (typeof document !== "undefined") {
     const root = document.getElementById("paneRoot");
     if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
-    else renderSettings(root);
+    else if (pane === "integrations") {
+      // The route is not part of loadAll(): it is this pane's own, polled at
+      // its own cadence, and a person on Today should not be paying for it.
+      // So the FIRST sight of the pane fetches, once, and re-routes.
+      if (!state.integrations && !state.integrationsError && !integrationsLoading) {
+        integrationsLoading = true;
+        loadIntegrations().then(() => {
+          integrationsLoading = false;
+          route();
+        });
+      }
+      renderIntegrations(root);
+    } else renderSettings(root);
   }
 
   window.addEventListener("hashchange", route);
@@ -2500,5 +2866,14 @@ if (typeof document !== "undefined") {
       await loadAll();
       route();
     }, 30000);
+    // The Integrations pane polls faster, and only while it is the pane being
+    // looked at: a person who has just restarted a tool or approved a hook is
+    // waiting for the row to change, and 30s of staring at a stale row reads
+    // as "it did not work".
+    setInterval(async () => {
+      if (state.pane !== "integrations") return;
+      await loadIntegrations();
+      route();
+    }, INTEGRATIONS_POLL_MS);
   })();
 }

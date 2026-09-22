@@ -164,6 +164,20 @@ func (v *v3) routes() []ingress.Route {
 		// answers 409 not_applicable rather than pretending to restart nothing.
 		serviceRestartRoute(func() error { return currentServiceHealth.Load().RestartSidecar() }, nil),
 		ingress.ProjectsRoute(v.projects),
+		// The Integrations pane's two routes. nil seams ⇒ the live readers:
+		// integrations.Snapshot off disk, and integrations.ApplyEntry through
+		// the same adapters and the same write path `keld signal setup` uses.
+		IntegrationsRoute(nil, nil),
+		// ⚠️ MOUNTED SINCE 2026-09-15, having been written, tested and left out
+		// of this list. The handler, the bundle writer, the redaction gate and
+		// both planted-string tests were all green while nothing could reach
+		// it: the pane POSTed here and the wire contract documented it as live.
+		// `routes_mounted_test.go` now fails on any documented path that 404s,
+		// because a route nobody mounts is a route that does not exist.
+		integrationsReportRoute(reportDeps{
+			Describe: describeIntegrationForReport,
+			Sink:     currentIntegrationSink(),
+		}),
 		ui.Route(),
 	}
 }

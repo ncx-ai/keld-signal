@@ -79,6 +79,13 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
+// blocksDebug turns on one line per SWEEP, naming the cursor the sidecar was
+// asked with and what it answered. Off unless KELD_BLOCKS_DEBUG is set, because
+// this is the watcher-driven path: a machine has hundreds of transcripts and a
+// line per path per sweep is the once-a-second flood operators filter out,
+// which is the same as never saying anything. The conformance harness sets it.
+var blocksDebug = os.Getenv("KELD_BLOCKS_DEBUG") != ""
+
 // Digester is the capability the emitter needs from the analysis service (the
 // sidecar's POST /blocks): "which closed blocks does this transcript have, and
 // what was each one". An interface rather than a *sidecar.Client so the emitter
@@ -149,6 +156,8 @@ type Emitter struct {
 	facts Facts
 	actor string
 	st    *state
+	// reasonWarned latches noteUnreadableReasons to one line per daemon run.
+	reasonWarned atomic.Bool
 
 	// backfill decides what FIRST SIGHT of a transcript does: emit the history
 	// the store already holds, or seed the cursor at the watermark and emit only
@@ -328,6 +337,35 @@ func (e *Emitter) reportCutPending(session string, ans enrich.BlocksAnswer) {
 	e.OnCutPending(session, "sidecar_behind")
 }
 
+// noteUnreadableReasons says out loud that this binary THREW AWAY blocks the
+// service had already cut and characterised.
+//
+// ⚠️ **THIS REFUSAL USED TO BE A BARE `continue`, AND ITS SILENCE COST FOUR CI
+// ROUNDS AND A WHOLE DEAD FEATURE.** A block whose boundary reason is not in
+// the published vocabulary is dropped, deliberately — an unreadable reason is
+// version skew, and publishing it invites a reader to draw a pause nobody
+// measured. But the drop produced no count, no event and no line, so from
+// outside "the sidecar closed nothing" and "this binary discarded everything it
+// was handed" were the same observation: the conformance chain measured a
+// sidecar holding one closed block, an enabled emitter, no error anywhere, and
+// zero blocks at Atlas. The cause was `KELD_DEV_BLOCKS=prompt`, whose boundary
+// name this binary had never heard of.
+//
+// One line per DAEMON RUN, not per sweep: the condition is a property of which
+// two artifacts are installed, so it cannot change between sweeps, and a line
+// per sweep per path is the flood operators filter out.
+func (e *Emitter) noteUnreadableReasons(ans enrich.BlocksAnswer) {
+	if ans.DroppedUnreadableReason <= 0 || e.reasonWarned.Swap(true) {
+		return
+	}
+	log.Printf("keld-agent: blocks: DISCARDED %d block(s) the analysis service had already cut, "+
+		"because their boundary reason (%q) is not one this agent publishes. "+
+		"That is version skew between keld-agent and the analysis sidecar, or a developer "+
+		"granularity this agent was not told to admit — either way NO block from this "+
+		"transcript can reach Atlas until the two halves agree.",
+		ans.DroppedUnreadableReason, ans.UnreadableReason)
+}
+
 // Advance is the watcher's per-file signal that a transcript grew, in the shape
 // watch.WithIngestSignal hands out. It is the emitter's ONLY trigger for adding
 // work: a transcript nothing has written to cannot have a block that has not
@@ -498,7 +536,31 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 		tgt.Cursor, now, maxPerSweep, resolved)
 	e.noteRouteUnsupported(ans)
 	e.reportCutPending(tgt.Session, ans)
+	e.noteUnreadableReasons(ans)
 	blocks := ans.Blocks
+
+	// ⚠️ **A SWEEP THAT FINDS NOTHING IS INVISIBLE, AND THAT COST A DAY.** The
+	// conformance chain reached a state where the sidecar held ONE closed block
+	// for a transcript and Atlas received NONE, with no error anywhere: the
+	// emitter reports only `cut_pending` (an unanswerable sidecar) and
+	// `emitter_enabled`, so "asked and got 0" and "never asked" look identical
+	// from outside — and the cursor that decides between them is never stated.
+	//
+	// One line per sweep, and only when something is actually being tracked, so
+	// it cannot become the once-a-second flood operators filter out. It names
+	// the CURSOR because that is the one input that can silently exclude a block
+	// the sidecar would otherwise return: `since_ts` is compared against a
+	// block's START.
+	if blocksDebug {
+		name := filepath.Base(tgt.Path)
+		if tgt.Cursor != nil {
+			log.Printf("keld-agent: blocks: swept %s (session %s) cursor=%.3f -> ok=%v blocks=%d dropped=%d",
+				name, tgt.Session, *tgt.Cursor, ans.OK, len(blocks), ans.DroppedUnreadableReason)
+		} else {
+			log.Printf("keld-agent: blocks: swept %s (session %s) cursor=<none> -> ok=%v blocks=%d dropped=%d",
+				name, tgt.Session, ans.OK, len(blocks), ans.DroppedUnreadableReason)
+		}
+	}
 	if !ans.OK {
 		// The sidecar could not answer (not ready, restarting, store behind).
 		// Do not advance and do not retire: the next sweep asks for the same
@@ -602,12 +664,6 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 	}
 	return sent
 }
-
-// unixSeconds is an instant in the form every seam on this path speaks — epoch
-// seconds as a float, the same shape as the cursor and as a block's
-// StartTS/EndTS. Sub-second precision is kept: a range edge is compared against
-// record timestamps that carry milliseconds.
-func unixSeconds(t time.Time) float64 { return float64(t.UnixNano()) / 1e9 }
 
 // sessionIDFor is the session identifier a block row publishes: the
 // transcript's file stem.

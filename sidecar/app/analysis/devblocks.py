@@ -79,19 +79,22 @@ def _prompt_boundaries(path):
     """`[(ts, prompt_id), ...]` ascending: the FIRST instant of every distinct human prompt in
     this transcript.
 
-    `user`-type lines only -- an assistant line carries no `promptId` at all
+    `user`-role turns only -- an assistant turn carries no prompt id at all
     (`test_prompt_id_seam.py`) -- and deduplicated to first occurrence, the same rule
-    `Store.upsert_prompts`' `ON CONFLICT DO NOTHING` enforces for the mixed index: a `promptId`
+    `Store.upsert_prompts`' `ON CONFLICT DO NOTHING` enforces for the mixed index: a prompt id
     shared by several continuation lines resolves to the HUMAN PROMPT's own instant, never a
     continuation's.
+
+    Read off `readers.base.Turn`, so this dev cut asks the same question of a Codex rollout that
+    it asks of a Claude transcript without naming either.
     """
     seen = set()
     out = []
     for o in transcript.iter_turns(path):
-        if o.get("type") != "user":
+        if o.role != "user":
             continue
-        pid = o.get("promptId")
-        ts = o.get("timestamp")
+        pid = o.prompt_id
+        ts = o.ts
         if not pid or not ts or pid in seen:
             continue
         seen.add(pid)

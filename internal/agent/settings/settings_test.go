@@ -137,3 +137,24 @@ func TestPIIRegionsCanBeSetToUniversalOnly(t *testing.T) {
 		t.Fatalf("KELD_PII_REGIONS=none: Regions() = %v, want empty", got)
 	}
 }
+
+// Default ON, and an ABSENT key is the default — not an explicit refusal.
+// Every agent-config.json written before this key existed omits it, so a plain
+// bool would have read the whole installed fleet as "auto-setup off".
+func TestAutoSetupIntegrationsDefaultsOnAndHonoursAnExplicitFalse(t *testing.T) {
+	if !(Settings{}).AutoSetupEnabled() {
+		t.Fatal("an agent-config.json with no auto_setup_integrations key read as OFF")
+	}
+	off := false
+	if (Settings{AutoSetupIntegrations: &off}).AutoSetupEnabled() {
+		t.Fatal("an explicit false was ignored")
+	}
+	on := true
+	if !(Settings{AutoSetupIntegrations: &on}).AutoSetupEnabled() {
+		t.Fatal("an explicit true was ignored")
+	}
+	t.Setenv(AutoSetupIntegrationsEnv, "0")
+	if (Settings{AutoSetupIntegrations: &on}).AutoSetupEnabled() {
+		t.Fatal("the env var did not override the file")
+	}
+}

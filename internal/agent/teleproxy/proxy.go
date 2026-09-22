@@ -29,10 +29,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // DefaultPort is the daemon's loopback OTLP port.
@@ -80,6 +82,14 @@ type Proxy struct {
 	// telemetry last arrive", not a write per OTLP batch.
 	lastPersisted time.Time
 	statePath     string
+	// sources is the PER-TOOL record (persource.go), beside the machine-wide
+	// lastForward above. Row 6 of the integrations decision table asks whether
+	// one named tool's telemetry arrived, and a single global instant cannot
+	// answer it: on a machine running Claude Code and Codex, Claude Code's
+	// forwards vouch for Codex's silence.
+	sources *sourceRecord
+	// dropped counts trace exports accepted and thrown away. See Handler.
+	dropped atomic.Int64
 
 	wg sync.WaitGroup
 }
@@ -103,6 +113,7 @@ func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoo
 		// again — and the first forward would then WRITE that empty map back,
 		// erasing the history rather than merely not reading it.
 		sessions: SessionsOnDisk(),
+		sources:  newSourceRecord(),
 	}
 	// Stamp every forward so a proxied machine stays distinguishable from a
 	// direct-push one while both populations exist. See PathHeader.
@@ -217,13 +228,59 @@ func (p *Proxy) DrainSpools(ctx context.Context) {
 // never call it on the request path.
 func (p *Proxy) WaitIdle() { p.wg.Wait() }
 
-// Handler routes /v1/logs and /v1/metrics.
+// Handler routes the OTLP signals, each at two paths.
+//
+// ⚠️ **THE `/t/{token}/…` FORM IS NOT A CONVENIENCE — WITHOUT IT GEMINI CANNOT
+// AUTHENTICATE AT ALL.** Gemini's OTLP SDK composes its signal URL by plain
+// string concatenation, `${endpoint}/v1/logs`, over a base it first normalises
+// through `new URL(...).href`. So the `?token=` form this proxy was built for
+// arrives as path "/" with a token of "SECRET/v1/logs": measured on 0.37.1,
+// every export alternating 404 and 401, printed as raw stack traces in the
+// user's terminal. A token in the PATH survives that concatenation, because
+// appending to a URL that already has a path is what the SDK assumes it is
+// doing. telemetry.GeminiTokenPath is the shared constant.
+//
+// ⚠️ **AND /v1/traces IS ACCEPTED AND DISCARDED, DELIBERATELY.** Gemini builds a
+// trace exporter unconditionally whenever telemetry is on and there is no
+// per-signal switch, so with no route here every run printed a 404 for a signal
+// Atlas does not read. Answering 200 and dropping the body is the honest
+// version of what was already happening — nothing was ever forwarded — minus
+// the error the user cannot act on. It is COUNTED, not silent: a signal that is
+// dropped without a number beside it is the shape this file's other comments
+// keep warning about.
 func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/logs", p.receive(p.logs))
-	mux.HandleFunc("/v1/metrics", p.receive(p.metric))
+	for path, h := range map[string]http.HandlerFunc{
+		"/v1/logs":    p.receive(p.logs),
+		"/v1/metrics": p.receive(p.metric),
+		"/v1/traces":  p.discard(),
+	} {
+		mux.HandleFunc(path, h)
+		mux.HandleFunc(telemetry.GeminiTokenPath+"{token}"+path, h)
+	}
 	return mux
 }
+
+// discard authenticates a signal this daemon does not forward, answers 200, and
+// counts it. See Handler for why /v1/traces is here rather than absent.
+func (p *Proxy) discard() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !p.authorized(r) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		p.dropped.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// TracesDropped is how many trace exports were accepted and thrown away.
+func (p *Proxy) TracesDropped() int64 { return p.dropped.Load() }
 
 // receive authenticates, strips text, answers the tool immediately, and forwards
 // in the background.
@@ -280,12 +337,18 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		// Read on THIS goroutine: body is handed to the forwarder below and must
 		// not be walked concurrently with it.
 		ids := SessionIDs(body)
+		src := SourceOf(body)
 
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
 			if err := tr.Deliver(context.Background(), body); err == nil {
-				p.noteForward(time.Now(), ids)
+				now := time.Now()
+				p.noteForward(now, ids)
+				// Recorded only on DELIVERY, like the instant above: an
+				// attempt would make a machine with no network read as a tool
+				// whose telemetry lane is working.
+				p.sources.note(now, src)
 			}
 		}()
 		w.WriteHeader(http.StatusAccepted)
@@ -319,6 +382,12 @@ func (p *Proxy) authorized(r *http.Request) bool {
 	for _, got := range []string{
 		r.Header.Get("x-keld-telemetry-secret"),
 		r.Header.Get("x-keld-ingest-token"),
+		// The PATH form is what Gemini can actually deliver; see Handler.
+		r.PathValue("token"),
+		// The query form is still ACCEPTED though nothing writes it any more:
+		// a machine configured by an older release keeps its settings file
+		// across an upgrade, and locking it out would be a second outage on top
+		// of the one it already has.
 		r.URL.Query().Get("token"),
 	} {
 		if got != "" && subtle.ConstantTimeCompare([]byte(got), want) == 1 {
@@ -356,8 +425,17 @@ func (p *Proxy) authorized(r *http.Request) bool {
 func textKey(k string) bool {
 	k = strings.ToLower(k)
 	matched := false
-	for _, s := range []string{"prompt", "completion", "message.content", "response.text",
-		"input.text", "output.text", "user_text", "assistant_text"} {
+	for _, s := range []string{"prompt", "completion", "message.content", "response",
+		"input.text", "output.text", "user_text", "assistant_text",
+		// ARGV. A tool's own command line is not metadata: it is whatever the
+		// person typed. ⚠️ MEASURED 2026-09-15 — Gemini CLI sets the OTLP
+		// resource attribute `process.command_args` to its full argv, so a
+		// `gemini -p "<prompt>"` run put the prompt on the wire and this gate
+		// matched none of its words. Same class as the `prompt.id` incident one
+		// direction over, and invisible for the same reason: no captured payload
+		// was in a fixture. `executable.path` goes with them — it is a home
+		// directory, and `executable.name` survives to identify the tool.
+		"command_args", "command_line", "process.command", "executable.path"} {
 		if strings.Contains(k, s) {
 			matched = true
 			break
@@ -365,6 +443,14 @@ func textKey(k string) bool {
 	}
 	return matched && !identifierOrMeasure(k)
 }
+
+// ⚠️ `response` is deliberately the BARE word, not `response.text`. Claude Code's
+// attribute is spelled `response`, and the narrower spelling was written from
+// imagination rather than from a capture: the tool redacts the value by default,
+// so the leak was latent until a managed settings file set
+// OTEL_LOG_ASSISTANT_RESPONSES=1. The proxy must not rely on a tool's own default
+// to uphold this repo's invariant. `response_length`/`response_id` are subtracted
+// below, which is what keeps the widening from costing a measure.
 
 // identifierOrMeasure reports whether a key that named a text word in fact ends
 // in an identifier or a quantity — `prompt.id`, `prompt_length`, `prompt_tokens`.

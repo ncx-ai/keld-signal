@@ -170,3 +170,58 @@ func TestKnownDynamicVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// ⚠️ **THIS TEST EXISTS BECAUSE THE TWO HALVES OF ONE FEATURE WERE BUILT
+// AGAINST EACH OTHER AND NEVER MET.** The sidecar's developer granularities cut
+// blocks whose boundary reason is the MODE NAME (`prompt`/`bin`/`minute`), and
+// this package's skew gate had never heard of any of them — so every dev block
+// the service cut was discarded by the Go client, silently, and the
+// conformance chain measured a sidecar holding a closed block, an enabled
+// emitter, no error anywhere and nothing at Atlas.
+//
+// A hand-mirrored list is what allowed that, so the list is read from the
+// sidecar's own source, exactly as the dynamics vocabularies above are. The
+// production `""` mode is excluded: it is not a boundary name, it is the
+// absence of a dev granularity.
+func TestDevBlockReasonsMatchTheSidecarsModes(t *testing.T) {
+	src, err := os.ReadFile("../../../sidecar/app/analysis/devblocks.py")
+	if err != nil {
+		t.Fatalf("cannot read the sidecar's devblocks module, so the Go dev "+
+			"boundary vocabulary is unpinned: %v", err)
+	}
+	modes := pyTuple(t, string(src), "MODES")
+	if len(modes) == 0 {
+		t.Fatal("parsed no values out of MODES; the comparison would be vacuous")
+	}
+	seen := 0
+	for _, m := range modes {
+		if m == "" {
+			continue // the production cutter, which names its own reasons
+		}
+		seen++
+		if !KnownDevBlockReason(m) {
+			t.Errorf("the sidecar can cut blocks with boundary reason %q and this "+
+				"package would DISCARD every one of them", m)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("MODES held only the production mode; the comparison would be vacuous")
+	}
+	if len(DevBlockReasons) != seen {
+		t.Errorf("DevBlockReasons has %d entries against the sidecar's %d dev modes %v — "+
+			"a reason this side admits and the sidecar never cuts is a boundary nobody measured",
+			len(DevBlockReasons), seen, modes)
+	}
+}
+
+// A dev reason must never be admitted by the PUBLISHED gate. The two
+// vocabularies are disjoint on purpose: KnownBlockReason is what a row
+// published to a real Atlas is checked against.
+func TestDevAndPublishedBlockReasonsAreDisjoint(t *testing.T) {
+	for r := range DevBlockReasons {
+		if KnownBlockReason(r) {
+			t.Errorf("%q is in BOTH vocabularies — a developer granularity would "+
+				"then publish to a real Atlas with no admission step at all", r)
+		}
+	}
+}

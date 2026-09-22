@@ -117,12 +117,12 @@ func TestFacetsForRequiresTheCapability(t *testing.T) {
 // A Codex job must not pay for a pass the analysis cannot serve: no sidecar
 // round-trip, no workstreams, and — critically, since ml_backend "auto" is what
 // nearly every user runs — no downgrade of the published pipeline_status.
-func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
+func TestProcessSkipsWorkstreamsForGemini(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
 	m := &analyzingModel{Model: enrichtest.NewFake()}
 	sender := &fakeSender{}
-	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-2",
-		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1#3", Inline: "write a function that adds two numbers"}
+	j := queue.Job{Source: "gemini_cli", Scheme: "prompt_id", ID: "WS-2",
+		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1########3", Inline: "write a function that adds two numbers"}
 
 	if ok := process(context.Background(), j, m, facetsFor(m, nil), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
@@ -193,5 +193,28 @@ func TestFacetsForWithNoRegionProviderSendsNoOpinion(t *testing.T) {
 	f.ScanPII("text")
 	if v, ok := raw["regions"]; !ok || v != nil {
 		t.Fatalf("regions = %v (present=%v), want null", v, ok)
+	}
+}
+
+// The positive counterpart, and the one that proves the 2026-09-15 work landed:
+// a Codex job now REACHES the analysis. For its whole life as a configured
+// source Codex captured zero prompts and this pass was gated off; the gate moved
+// only because sidecar/app/analysis/readers/codex.py can resolve a rollout's
+// prompt id. A regression that removes the reader must fail here, loudly, rather
+// than silently downgrading every Codex job to "partial" again.
+func TestProcessRunsWorkstreamsForCodex(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
+	m := &analyzingModel{Model: enrichtest.NewFake()}
+	sender := &fakeSender{}
+	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-CODEX",
+		TranscriptPath: "/tmp/rollout.jsonl", PromptID: "01a0a504-72ba-7f80-803f-d847527b0aec#turn-3",
+		Inline: "write a function that adds two numbers"}
+
+	if ok := process(context.Background(), j, m, facetsFor(m, nil), sender, "actor@keld.co",
+		func() bool { return true }, nil, nil, nil); !ok {
+		t.Fatal("process did not publish")
+	}
+	if m.path != j.TranscriptPath {
+		t.Errorf("the analysis was not asked about a Codex transcript: path=%q, want %q", m.path, j.TranscriptPath)
 	}
 }

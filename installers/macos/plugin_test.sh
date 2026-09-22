@@ -6,6 +6,34 @@ d="$(cd "$(dirname "$0")" && pwd)"
 p="$d/plugin"
 fail() { echo "FAIL: $1"; exit 1; }
 
+# body_has <file> <awk-range> <needle> — does that awk range contain the needle?
+#
+# ⚠️ **NOT `awk … | grep -q`, AND THAT PIPELINE IS WHAT TURNED CI RED WITHOUT A
+# CODE CHANGE.** `grep -q` exits at the FIRST match, which closes the pipe and
+# kills awk with SIGPIPE; `set -o pipefail` (line 4) then reports the whole
+# pipeline as failed — so the assertion FAILS precisely because it HELD, and it
+# does so only when the timing goes that way.
+#
+# Measured on the startSidecarDownload range: 74 lines, with the match on line
+# 22, leaving awk 52 lines still to write. When that output fits the pipe buffer
+# before grep exits, awk never notices and the test passes; on a loaded runner it
+# does notice and the pipeline exits 141. Reproduced deliberately (forcing awk to
+# flush per line): 3 of 3 runs exit 141 with the needle present. That is what
+# failed main's own CI at 67be5f5 — "the pane does not say why Continue is held
+# while the engine downloads" — on a tree where the pane says exactly that.
+#
+# Capturing first removes the pipe, so the reader is the shell and nothing can be
+# killed mid-write. A genuinely missing needle still fails, which is asserted by
+# plugin_test_selftest.sh.
+body_has() {
+  local file=$1 range=$2 needle=$3 body
+  body=$(awk "$range" "$file")
+  case "$body" in
+    *"$needle"*) return 0 ;;
+  esac
+  return 1
+}
+
 test -f "$p/KeldSetup.m" || fail "missing KeldSetup.m"
 test -x "$p/build-plugin.sh" || fail "build-plugin.sh is not executable"
 
@@ -209,7 +237,7 @@ grep -q 'didFinishNavigation' "$p/KeldSetup.m" \
 # The prompt must live INSIDE didFinishNavigation. A grep for the string alone
 # would pass on exactly the code this pins against — it was already present, in
 # the device_code handler, which is the bug.
-awk '/didFinishNavigation/,/^}/' "$p/KeldSetup.m" | grep -q 'Sign in to connect' \
+body_has "$p/KeldSetup.m" '/didFinishNavigation/,/^}/' 'Sign in to connect' \
   || fail "the sign-in prompt is not set when the page finishes loading, so it still appears over a blank view"
 
 # And the wait has to be visible for as long as it lasts. The invariant is
@@ -254,11 +282,11 @@ grep -q 'beginLoadingTools' "$p/KeldSetup.m" \
   || fail "the pane has no loading state between signing in and being ready"
 # (Expressed through the single source of truth now: the step clears its own
 # condition and asks for a recompute, rather than assigning the button directly.)
-awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = NO' \
+body_has "$p/KeldSetup.m" '/- \(void\)beginLoadingTools/,/^}/' '_toolsLoaded = NO' \
   || fail "Continue is not held while the pane is still loading its tool list"
-awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+body_has "$p/KeldSetup.m" '/- \(void\)beginLoadingTools/,/^}/' 'startAnimation' \
   || fail "nothing moves while the pane loads, so the wait is indistinguishable from a hang"
-awk '/- \(void\)finishLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = YES' \
+body_has "$p/KeldSetup.m" '/- \(void\)finishLoadingTools/,/^}/' '_toolsLoaded = YES' \
   || fail "Continue is never re-enabled once loading finishes"
 
 # And the gap between submitting the form and the device poll answering must
@@ -275,7 +303,7 @@ grep -q 'addScriptMessageHandler' "$p/KeldSetup.m" \
   || fail "the pane cannot tell that a sign-in was submitted (the page posts by fetch, not navigation)"
 grep -q 'didReceiveScriptMessage' "$p/KeldSetup.m" \
   || fail "the pane installs a message handler and never handles the message"
-awk '/didReceiveScriptMessage/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+body_has "$p/KeldSetup.m" '/didReceiveScriptMessage/,/^}/' 'startAnimation' \
   || fail "submitting the form starts nothing moving, so the wait still looks like a hang"
 # The handler is retained by the content controller, which the web view retains:
 # leaving it installed keeps the pane alive for the life of the process.
@@ -320,7 +348,7 @@ strays=$(grep -c 'nextEnabled = ' "$p/KeldSetup.m" || true)
 # so the failure path sets the same flag and offers a retry.
 done_body=$(awk '/_sidecarSettled = YES/{found++} END{print found+0}' "$p/KeldSetup.m")
 [ "$done_body" -ge 1 ] || fail "nothing ever marks the sidecar download as settled"
-awk '/- \(void\)startSidecarDownload/,/^\}/' "$p/KeldSetup.m" | grep -q 'Downloading the analysis engine' \
+body_has "$p/KeldSetup.m" '/- \(void\)startSidecarDownload/,/^\}/' 'Downloading the analysis engine' \
   || fail "the pane does not say why Continue is held while the engine downloads"
 
 echo "plugin_test.sh: OK"

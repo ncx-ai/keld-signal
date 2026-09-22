@@ -107,6 +107,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <span class="chip chip-draft">Draft — awaiting sign-off</span>
   <span>Fable 5.1 (1M context) — thinking: medium</span>
   <span class="mono">2026-09-14</span>
+  <span class="mono">revised 2026-09-15 · §10 spike added, mapping widened</span>
 </div>
 
 <dl class="kv">
@@ -115,9 +116,9 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <dt>Codex prompts ever captured</dt><dd class="mono">0 — watcher needs an ordinal; 0 of 4,076 user_message lines carry one (287 rollouts, 20 CLI versions, this machine)</dd>
   <dt>Modules reading Claude field names</dt><dd class="mono">6 — ingest.py, levels.py, capture.py, workspace.py, textembed.py, analyze.py (grep, release/v3)</dd>
   <dt>turn_context before its user_message</dt><dd class="mono">1,846 of 1,848 turns (40 newest rollouts) — the 2 exceptions get the timestamp fallback</dd>
-  <dt>Codex records that carry the work</dt><dd class="mono">turn_context (cwd, model, turn_id) · item_completed (CommandExecution, FileChange, McpToolCall) · token_usage_record</dd>
+  <dt>Codex records that carry the work</dt><dd class="mono">turn_context (cwd, model, turn_id) · TWO tool transports: response_item function_call / custom_tool_call (+ exec_command_end, patch_apply_end, mcp_tool_call_end) up to 0.146, item_completed (CommandExecution, FileChange, McpToolCall) from 0.148 · event_msg/token_count in every version, token_usage_record in 0.153.4 only</dd>
   <dt>Parity oracle</dt><dd class="mono">analyze_window_by_parse + 284-transcript chunk equivalence; both exist today</dd>
-  <dt>codeburn</dt><dd class="mono">MIT · reference only · src/providers/codex.ts, 1,409 lines</dd>
+  <dt>codeburn</dt><dd class="mono">MIT · reference + numbers oracle, never a runtime dependency · parsers measured 2026-09-15 (§10) · src/providers/codex.ts, 1,409 lines</dd>
 </dl>
 
 <h2 id="s1">1 · Hypothesis &amp; scope</h2>
@@ -134,7 +135,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <ul>
   <li><strong>G1</strong> — A Codex session publishes blocks with attributed workstreams.</li>
   <li><strong>G2</strong> — Claude Code and Cowork rows do not change by one byte.</li>
-  <li><strong>G3</strong> — A third tool is a reader plus one eligibility entry. Nothing else.</li>
+  <li><strong>G3</strong> — A third tool is a sidecar reader plus one eligibility entry, on top of the Go watcher extractor and resolver it already needs for capture. Codex and Gemini have both Go halves today; a tool such as Cursor or Copilot has neither, so for it the count is three code units, not one.</li>
 </ul>
 
 <h3>Acceptance criteria</h3>
@@ -146,12 +147,12 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr id="ac-1"><td class="mono">AC-1</td><td>Claude field names (<span class="mono">promptId</span>, <span class="mono">gitBranch</span>, <span class="mono">attributionSkill</span>, <span class="mono">message.content</span>, <span class="mono">tool_use</span>, <span class="mono">isSidechain</span>) appear in exactly one sidecar module, the Claude reader.</td><td>source tree</td><td class="mono">sidecar/app/test_reader_boundary.py — greps analysis/*.py, fails on any hit outside readers/claude.py</td></tr>
   <tr id="ac-2"><td class="mono">AC-2</td><td>Over the fixture transcripts, the store's <span class="mono">event</span>, <span class="mono">bin</span>, <span class="mono">prompt</span> and <span class="mono">turn_magnitude</span> rows equal a golden dump taken at the commit before the record.</td><td>refseries.db rows</td><td class="mono">test_reader_golden.py against docs/superpowers/specs/golden/turn-record-*.jsonl, committed first</td></tr>
   <tr id="ac-3"><td class="mono">AC-3</td><td>For a rollout captured from Codex 0.153.4, the watcher emits one pointer per <span class="mono">event_msg/user_message</span>, id <span class="mono">&lt;session_id&gt;#&lt;turn_id&gt;</span>, cwd from <span class="mono">turn_context</span>.</td><td>spool.Pointer</td><td class="mono">go test ./internal/agent/watch -run TestCodexExtractorRealRollout</td></tr>
-  <tr id="ac-4"><td class="mono">AC-4</td><td>No fixture in <span class="mono">watch</span> or <span class="mono">resolve</span> places an <span class="mono">ordinal</span> on a <span class="mono">user_message</span> line, and the Codex fixture is a captured file, not a hand-written one.</td><td>test fixtures</td><td class="mono">TestCodexFixturesMatchProduction — parses every fixture, fails on the shape</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td>No fixture in <span class="mono">watch</span> or <span class="mono">resolve</span> places an <span class="mono">ordinal</span> on a <span class="mono">user_message</span> line, and the Codex fixture is a captured file, not a hand-written one. ⚠️ <strong>Amended during implementation, 2026-09-15:</strong> Codex 0.148-0.151 stamps an <span class="mono">ordinal</span> on EVERY line, including its <span class="mono">item_completed UserMessage</span> turns. Stripping them to satisfy a literal reading would make the fixture stop being the file it came from — the exact defect this criterion exists to prevent. The assertion is the sentence as written (no ordinal on a <span class="mono">user_message</span> line, true on all three captured versions), plus a second test pinning that 0.151's production ordinals are still present, and a third grepping both Go files so identity can never be derived from one.</td><td>test fixtures</td><td class="mono">TestCodexFixturesMatchProduction — parses every fixture, fails on the shape</td></tr>
   <tr id="ac-5"><td class="mono">AC-5</td><td><span class="mono">CodexReader.Read(path, id)</span> returns the human text of that turn and no other turn's text, for the AC-3 fixture.</td><td>resolve.TranscriptReader</td><td class="mono">go test ./internal/agent/resolve -run TestCodexReaderReadByTurnID</td></tr>
   <tr id="ac-6"><td class="mono">AC-6</td><td>Ingesting the AC-3 rollout writes <span class="mono">workspace</span>, <span class="mono">model</span>, <span class="mono">tool</span>, <span class="mono">exe</span>, <span class="mono">action</span> and <span class="mono">mag/tok</span> rows, and no <span class="mono">say</span> row carries text.</td><td>refseries.db rows</td><td class="mono">sidecar/app/test_codex_reader.py</td></tr>
   <tr id="ac-7"><td class="mono">AC-7</td><td>Chunked ingest of the Codex rollout in 40 pieces equals one pass, row for row.</td><td>refseries.db rows</td><td class="mono">test_ingest.py::test_chunked_ingest_of_a_codex_rollout_equals_one_pass</td></tr>
   <tr id="ac-8"><td class="mono">AC-8</td><td><span class="mono">analyze_window_by_parse</span> equals the store's answer for a Codex prompt id, and the oracle resolves that id from the reader, not from Claude keys.</td><td>/analyze response</td><td class="mono">test_prompt_id_seam.py::test_codex_oracle_agrees_with_the_index</td></tr>
-  <tr id="ac-9"><td class="mono">AC-9</td><td><span class="mono">WorkstreamsEligible("codex")</span> is true, the ingest signal fires for a Codex path, and <span class="mono">WorkstreamsEligible("gemini")</span> is unchanged.</td><td>enrich + daemon</td><td class="mono">go test ./internal/agent/enrich ./internal/agent/daemon -run 'Eligible|IngestSignal'</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td><span class="mono">WorkstreamsEligible("codex")</span> is true, the ingest signal fires for a Codex path, and <span class="mono">WorkstreamsEligible("gemini_cli")</span> is unchanged (the id the watcher and roots use; there is no <span class="mono">"gemini"</span> source).</td><td>enrich + daemon</td><td class="mono">go test ./internal/agent/enrich ./internal/agent/daemon -run 'Eligible|IngestSignal'</td></tr>
   <tr id="ac-10"><td class="mono">AC-10</td><td>A real Codex session through an isolated daemon against the dev Atlas publishes at least one block whose <span class="mono">workstreams.model</span> is <span class="mono">attributed</span>, and its telemetry row is unchanged.</td><td>Atlas blocks table + ledger</td><td class="mono">scripts/ledger_e2e.sh --source codex, read back by (session_id, start_ts)</td></tr>
 </tbody>
 </table>
@@ -160,7 +161,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <h3>Explicit exclusions</h3>
 <ul>
   <li>A Gemini reader. Same shape, separate page; see section 8.</li>
-  <li>Embedding or porting codeburn. Its Codex parser is the field-mapping reference and nothing more.</li>
+  <li>Embedding or porting codeburn's parsers. Measured 2026-09-15 (§10): their rows carry no assistant text and 500 characters of user text, and on the installed Codex they carry no file paths, MCP calls or command text. The Codex parser stays the reference for the token-dedup rule and the transport history, nothing more.</li>
   <li>Any change to Codex telemetry, the proxy, or Atlas. Atlas already renders <span class="mono">workstreams</span> for any source.</li>
   <li>A Codex prompt hook. Codex fires no prompt-submit hook; the watcher is the only capture path.</li>
   <li>Keyword or heuristic classification of Codex turns. The workstream dimensions are counted, as for Claude.</li>
@@ -226,14 +227,14 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <tbody>
   <tr><td class="mono">ts</td><td class="mono">timestamp</td><td class="mono">timestamp</td><td>both top-level</td></tr>
   <tr><td class="mono">session</td><td>path-derived</td><td class="mono">session_meta.id</td><td>subagent rollouts carry <span class="mono">parent_thread_id</span>; keep their own id</td></tr>
-  <tr><td class="mono">prompt_id</td><td class="mono">promptId</td><td class="mono">&lt;session_id&gt;#turn_context.turn_id</td><td>fallback: the prompt's own timestamp, 2 of 1,848</td></tr>
-  <tr><td class="mono">role</td><td class="mono">type</td><td><span class="mono">user_message</span> → user; <span class="mono">AgentMessage</span> item → assistant</td><td><span class="mono">response_item</span> user-role is injected context, not a human turn</td></tr>
+  <tr><td class="mono">prompt_id</td><td class="mono">promptId</td><td class="mono">&lt;session_id&gt;#turn_context.turn_id</td><td>fallback: the prompt's own timestamp. 2 of 1,848 on the 40 newest rollouts; <strong>320 of 4,076 (7.9%)</strong> over all 287, which backfill reads. <span class="mono">turn_id</span> is absent from the 0.36-era <span class="mono">turn_context</span> entirely (1,223 of 5,419)</td></tr>
+  <tr><td class="mono">role</td><td class="mono">type</td><td><span class="mono">event_msg/user_message</span> → user, <strong>or</strong> <span class="mono">item_completed</span> with <span class="mono">item.type=UserMessage</span> (0.151 writes ONLY that shape: 47 turns, 0 <span class="mono">user_message</span> lines; 0.153.4 writes both, 1,384 + 67); <span class="mono">AgentMessage</span> item → assistant</td><td><span class="mono">response_item</span> user-role is injected context, not a human turn: 5,300 such lines against 4,076 human prompts</td></tr>
   <tr><td class="mono">cwd</td><td class="mono">cwd</td><td class="mono">turn_context.cwd</td><td><span class="mono">session_meta.cwd</span> as fallback</td></tr>
   <tr><td class="mono">model</td><td class="mono">message.model</td><td class="mono">turn_context.model</td><td></td></tr>
   <tr><td class="mono">branch</td><td class="mono">gitBranch</td><td>—</td><td>unattributed; excluded above</td></tr>
-  <tr><td class="mono">tool_calls</td><td class="mono">content[].tool_use</td><td class="mono">item_completed.item</td><td><span class="mono">CommandExecution{command,cwd}</span> → Bash; <span class="mono">FileChange.changes[].path</span> → edit; <span class="mono">McpToolCall</span> → mcp</td></tr>
-  <tr><td class="mono">usage</td><td class="mono">message.usage</td><td class="mono">token_usage_record.usage</td><td><span class="mono">cached_input_tokens</span> → in_cached; <span class="mono">cache_write_input_tokens</span> → in_fresh</td></tr>
-  <tr><td class="mono">request_id</td><td class="mono">requestId</td><td class="mono">token_usage_record.response_id</td><td>dedup across batches, as today</td></tr>
+  <tr><td class="mono">tool_calls</td><td class="mono">content[].tool_use</td><td class="mono">≤0.146: response_item function_call / custom_tool_call, event_msg patch_apply_end, mcp_tool_call_end · ≥0.148: item_completed.item</td><td><span class="mono">CommandExecution{command,cwd}</span> → Bash; <span class="mono">FileChange.changes[].path</span> → edit; <span class="mono">McpToolCall</span> → mcp</td></tr>
+  <tr><td class="mono">usage</td><td class="mono">message.usage</td><td class="mono">event_msg/token_count · info.last_token_usage (every version, 0.34 → 0.153.4); token_usage_record only in 0.153.4</td><td><span class="mono">cached_input_tokens</span> → in_cached; <span class="mono">cache_write_input_tokens</span> → in_fresh. Three modes, in codeburn's order: <span class="mono">last_token_usage</span> present → use it; only <span class="mono">total_token_usage</span> → delta against the previous event; neither → no row (never estimate). OpenAI counts cached tokens INSIDE input_tokens; subtract</td></tr>
+  <tr><td class="mono">request_id</td><td class="mono">requestId</td><td class="mono">token_count: (timestamp, cumulative total) · token_usage_record.response_id where present</td><td>dedup across batches, as today; plus fork replays (<span class="mono">session_meta.forked_from_id</span>, events inside 5 s of the fork instant) and spawned sub-agent parents, both codeburn rules</td></tr>
   <tr><td class="mono">think_chars</td><td>thinking blocks</td><td><span class="mono">Reasoning</span> items</td><td>count only; Codex reasoning is encrypted</td></tr>
   <tr><td class="mono">skill</td><td class="mono">attributionSkill</span> · Skill tool</td><td>—</td><td>unattributed</td></tr>
 </tbody>
@@ -308,7 +309,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
 <tbody>
   <tr><td class="mono">A</td><td>Add a Codex branch inside <span class="mono">events_for_turns</span> and friends, no record</td><td>Six modules each grow a second shape. The prompt-id index bug came from exactly two copies of one rule drifting.</td></tr>
-  <tr><td class="mono">B</td><td>Embed codeburn's parsers as a Node step</td><td>CLI-only, no library exports, output is aggregated cost. A Node runtime in the client to fork a 5,561-line parser.</td></tr>
+  <tr><td class="mono">B</td><td>Embed codeburn's parsers (Node) for the numbers, our reader for text</td><td><strong>Measured 2026-09-15, §10.</strong> Rows carry no assistant text and 500 chars of user text, so the text half (and any vector mapping) cannot come from them. On the installed Codex they yield 63 file paths against 376 FileChange items, 0 MCP calls against 279, 0 command texts, and name 565 turns where 1,384 human prompts exist. On Claude, against the oracle: tokens over-counted on 44 of 181 transcripts (message.id vs requestId), 7.7% of tool_use blocks absent, file paths 25% of ours. A Node runtime was NOT the reason and is acceptable. Revisit when upstream reads item-model FileChange/McpToolCall and emits full text.</td></tr>
   <tr><td class="mono">C</td><td>Convert rollouts to Claude JSONL on disk, then reuse everything</td><td>A second file per session, a second byte-offset checkpoint, and a translation with no oracle to check it against.</td></tr>
   <tr><td class="mono">D</td><td>Fix the watcher's ordinal check only</td><td>Codex prompts would publish sensitivity alone. Atlas renders that as no classification; the report stays true.</td></tr>
   <tr><td class="mono">E</td><td>Do nothing</td><td>Codex stays telemetry-only for every org, and each further tool restates the whole question.</td></tr>
@@ -352,7 +353,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <text x="260" y="170" text-anchor="middle" class="small">yes, none pending</text>
   <rect x="20" y="156" width="198" height="44" rx="4" class="b-bad"/>
   <text x="119" y="176" text-anchor="middle" class="txt">fallback: own timestamp</text>
-  <text x="119" y="192" text-anchor="middle" class="small">counted · 2 of 1,848 measured</text>
+  <text x="119" y="192" text-anchor="middle" class="small">counted · 2/1,848 newest · 320/4,076 all</text>
   <path d="M440 200V224" class="arr" marker-end="url(#f-ah)"/>
   <text x="452" y="216" class="small">no</text>
 
@@ -367,7 +368,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <text x="452" y="286" class="small">no</text>
 
   <rect x="300" y="296" width="280" height="44" rx="4" class="b-plain"/>
-  <text x="440" y="323" text-anchor="middle" class="txt">token_usage_record?</text>
+  <text x="440" y="323" text-anchor="middle" class="txt">token_count / token_usage_record?</text>
   <path d="M580 318H660" class="arr-good" marker-end="url(#f-ah-good)"/>
   <text x="620" y="310" text-anchor="middle" class="small">yes</text>
   <rect x="662" y="296" width="198" height="44" rx="4" class="b-good"/>
@@ -430,9 +431,9 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td class="mono">3</td><td>codex</td><td>user_message</td><td>no</td><td>record, prompt_id from timestamp, fallback counted</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
   <tr><td class="mono">4</td><td>codex</td><td>response_item, role user</td><td>—</td><td>skipped: injected context, not a human turn</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
   <tr><td class="mono">5</td><td>codex</td><td>item_completed CommandExecution</td><td>—</td><td>tool Bash, exe/verb/action rows, cwd path pending</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
-  <tr><td class="mono">6</td><td>codex</td><td>token_usage_record, response_id seen</td><td>—</td><td>no second tok/mag row</td><td class="mono"><a href="#ac-7">AC-7</a></td></tr>
+  <tr><td class="mono">6</td><td>codex</td><td>token_count whose cumulative total was already costed, or token_usage_record with a seen response_id</td><td>—</td><td>no second tok/mag row</td><td class="mono"><a href="#ac-7">AC-7</a></td></tr>
   <tr><td class="mono">7</td><td>codex</td><td>unknown type</td><td>—</td><td>skipped, counted in /metrics</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
-  <tr><td class="mono">8</td><td>gemini</td><td>any</td><td>—</td><td>ineligible, no ingest signal, unchanged</td><td class="mono"><a href="#ac-9">AC-9</a></td></tr>
+  <tr><td class="mono">8</td><td>gemini_cli</td><td>any</td><td>—</td><td>ineligible, no ingest signal, unchanged</td><td class="mono"><a href="#ac-9">AC-9</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -524,11 +525,54 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td class="mono">4</td><td><span class="mono">isSidechain</span> for Codex subagents (<span class="mono">parent_thread_id</span>). Left unattributed here.</td><td>no</td><td>decision from Gabriel on whether subagent work should fold into the parent</td></tr>
   <tr><td class="mono">5</td><td>The July Codex readers were never run against a real rollout. Whether Gemini's were is unknown.</td><td>no</td><td>AC-4's fixture rule, extended to Gemini in item 1</td></tr>
   <tr><td class="mono">6</td><td>Blocks for Codex read the same 20-minute cap and 15-minute idle. Codex agent runs may pace differently.</td><td>no</td><td>measure block attribution rate on Codex after AC-10</td></tr>
+  <tr><td class="mono">7</td><td>Backfill reads pre-0.148 rollouts (about 100 of 287 here). A reader that knows only <span class="mono">item_completed</span> ingests them with zero tool rows and no counter fires, because every record type is known.</td><td><strong>yes</strong></td><td>the two-transport mapping above; AC-4's fixture set gains one 0.125 rollout and one 0.151 rollout beside the 0.153.4 one</td></tr>
+  <tr><td class="mono">8</td><td>The Codex token rule has three modes and two replay filters (fork, sub-agent parent). Getting it wrong doubles spend silently, which is what the <span class="mono">reqs</span> accumulator already fixed once for Claude.</td><td>no</td><td>port codeburn's rule; test the reader's per-rollout token totals against codeburn's on all 287 rollouts (§10 gives the numbers)</td></tr>
+  <tr><td class="mono">9</td><td>Where each of codeburn's 41 tools writes its transcripts (<span class="mono">probeRoots</span>) is a table, not code, and is the cheapest thing in that repo to lift.</td><td>no</td><td>a data table in <span class="mono">watch/roots.go</span>, when a third tool is chosen</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2 id="s9">9 · Review log</h2>
+<h2 id="s10">10 · Spike — codeburn as the parser (2026-09-15)</h2>
+<p class="lede">Gabriel reopened alternative B: a Node runtime in every install is acceptable if it saves time, and the solution needs numbers <strong>and</strong> prompt text <strong>and</strong> agent responses, for the vector-mapping approach. So the question is what codeburn's rows carry. Its per-file parsers were driven directly (a 30-line shim against <span class="mono">parseClaudeFileFull</span> / <span class="mono">createSessionParser</span>, cache bypassed) over this machine's corpus and compared with the sidecar's own rows where an oracle exists.</p>
+
+<h3>Claude Code, against the oracle <span class="mono">181 non-agent transcripts · 212 MB · sidecar 8.5 s incl. store writes · codeburn 1.1 s</span></h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Level</th><th>Sidecar</th><th>codeburn</th><th>Agreement</th><th>Why they differ</th></tr></thead>
+<tbody>
+  <tr><td class="mono">model</td><td>per assistant line</td><td>per call</td><td>dominant per 5-min bin <strong>1,823 / 1,824</strong></td><td>—</td></tr>
+  <tr><td class="mono">branch</td><td>per turn</td><td>per turn, stored on change</td><td>dominant per bin <strong>1,807 / 1,824</strong></td><td>carry-forward starts one turn late</td></tr>
+  <tr><td class="mono">workspace / cwd</td><td>resolved to the repo</td><td>file-level cwd</td><td><strong>170 / 181</strong> files</td><td>the 11 are <span class="mono">.claude/worktrees/*</span>: sidecar answers the repo, codeburn the worktree</td></tr>
+  <tr><td class="mono">tokens (4 kinds)</td><td>per <span class="mono">requestId</span></td><td>per <span class="mono">message.id</span></td><td>exact on <strong>134 / 181</strong> files; cache_read within 0.9% corpus-wide</td><td>44 <span class="mono">devgen-*</span> transcripts write each request as two lines with distinct message ids and one requestId: codeburn counts both (input 1.89×, output 1.28×, cache_creation 1.30× over the corpus)</td></tr>
+  <tr><td class="mono">tool</td><td>12,876 tool_use blocks</td><td>11,881</td><td><strong>−7.7%</strong>; per-bin multiset overlap 91%</td><td>every absent block sits on a continuation line sharing an earlier line's message id; mostly Bash (−646), Edit (−150), Write (−100)</td></tr>
+  <tr><td class="mono">file</td><td>7,363, workspace-relative</td><td>1,863, absolute</td><td><strong>25%</strong></td><td>codeburn reads <span class="mono">file_path</span> on Read/Edit/Write only; the sidecar also reads <span class="mono">notebook_path</span>, <span class="mono">path</span> and paths quoted in Bash, then resolves through <span class="mono">reconcile()</span></td></tr>
+  <tr><td class="mono">text</td><td>read whole, never stored</td><td>user ≤500 chars; assistant counted only</td><td>—</td><td>structural: no tracker in this class emits text</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Codex, by transport <span class="mono">287 rollouts · 20 CLI versions · codeburn 4.6 s · no oracle, raw line counts beside</span></h3>
+<div class="wrap">
+<table>
+<thead><tr><th>CLI</th><th>Rollouts</th><th>Human prompts (raw)</th><th>codeburn turns</th><th>Tool names</th><th>File paths</th><th>Commands</th><th>MCP</th><th>cwd</th></tr></thead>
+<tbody>
+  <tr><td class="mono">0.34–0.36 (2025)</td><td class="mono">106</td><td class="mono">162</td><td class="mono">161</td><td class="mono">1,034</td><td class="mono">0</td><td class="mono">1</td><td class="mono">—</td><td class="mono">100%</td></tr>
+  <tr><td class="mono">0.118–0.146 (classic)</td><td class="mono">108</td><td class="mono">2,060</td><td class="mono">2,241</td><td class="mono">41,037</td><td class="mono">3,675</td><td class="mono">25,684</td><td class="mono">event_msg/mcp_tool_call_end</td><td class="mono">100%</td></tr>
+  <tr><td class="mono">0.148–0.151 (item model)</td><td class="mono">7</td><td class="mono">444 + 106 as UserMessage items</td><td class="mono">493</td><td class="mono">1,405</td><td class="mono">27</td><td class="mono">0</td><td class="mono">—</td><td class="mono">100%</td></tr>
+  <tr><td class="mono">0.153.4 (installed)</td><td class="mono">29</td><td class="mono">1,384 + 67</td><td class="mono"><strong>565</strong></td><td class="mono">7,878</td><td class="mono"><strong>63</strong> of 376 FileChange items</td><td class="mono"><strong>0</strong></td><td class="mono"><strong>0</strong> of 279 McpToolCall items</td><td class="mono">100%</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>Turn identity is wrong in both directions.</strong> 0.121.0: 371 human prompts, 638 codeburn turns (injected <span class="mono">response_item</span> user-role context counted as turns). 0.153.4: 1,384 human prompts, 565 turns. It is an ordinal counter, and Claude's <span class="mono">promptId</span> is not read at all, so <span class="mono">corr_id</span> is ours to compute for every source regardless.</li>
+  <li><strong>The item model is where codeburn is behind, not ahead.</strong> First 0.148 rollout here is 2026-08-21; upstream <span class="mono">codex.ts</span> fetched 2026-09-15 (HEAD of 2026-09-14) handles <span class="mono">CommandExecution</span> for attribution only and has no <span class="mono">FileChange</span>, <span class="mono">McpToolCall</span> or <span class="mono">UserMessage</span> handling. Its ~40 Codex commits since May are token-dedup, cost, discovery and throughput fixes: the metric it exists for, and the one telemetry already delivers to Atlas.</li>
+  <li><strong>What it does carry, it carries across every version:</strong> tokens, model and cwd on 100% of rows, 287 of 287 rollouts parsed (3 empty VS Code sessions aside). The token rule, the fork-replay cutoff and the sub-agent-parent rule are worth porting and testing against its numbers (gap 8).</li>
+  <li><strong>Gemini:</strong> 55 chats, 203 calls, cwd on 0, tools on 4. The transcript carries a <span class="mono">projectHash</span> and no cwd, so Gemini yields model and tokens whichever parser reads it.</li>
+  <li><strong>Siblings</strong> (ccusage 18 providers, tokscale 40+ with a Rust core, tokentracker 38 via hooks): all MIT, all CLI-only, none emits message text. The conclusion above is the class's, not codeburn's.</li>
+</ul>
+<p><strong>What this changed on this page:</strong> the Codex field mapping now names both transports and <span class="mono">token_count</span>; the human-turn rule gained the <span class="mono">UserMessage</span> item; the fallback rate is stated for backfill, not only for the newest 40; G3 counts the Go half; AC-9 uses the real source id; alternative B and gap 7 are rewritten from the measurement. The record keeps <span class="mono">text</span> for the user and assistant streams, whole, because that is the requirement the vector-mapping approach adds and the one nothing off the shelf meets. Harness: a scratch shim over codeburn's <span class="mono">src/</span> plus <span class="mono">ingest.ingest_file</span> into a scratch store; both sides bucket to the store's 300 s bins.</p>
+
+<h2 id="s9">11 · Review log</h2>
 <p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
 <div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
 
@@ -539,8 +583,8 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <dd>That is option A, and it is faster by days. The cost is a second shape in six places, which is the drift class that produced the uuid-only index bug. AC-2 makes the refactor safe: one golden dump, zero rows may differ.</dd>
   <dt>Isn't the golden dump just freezing today's bugs?</dt>
   <dd>Yes, and that is the point. This page changes where the code reads from, not what it computes. A bug fixed on the way would be invisible inside the refactor; fix it in its own commit, and regenerate the dump there.</dd>
-  <dt>Why not codeburn? It already has 46 parsers.</dt>
-  <dd>It has 46 parsers behind a CLI with no library exports, emitting aggregated cost. We need events with timestamps, paths and turn ids inside a Python process. Reading its Codex parser saved a day of field-hunting; running it would cost a Node runtime in every install.</dd>
+  <dt>Why not codeburn? It already has 41 parsers, and a Node runtime is acceptable.</dt>
+  <dd>Because of what its rows carry, not what they cost to run (§10). No assistant text, ever, and 500 characters of user text: the vector-mapping approach needs both streams whole, so the text reader is ours whichever parser supplies the numbers. And on the installed Codex the numbers it supplies are tokens, model and cwd, which telemetry already delivers; the levels enrichment needs from the transcript (file paths, MCP calls, command text, the human turn) are the ones it does not read on the item model as of its 2026-09-14 HEAD. Two parsers over one file would then still be two turn identities to keep equal.</dd>
   <dt>The record is the Claude shape with new names. Is that really neutral?</dt>
   <dd>Partly true. Its fields are what the extractor consumes today, which was written for Claude. It is neutral where it matters: Codex fills every field the workstream dimensions need except branch and skill, and those stay unattributed rather than faked.</dd>
   <dt>Does Codex text now leak into named_terms?</dt>

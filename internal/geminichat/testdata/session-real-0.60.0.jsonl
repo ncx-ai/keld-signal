@@ -1,0 +1,6 @@
+{"sessionId":"637be05e-a0e5-4d8d-9fb9-8726fb7a269f","projectHash":"0000000000000000000000000000000000000000000000000000000000000000","startTime":"2026-09-17T14:17:13.848Z","lastUpdated":"2026-09-17T14:17:13.848Z","kind":"main"}
+{"$set":{"messages":[{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-09-17T14:17:13.849Z","type":"user","content":[{"text":"<session_context>(scrubbed)</session_context>"}]}],"lastUpdated":"2026-09-17T14:17:13.849Z"}}
+{"id":"6ad071ad-07e3-482c-a392-7768e251a09d","timestamp":"2026-09-17T14:17:13.894Z","type":"user","content":[{"text":"reply with one word"}]}
+{"$set":{"lastUpdated":"2026-09-17T14:17:13.894Z"}}
+{"id":"adf21f66-a7d2-413a-bd65-2902a3a8bdd0","timestamp":"2026-09-17T14:17:13.922Z","type":"gemini","content":"MOCK OK","thoughts":[],"tokens":{"input":42,"output":3,"cached":0,"thoughts":0,"tool":0,"total":45},"model":"gemini-3.5-flash"}
+{"$set":{"lastUpdated":"2026-09-17T14:17:13.923Z"}}

@@ -69,8 +69,26 @@ var ClaudeHookEvents = []ClaudeHookEvent{
 	{Event: "UserPromptSubmit", Matcher: nil},
 }
 
-// CodexHookEvents is the list of hook event names keld registers with Codex.
-var CodexHookEvents = []string{"SessionStart", "PreToolUse"}
+// CodexHookEvents is the list of hook event names keld registers with Codex,
+// in lifecycle order.
+//
+// ⚠️ This was {SessionStart, PreToolUse} and neither of those could ever
+// produce a captured prompt. `UserPromptSubmit` is the human turn and the only
+// event whose payload carries a `turn_id` beside the prompt — the identity
+// `hook.Run` builds `<session_id>#<turn_id>` from. `Stop` closes that same
+// turn under the same `turn_id`. `SessionStart` stays because it is how the
+// daemon learns a Codex session exists before any prompt arrives.
+//
+// `PreToolUse` is dropped rather than kept for completeness: it fires once per
+// TOOL CALL — dozens per turn on an agentic session — and its payload names no
+// prompt, so every one of those was a process spawn that could not produce a
+// pointer.
+//
+// ⚠️ Changing this list changes the hook COMMANDS Codex hashes, and Codex marks
+// a changed hook for review again: a machine that had approved keld's hooks
+// returns to `approval_required` at its next setup. That is stated on the
+// Integrations row rather than hidden — see tools.CodexHooksTrusted.
+var CodexHookEvents = []string{"SessionStart", "UserPromptSubmit", "Stop"}
 
 // HookCommand returns the command string keld uses for a hook invocation from
 // the given source tool. The binary acts as its own hook runner. binPath is the
@@ -84,7 +102,42 @@ func HookCommand(binPath, source string) string {
 	if binPath != "" {
 		bin = binPath
 	}
-	return bin + " __hook --source " + source
+	return quoteBin(bin) + " __hook --source " + source
+}
+
+// quoteBin wraps the binary path in double quotes when it cannot survive being
+// read bare, and leaves it alone otherwise.
+//
+// ⚠️ **AN UNQUOTED WINDOWS PATH IS A STRING OF ESCAPES, AND IT COST THE WHOLE
+// ENRICHMENT LANE ON WINDOWS.** Measured on a real runner 2026-09-16: the
+// conformance chain passed transcript, store_rows and telemetry and failed only
+// the enrichment checkpoints, with NO pointer ever reaching the daemon. The
+// hook binary itself was fine — run by hand with a real payload it exits 0 —
+// and Claude Code was fine too: a control hook added beside keld's own FIRED.
+//
+// The control is the natural experiment, because it differed in exactly one
+// way. It was written QUOTED and ran; keld's was written BARE and did not:
+//
+//	"C:\...\probe.cmd" "C:\...\marker"                  → fired
+//	D:\a\...\keld.exe __hook --source claude_code        → never ran
+//
+// To anything shell-like, `\a` `\_` `\b` are escapes, and what is left is
+// not a path to anything. Inside double quotes a backslash is literal in both
+// cmd.exe and POSIX sh, so one pair of quotes fixes both readers.
+//
+// Scoped to paths that CANNOT work bare — a space, or a backslash — so the
+// millions of plain Unix paths already written are byte-identical and nothing
+// rewrites them for no reason. `HookCommandSubstr` is unaffected either way:
+// it matches the FLAG and its argument, never the binary, which is exactly why
+// that constant was widened. A test pins that.
+func quoteBin(bin string) string {
+	if bin == "" || (!strings.ContainsAny(bin, ` \`)) {
+		return bin
+	}
+	if strings.HasPrefix(bin, `"`) {
+		return bin // already quoted by a caller
+	}
+	return `"` + bin + `"`
 }
 
 // ClaudeEnv returns an ordered map of environment variables to inject into
@@ -114,34 +167,73 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m.Set("otlpProtocol", "http")
 	m.Set("otlpEndpoint", endpointWithToken(p.Endpoint, p.IngestToken))
 	m.Set("logPrompts", false)
-	// gemini-cli builds its OTLP trace exporter unconditionally when telemetry
-	// is enabled — there is no per-signal switch to stop trace *export* (spans
-	// still flow to /v1/traces; Atlas ignores them). What we can control is
-	// span *content*: shouldIncludePayloads = traces && logPrompts. Both are
-	// false here, so spans carry no prompt/response bodies. Setting traces
-	// explicitly (in addition to logPrompts) makes that guarantee robust even
-	// if a future gemini-cli flips the logPrompts default.
-	m.Set("traces", false)
+	// ⚠️ **`traces: false` WAS WRITTEN HERE AND CURRENT GEMINI REJECTS THE WHOLE
+	// TELEMETRY BLOCK OVER IT.** It was belt-and-braces: the comment argued that
+	// span CONTENT is gated by `shouldIncludePayloads = traces && logPrompts`,
+	// so setting both made the no-payloads guarantee robust against a future
+	// build flipping the logPrompts default. That future arrived in the other
+	// direction — the key is gone. Measured on gemini-cli 0.37.1: the strings
+	// `"traces"` and `shouldIncludePayloads` appear ZERO times in its bundle,
+	// and every invocation prints
+	//
+	//   Invalid configuration in ~/.gemini/settings.json:
+	//     Error in: telemetry
+	//         Unrecognized key(s) in object: 'traces'
+	//     Please fix the configuration.
+	//
+	// — a file KELD wrote, blamed on the user, on every single run. A key a tool
+	// does not recognise is not free insurance; it is a visible defect, and
+	// hardening against a hypothetical default cost more than the default ever
+	// could. `logPrompts: false` is the real control and is still set.
 	return m
 }
 
-// endpointWithToken returns base with the ingest token as a ?token= query param.
-// Gemini CLI cannot reliably carry an auth *header*: its OTEL_EXPORTER_OTLP_HEADERS
-// env var is only honored when the workspace is "trusted" (and even then a closer
-// project .env shadows ~/.gemini/.env), so in a normal untrusted directory the
-// header never reaches the exporter — the request hits Atlas with no token and is
-// rejected 401 "missing ingest token". The otlpEndpoint in user settings.json, by
-// contrast, is always loaded regardless of trust/cwd, and gemini's exporter
-// preserves the URL's query string when it appends the signal path. Atlas accepts
-// the token via ?token= for ingest auth. No x-keld-actor: that header is deprecated.
+// GeminiTokenPath is the URL path segment that carries Gemini's credential, and
+// the proxy mirrors it. Exported so the two halves cannot drift.
+const GeminiTokenPath = "/t/"
+
+// endpointWithToken returns the OTLP base URL Gemini should post to, with the
+// ingest token as a PATH SEGMENT: "<base>/t/<token>".
+//
+// Gemini CLI cannot carry an auth HEADER: its OTEL_EXPORTER_OTLP_HEADERS env var
+// is only honoured when the workspace is "trusted" (and even then a closer
+// project .env shadows ~/.gemini/.env), so in an ordinary untrusted directory
+// the header never reaches the exporter. The endpoint in settings.json is always
+// loaded regardless of trust or cwd, so the credential has to ride the URL.
+//
+// ⚠️ **IT RODE THE QUERY STRING UNTIL NOW, AND THAT SILENTLY SENT EVERY GEMINI
+// USER'S TELEMETRY NOWHERE.** This function's comment asserted that "gemini's
+// exporter preserves the URL's query string when it appends the signal path".
+// It does not, and the composition is not even URL-aware: the SDK does plain
+// string concatenation, `${endpoint}/v1/logs`, over a base gemini first
+// normalises through `new URL(...).href` — which appends the missing root slash.
+// So `http://127.0.0.1:14318?token=SECRET` became
+//
+//	http://127.0.0.1:14318/?token=SECRET/v1/logs
+//
+// — path "/", and a token of "SECRET/v1/logs". Measured on gemini-cli 0.37.1
+// against a live proxy: every export failed, alternating 404 (no route at "/")
+// and 401 (that is not the secret), printed as raw OTLPExporterError stack
+// traces in the user's terminal. A path segment survives the concatenation
+// intact, because appending to a URL that already has a path is exactly what the
+// SDK assumes it is doing.
+//
+// The proxy still ACCEPTS the query form (see teleproxy.authorized), so a
+// machine configured by an older release is not locked out the moment it
+// upgrades — but nothing WRITES it any more, because on that machine the token
+// never arrives in readable form anyway.
 func endpointWithToken(base, token string) string {
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
 	}
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
+	// Any pre-existing ?token= is dropped: it is the broken form, and leaving it
+	// on would put the secret in a second place for no benefit.
+	u.RawQuery = ""
+	// u.Path is the DECODED path; u.String() escapes it on the way out. Passing
+	// an already-escaped token here would escape the percent signs a second
+	// time and the proxy would compare "a%2520b" against "a b".
+	u.Path = strings.TrimSuffix(u.Path, "/") + GeminiTokenPath + token
 	return u.String()
 }
 
@@ -177,4 +269,33 @@ func CodexBlockBody(p SetupParams, source string) string {
 		p.IngestToken,
 		strings.Join(hookBlocks, "\n"),
 	)
+}
+
+// HookCommandNeedsRepair reports whether a hook command already on disk was
+// written before the quoting rule existed and cannot execute as it stands.
+//
+// ⚠️ **ONE RULE, TWO USERS, AND THEY MUST NOT DRIFT.** `HookCommand` quotes a
+// binary that cannot survive being read bare; this answers the same question
+// about a command already written into a tool's config. If the two disagree the
+// detector either misses a broken machine or rewrites a healthy one every
+// minute forever — `TestRepairIsIdempotent` pins that by asking this about what
+// HookCommand itself produces.
+//
+// Why it is needed at all: an upgrade DELIBERATELY preserves tool configs, so a
+// keld that fixes the quoting cannot reach a machine the old keld configured.
+// Measured on windows-latest: chain B installs the previous release, upgrades,
+// asserts "tool configs preserved byte for byte" — and enrichment stays dark,
+// because the fixed binary is running against a command it is not allowed to
+// rewrite. Without a repair path, every existing Windows install stays broken
+// after upgrading until a human re-runs setup.
+func HookCommandNeedsRepair(cmd string) bool {
+	i := strings.Index(cmd, HookCommandSubstr)
+	if i <= 0 {
+		return false // not keld's hook, or nothing before the flag
+	}
+	bin := strings.TrimSpace(cmd[:i])
+	if bin == "" || strings.HasPrefix(bin, `"`) {
+		return false // bare `keld`, or already quoted
+	}
+	return strings.ContainsAny(bin, ` \`)
 }

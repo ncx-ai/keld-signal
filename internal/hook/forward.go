@@ -23,7 +23,7 @@ func forwardToAgent(source, sessionID, promptID, transcriptPath, cwd string) {
 		return
 	}
 	p := spool.Pointer{
-		Source:      spool.Source{ID: source, Origin: "hook"},
+		Source:      spool.Source{ID: source, Origin: spool.OriginHook},
 		Correlation: spool.Correlation{Scheme: "prompt_id", ID: promptID, SessionID: sessionID},
 		Pointer:     &spool.Ptr{TranscriptPath: transcriptPath, PromptID: promptID, Cwd: cwd},
 	}

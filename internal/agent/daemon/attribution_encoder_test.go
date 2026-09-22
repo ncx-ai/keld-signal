@@ -65,7 +65,7 @@ func TestAttributionAloneProvisionsTheEncoderWithNoTextembedToggle(t *testing.T)
 	// And the spawn env the sidecar actually sees must carry KELD_TEXTEMBED=1
 	// — attrib alone provisioning the weights Go-side is not enough; the
 	// sidecar's own textembed.enabled() reads its own copy of the variable.
-	env := sidecarEnv([]string{"PATH=/bin"}, "/m", encoderDirForSpawn(needed), nil, needed)
+	env := sidecarEnv([]string{"PATH=/bin"}, "/m", encoderDirForSpawn(needed), nil, needed, "")
 	if envMap(env)["KELD_TEXTEMBED"] != "1" {
 		t.Fatalf("sidecar spawn env KELD_TEXTEMBED = %q, want \"1\" so /attribute's encoder is reachable",
 			envMap(env)["KELD_TEXTEMBED"])
@@ -106,7 +106,7 @@ func TestAttributionOffAndTextembedOffProvisionsNothing(t *testing.T) {
 		t.Fatalf("fetched %d times with the gate off", n)
 	}
 
-	env := sidecarEnv([]string{"PATH=/bin"}, "/m", encoderDirForSpawn(needed), nil, needed)
+	env := sidecarEnv([]string{"PATH=/bin"}, "/m", encoderDirForSpawn(needed), nil, needed, "")
 	if hasEnvKey(env, "KELD_TEXTEMBED") {
 		t.Fatalf("KELD_TEXTEMBED set with both operands off: %v", env)
 	}

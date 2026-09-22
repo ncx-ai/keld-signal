@@ -25,7 +25,7 @@ import (
 func TestSidecarSpawnWiresStderrToTheDaemons(t *testing.T) {
 	// A sidecar binary need not exist: sidecarService builds the supervisor (and its spawn
 	// closure) without executing anything, and this test never starts a child.
-	_, sup, _, ok, err := sidecarService(context.Background(), nil, false)
+	_, sup, _, ok, err := sidecarService(context.Background(), nil, false, "")
 	if err != nil || !ok || sup == nil {
 		t.Skipf("no sidecar wiring on this host (ok=%v err=%v)", ok, err)
 	}

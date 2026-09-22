@@ -31,6 +31,31 @@ var BlockReasons = map[string]bool{
 // KnownBlockReason reports whether r is in the published boundary vocabulary.
 func KnownBlockReason(r string) bool { return BlockReasons[r] }
 
+// DevBlockReasons is the boundary vocabulary the DEVELOPER granularities cut
+// with — the sidecar's app/analysis/devblocks.py, one name per mode.
+//
+// ⚠️ **THESE EXISTED SIDECAR-SIDE AND THIS SIDE HAD NEVER HEARD OF THEM, AND
+// THAT MADE THE WHOLE FEATURE INERT.** `KELD_DEV_BLOCKS=prompt` cuts a block
+// per human prompt so a test can produce one in seconds rather than twenty
+// minutes; devblocks.py names both its boundaries `"prompt"` and says so
+// deliberately ("Reasons are deliberately NOT drawn from blocks.REASONS"). The
+// gate above then dropped every one of those blocks — with `continue`, saying
+// nothing — so the conformance chain measured: the sidecar holding ONE closed
+// block, the emitter enabled, no error anywhere, and zero blocks at Atlas. Four
+// CI rounds went into narrowing that from the outside. The two halves of one
+// feature were built against each other and never met.
+//
+// They are admitted ONLY where the granularity itself is admitted — see
+// Client.AdmitDevBlockReasons — which is never against a real Atlas.
+var DevBlockReasons = map[string]bool{
+	"prompt": true,
+	"bin":    true,
+	"minute": true,
+}
+
+// KnownDevBlockReason reports whether r is a developer granularity's boundary.
+func KnownDevBlockReason(r string) bool { return DevBlockReasons[r] }
+
 // BlockCorrScheme is the correlation scheme a block row carries.
 //
 // A block is not a prompt and not a tick window: it has its own Atlas route
@@ -162,4 +187,18 @@ type BlocksAnswer struct {
 	// RouteUnsupported: the service answered 404 — it has no /blocks route,
 	// which is version skew rather than an empty answer. Never true with OK.
 	RouteUnsupported bool
+	// DroppedUnreadableReason counts blocks the service DID return and this
+	// binary refused, because a boundary reason was not in either vocabulary.
+	//
+	// ⚠️ **THE DROP USED TO BE A BARE `continue` AND THAT IS WHAT HID A WHOLE
+	// DEAD FEATURE.** Every dev-granularity block was discarded in that loop,
+	// so `OK` was true, the list was empty, and "the sidecar has nothing
+	// closed" and "this binary threw away everything it was handed" were the
+	// same observation from outside. A refusal that says nothing is a refusal
+	// nobody can act on — the same defect class as a check that cannot see
+	// what it reports on. The emitter states this; it never absorbs it.
+	DroppedUnreadableReason int
+	// UnreadableReason is one example of what was refused, so the line names a
+	// vocabulary rather than a count. Empty when nothing was dropped.
+	UnreadableReason string
 }

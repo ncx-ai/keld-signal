@@ -209,29 +209,26 @@ class Message:
         self.t, self.stream, self.text, self.id = t, stream, text, id
 
 
-def _blocks_of(kind, content):
-    """The text of every `kind` content block, in order.
-
-    Block-typed, and that is the whole `tool_result` guarantee: only `text` and `thinking` blocks
-    are ever read, so a `tool_result` block riding the same message — which happens whenever a line
-    also carries a `tool_use` and so survives `turns_in`'s skip — is structurally unreadable here
-    rather than filtered out somewhere a later edit could miss."""
-    if isinstance(content, str):
-        return [content] if kind == "text" else []
-    if not isinstance(content, list):
-        return []
-    field = "thinking" if kind == "thinking" else "text"
-    return [b.get(field) or "" for b in content
-            if isinstance(b, dict) and b.get("type") == kind]
-
-
 def messages_in(turns, epoch_fn):
     """`Message`s from parsed transcript turns, in file order.
 
-    `turns` are what `transcript.turns_in` yields — already filtered of the unparsed `tool_result`
-    lines. `epoch_fn` converts a turn's ISO timestamp to an epoch (`capture.epoch`; injected rather
-    than imported so this module keeps no opinion about the timezone contract, which that function
-    owns and refuses on).
+    `turns` are what `transcript.turns_in` yields — `readers.base.Turn` records, already filtered
+    of the unparsed `tool_result` lines. `epoch_fn` converts a turn's ISO timestamp to an epoch
+    (`capture.epoch`; injected rather than imported so this module keeps no opinion about the
+    timezone contract, which that function owns and refuses on).
+
+    ⚠️ THE BLOCK-TYPED GUARANTEE IS NOW THE RECORD'S, AND IT IS THE SAME GUARANTEE. This used to
+    read only `text` and `thinking` blocks off the raw content, so a `tool_result` block riding
+    the same message — which happens whenever a line also carries a `tool_use` and so survives the
+    `tool_result` skip — was structurally unreadable rather than filtered out somewhere a later
+    edit could miss. `Turn.text_blocks` / `Turn.think_blocks` are built by the reader under
+    exactly that rule, so the guarantee moved with the field names and did not weaken: a reader
+    is the only thing that ever sees a content block, and it puts only those two kinds in.
+
+    Two reads this function used to do differently from `levels` were measured before the record
+    collapsed them (25,353 real turns, 60 largest transcripts): `message.role or type` differs
+    from `type` on 0, and the top-level `content` fallback fires on 0 because `message.content`
+    is never absent. See `readers/claude.py`.
 
     A `user` turn that is machine text in a user-shaped envelope is dropped — `text.is_command_echo`
     covers slash-command echoes, injected skill files and task notifications. It cost the effort
@@ -240,34 +237,31 @@ def messages_in(turns, epoch_fn):
 
     A turn whose timestamp cannot be read is skipped exactly as `turns_in` skips one: a message
     that cannot be placed in time can be in no shell."""
+    from app.analysis.readers import coerce
     from app.analysis.text import is_command_echo
 
     out = []
     for o in turns:
-        role = (o.get("message") or {}).get("role") or o.get("type")
-        content = (o.get("message") or {}).get("content")
-        if content is None:
-            content = o.get("content")
+        o = coerce(o)
         try:
-            t = epoch_fn(o["timestamp"])
+            t = epoch_fn(o.ts)
         except Exception:                  # noqa: BLE001 — a transcript is another process's data
             continue
         # The turn's own id, carried so a published `message` row has a key that is not its
         # instant. `str()` and not a cast to anything narrower: it is another process's data and
         # its SHAPE is re-checked at the decode boundary, not its type here.
-        mid = o.get("uuid")
-        mid = str(mid) if mid else None
-        if role == "user":
-            for body in _blocks_of("text", content):
+        mid = str(o.line_id) if o.line_id else None
+        if o.role == "user":
+            for body in o.text_blocks:
                 body = (body or "").strip()
                 if body and not is_command_echo(body):
                     out.append(Message(t, USER, body, mid))
-        elif role == "assistant":
-            for body in _blocks_of("text", content):
+        elif o.role == "assistant":
+            for body in o.text_blocks:
                 body = (body or "").strip()
                 if body:
                     out.append(Message(t, ASST, body, mid))
-            for body in _blocks_of("thinking", content):
+            for body in o.think_blocks:
                 body = (body or "").strip()
                 if body:
                     out.append(Message(t, THINK, body, mid))

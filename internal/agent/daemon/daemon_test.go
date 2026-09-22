@@ -1053,7 +1053,7 @@ func TestSidecarServiceBuildsTheServiceWithoutProvisioning(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 
-	client, sup, healthFn, ok, err := sidecarService(ctx, emitter, false)
+	client, sup, healthFn, ok, err := sidecarService(ctx, emitter, false, "")
 	if !ok || err != nil {
 		t.Fatalf("sidecarService: ok=%v err=%v, want true/nil", ok, err)
 	}
@@ -1149,7 +1149,7 @@ func TestSidecarServiceNoBinaryLeavesThePolicyToTheCaller(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 
-	client, sup, healthFn, ok, err := sidecarService(context.Background(), emitter, false)
+	client, sup, healthFn, ok, err := sidecarService(context.Background(), emitter, false, "")
 	if ok {
 		t.Fatal("no sidecar binary must report ok=false")
 	}

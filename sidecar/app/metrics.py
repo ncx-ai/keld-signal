@@ -97,7 +97,7 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
                   hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
                   store_stats=None, embed_stats=None, verifier_stats=None,
-                  attribution_stats=None, clock=time.monotonic):
+                  attribution_stats=None, reader_skipped=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -186,5 +186,27 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
         # None when this process has never attributed anything — the same "built: false"
         # distinction `verifier` makes, so an idle machine and a broken one are not one shape.
         "attribution": attribution_stats,
+        # WHAT THE TRANSCRIPT READERS THREW AWAY, by source and record type
+        # (app/analysis/readers/base.py). `{}` when nothing has been read.
+        #
+        # ⚠️ **IT EXISTS BECAUSE A READER THAT UNDERSTANDS EVERY RECORD IT SEES AND PRODUCES
+        # NOTHING IS INDISTINGUISHABLE FROM ONE WITH NOTHING TO DO.** The Codex watcher's ordinal
+        # gate produced ZERO pointers from 4,076 real `user_message` lines across 287 rollouts,
+        # and no counter anywhere moved, because every record type it met was one it knew. A
+        # record type a tool invents tomorrow appears here as a NEW KEY, which is the only cheap
+        # way that failure becomes visible rather than silent.
+        #
+        # Most keys are EXPECTED and large — the request side of a tool call whose completion
+        # record carries the row, a machine-wide state snapshot — so this is not an error count
+        # and must not be read as one. A record CONSUMED AS STATE (a `turn_context`, a
+        # `session_meta`) is deliberately absent: counting those would put the biggest numbers on
+        # the records the reader understands best, which is how a counter stops being read.
+        #
+        # `prompt_id_fallback` is the one key here that is a quality signal rather than an
+        # inventory: it counts human turns named by their own TIMESTAMP because no turn context
+        # preceded them (measured: 2 of 1,848 on the 40 newest rollouts, 320 of 4,076 over all
+        # 287). A worse id, never a dropped prompt — and if the 2 ever become 200, this says so
+        # before Atlas does.
+        "reader": {"skipped": reader_skipped if reader_skipped is not None else {}},
         "uptime_s": round(uptime_s, 1),
     }

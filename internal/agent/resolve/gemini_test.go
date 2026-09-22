@@ -6,186 +6,58 @@ import (
 	"testing"
 )
 
-const geminiFixture = `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:05:00Z","kind":"chat"}
-{"$set":{"field":"value"}}
-{"id":"msg-uuid-001","timestamp":"2026-07-21T10:00:05Z","type":"user","content":[{"text":"hello "},{"text":"world"}]}
-{"id":"msg-uuid-002","timestamp":"2026-07-21T10:00:10Z","type":"gemini","content":"ok"}
-{"id":"msg-uuid-003","timestamp":"2026-07-21T10:00:15Z","type":"user","content":[{"text":"second prompt"}]}
-`
+// ⚠️ **EVERY FIXTURE IN THIS FILE USED TO BE JSONL, AND GEMINI HAS NEVER
+// WRITTEN JSONL.** The reader decoded one JSON object per line — session meta
+// first, `$set` mutation lines, one object per turn — and the tests fed it
+// exactly that, so the suite was green while the lane could not read a single
+// real chat file. Measured before the rewrite: 55 real Gemini chat files on one
+// machine, 262 messages, ZERO `.jsonl` files, the oldest from 2025-09.
+//
+// A chat is ONE JSON document: the session id at the top, the turns in a
+// `messages` array. The `$set` cases are gone because no such record exists —
+// they were testing a format nobody produces. What replaced them tests the two
+// things that really do appear: a non-user turn, and a user turn with no text.
+//
+// internal/geminichat owns the shape and carries a REAL captured file.
+const geminiFixture = `{
+  "sessionId": "sess_123",
+  "projectHash": "abc123",
+  "startTime": "2026-07-21T10:00:00Z",
+  "lastUpdated": "2026-07-21T10:05:00Z",
+  "messages": [
+    {"id":"msg-uuid-001","timestamp":"2026-07-21T10:00:05Z","type":"user",
+     "content":[{"text":"hello "},{"text":"world"}]},
+    {"id":"msg-uuid-002","timestamp":"2026-07-21T10:00:10Z","type":"gemini",
+     "content":"ok"},
+    {"id":"msg-uuid-003","timestamp":"2026-07-21T10:00:15Z","type":"user",
+     "content":[{"text":"second prompt"}]}
+  ],
+  "kind": "main"
+}`
 
-func writeGeminiFixture(t *testing.T) string {
+func writeGeminiChat(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "gemini-chat.jsonl")
-	if err := os.WriteFile(p, []byte(geminiFixture), 0o600); err != nil {
+	p := filepath.Join(t.TempDir(), "session-2026-07-21T10-00-sess1234.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
+func writeGeminiFixture(t *testing.T) string {
+	t.Helper()
+	return writeGeminiChat(t, geminiFixture)
+}
+
 func TestGeminiReaderSource(t *testing.T) {
-	r := NewGeminiReader()
-	if r.Source() != "gemini_cli" {
-		t.Fatalf("source=%q, want gemini_cli", r.Source())
+	if got := NewGeminiReader().Source(); got != "gemini_cli" {
+		t.Fatalf("source=%q, want gemini_cli", got)
 	}
 }
 
-func TestGeminiReaderReadUserPrompt(t *testing.T) {
-	r := NewGeminiReader()
-	text, ok := r.Read(writeGeminiFixture(t), "msg-uuid-001")
-	if !ok || text != "hello world" {
-		t.Fatalf("read msg-uuid-001: %q ok=%v, want (hello world,true)", text, ok)
-	}
-}
-
-func TestGeminiReaderReadSecondUserPrompt(t *testing.T) {
-	r := NewGeminiReader()
-	text, ok := r.Read(writeGeminiFixture(t), "msg-uuid-003")
-	if !ok || text != "second prompt" {
-		t.Fatalf("read msg-uuid-003: %q ok=%v, want (second prompt,true)", text, ok)
-	}
-}
-
-func TestGeminiReaderSkipsSetLine(t *testing.T) {
-	r := NewGeminiReader()
-	// The $set line should be skipped and not found
-	_, ok := r.Read(writeGeminiFixture(t), "msg-uuid-002")
-	if ok {
-		t.Fatal("gemini type (not user) must not be found")
-	}
-}
-
-func TestGeminiReaderNotFoundForMissingID(t *testing.T) {
-	r := NewGeminiReader()
-	_, ok := r.Read(writeGeminiFixture(t), "msg-uuid-999")
-	if ok {
-		t.Fatal("missing id must return ok=false")
-	}
-}
-
-func TestGeminiReaderNotFoundForMetaLine(t *testing.T) {
-	r := NewGeminiReader()
-	// Meta line has no type field and no id field matching our format
-	_, ok := r.Read(writeGeminiFixture(t), "sess_123")
-	if ok {
-		t.Fatal("meta line must not be found")
-	}
-}
-
-func TestGeminiReaderEmptyContentNotFound(t *testing.T) {
-	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
-{"id":"msg-uuid-empty","timestamp":"2026-07-21T10:00:05Z","type":"user","content":[]}
-{"id":"msg-uuid-valid","timestamp":"2026-07-21T10:00:10Z","type":"user","content":[{"text":"hello"}]}
-`
-	p := filepath.Join(t.TempDir(), "gemini-empty.jsonl")
-	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := NewGeminiReader()
-	_, ok := r.Read(p, "msg-uuid-empty")
-	if ok {
-		t.Fatal("empty content must return ok=false")
-	}
-	// Valid one should still work
-	text, ok := r.Read(p, "msg-uuid-valid")
-	if !ok || text != "hello" {
-		t.Fatalf("msg-uuid-valid: %q ok=%v, want (hello,true)", text, ok)
-	}
-}
-
-func TestGeminiReaderRecentUserPrompts(t *testing.T) {
-	r := NewGeminiReader()
-	// Exclude msg-uuid-003 (current), should get msg-uuid-001 newest-first
-	got := r.RecentUserPrompts(writeGeminiFixture(t), "msg-uuid-003", 5)
-	if len(got) != 1 || got[0] != "hello world" {
-		t.Fatalf("recent (excluding current): %v, want [hello world]", got)
-	}
-}
-
-func TestGeminiReaderRecentUserPromptsNewestFirst(t *testing.T) {
-	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
-{"id":"msg-uuid-001","timestamp":"2026-07-21T10:00:05Z","type":"user","content":[{"text":"first"}]}
-{"id":"msg-uuid-002","timestamp":"2026-07-21T10:00:10Z","type":"user","content":[{"text":"second"}]}
-{"id":"msg-uuid-003","timestamp":"2026-07-21T10:00:15Z","type":"user","content":[{"text":"third"}]}
-`
-	p := filepath.Join(t.TempDir(), "gemini-recent.jsonl")
-	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := NewGeminiReader()
-	// Exclude msg-uuid-003 (current), should get [second, first] newest-first
-	got := r.RecentUserPrompts(p, "msg-uuid-003", 5)
-	if len(got) != 2 || got[0] != "second" || got[1] != "first" {
-		t.Fatalf("recent newest-first: %v, want [second first]", got)
-	}
-}
-
-func TestGeminiReaderToleratesMalformedLines(t *testing.T) {
-	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
-not json at all
-{"id":"msg-uuid-001","timestamp":"2026-07-21T10:00:05Z","type":"user","content":[{"text":"valid"}]}
-{bad json
-`
-	p := filepath.Join(t.TempDir(), "gemini-malformed.jsonl")
-	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := NewGeminiReader()
-	text, ok := r.Read(p, "msg-uuid-001")
-	if !ok || text != "valid" {
-		t.Fatalf("read with malformed lines: %q ok=%v, want (valid,true)", text, ok)
-	}
-}
-
-func TestResolveGeminiSource(t *testing.T) {
-	text, ok := Resolve("gemini_cli", writeGeminiFixture(t), "msg-uuid-001", "")
-	if !ok || text != "hello world" {
-		t.Fatalf("resolve gemini: %q ok=%v, want (hello world,true)", text, ok)
-	}
-}
-
-func TestGeminiReaderSkipsSetLineInRecentUserPrompts(t *testing.T) {
-	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
-{"id":"msg-uuid-001","timestamp":"2026-07-21T10:00:05Z","type":"user","content":[{"text":"first"}]}
-{"$set":{"field":"value"}}
-{"id":"msg-uuid-003","timestamp":"2026-07-21T10:00:15Z","type":"user","content":[{"text":"second"}]}
-`
-	p := filepath.Join(t.TempDir(), "gemini-set-skip.jsonl")
-	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := NewGeminiReader()
-	// The $set line should be skipped; recent should only include "first"
-	got := r.RecentUserPrompts(p, "msg-uuid-003", 5)
-	if len(got) != 1 || got[0] != "first" {
-		t.Fatalf("recent (skip $set): %v, want [first]", got)
-	}
-}
-
-func TestGeminiReaderStringFormContent(t *testing.T) {
-	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
-{"id":"msg-uuid-string","timestamp":"2026-07-21T10:00:05Z","type":"user","content":"hello world"}
-{"id":"msg-uuid-array","timestamp":"2026-07-21T10:00:10Z","type":"user","content":[{"text":"array form"}]}
-`
-	p := filepath.Join(t.TempDir(), "gemini-string-form.jsonl")
-	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := NewGeminiReader()
-	// Test string-form content
-	text, ok := r.Read(p, "msg-uuid-string")
-	if !ok || text != "hello world" {
-		t.Fatalf("read string-form content: %q ok=%v, want (hello world,true)", text, ok)
-	}
-	// Test that array form still works
-	text, ok = r.Read(p, "msg-uuid-array")
-	if !ok || text != "array form" {
-		t.Fatalf("read array-form content: %q ok=%v, want (array form,true)", text, ok)
-	}
-}
-
-// TestGeminiReaderReadByOrdinal: the primary path — resolve the telemetry corr
-// id "<sessionId>########<ordinal>" by 0-based user-prompt ordinal. The fixture
-// has two user prompts (ordinals 0 and 1) with a gemini turn + $set between.
+// THE PRIMARY PATH: the correlation id is Gemini's own OTEL id,
+// "<sessionId>########<ordinal>", because Atlas joins it to
+// ToolEvent.prompt_id. The record uuid appears in no telemetry.
 func TestGeminiReaderReadByOrdinal(t *testing.T) {
 	r := NewGeminiReader()
 	p := writeGeminiFixture(t)
@@ -196,12 +68,147 @@ func TestGeminiReaderReadByOrdinal(t *testing.T) {
 	if txt, ok := r.Read(p, "sess_123########1"); !ok || txt != "second prompt" {
 		t.Fatalf("ordinal 1: %q ok=%v, want (second prompt,true)", txt, ok)
 	}
-	// Out-of-range ordinal → not found.
 	if _, ok := r.Read(p, "sess_123########9"); ok {
-		t.Fatal("ordinal 9 should not resolve")
+		t.Error("an out-of-range ordinal must not resolve")
 	}
-	// Legacy UUID promptID still resolves via the fallback.
-	if txt, ok := r.Read(p, "msg-uuid-003"); !ok || txt != "second prompt" {
-		t.Fatalf("legacy UUID: %q ok=%v, want (second prompt,true)", txt, ok)
+	// A malformed ordinal must NOT fall back to the record-uuid path: that
+	// would resolve some unrelated prompt rather than nothing.
+	if _, ok := r.Read(p, "sess_123########nope"); ok {
+		t.Error("a malformed ordinal must not resolve")
+	}
+}
+
+// The legacy path: pointers spooled before the ordinal scheme carry the record
+// uuid, and must still resolve.
+func TestGeminiReaderReadByRecordID(t *testing.T) {
+	r := NewGeminiReader()
+	p := writeGeminiFixture(t)
+	if text, ok := r.Read(p, "msg-uuid-001"); !ok || text != "hello world" {
+		t.Fatalf("read msg-uuid-001: %q ok=%v, want (hello world,true)", text, ok)
+	}
+	if text, ok := r.Read(p, "msg-uuid-003"); !ok || text != "second prompt" {
+		t.Fatalf("read msg-uuid-003: %q ok=%v, want (second prompt,true)", text, ok)
+	}
+}
+
+// A model turn is not a prompt, and neither is the session's own id.
+func TestGeminiReaderReadsOnlyUserTurns(t *testing.T) {
+	r := NewGeminiReader()
+	p := writeGeminiFixture(t)
+	if _, ok := r.Read(p, "msg-uuid-002"); ok {
+		t.Error("a gemini turn must not resolve as a prompt")
+	}
+	if _, ok := r.Read(p, "sess_123"); ok {
+		t.Error("the session id is not a record id")
+	}
+	if _, ok := r.Read(p, "msg-uuid-999"); ok {
+		t.Error("a missing id must return ok=false")
+	}
+}
+
+// ⚠️ An empty user turn must not CONSUME AN ORDINAL, or every prompt after it
+// resolves to the text of the one before.
+func TestGeminiReaderEmptyContentTakesNoOrdinal(t *testing.T) {
+	p := writeGeminiChat(t, `{
+      "sessionId":"sess_123",
+      "messages":[
+        {"id":"msg-uuid-empty","type":"user","content":[]},
+        {"id":"msg-uuid-blank","type":"user","content":"   "},
+        {"id":"msg-uuid-valid","type":"user","content":[{"text":"hello"}]}
+      ]}`)
+	r := NewGeminiReader()
+	if _, ok := r.Read(p, "msg-uuid-empty"); ok {
+		t.Error("empty content must return ok=false")
+	}
+	if text, ok := r.Read(p, "msg-uuid-valid"); !ok || text != "hello" {
+		t.Fatalf("msg-uuid-valid: %q ok=%v, want (hello,true)", text, ok)
+	}
+	if text, ok := r.Read(p, "sess_123########0"); !ok || text != "hello" {
+		t.Fatalf("ordinal 0 must be the first GENUINE prompt: %q ok=%v", text, ok)
+	}
+}
+
+func TestGeminiReaderRecentUserPrompts(t *testing.T) {
+	r := NewGeminiReader()
+	got := r.RecentUserPrompts(writeGeminiFixture(t), "msg-uuid-003", 5)
+	if len(got) != 1 || got[0] != "hello world" {
+		t.Fatalf("recent (excluding current): %v, want [hello world]", got)
+	}
+	// And by ordinal, which is how a live pointer names the current prompt.
+	got = r.RecentUserPrompts(writeGeminiFixture(t), "sess_123########1", 5)
+	if len(got) != 1 || got[0] != "hello world" {
+		t.Fatalf("recent by ordinal: %v, want [hello world]", got)
+	}
+}
+
+func TestGeminiReaderRecentUserPromptsNewestFirst(t *testing.T) {
+	p := writeGeminiChat(t, `{
+      "sessionId":"sess_123",
+      "messages":[
+        {"id":"msg-uuid-001","type":"user","content":[{"text":"first"}]},
+        {"id":"msg-uuid-002","type":"user","content":[{"text":"second"}]},
+        {"id":"msg-uuid-003","type":"user","content":[{"text":"third"}]}
+      ]}`)
+	got := NewGeminiReader().RecentUserPrompts(p, "msg-uuid-003", 5)
+	if len(got) != 2 || got[0] != "second" || got[1] != "first" {
+		t.Fatalf("recent newest-first: %v, want [second first]", got)
+	}
+}
+
+// A truncated or half-written document is unreadable AS A WHOLE — there is no
+// "valid prefix" of a JSON document the way there is of a JSONL file. The
+// reader must say so rather than answer from nothing; the next poll reads the
+// whole file. (A chat file is rewritten whole by Gemini on each turn.)
+func TestGeminiReaderRefusesAMalformedDocument(t *testing.T) {
+	p := writeGeminiChat(t, `{"sessionId":"sess_123","messages":[{"id":"a",`)
+	if _, ok := NewGeminiReader().Read(p, "sess_123########0"); ok {
+		t.Error("a half-written document must not resolve")
+	}
+	if got := NewGeminiReader().RecentUserPrompts(p, "sess_123########0", 5); got != nil {
+		t.Errorf("a half-written document must yield no recent prompts, got %v", got)
+	}
+}
+
+func TestResolveGeminiSource(t *testing.T) {
+	text, ok := Resolve("gemini_cli", writeGeminiFixture(t), "sess_123########0", "")
+	if !ok || text != "hello world" {
+		t.Fatalf("resolve gemini: %q ok=%v, want (hello world,true)", text, ok)
+	}
+}
+
+// Both content shapes occur in real data: a bare string on 258 of 262 measured
+// messages, an array of {text} blocks on 4.
+func TestGeminiReaderBothContentShapes(t *testing.T) {
+	p := writeGeminiChat(t, `{
+      "sessionId":"sess_123",
+      "messages":[
+        {"id":"msg-uuid-string","type":"user","content":"hello world"},
+        {"id":"msg-uuid-array","type":"user","content":[{"text":"array form"}]}
+      ]}`)
+	r := NewGeminiReader()
+	if text, ok := r.Read(p, "msg-uuid-string"); !ok || text != "hello world" {
+		t.Fatalf("string-form content: %q ok=%v", text, ok)
+	}
+	if text, ok := r.Read(p, "msg-uuid-array"); !ok || text != "array form" {
+		t.Fatalf("array-form content: %q ok=%v", text, ok)
+	}
+}
+
+// ⚠️ **THE HOOK AND THE WATCHER CALL GEMINI BY DIFFERENT NAMES, AND Resolve
+// DISPATCHES ON THAT NAME.** keld writes `keld __hook --source gemini` into
+// ~/.gemini/settings.json (tools.GeminiAdapter is Name()d "gemini") while the
+// watcher root, this reader and the conformance tool id all say "gemini_cli".
+// An unregistered source is a deliberate SKIP, not an error, so every
+// hook-delivered Gemini prompt resolved no text and published nothing, silently.
+// Measured: `transcript` PASS with 2 prompt ids read, `publish` 0, hook verified
+// to fire.
+func TestBothGeminiSourceNamesResolve(t *testing.T) {
+	p := writeGeminiFixture(t)
+	for _, src := range []string{"gemini_cli", "gemini"} {
+		text, ok := Resolve(src, p, "sess_123########0", "")
+		if !ok || text != "hello world" {
+			t.Errorf("Resolve(%q) = %q ok=%v — a prompt this source delivers "+
+				"cannot be enriched at all", src, text, ok)
+		}
 	}
 }

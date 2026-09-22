@@ -228,3 +228,75 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 	@bash installers/macos/plugin/build-plugin.sh /tmp/keld-plugin-check-plugins 0.0.0-check /tmp/keld-plugin-check-keld
 	@rm -rf /tmp/keld-plugin-check-plugins /tmp/keld-plugin-check-keld
 	@echo "pkg-plugin-check: OK"
+
+# --- conformance harness -----------------------------------------------------
+# Drive REAL tools against a mock model and a mock Atlas inside an isolated
+# HOME, and assert the five checkpoints (AC-10). Nothing here reaches the
+# network, touches the developer's ~/.keld, ~/.claude or ~/.codex, or registers
+# a service.
+#
+#   make conformance TOOL=all                    both tools, halves split by seed
+#   make conformance TOOL=claude_code            one tool (it lands in the before half)
+#   make conformance TOOL=all CHAIN=B            the upgrade chain
+#   make conformance TOOL=all SEED=42 WORK=/tmp/xyz PREVIOUS=dir:/path/to/release
+#   make conformance TOOL=all ARTIFACT=dir:/path/to/artifacts   (AC-12: install
+#       the REAL pkg/tarball unattended first — needs a DISPOSABLE machine, see
+#       scripts/conformance/install-<os>.sh)
+#
+# TOOL=all splits the installable tools into a `before` half (installed and used
+# before Signal) and an `after` half (installed after it, so the daemon's
+# detector configures them), seeded by SEED — else $GITHUB_RUN_ID, else the
+# epoch. The seed is the first line of output and rides every failure line.
+#
+# CHAIN=B installs the PREVIOUS release first and upgrades onto it: configs
+# preserved, sidecar replaced, no version skew. PREVIOUS is `installed` (the
+# release on this machine, the default) or `dir:<path>` (a downloaded release —
+# the seam CI uses).
+#
+# The tools are used AS INSTALLED on this machine, so a local run proves this
+# machine's versions; the container and VM legs (task A.4) set
+# KELD_CONFORM_INSTALL=1 to npm-install them at @latest instead.
+.PHONY: conformance
+conformance: ## Run a conformance chain against real tools (TOOL=all|claude_code|codex, CHAIN=A|B)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=all [CHAIN=A|B] [SEED=n]"; exit 2; }
+	@bash scripts/conformance/run-chain.sh \
+		--tool "$(TOOL)" \
+		$(if $(CHAIN),--chain "$(CHAIN)",) \
+		$(if $(SEED),--seed "$(SEED)",) \
+		$(if $(WORK),--work "$(WORK)",) \
+		$(if $(PREVIOUS),--previous "$(PREVIOUS)",) \
+		$(if $(ARTIFACT),--artifact "$(ARTIFACT)",) \
+		$(if $(BEFORE),--before "$(BEFORE)",) \
+		$(if $(AFTER),--after "$(AFTER)",)
+
+# The Linux leg, in a container: ubuntu 24.04, Node 22, Python 3.12, sqlite3,
+# the tool installed at @latest. The repo is mounted READ-ONLY and everything
+# the run writes goes to named volumes.
+#
+#   make conformance-linux TOOL=codex [CHAIN=A] [SEED=42]
+#
+# ⚠️ A container has no launchd and no systemd user bus, so SERVICE
+# REGISTRATION is not exercised here and the entrypoint says so every run.
+# AC-12's installer path belongs to conformance-macos-vm and to the CI runners.
+.PHONY: conformance-linux
+conformance-linux: ## Run a conformance chain in the Linux container (TOOL=claude_code)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance-linux TOOL=claude_code"; exit 2; }
+	@TOOL="$(TOOL)" CHAIN="$(CHAIN)" SEED="$(SEED)" \
+		docker compose -f scripts/conformance/compose/docker-compose.yml run --rm --build conformance
+
+# The macOS leg, in a throwaway Tart VM — the only local place the .pkg and real
+# service registration (AC-12) can run without rewriting this machine's own
+# LaunchAgent.
+#
+#   make conformance-macos-vm TOOL=claude_code [CHAIN=A] [SEED=42] [PKG=path.pkg]
+#
+# ⚠️ UNVERIFIED: needs `tart` and a ~40 GB image pull, neither done yet. Read
+# docs/conformance.md (licence + disk) before the first run.
+.PHONY: conformance-macos-vm
+conformance-macos-vm: ## Run a conformance chain in a clean macOS VM (needs tart)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance-macos-vm TOOL=claude_code"; exit 2; }
+	@bash scripts/conformance/tart/run.sh \
+		--tool "$(TOOL)" \
+		$(if $(CHAIN),--chain "$(CHAIN)",) \
+		$(if $(SEED),--seed "$(SEED)",) \
+		$(if $(PKG),--pkg "$(PKG)",)

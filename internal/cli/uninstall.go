@@ -103,7 +103,7 @@ func stripToolConfig(m *config.Manifest, name string, tm config.ToolManifest, ad
 	// ~/.gemini/.env), gated by the same confirm prompt that already guards
 	// the ConfigPath write above (runUninstall confirms before ever calling
 	// stripToolConfig).
-	if err := writeExtraFile(plan.ExtraFile); err != nil {
+	if err := tools.WriteExtraFile(plan.ExtraFile); err != nil {
 		return err
 	}
 

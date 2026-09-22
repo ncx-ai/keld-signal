@@ -154,6 +154,37 @@ def test_counts_has_the_expired_window_counter():
     assert c.analyze_expired == 0
     assert c.analyze_not_ingested == 0
 
+
+def test_build_metrics_reports_what_the_readers_threw_away():
+    """D.4 / AC-6's unknown-record arm.
+
+    ⚠️ A reader that understands every record it sees and produces nothing is indistinguishable
+    from one with nothing to do. The Codex watcher's ordinal gate produced ZERO pointers from
+    4,076 real `user_message` lines and no counter anywhere moved. A record type a tool invents
+    tomorrow has to appear here as a NEW KEY.
+    """
+    from app.analysis import readers
+    readers.reset_skipped()
+    readers.note_skipped("codex", "quantum_entanglement")
+    readers.note_skipped("codex", "quantum_entanglement")
+    readers.note_skipped("codex", "prompt_id_fallback")
+    m = build_metrics(
+        worker_state="idle", worker_rss_mb=1.0, parent_rss_mb=1.0, model_cost_mb=1.0,
+        governor=None, runner=None, counts=Counts(), recycles=0, kills={}, uptime_s=1.0,
+        reader_skipped=readers.skipped_counts())
+    assert m["reader"]["skipped"] == {
+        "codex": {"quantum_entanglement": 2, "prompt_id_fallback": 1}}, m["reader"]
+    readers.reset_skipped()
+
+
+def test_reader_block_is_empty_rather_than_absent_when_nothing_was_read():
+    """An empty block and a missing one are different answers, and only one of them is honest
+    about a sidecar that has not read a transcript yet."""
+    m = build_metrics(
+        worker_state="idle", worker_rss_mb=1.0, parent_rss_mb=1.0, model_cost_mb=1.0,
+        governor=None, runner=None, counts=Counts(), recycles=0, kills={}, uptime_s=1.0)
+    assert m["reader"] == {"skipped": {}}
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
