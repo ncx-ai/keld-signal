@@ -21,6 +21,7 @@ type V3Patch struct {
 	ShowBreaks     *bool
 	WorkstreamsOff *[]string
 	Attribution    *bool
+	ToolOTLP       *bool
 }
 
 // WriteV3Settings merges p onto ~/.keld/agent-config.json.
@@ -110,6 +111,11 @@ func WriteV3Settings(p V3Patch) error {
 	}
 	if p.Attribution != nil {
 		if err := set("attribution", *p.Attribution); err != nil {
+			return err
+		}
+	}
+	if p.ToolOTLP != nil {
+		if err := set("tool_otlp", *p.ToolOTLP); err != nil {
 			return err
 		}
 	}

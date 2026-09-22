@@ -37,11 +37,38 @@ type kv struct {
 	Value anyVal `json:"value"`
 }
 
-// anyVal is an OTLP AnyValue. OTLP/JSON encodes integers as decimal strings under
-// "intValue"; only one field is set per value.
+// anyVal is an OTLP AnyValue. Only one field is set per value.
 type anyVal struct {
-	StringValue string `json:"stringValue,omitempty"`
-	IntValue    string `json:"intValue,omitempty"`
+	StringValue string  `json:"stringValue,omitempty"`
+	IntValue    otlpInt `json:"intValue,omitempty"`
+}
+
+// otlpInt is an OTLP integer attribute value.
+//
+// ⚠️ **OTLP/JSON PERMITS BOTH A DECIMAL STRING AND A BARE NUMBER FOR AN
+// `intValue`, AND THE REAL TOOLS USE BOTH.** This was a plain `string`, which is
+// what the protobuf-JSON mapping prescribes and what this package emits — but a
+// captured `claude_code.api_request` record writes `"event.sequence":
+// {"intValue": 237}` as a NUMBER, so decoding a real payload with the strict type
+// failed outright ("cannot unmarshal number into Go struct field ... of type
+// string"). Reading is therefore tolerant and writing stays strict: a value is
+// accepted in either form and always re-emitted as the decimal string, so a
+// mirrored payload is byte-stable regardless of what it was compared against.
+type otlpInt string
+
+func (o *otlpInt) UnmarshalJSON(b []byte) error {
+	if len(b) >= 2 && b[0] == '"' && b[len(b)-1] == '"' {
+		b = b[1 : len(b)-1]
+	}
+	if string(b) == "null" {
+		b = nil
+	}
+	*o = otlpInt(b)
+	return nil
+}
+
+func (o otlpInt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(o))
 }
 
 type otlpMetrics struct {
@@ -84,8 +111,46 @@ type metric struct {
 // attr builds a string-valued OTLP attribute.
 func attr(k, v string) kv { return kv{Key: k, Value: anyVal{StringValue: v}} }
 
+// pruneEmpty drops attributes whose VALUE object would serialise to `{}`.
+//
+// ⚠️ AN ATTRIBUTE WITH NO VALUE IS NOT AN EMPTY STRING ON THE WIRE, AND IT
+// BROKE THE WHOLE USAGE LANE AGAINST A REAL ATLAS. `anyVal.StringValue` carries
+// `omitempty`, so `attr("prompt.id", "")` marshals as
+// `{"key":"prompt.id","value":{}}`. Atlas flattens that to a Python dict and
+// the insert fails on the column it lands in:
+//
+//	invalid input for query argument $13: {} (expected str, got dict)
+//
+// $13 is `prompt_id`. Every batch carrying one killed the ingest consumer, so
+// NOTHING was stored — while the POST answered 200 and the client had no way to
+// know. Measured on a real machine 2026-09-21: the mirror posting correct rows
+// (claude-opus-5, 2 in / 887 out / 880,949 cache-read, $0.48) and Atlas holding
+// none of them.
+//
+// An empty prompt id is legitimate and common: the mirror learns it from a
+// `user_prompt` it observed, so a daemon that starts mid-session has none for
+// that session. The attribute simply should not be there.
+//
+// ⚠️ The conformance chains could not catch this: `mockatlas` accepts any
+// payload, so a row the real Atlas refuses passes there. A mock is a transport
+// check, not a schema one.
+func pruneEmpty(attrs []kv) []kv {
+	out := attrs[:0:0]
+	for _, a := range attrs {
+		if a.Value == (anyVal{}) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // attrInt builds an integer-valued OTLP attribute (encoded as a decimal string).
-func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: strconv.Itoa(n)}} }
+func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: otlpInt(itoa(n))}} }
+
+// itoa is strconv.Itoa under a shorter name, used wherever an id is composed
+// from a record's own ordinal.
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // logsPayload marshals an OTLP/HTTP logs export request for one resource.
 func logsPayload(res []kv, records []logRecord) ([]byte, error) {

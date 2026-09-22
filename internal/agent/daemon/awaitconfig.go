@@ -30,6 +30,13 @@ func configPollInterval() time.Duration {
 // and an ingest token, then returns it. It returns ctx.Err() if the context is
 // cancelled first (a clean shutdown while idling).
 //
+// ⚠️ **ONLY THE SENDERS WAIT ON THIS NOW.** It used to be called inline in Run,
+// so the telemetry proxy, the transcript watcher, the block emitter and the
+// enrichment worker all sat behind it and a machine between install and login
+// collected nothing at all. It runs on its own goroutine, and what it gates is
+// delivery — see daemon/pairing.go and daemon/senders.go. Everything below is
+// unchanged and still the reason this idles instead of exiting.
+//
 // Why idle rather than exit: "not configured" is not a crash. On the documented
 // macOS flow the pkg registers the service BEFORE onboarding runs, so the daemon
 // is legitimately configuration-less on first boot. Exiting non-zero there made

@@ -9,6 +9,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
+	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/ui"
 	"github.com/ncx-ai/keld-signal/internal/atlas"
@@ -178,6 +179,10 @@ func (v *v3) routes() []ingress.Route {
 			Describe: describeIntegrationForReport,
 			Sink:     currentIntegrationSink(),
 		}),
+		// The analysis engine's own state and its install, driven from the page
+		// rather than from the macOS installer — see engineroute.go for the wedge
+		// that moved it here.
+		engineRoute(currentEngineManager()),
 		ui.Route(),
 	}
 }
@@ -215,6 +220,20 @@ func (b ledgerBlocks) SinceWeekStart() ([]projects.BlockSummary, error) {
 // noteHealth records the machine-level facts the page's health strip shows.
 // Called at startup and whenever one of them changes; each is a fact the daemon
 // already knew and previously kept to itself.
+// noteAtlasDelivered records a real block delivery as the connector's most
+// recent answer, so the health strip's `atlas` row reads from what actually
+// reached Atlas rather than from a client the delivery path never calls.
+//
+// It takes the emitter's onPublished shape (rows, path) so it can be chained
+// beside recordDelivered; reaching it at all means Atlas answered 2xx, because
+// the emitter treats anything else as a failure and routes it to onFailed.
+func (v *v3) noteAtlasDelivered(_ []publish.BlockEnrichment, _ string) {
+	if v == nil || v.atlas == nil {
+		return
+	}
+	v.atlas.Note(200)
+}
+
 func (v *v3) noteHealth(key ledger.HealthKey, status ledger.Status, detail string) {
 	if v == nil || v.ledger == nil {
 		return

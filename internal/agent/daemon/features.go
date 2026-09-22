@@ -87,7 +87,7 @@ func featureSourceFor(v any) features.Source {
 // once per run rather than discover it by finding rows nothing joins. Emitted
 // exempt from the severity floor for the same reason the lifecycle events are:
 // it describes what this run WILL do.
-func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoint string,
+func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoint func() string,
 	token func() string, actor, installID string,
 	enabled, publishing func() bool, emitter *clientevents.Emitter, enc *encoderProvisioner) func(source, path string) {
 	if src == nil || token == nil || enabled == nil {
@@ -98,7 +98,11 @@ func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoin
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		enabled, actor, features.StatePath())
 
-	tr := features.NewTransport(signalFeaturesEndpoint(ingestEndpoint), token, paths.FeaturesSpoolDir())
+	// A RESOLVER: the emitter is constructed before the machine is paired, and
+	// while the endpoint answers "" the transport SPOOLS rather than posts —
+	// which is what keeps the emitter's own "advance the cursor on buffering"
+	// rule honest, since a buffered row still has somewhere durable to land.
+	tr := features.NewPendingTransport(deriveEndpoint(ingestEndpoint, signalFeaturesEndpoint), token, paths.FeaturesSpoolDir())
 	rep := features.NewReporter(tr, em.Drain, installID, publishing)
 
 	interval := features.IntervalFromEnv()

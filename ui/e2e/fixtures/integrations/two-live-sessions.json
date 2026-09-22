@@ -1,0 +1,107 @@
+{
+  "integrations": [
+    {
+      "id": "claude_code",
+      "display_name": "Claude Code",
+      "installed": true,
+      "configured": true,
+      "supported": true,
+      "storage_class": "jsonl-tail",
+      "state": "restart_required",
+      "tool_version": "2.1.267",
+      "surfaces": [
+        {
+          "kind": "hook",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "waiting_on": "restart",
+          "instruction": "Restart this tool to finish — a session that started before its config was written keeps using the settings it launched with."
+        },
+        {
+          "kind": "otel",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "waiting_on": "restart",
+          "instruction": "Restart this tool to finish — a session that started before its config was written keeps using the settings it launched with."
+        },
+        {
+          "kind": "watcher",
+          "documented": false,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        },
+        {
+          "kind": "reader",
+          "documented": false,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        }
+      ],
+      "stale_session_id": "8f21c0de-4b17-4c2a-9a55-0f3e7d1b2c44"
+    },
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "installed": true,
+      "configured": true,
+      "supported": true,
+      "storage_class": "jsonl-tail",
+      "state": "working",
+      "tool_version": "0.153.4",
+      "surfaces": [
+        {
+          "kind": "hook",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        },
+        {
+          "kind": "otel",
+          "documented": true,
+          "wired": true,
+          "expected": true,
+          "last_seen": "2026-09-15T09:12:44Z"
+        },
+        {
+          "kind": "watcher",
+          "documented": false,
+          "wired": true,
+          "expected": false
+        },
+        {
+          "kind": "reader",
+          "documented": false,
+          "wired": false,
+          "expected": false,
+          "waiting_on": "reader",
+          "instruction": "Signal captures this tool but cannot read its transcripts yet, so its prompts are not classified — nothing for you to do."
+        }
+      ]
+    }
+  ],
+  "vocabulary": {
+    "states": [
+      "not_installed",
+      "not_configured",
+      "restart_required",
+      "approval_required",
+      "idle",
+      "working",
+      "broken",
+      "unsupported"
+    ],
+    "waiting_on": [
+      "",
+      "restart",
+      "approval",
+      "reader"
+    ]
+  },
+  "auto_setup": true,
+  "computed_at": "2026-09-15T09:13:00Z"
+}

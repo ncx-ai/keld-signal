@@ -238,7 +238,7 @@ func TestWithTheToggleOffTheVectorFieldIsAbsentFromTheWire(t *testing.T) {
 	// to either hook, so nothing can write the cell. Pinned rather than
 	// assumed, since the whole claim rests on it.
 	t.Setenv(attrib.EnvEnabled, "0")
-	if hook := startAttributor(t.Context(), nil, nil, "", nil, "", nil, false, nil, nil); hook != nil {
+	if hook := startAttributor(t.Context(), nil, nil, constEndpoint(""), nil, "", nil, false, nil, nil); hook != nil {
 		t.Fatal("with attribution off there must be no attributor and no hook")
 	}
 	// And even if a handler is somehow still registered from a previous run,

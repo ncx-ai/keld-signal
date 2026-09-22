@@ -98,6 +98,21 @@ func newStatusCmd() *cobra.Command {
 				console.Print(fmt.Sprintf("  %-14s %s", row.displayName, state))
 			}
 
+			// ⚠️ **"NOT PAIRED" IS A STATE, NOT A FAULT, AND IT NOW HAS ONE.**
+			// Since the daemon collects from its first second and waits for the
+			// pairing only in order to SEND, a machine between install and login
+			// is working exactly as designed — capturing telemetry, transcripts,
+			// blocks and enrichment pointers and holding them — and the only
+			// thing status could previously say about it was the absence of a
+			// login line. Read from hook.json, the file the daemon reads; see
+			// pairedEndpoint for why never from the manifest.
+			if ep := pairedEndpoint(); ep != "" {
+				console.Print(fmt.Sprintf("Pairing: paired · publishing to %s", ep))
+			} else {
+				console.Print("Pairing: COLLECTING, NOT PAIRED — work is captured and held locally; " +
+					"nothing is published yet. Finish with `keld login` then `keld signal setup`.")
+			}
+
 			if manifest.Hook != nil {
 				// ⚠️ THE RECORDED VERSION ALREADY CARRIES ITS "v". It is
 				// version.CLI, stamped from the release tag ("v3.0.1"), so
@@ -335,6 +350,19 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			reauthRequired, _ := paths.ReauthRequired()
+
+			// ⚠️ **SAID, BUT NEVER AS A PROBLEM.** An unpaired machine collects
+			// and holds by design, so a finding here would accuse a healthy
+			// machine and push doctor toward the noise that makes it unread —
+			// the same call IntegrationProblems makes for `idle` and
+			// EndpointAgreement makes for a missing hook. It is still SAID,
+			// because "nothing has been published" is the first thing anybody
+			// debugging a quiet machine needs to know, and silence on it is what
+			// left the previous behaviour undiagnosable.
+			if pairedEndpoint() == "" {
+				console.Print("  · collecting, not paired — work is captured and held locally and " +
+					"nothing is published yet. Finish with `keld login` then `keld signal setup`.")
+			}
 
 			if len(problems) > 0 {
 				for _, p := range problems {

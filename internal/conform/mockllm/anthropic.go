@@ -24,6 +24,18 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	s.log(record{Path: r.URL.Path, Model: model, Stream: stream, NInputs: nInputs})
 
 	id := fmt.Sprintf("msg_mock_%08x", rand.Uint32())
+	// ⚠️ THE REQUEST ID IS WHAT MAKES A BLOCK PRICEABLE, AND THE MOCK NEVER SENT
+	// ONE. Anthropic's API returns `request-id` on every response and Claude Code
+	// records it on each assistant line as `requestId`; the sidecar records the
+	// four raw token classes ONCE PER requestId (`magnitude.py`), so a transcript
+	// whose assistant lines carry none has usage that reaches no priced field.
+	// Measured on chain C: every block cut from a mock-driven session read
+	// `measured: {status:"n/a", reason:"no_tokens"}` while `message.usage` was
+	// right there in the transcript with input_tokens 42 / output_tokens 3.
+	//
+	// So the conformance chains have never once exercised the PRICED path --
+	// they proved a block was cut, never that it carried money. One header.
+	w.Header().Set("request-id", fmt.Sprintf("req_mock_%08x", rand.Uint32()))
 	if !stream {
 		writeJSON(w, map[string]any{
 			"id":            id,

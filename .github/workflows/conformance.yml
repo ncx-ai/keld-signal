@@ -69,8 +69,13 @@ on:
       chain:
         description: "Chain"
         type: choice
-        options: ["A", "B", "all"]
+        options: ["A", "B", "C", "all"]
         default: "A"
+        # ⚠️ "all" is still A and B. Chain C is the DAY-THREE chain and is
+        # expected to fail today — its steps are written against behaviour four
+        # other workstreams are landing — so folding it into "all" would turn
+        # every ordinary dispatch amber and teach people to ignore the result.
+        # Ask for it by name until it is green.
       seed:
         description: "Seed for the before/after split (empty = the run id)"
         type: string
@@ -152,9 +157,25 @@ jobs:
               # design. Both are tracked; neither belongs in a PR gate yet.
               #
               # Widen this the day each of those is true, not before.
+              #
+              # ⚠️ **CHAIN C RIDES HERE BUT IS NOT A GATE** (continue-on-error,
+              # see the job). It is the DAY-THREE chain: its steps encode the
+              # six defects the maintainer hit on 2026-09-18, and every one of
+              # them is written against behaviour four other workstreams are
+              # landing in parallel. It fails today BY DESIGN, and a required
+              # check that is red before anyone touches it is a check people
+              # learn to ignore — the same reasoning that kept Windows and
+              # chain B out of this gate until each could pass.
+              #
+              # It runs anyway, on one OS and one tool, because its value right
+              # now IS the failing run: it names which of the six a branch has
+              # fixed and which it has not, at the moment the fix lands rather
+              # than a release later. Promote it to required when it is green,
+              # and delete this paragraph when you do.
               matrix='{"include":[
                 {"os":"ubuntu-latest","chain":"A","tool":"all","version":""},
                 {"os":"ubuntu-latest","chain":"B","tool":"all","version":""},
+                {"os":"ubuntu-latest","chain":"C","tool":"claude_code","version":""},
                 {"os":"macos-14","chain":"A","tool":"all","version":""},
                 {"os":"macos-14","chain":"B","tool":"all","version":""},
                 {"os":"windows-latest","chain":"A","tool":"all","version":""},
@@ -232,13 +253,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     # 25 minutes: a chain is ~15 (npm install, a Go build, two headless prompts
     # and the settle), and a hung daemon must not hold a macOS runner at 10x.
-    timeout-minutes: 25
+    #
+    # Chain C gets 45: it drives eleven steps rather than five, restarts the
+    # daemon five times, freezes the machine for 35 seconds on purpose, and —
+    # because it is expected to fail — pays the full 180s settle at whichever
+    # step breaks.
+    timeout-minutes: ${{ matrix.chain == 'C' && 45 || 25 }}
     # ⚠️ The Windows leg is EXPECTED TO FAIL and is marked so on purpose:
     # scripts/conformance/run-chain.ps1 does not exist yet (task A.3's Windows
     # half, owned elsewhere). A permanently red leg nobody reads is worse than
     # an honest amber one, and deleting the leg would hide that Windows is
     # unproven. Remove this the day the .ps1 lands.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    #
+    # ⚠️ Chain C joins Windows here, for the same reason and NOT the same cause:
+    # Windows is amber because the HARNESS is unproven there, chain C is amber
+    # because the PRODUCT is unfinished and the chain says so on purpose. Both
+    # stop being amber the day they pass, not the day we stop looking.
+    continue-on-error: ${{ matrix.os == 'windows-latest' || matrix.chain == 'C' }}
     permissions:
       contents: read
       issues: write
@@ -725,6 +756,14 @@ jobs:
           # service check to the unit file and says so, it does not skip it.
           KELD_CONFORM_INSTALL_FLAGS: ${{ runner.os == 'Linux' && '--allow-no-service-manager' || '' }}
           KELD_CONFORM_DISPOSABLE: "1"
+          # ⚠️ **CHAIN C SURVEYS; A AND B STOP AT THE FIRST BREAK.** For a gate,
+          # stopping is right: one break must read as one break. Chain C is not a
+          # gate — it is expected to fail in several places at once, and its
+          # whole value is naming WHICH of the six defects a branch has fixed.
+          # Stopping would report the first one forever and hide the rest. Every
+          # step that runs after a failure is labelled in the output as a survey,
+          # and no assertion is relaxed.
+          KELD_CONFORM_KEEP_GOING: ${{ matrix.chain == 'C' && '1' || '0' }}
           # Empty on chain A, so the ${VAR:+...} below adds nothing there.
           PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
           NEW_SIDECAR: ${{ steps.previous.outputs.newsidecar || '' }}
@@ -753,7 +792,19 @@ jobs:
           # env: entry — GitHub expressions cannot read the runner's HOME.
           if [ "$CHAIN" = "B" ] && [ -n "${NEW_SIDECAR:-}" ]; then
             export KELD_CONFORM_NEW_SIDECAR="$NEW_SIDECAR"
-            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
+            # ⚠️ STAMP THE BINARIES UNDER TEST WITH THE SIDECAR THEY UPGRADE TO.
+            # Chain B asserts two things about sidecar.version_skew: it FIRES
+            # with the old sidecar and is SILENT after the upgrade. The default
+            # stamp, 99.0.0-conform, can satisfy the first and never the second —
+            # no release sidecar will ever carry that string — so this leg
+            # failed at `upgrade` on every run since it existed (macOS passed
+            # only by counting events before the 5 s flush). Stamped as the
+            # release it upgrades to, both halves are real: 3.0.4 against 3.0.3
+            # must fire, 3.0.4 against 3.0.4 must not.
+            if [ -s "$NEW_SIDECAR/VERSION" ]; then
+              export KELD_CONFORM_VERSION="$(sed 's/^v//' "$NEW_SIDECAR/VERSION" | tr -d '[:space:]')"
+            fi
+            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?'), binaries stamped ${KELD_CONFORM_VERSION:-99.0.0-conform}"
           fi
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
             ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
@@ -811,7 +862,13 @@ jobs:
           if [ "$CHAIN" = "B" ] && [ -n "${PREVIOUS_WIN:-}" ]; then
             PREV_ARG="--previous dir:$(cygpath -u "$PREVIOUS_WIN")"
             export KELD_CONFORM_NEW_SIDECAR="$(cygpath -u "$NEW_SIDECAR_WIN")"
-            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN"
+            # Same stamp rule as the Linux/macOS leg above: the binaries under
+            # test report the version of the sidecar they upgrade to, so the
+            # post-upgrade "no skew" assertion is satisfiable and non-vacuous.
+            if [ -s "$KELD_CONFORM_NEW_SIDECAR/VERSION" ]; then
+              export KELD_CONFORM_VERSION="$(sed 's/^v//' "$KELD_CONFORM_NEW_SIDECAR/VERSION" | tr -d '[:space:]')"
+            fi
+            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN stamped ${KELD_CONFORM_VERSION:-99.0.0-conform}"
           fi
           mkdir -p "$work"
           echo "bash: $(bash --version | head -1)"

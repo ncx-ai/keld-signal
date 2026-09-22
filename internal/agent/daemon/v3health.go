@@ -75,7 +75,10 @@ func setSidecarProbe(p *sidecarHealthProbe) {
 // version comparison where either side reads "dev" is NOT skew: a source
 // checkout and a local build both report that, and a check that fires on every
 // developer machine is one nobody reads on the machine that matters.
-func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, atlasOn bool) {
+// paired reports whether this machine has an Atlas pairing yet. nil means "do
+// not ask" — every existing caller that has no pairing to consult keeps its
+// previous behaviour.
+func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, atlasOn bool, paired func() bool) {
 	if sig == nil {
 		return
 	}
@@ -123,6 +126,11 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 			// given the analysis service, the second is a machine whose service
 			// is down. Only the second is a problem to report.
 			sig.noteHealth(ledger.HealthSidecar, ledger.StatusNA, "")
+		} else if currentServiceHealth.Load().Settling() {
+			// Not answering YET, and the ladder has not acted. Reporting this
+			// as `failed`/`sidecar_down` is what put a red "not responding"
+			// pill on screen seconds after a good swap — see Settling().
+			sig.noteHealth(ledger.HealthSidecar, ledger.StatusNA, string(ledger.ReasonSidecarStarting))
 		} else if !sidecarHealthy() {
 			sig.noteHealth(ledger.HealthSidecar, ledger.StatusFailed, string(ledger.ReasonSidecarDown))
 		} else {
@@ -154,6 +162,19 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 
 		if !atlasOn {
 			sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, string(ledger.ReasonAtlasOff))
+		} else if paired != nil && !paired() {
+			// ⚠️ **COLLECTING, NOT PAIRED — AND THAT IS n/a, NEVER failed.**
+			// Since WS1 the daemon collects from its first second and waits for
+			// the pairing only to SEND, so on a machine between install and
+			// login this row is asked about an Atlas that has not been named
+			// yet. Left to the branch below it would report nothing at all
+			// (LastResponse is zero, so the row is absent and renders as
+			// unknown), which reads as "we could not tell" about the one thing
+			// the machine knows perfectly well. Stating it is the same call the
+			// sidecar row makes for a machine with no sidecar installed: a
+			// structural n/a with its reason, not a fault anybody should act on
+			// beyond finishing the pairing.
+			sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, string(ledger.ReasonNotPaired))
 		} else if sig.atlas != nil {
 			// ⚠️ **"REACHABLE" AND "NEVER TRIED" ARE DIFFERENT FACTS, and until
 			// this the health strip had no `atlas` row at all when Atlas was
@@ -170,6 +191,26 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 				} else {
 					sig.noteHealth(ledger.HealthAtlas, ledger.StatusFailed, string(classifyAtlasStatus(status)))
 				}
+			} else {
+				// ⚠️ **"SAY NOTHING" IS ONLY SAFE WHEN NOTHING WAS SAID BEFORE,
+				// AND HERE SOMETHING ALWAYS WAS.** The health rows are a stored
+				// table, not a fresh reading: declining to write leaves whatever
+				// the last pass wrote standing as a current assertion. And the
+				// branch above ALWAYS runs first on a paired machine, because
+				// startHealth's first pass happens before the pairing goroutine
+				// lands — so every restart stamped `not_paired`, and this branch
+				// then refused to correct it for the rest of the run.
+				//
+				// Measured on a live machine: `atlas n/a not_paired` frozen at
+				// the exact second the daemon logged `PAIRED with
+				// http://localhost:8000`, while `daemon`, `sidecar` and `store`
+				// had refreshed 25 minutes later and blocks were being delivered
+				// and confirmed throughout.
+				//
+				// So the absence is STATED rather than implied. Not `ok` — the
+				// pairing is not a reachability check and nothing has come back
+				// yet — and not `failed`, which would accuse a healthy machine.
+				sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, "")
 			}
 		}
 		sig.noteHealth(ledger.HealthStore, ledger.StatusOK, "")

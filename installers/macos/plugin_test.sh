@@ -80,7 +80,26 @@ if grep -qE '_codeField|_connectButton|prefillFromClipboard' "$p/KeldSetup.m"; t
 fi
 grep -qF 'login", @"--json"' "$p/KeldSetup.m" \
   || fail "pane does not start a device sign-in via keld login --json"
-grep -q 'install-sidecar' "$p/KeldSetup.m" || fail "pane does not drive keld signal install-sidecar"
+# ⚠️ INVERTED ON 2026-09-21, AND THE INVERSION IS THE POINT. This asserted that
+# the pane DRIVES `keld signal install-sidecar`, which it did — a ~300 MB
+# download in front of somebody who had not finished installing, on a release
+# host measured answering 504 on three of four full pulls with a 30-minute
+# client timeout per attempt, holding Continue until it settled. It also had to
+# render progress from this XPC-hosted view, and that layout pass wedged the
+# plugin's main thread: sampled on a real stuck installer, 302 of 553 samples in
+# updateNextEnabled -> KeldPaneView layout -> heightFor:width:, with the download
+# ALREADY finished and staged on disk.
+#
+# The daemon owns it now (GET/POST /v1/engine, engineroute.go): it knows whether
+# an engine is needed and which version is on disk, nothing is blocked while it
+# downloads, and a failure is a line of text beside a button. A reintroduced
+# download in this pane fails here.
+if grep -q 'install-sidecar' "$p/KeldSetup.m"; then
+  fail "the pane downloads the analysis engine again; the page owns that (see engineroute.go)"
+fi
+if grep -qE '_engineBar|_sidecarSettled|startSidecarDownload' "$p/KeldSetup.m"; then
+  fail "the pane still carries the analysis-engine download UI"
+fi
 grep -q 'installer-handoff.json' "$p/KeldSetup.m" || fail "pane writes no handoff file"
 grep -q 'nextEnabled' "$p/KeldSetup.m" || fail "pane never gates Continue"
 
@@ -88,7 +107,7 @@ grep -q 'nextEnabled' "$p/KeldSetup.m" || fail "pane never gates Continue"
 # spellings its own pattern anticipated (it's case-sensitive, and it only
 # inspects the writeToFile: line, by which point the payload is already an
 # opaque NSData) — so this is a POSITIVE assertion on the handoff payload's
-# key set instead: exactly these five keys, no more, no fewer. A new key of
+# key set instead: exactly these four keys, no more, no fewer. A new key of
 # any spelling then fails here until someone justifies it.
 python3 - "$p/KeldSetup.m" <<'PY' || fail "the setup code must never be written to disk"
 import re, sys
@@ -97,7 +116,9 @@ m = re.search(r'NSDictionary \*payload = @\{(.*?)\};', src, re.S)
 if not m:
     sys.exit(1)
 keys = set(re.findall(r'@"([A-Za-z0-9_]+)"\s*:', m.group(1)))
-expected = {"version", "paired", "api_url", "tools", "sidecar_staged"}
+# `sidecar_staged` is GONE with the pane's download (2026-09-21): the page
+# owns the engine now, so there is no staged tree to hand over. Four keys.
+expected = {"version", "paired", "api_url", "tools"}
 sys.exit(0 if keys == expected else 1)
 PY
 
@@ -332,23 +353,32 @@ printf '%s' "$body" | grep -q '_paired' \
   || fail "updateNextEnabled ignores whether the machine is connected"
 printf '%s' "$body" | grep -q '_toolsLoaded' \
   || fail "updateNextEnabled ignores whether the tool list has been read"
-printf '%s' "$body" | grep -q '_sidecarSettled' \
-  || fail "updateNextEnabled ignores the sidecar download, so someone can click through mid-download"
+# ⚠️ AND THE THIRD CONDITION IS GONE, DELIBERATELY. This required
+# `_sidecarSettled` — "nobody clicks Continue mid-download" — which only ever
+# mattered because the pane was doing the download. It is not needed to finish
+# installing (telemetry works without an engine and enrichment spools), and
+# holding Continue on it is what turned a flaky 300 MB fetch into a stuck
+# wizard. The page downloads it now. A reintroduced gate fails here.
+if printf '%s' "$body" | grep -q '_sidecarSettled'; then
+  fail "Continue is gated on an engine download again; the page owns that (see engineroute.go)"
+fi
 
 # Nothing else may set it, or the single source of truth is decorative.
 strays=$(grep -c 'nextEnabled = ' "$p/KeldSetup.m" || true)
 [ "$strays" -eq 1 ] \
   || fail "nextEnabled is assigned in $strays places; it must be computed only inside updateNextEnabled"
 
-# ⚠️ SETTLED, NOT SUCCEEDED — A FAILED DOWNLOAD MUST NOT WEDGE THE INSTALL.
-# Gating Continue on a SUCCESSFUL fetch makes an offline machine impossible to
-# install: a captive portal, a VPN or a GitHub outage would leave someone unable
-# to finish at all. The install is still worth completing without it — telemetry
-# works, enrichment spools, and the launchd fallback fetches the sidecar later —
-# so the failure path sets the same flag and offers a retry.
-done_body=$(awk '/_sidecarSettled = YES/{found++} END{print found+0}' "$p/KeldSetup.m")
-[ "$done_body" -ge 1 ] || fail "nothing ever marks the sidecar download as settled"
-body_has "$p/KeldSetup.m" '/- \(void\)startSidecarDownload/,/^\}/' 'Downloading the analysis engine' \
-  || fail "the pane does not say why Continue is held while the engine downloads"
+# ⚠️ THE PANE MUST NOT SPAWN A LONG-RUNNING CHILD AT ALL. The settled/succeeded
+# distinction this used to police existed only because the pane downloaded the
+# engine; the real lesson was one level up — an Installer.app pane is hosted over
+# XPC, its view's layout runs on the plugin's main thread, and a progress bar
+# driven from there wedged a real install with the work already done. Every
+# `keld` call the pane still makes is short and answers in milliseconds
+# (whoami --verify, setup --dry-run, login). Nothing here may wait on a network
+# transfer again.
+if grep -qE 'install-sidecar|_sidecarSettled|_engineBar' "$p/KeldSetup.m"; then
+  fail "the pane spawns a long-running download again; the page owns that (see engineroute.go)"
+fi
+
 
 echo "plugin_test.sh: OK"

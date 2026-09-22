@@ -5,6 +5,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/integrations"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // integrationSink holds the live emitter adapter.
@@ -45,7 +46,12 @@ func (lateSink) EmitExempt(code, severity string, fields map[string]any) {
 // SAME snapshot the route and doctor read. A second derivation here would be a
 // second state rule, which AC-8 exists to prevent.
 func describeIntegrationForReport(id string) (state, toolVersion string, findings []string, ok bool) {
-	for _, in := range integrations.Snapshot(integrations.Deps{}, integrations.Options{}).Integrations {
+	// ⚠️ The Developer switch is resolved here too, not defaulted. A snapshot
+	// taken with it off on a machine that has it on would report the otel lane
+	// as not expected, so the bundle would disagree with the pane about the same
+	// row — and the bundle is what someone reads when the pane confused them.
+	opts := integrations.Options{ToolOTLP: settings.Load().ToolOTLPEnabled()}
+	for _, in := range integrations.Snapshot(integrations.Deps{}, opts).Integrations {
 		if in.ID != id {
 			continue
 		}

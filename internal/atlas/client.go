@@ -53,6 +53,18 @@ type Client interface {
 	// LastResponse is the class of the most recent answer Atlas gave, for the
 	// health strip: the HTTP status and when. Zero status means "not tried yet".
 	LastResponse() (status int, at time.Time)
+
+	// Note records an answer Atlas gave on a route this connector did not make
+	// the call for.
+	//
+	// ⚠️ IT EXISTS BECAUSE THE MAIN DELIVERY PATH DOES NOT GO THROUGH HERE, AND
+	// THE HEALTH STRIP READ ZERO FOREVER BECAUSE OF IT. The block emitter builds
+	// its own publisher (the block route is not the enrichments route — see
+	// startBlockEmitter), so on a healthy machine the only callers of SendBlocks
+	// are the republisher's drain paths, which no-op when there is nothing to
+	// resend. LastResponse therefore stayed (0, zero) while blocks were landing
+	// every sweep, and the strip could never say Atlas was reachable.
+	Note(status int)
 }
 
 // Off is the Client for `send_to_atlas: false`. It holds no transport, no
@@ -65,5 +77,6 @@ func (Off) SendBlocks(context.Context, []publish.BlockEnrichment) (int, error) {
 }
 func (Off) Settings(context.Context) (settings.Remote, error) { return settings.Remote{}, ErrOffline }
 func (Off) LastResponse() (int, time.Time)                    { return 0, time.Time{} }
+func (Off) Note(int)                                          {}
 
 var _ Client = Off{}

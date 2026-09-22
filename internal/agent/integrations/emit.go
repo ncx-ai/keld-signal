@@ -292,6 +292,18 @@ func LoadEmittedStates() (map[string]EmittedState, error) {
 // state rule reads — so the next compute would conclude every lane was silent
 // and this file would emit a broken event for every tool on the machine.
 func SaveEmittedStates(states map[string]EmittedState) error {
+	buf, err := json.Marshal(states)
+	if err != nil {
+		return err
+	}
+	return putEmitDoc(emittedStatesKey, buf)
+}
+
+// putEmitDoc sets ONE key of ~/.keld/state/integrations.json and rewrites the
+// document, keys it knows nothing about included. Every writer of that file goes
+// through here for the reason SaveEmittedStates gives above: `repairs` and the
+// lane facts share it, and a marshal of one map would delete the others.
+func putEmitDoc(key string, value json.RawMessage) error {
 	doc, err := readEmitDoc()
 	if err != nil {
 		return err
@@ -299,11 +311,7 @@ func SaveEmittedStates(states map[string]EmittedState) error {
 	if doc == nil {
 		doc = map[string]json.RawMessage{}
 	}
-	buf, err := json.Marshal(states)
-	if err != nil {
-		return err
-	}
-	doc[emittedStatesKey] = buf
+	doc[key] = value
 
 	out, err := json.Marshal(doc)
 	if err != nil {

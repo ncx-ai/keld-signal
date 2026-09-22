@@ -51,7 +51,7 @@ func commitExtraFile(t *testing.T, ef *ExtraFile) {
 func TestGeminiApplySetsTelemetry(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 	cur := "{\n  \"theme\": \"dark\"\n}\n"
 	plan := a.Apply(&cur, p, false)
 	if !plan.Changed || !strings.Contains(plan.AfterText, "otlpEndpoint") || !strings.Contains(plan.AfterText, "\"theme\"") {
@@ -69,7 +69,7 @@ func TestGeminiApplySetsTelemetry(t *testing.T) {
 func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "secret"}
+	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "secret", ToolOTLP: true}
 
 	// Start with a config that has an extra key.
 	original := "{\n  \"theme\": \"dark\"\n}\n"
@@ -121,7 +121,7 @@ func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 func TestGeminiApplyNilCurrentText(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "tok2"}
+	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "tok2", ToolOTLP: true}
 
 	plan := a.Apply(nil, p, false)
 	if !plan.Changed {
@@ -160,7 +160,7 @@ func TestGeminiMeta(t *testing.T) {
 func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", ToolOTLP: true}
 
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 	plan := a.Apply(&cur, p, false)
@@ -220,7 +220,7 @@ func TestGeminiApplyLeavesCleanEnvUntouched(t *testing.T) {
 	}
 
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", ToolOTLP: true}
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 
 	plan := a.Apply(&cur, p, false)

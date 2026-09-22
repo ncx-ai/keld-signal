@@ -17,6 +17,24 @@ const DefaultWindow = 24 * time.Hour
 // WindowEnv overrides it on one machine (a Go duration: "6h", "30m").
 const WindowEnv = "KELD_INTEGRATIONS_WINDOW"
 
+// settleWindow is how long a lane is given to report after the tool has been
+// seen on another one, before its silence counts as evidence of a break.
+//
+// ⚠️ WITHOUT IT A HEALTHY MACHINE READS `broken` SECONDS AFTER A PROMPT. The
+// lanes do not fire together: the hook posts its pointer as the prompt is
+// submitted, while the reader lane only reports once the watcher's poll
+// (`KELD_WATCH_POLL`, 5s) has signalled the sidecar and the sidecar has parsed
+// the tail into rows. `broken` needs one expected lane active and another
+// silent, and both halves are momentarily true on every prompt a working
+// machine serves. Observed by the day-three conformance chain on 2026-09-19,
+// which reported it rather than failing on it.
+//
+// Two minutes is generous against those mechanisms and cheap against the
+// detection it delays: a genuinely broken lane is still reported inside the
+// look-back, which is a day. It errs toward `working`, the direction AC-4 asks
+// for — a check that cries wolf on every prompt is one nobody reads.
+const settleWindow = 2 * time.Minute
+
 // Options are Compute's knobs. A zero Options is the shipped behaviour.
 type Options struct {
 	// Window is the lane look-back. Zero means DefaultWindow, honouring
@@ -24,6 +42,19 @@ type Options struct {
 	Window time.Duration
 	// AutoSetup is reported on the Response, not used by the rule.
 	AutoSetup bool
+	// ToolOTLP is the Developer switch (settings.Settings.ToolOTLPEnabled, off
+	// by default): whether this machine asks a tool to export OTLP at all.
+	//
+	// ⚠️ It reaches the rule ONLY as part of the SupportLevel Compute evaluates
+	// ExpectedLanes against — there is no second test for it anywhere in this
+	// file, and adding one would be the second copy AC-8 forbids. With the
+	// switch off keld writes no OTEL block, so the lane is not expected, and by
+	// the existing rule an unexpected lane contributes neither half of `broken`.
+	//
+	// The zero value is off, which matches the product default: a caller that
+	// has not resolved the setting gets the shipped behaviour rather than a
+	// lane it never wrote being blamed for silence.
+	ToolOTLP bool
 }
 
 // Window resolves the effective look-back: the explicit option, else the env
@@ -55,6 +86,10 @@ type Facts struct {
 	Lanes       LaneFacts
 	ToolVersion string
 	BackupPath  string
+	// Repair — what keld last repaired in this tool's config, nil when it has
+	// never repaired one. Read from disk (LoadRepairs), because the detector
+	// that repairs and the route that reports never share memory.
+	Repair *Repair
 }
 
 // Compute decides one state per tool. IT IS THE ONLY PLACE THAT DECIDES (AC-8):
@@ -76,20 +111,21 @@ func Compute(now time.Time, entries []Entry, facts map[string]Facts, opts Option
 	window := opts.window()
 	out := make([]Integration, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, computeOne(now, window, e, facts[e.ID]))
+		out = append(out, computeOne(now, window, e, facts[e.ID], opts.ToolOTLP))
 	}
 	return out
 }
 
-func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integration {
+func computeOne(now time.Time, window time.Duration, e Entry, f Facts, toolOTLP bool) Integration {
 	level := e.SupportLevel()
+	level.ToolOTLP = toolOTLP
 	expected := map[SurfaceKind]bool{}
 	for _, k := range e.ExpectedLanes(level) {
 		expected[k] = true
 	}
 	active := laneActivity(e, f, now, window)
 
-	state, brokenLane := decide(e, f, expected, active)
+	state, brokenLane := decide(now, e, f, expected, active)
 
 	in := Integration{
 		ID:           e.ID,
@@ -100,11 +136,34 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 		StorageClass: e.StorageClass,
 		State:        state,
 		BrokenLane:   brokenLane,
-		ToolVersion:  f.ToolVersion,
-		BackupPath:   f.BackupPath,
-		Surfaces:     make([]Surface, 0, len(e.Surfaces)),
+		// ⚠️ ONLY UNDER RestartRequired. The facts reader can name a stale
+		// session whenever it finds one, but a row that is `working` or `idle`
+		// carrying a "this session is stale" id would be stating a problem it
+		// had just decided there isn't. The verdict owns the evidence.
+		StaleSessionID: staleSessionID(state, f),
+		Repaired:       repaired(now, window, state, f),
+		ToolVersion:    f.ToolVersion,
+		BackupPath:     f.BackupPath,
+		Surfaces:       make([]Surface, 0, len(e.Surfaces)),
 	}
 	for _, spec := range e.Surfaces {
+		// ⚠️ A LANE THE PERSON SWITCHED OFF IS NOT A LANE OF THIS MACHINE, and
+		// publishing it made every tool carry an `otel` row nobody asked for.
+		// The switch ships OFF, so that was the default view: a lane rendered on
+		// every row, forever, for a thing deliberately not in use. Reported as
+		// "why would I care about otel if I know otel is turned off".
+		//
+		// This is NARROWER than "hide what is not expected", and the difference
+		// is who decided. A lane that cannot feed for STRUCTURAL reasons — Gemini
+		// runs no command hook, Codex has no sidecar reader yet — is still
+		// published and still rendered, because a lane with no traffic and a
+		// lane that could never have any must not look alike. That reasoning is
+		// about the TOOL. `tool_otlp` is about the PERSON, they can see its
+		// position in the Developer box, and they do not need it restated on
+		// every row.
+		if !expected[spec.Kind] && hiddenBySwitch(spec, level) {
+			continue
+		}
 		s := Surface{
 			Kind:       spec.Kind,
 			Documented: spec.Documented,
@@ -112,11 +171,84 @@ func computeOne(now time.Time, window time.Duration, e Entry, f Facts) Integrati
 			Expected:   expected[spec.Kind],
 			LastSeen:   lastSeen(spec.Kind, f),
 		}
-		s.WaitingOn = waitingOn(e, spec.Kind, state, expected[spec.Kind])
+		s.WaitingOn = waitingOn(e, spec.Kind, state, expected[spec.Kind], f)
 		s.Instruction = Instructions[s.WaitingOn]
 		in.Surfaces = append(in.Surfaces, s)
 	}
 	return in
+}
+
+// staleSessionID is the id the restart verdict was decided on, and "" for every
+// other verdict — see the field comment on Integration.StaleSessionID.
+func staleSessionID(state State, f Facts) string {
+	if state != RestartRequired {
+		return ""
+	}
+	return f.Wiring.StaleSessionID
+}
+
+// repaired is the note the pane prints: keld rewrote its own block in this
+// tool's config, and the tool needs one restart to pick it up.
+//
+// ⚠️ IT IS NOT SCOPED TO RestartRequired, AND THE FIRST DRAFT OF THIS FUNCTION
+// WAS. `broken` is the state the 2026-09-18 incident actually produced — the row
+// read `broken · otel` while both the stale credential and the live one sat on
+// disk in front of the daemon — and it is therefore the row that most needs the
+// sentence. Reproduced end to end on an isolated KELD_HOME: with no Codex
+// transcript on the machine there is no session to call stale, so the repaired
+// row reads `broken`, and under the narrow rule it published nothing at all.
+//
+// Two conditions instead, and each is a refusal the rest of this file already
+// makes:
+//
+//   - `working` CLEARS it. Every expected lane has carried something since the
+//     config was written, so the tool has demonstrably read it; a row that has
+//     just decided the tool is fine must not go on asking for a restart. (This
+//     is staleSessionID's rule, stated against the evidence rather than against
+//     one verdict.)
+//   - it AGES OUT at the row's own lane look-back, so a tool nobody opens does
+//     not carry "restart this once" forever — the permanent-instruction-with-
+//     nothing-to-do failure a zero NewestSessionStart is refused for. The bound
+//     is the window already in hand rather than a new constant: outside it
+//     nothing else on this row counts either. `restart_required` is EXEMPT,
+//     because that verdict is direct evidence the restart still has not
+//     happened, however long ago the repair was.
+//
+// The SENTENCE is attached here rather than stored with the record, so a
+// reworded note reaches every machine with the binary instead of only the ones
+// that repair again afterwards. A reason with no sentence (ReasonFirstSetup, or
+// one a newer daemon wrote and this one does not know) publishes nothing: the
+// pane maps nothing, so a note it cannot be handed is a note that does not
+// exist.
+func repaired(now time.Time, window time.Duration, state State, f Facts) *Repair {
+	if f.Repair == nil || state == Working {
+		return nil
+	}
+	if state != RestartRequired && f.Repair.At.Before(now.Add(-window)) {
+		return nil
+	}
+	note := RepairNotes[f.Repair.Reason]
+	if note == "" {
+		return nil
+	}
+	out := *f.Repair
+	out.Note = note
+	return &out
+}
+
+// hiddenBySwitch reports whether the ONLY reason this lane is not expected is
+// that the person turned `tool_otlp` off — i.e. it would be expected with the
+// switch on. See the note at its call site.
+//
+// Expressed by asking the catalogue rather than by naming lanes here, so a
+// second switch-gated surface cannot be added without this following it.
+func hiddenBySwitch(spec SurfaceSpec, level SupportLevel) bool {
+	if level.ToolOTLP || spec.ExpectedWhen == nil {
+		return false
+	}
+	on := level
+	on.ToolOTLP = true
+	return spec.ExpectedWhen(on)
 }
 
 // laneState is a lane's answer inside the window. `unknown` exists because a
@@ -153,7 +285,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 	// UNREADABLE mtime (zero) falls back to the plain window rather than
 	// suppressing every break forever.
 	cut := now.Add(-window)
-	if m := f.Wiring.ConfigMtime; !m.IsZero() && m.After(cut) {
+	if m := f.Wiring.ConfiguredAt; !m.IsZero() && m.After(cut) {
 		cut = m
 	}
 	within := func(t *time.Time) laneState {
@@ -181,7 +313,7 @@ func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[Sur
 }
 
 // decide walks spec §4's table in its own order.
-func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
+func decide(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceKind]laneState) (State, SurfaceKind) {
 	// Row 9, first: an unsupported entry is a catalogue row whatever else is
 	// true of the machine. Cursor with its config dir present is still
 	// `unsupported`, not `not_installed` — Signal names the tool and its
@@ -237,9 +369,31 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// process adopted it: the loopback proxy is what the config points at.
 	// Without this the instruction is unfollowable — restarting the tool does
 	// not clear it, and the row states a repair that cannot work.
-	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfigMtime.IsZero() &&
-		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfigMtime) &&
-		!f.Wiring.NewestSessionAdopted {
+	//
+	// ⚠️ AND THERE MUST BE SOMETHING STALE TO FIX. The rule above asks only
+	// WHEN a session started; it never asks whether anything the tool reads at
+	// startup is actually not working. A tool reads two things from its config
+	// at launch — the hook command and the OTEL block — so if every one of those
+	// lanes that this machine expects has reported SINCE the config was written,
+	// the running session is delivering everything we depend on and a restart
+	// changes nothing.
+	//
+	// This became reachable the moment `tool_otlp` shipped off. The adoption
+	// escape above accepts only TELEMETRY as proof, and a machine with the
+	// switch off asks the tool for no telemetry at all — so it could never
+	// fire, and the row sat on `restart_required` with every lane ticked and no
+	// sentence under it. Seen on a real machine 2026-09-21: hook ✓ watcher ✓
+	// reader ✓, state restart_required, reported as "why is the restart
+	// required if everything is healthy now".
+	//
+	// The case this must keep catching is the one it was built for: a session
+	// started before setup that is posting nowhere. There the hook lane is
+	// silent since the config, `configReadLanesStale` is true, and the
+	// instruction stands.
+	if !f.Wiring.NewestSessionStart.IsZero() && !f.Wiring.ConfiguredAt.IsZero() &&
+		f.Wiring.NewestSessionStart.Before(f.Wiring.ConfiguredAt) &&
+		!f.Wiring.NewestSessionAdopted &&
+		configReadLanesStale(e, f, expected) {
 		return RestartRequired, ""
 	}
 	// Row 3b. Requires KNOWN trust: `known=false` is "we cannot tell", and
@@ -271,10 +425,31 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	if !anyActive {
 		return Idle, "" // row 4 — a quiet user is not a bug
 	}
-	if firstSilent != "" {
+	if firstSilent != "" && settled(now, e, f, expected) {
 		return Broken, firstSilent // rows 5, 6, 7
 	}
 	return Working, "" // rows 7b and 8
+}
+
+// settled reports whether enough time has passed since this tool was last seen
+// on ANY expected lane for a still-silent lane to mean something. See
+// settleWindow.
+func settled(now time.Time, e Entry, f Facts, expected map[SurfaceKind]bool) bool {
+	newest := time.Time{}
+	for _, spec := range e.Surfaces {
+		if !expected[spec.Kind] {
+			continue
+		}
+		if at := lastSeen(spec.Kind, f); at != nil && at.After(newest) {
+			newest = *at
+		}
+	}
+	// No instant at all: the active lane is the reader, which answers a
+	// yes/no rather than an instant. Nothing to wait for.
+	if newest.IsZero() {
+		return true
+	}
+	return now.Sub(newest) >= settleWindow
 }
 
 // wired answers, per lane, whether the configuration this lane needs is on
@@ -319,19 +494,78 @@ func lastSeen(kind SurfaceKind, f Facts) *time.Time {
 // waitingOn names what one lane is waiting for. The sentences are
 // Instructions'; they live once, in vocabulary.go, because the pane, doctor
 // and the wire doc all quote them.
-func waitingOn(e Entry, kind SurfaceKind, state State, expected bool) WaitingOn {
+func waitingOn(e Entry, kind SurfaceKind, state State, expected bool, f Facts) WaitingOn {
 	switch {
 	case state == ApprovalRequired && kind == SurfaceHook:
 		return WaitingOnApproval
-	case state == RestartRequired && expected && (kind == SurfaceHook || kind == SurfaceOTel):
+	case state == RestartRequired && expected && (kind == SurfaceHook || kind == SurfaceOTel) &&
+		!seenSinceConfigured(kind, f):
 		// Only the lanes the tool reads out of its own config at startup. A
 		// restart does not change what the daemon can tail.
+		//
+		// ⚠️ AND ONLY THE ONES THAT HAVE NOT REPORTED SINCE. This was decided
+		// from the tool's STATE alone, so every expected lane carried "not
+		// restarted since" whenever the tool read `restart_required` — including
+		// a lane that had just delivered. Seen on a real machine 2026-09-21: the
+		// hook lane labelled "not restarted since" while its last pointer was 31
+		// SECONDS old against a config written 11 minutes earlier. The tool row
+		// was right (a session did predate the config); the lane label was a
+		// statement about that lane, and it was false.
+		//
+		// The restart belongs to the TOOL. A lane that has been seen since the
+		// config has visibly adopted it and has nothing to wait for.
 		return WaitingOnRestart
 	case kind == SurfaceReader && e.Supported && !expected:
 		return WaitingOnReader
 	default:
 		return WaitingOnNothing
 	}
+}
+
+// configReadLanesStale reports whether any lane the tool reads out of its own
+// config at startup — the hook command, the OTEL block — is EXPECTED on this
+// machine and has not been seen since keld wrote that config.
+//
+// No such lane expected at all (the switch off and no hook, as Gemini has)
+// means there is nothing a restart could fix, so it answers false.
+func configReadLanesStale(e Entry, f Facts, expected map[SurfaceKind]bool) bool {
+	// ⚠️ WITH THE OTLP LANE EXPECTED, THE NOTICE STILL WINS, AND THE REASON IS
+	// VOUCHING. Lane facts are per TOOL, not per session: with two windows open,
+	// a healthy one's traffic is indistinguishable from a stale one's silence.
+	// While the tool exports OTLP that difference costs data — the stale window
+	// posts with the credential it launched with — so suppressing the notice on
+	// another window's evidence would hide a real loss. The decision table's row
+	// 3 says "lanes are live; the restart notice still wins", and inside this
+	// branch it stays true.
+	//
+	// With the switch OFF the claim is structurally different, not merely
+	// weaker: nothing this machine collects depends on what the tool read at
+	// startup. The hook command is unchanged, so a "stale" window fires the same
+	// hook, and its transcript is read by the daemon regardless. There is
+	// nothing for a restart to fix, for any window — so the notice is not
+	// suppressed on one window's behalf, it is simply no longer true.
+	if expected[SurfaceOTel] {
+		return true
+	}
+	for _, kind := range []SurfaceKind{SurfaceHook, SurfaceOTel} {
+		if !expected[kind] {
+			continue
+		}
+		if !seenSinceConfigured(kind, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// seenSinceConfigured reports whether this lane has carried something since
+// keld last wrote the tool's config. See waitingOn.
+func seenSinceConfigured(kind SurfaceKind, f Facts) bool {
+	if f.Wiring.ConfiguredAt.IsZero() {
+		return false
+	}
+	at := lastSeen(kind, f)
+	return at != nil && at.After(f.Wiring.ConfiguredAt)
 }
 
 // Respond wraps computed rows in the route's body, with the closed

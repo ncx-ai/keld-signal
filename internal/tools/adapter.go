@@ -48,10 +48,20 @@ type Plan struct {
 
 // ToolStatus describes the installation and configuration state of a tool.
 type ToolStatus struct {
-	Name       string
-	Installed  bool
+	Name      string
+	Installed bool
+	// Configured — keld's wiring is in this file. ⚠️ It asks about the HOOK
+	// only: the tool's own OTLP export is opt-in (SetupParams.ToolOTLP, off by
+	// default), so a config that correctly has no OTEL block is configured.
+	// Requiring the block here would make every default machine read as drift
+	// and be rewritten on every detector poll.
 	Configured bool
-	Detail     string
+	// OTLP — whether this file currently carries keld's OTLP wiring. A FACT
+	// about the file, kept separate from the verdict above so the detector can
+	// notice that the file and the tool_otlp switch disagree, in either
+	// direction, and put them back in step through the one apply path.
+	OTLP   bool
+	Detail string
 }
 
 // Adapter is the interface that tool adapters (Claude Code, Codex, Gemini) must

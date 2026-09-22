@@ -25,6 +25,11 @@ func TestGoldenParity(t *testing.T) {
 	p := SetupParams{
 		Endpoint:    "https://atlas.keld.co",
 		IngestToken: "tok",
+		// The goldens were captured from the Python CLI, which always wrote the
+		// OTEL block, so the lane is asked for explicitly rather than the
+		// goldens being re-cut: what this test checks is byte parity with that
+		// reference, and re-cutting them would silently retire the check.
+		ToolOTLP: true,
 	}
 
 	t.Run("claude", func(t *testing.T) {

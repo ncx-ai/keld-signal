@@ -47,14 +47,19 @@ type reauther struct {
 	tok     *creds.Token
 	emitter *clientevents.Emitter
 
-	// startupEndpoint is the ingest endpoint the daemon's consumers (publish,
-	// settings, client-events) were built against at startup (cfg.Endpoint).
+	// pairedEndpoint resolves the ingest endpoint this daemon publishes to.
 	// refresh only swaps the token (see the endpoint-rotation comment below);
 	// this is compared against a successful Onboarding response purely to
 	// warn when the endpoint itself has also changed underneath the running
-	// daemon. Zero value ("") is fine — it just means the warning never fires
+	// daemon. A nil resolver is fine — it just means the warning never fires
 	// (e.g. in tests that don't set it).
-	startupEndpoint string
+	//
+	// ⚠️ A RESOLVER RATHER THAN THE STRING IT USED TO BE. The daemon builds
+	// this reauther BEFORE the machine is paired (see pairing.go), so there is
+	// no endpoint to capture at construction — and assigning a field later from
+	// the pairing goroutine would race every concurrent refresh, which the
+	// telemetry proxy can trigger from its own goroutine at any moment.
+	pairedEndpoint func() string
 
 	mu             sync.Mutex
 	lastAttempt    time.Time
@@ -160,8 +165,12 @@ func (r *reauther) refresh(ctx context.Context) error {
 	// loudly when Onboarding reports a different one — the operator needs to
 	// restart keld-agent to pick it up; the token swap above still applies
 	// immediately regardless.
-	if ob.Endpoint != "" && ob.Endpoint != r.startupEndpoint {
-		log.Printf("keld-agent: ingest endpoint changed (%s → %s); restart keld-agent to adopt it", r.startupEndpoint, ob.Endpoint)
+	startup := ""
+	if r.pairedEndpoint != nil {
+		startup = r.pairedEndpoint()
+	}
+	if ob.Endpoint != "" && startup != "" && ob.Endpoint != startup {
+		log.Printf("keld-agent: ingest endpoint changed (%s → %s); restart keld-agent to adopt it", startup, ob.Endpoint)
 	}
 	return nil
 }

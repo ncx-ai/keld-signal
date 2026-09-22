@@ -1,0 +1,74 @@
+{
+ "sessionId": "40164b6f-75b0-4059-9392-c013bf2b5a67",
+ "projectHash": "<stripped>",
+ "startTime": "2025-09-21T15:35:33.067Z",
+ "lastUpdated": "2025-09-21T15:41:50.023Z",
+ "messages": [
+  {
+   "id": "21511844-c089-416b-a0dc-8c15d820554c",
+   "timestamp": "2025-09-21T15:35:33.067Z",
+   "type": "user",
+   "content": "x"
+  },
+  {
+   "id": "64bfc674-f258-40a5-af11-33c8cae3315b",
+   "timestamp": "2025-09-21T15:35:39.075Z",
+   "type": "gemini",
+   "tokens": {
+    "input": 5992,
+    "output": 65,
+    "cached": 4475,
+    "thoughts": 400,
+    "tool": 0,
+    "total": 6457
+   },
+   "model": "gemini-2.5-pro",
+   "content": ""
+  },
+  {
+   "id": "e2e71c46-40c4-411e-84fb-6a9fea45b5ff",
+   "timestamp": "2025-09-21T15:35:42.254Z",
+   "type": "gemini",
+   "tokens": {
+    "input": 6270,
+    "output": 74,
+    "cached": 5735,
+    "thoughts": 48,
+    "tool": 0,
+    "total": 6392
+   },
+   "model": "gemini-2.5-pro",
+   "content": ""
+  },
+  {
+   "id": "42d0777d-e4d1-4bfa-8115-f90975bc354c",
+   "timestamp": "2025-09-21T15:35:46.161Z",
+   "type": "gemini",
+   "tokens": {
+    "input": 6496,
+    "output": 49,
+    "cached": 5731,
+    "thoughts": 63,
+    "tool": 0,
+    "total": 6608
+   },
+   "model": "gemini-2.5-pro",
+   "content": ""
+  },
+  {
+   "id": "599554be-ca5a-45e4-8732-84fce91a9dcf",
+   "timestamp": "2025-09-21T15:35:50.059Z",
+   "type": "gemini",
+   "tokens": {
+    "input": 6626,
+    "output": 121,
+    "cached": 0,
+    "thoughts": 61,
+    "tool": 0,
+    "total": 6808
+   },
+   "model": "gemini-2.5-pro",
+   "content": ""
+  }
+ ]
+}

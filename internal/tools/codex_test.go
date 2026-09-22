@@ -10,7 +10,7 @@ import (
 
 func TestCodexApplyFreshAddsBlock(t *testing.T) {
 	a := &CodexAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 	plan := a.Apply(nil, p, false)
 	if plan.Conflict != "" || !plan.Changed {
 		t.Fatalf("fresh apply should succeed: %+v", plan)
@@ -28,7 +28,7 @@ func TestCodexApplyFreshAddsBlock(t *testing.T) {
 
 func TestCodexConflictOnExistingOtel(t *testing.T) {
 	a := &CodexAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 	cur := "[otel]\nexporter = \"otherthing\"\n"
 	plan := a.Apply(&cur, p, false)
 	if plan.Conflict == "" {
@@ -43,7 +43,7 @@ func TestCodexConflictOnExistingOtel(t *testing.T) {
 
 func TestCodexApplyReplacePreservesNonOtelContent(t *testing.T) {
 	a := &CodexAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 
 	// Config with both [otel] (conflicting) and [model] (unrelated, must survive).
 	cur := "[otel]\nexporter = \"otherthing\"\n\n[model]\nname = \"x\"\n"
@@ -140,7 +140,7 @@ func TestCodexStatus(t *testing.T) {
 
 func TestCodexConflictMessageNotReplace(t *testing.T) {
 	a := &CodexAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", ToolOTLP: true}
 	cur := "[otel]\nexporter = \"otherthing\"\n"
 	plan := a.Apply(&cur, p, false)
 	// The conflict message must start with the exact prefix from codex.py.

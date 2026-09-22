@@ -61,9 +61,29 @@ type serviceState string
 const (
 	// serviceOK — the last probe was answered.
 	serviceOK serviceState = "ok"
-	// serviceDegraded — one or two consecutive probes went unanswered. One
-	// failure is noise; nothing is restarted here.
+	// serviceDegraded — the ladder has ACTED and the service is still not
+	// answering: a restart was attempted and failed, or this daemon cannot
+	// perform one. Something a person may need to know about. Everything
+	// before the first rung is serviceSettling, below.
 	serviceDegraded serviceState = "degraded"
+	// serviceSettling — the service has not answered, and NOTHING HAS BEEN DONE
+	// about it yet.
+	//
+	// ⚠️ IT WAS `degraded`, AND THAT MADE THE PAGE ARGUE WITH ITSELF. One bucket
+	// covered three different facts: never probed (start-up), one or two missed
+	// checks that the ladder itself calls noise, and a service the ladder has
+	// actually acted on. The page alarms on `degraded`, so seconds after a
+	// perfectly good sidecar swap a person saw a banner reading "The analysis
+	// service isn't healthy" with a Restart button, above the daemon's own
+	// sentence: "(1 in a row). Nothing has been restarted — one missed check is
+	// usually noise." Observed 2026-09-22, and it cleared itself moments later.
+	//
+	// `ok` would be wrong in the other direction — a confident answer from a
+	// check that did not pass — which is why this is a third state rather than a
+	// widening of either. It says exactly what is true: not established, nothing
+	// done, no action for anyone. The rungs below still fire on the same counts;
+	// only what is REPORTED before the first rung changes.
+	serviceSettling serviceState = "settling"
 	// serviceRestarting — a restart has been issued and we are waiting to see
 	// whether it took.
 	serviceRestarting serviceState = "restarting"
@@ -249,7 +269,7 @@ func newServiceHealth(
 		// reading this whole file exists to remove. Degraded-with-zero-failures
 		// reads as "not established yet" on the page and cannot be mistaken for
 		// a verdict.
-		h.state, h.reason = serviceDegraded, "the analysis service has not answered yet."
+		h.state, h.reason = serviceSettling, "the analysis service has not answered yet."
 	}
 	return h
 }
@@ -357,7 +377,7 @@ func (h *serviceHealth) checkMode(ctx context.Context, counting bool) {
 		// Degraded with a failure count of ZERO, deliberately: `failures` is
 		// the consecutive count the 3-and-6 rungs fire on, and no streak has
 		// started yet. The reason is what carries the difference.
-		h.setState(serviceDegraded, "the analysis service has not answered yet; it may still be starting.")
+		h.setState(serviceSettling, "the analysis service has not answered yet; it may still be starting.")
 	}
 }
 
@@ -445,7 +465,10 @@ func (h *serviceHealth) onFailure() {
 
 	switch {
 	case n < serviceRestartSidecarAt:
-		h.setState(serviceDegraded, fmt.Sprintf(
+		// Settling, not degraded: this branch's own sentence says nothing has
+		// been restarted because the miss is usually noise, and a state that
+		// alarms while saying that is the page contradicting itself.
+		h.setState(serviceSettling, fmt.Sprintf(
 			"the analysis service did not answer its health check (%d in a row). Nothing has been restarted — one missed check is usually noise.", n))
 
 	case n == serviceRestartSidecarAt:
@@ -702,6 +725,23 @@ func (h *serviceHealth) Healthy() (ok, known bool) {
 }
 
 // Snapshot is what the loopback routes serve. A mutex read, never a probe.
+// Settling reports that the service has not answered and NOTHING HAS BEEN DONE
+// about it yet — start-up, or a missed check or two the ladder calls noise.
+//
+// ⚠️ Healthy() cannot express this. It answers a BOOL plus "do I know", and
+// settling is neither "healthy" nor "down": reported through Healthy() the
+// health strip drew a red "Analysis service not responding" pill seconds after
+// a good sidecar swap, beside a banner that said nothing was wrong. A third
+// state needs a third answer.
+func (h *serviceHealth) Settling() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state == serviceSettling
+}
+
 func (h *serviceHealth) Snapshot() serviceWire {
 	if h == nil {
 		// ⚠️ Reachable in production: the onboarding handler mounts these routes

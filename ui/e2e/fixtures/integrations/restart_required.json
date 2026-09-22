@@ -40,7 +40,8 @@
           "expected": true,
           "last_seen": "2026-09-15T09:12:44Z"
         }
-      ]
+      ],
+      "stale_session_id": "8f21c0de-4b17-4c2a-9a55-0f3e7d1b2c44"
     }
   ],
   "vocabulary": {

@@ -8,7 +8,6 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/api"
 	"github.com/ncx-ai/keld-signal/internal/auth"
-	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
 	"github.com/ncx-ai/keld-signal/internal/paths"
@@ -186,9 +185,17 @@ func newWhoamiCmd() *cobra.Command {
 				return console.Fail("not logged in (run `keld login`)")
 			}
 			line := fmt.Sprintf("%s · org %s · %s", a.Principal, a.Org, a.APIURL)
-			m, err := config.LoadManifest()
-			if err == nil && m.Endpoint != nil && *m.Endpoint != "" {
-				line += fmt.Sprintf(" · endpoint %s", *m.Endpoint)
+			// ⚠️ THE PAIRING, NOT THE MANIFEST. This used to print
+			// manifest.json's `endpoint`, which setup rewrites only when a tool
+			// config changes — so on the ordinary upgrade it reported whichever
+			// Atlas the machine last APPLIED against, while the daemon published
+			// somewhere else. See pairedEndpoint.
+			if ep := pairedEndpoint(); ep != "" {
+				line += fmt.Sprintf(" · endpoint %s", ep)
+			} else {
+				// Not a fault: the daemon collects and holds until a pairing
+				// arrives, so this says what is true rather than nothing.
+				line += " · not paired yet (collecting locally)"
 			}
 			console.Print(line)
 			return nil

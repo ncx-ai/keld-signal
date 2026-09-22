@@ -432,6 +432,7 @@ export const SETTINGS_ENV = {
   send_to_atlas: "KELD_ATLAS",
   dev_blocks: "KELD_DEV_BLOCKS",
   attribution: "KELD_ATTRIBUTION",
+  tool_otlp: "KELD_TOOL_OTLP",
 };
 
 /** validProjectTitle is the one rule for naming a project from a suggestion:
@@ -578,8 +579,22 @@ export const REASON_TEXT = {
   atlas_unavailable: "Couldn't reach Atlas — Signal will retry.",
   captive_portal: "Got a login page back instead of Atlas — check the network.",
   atlas_off: "Send to Atlas is off.",
-  sidecar_outdated: "The local analysis service is out of date — reinstall to update it.",
+  // ⚠️ Two states that are NOT faults and must not read as one. `not_paired`
+  // is a step the person still has to take; the empty-reason `n/a` on the Atlas
+  // row is "paired, nothing has come back through this connector yet", which is
+  // every machine for the first few minutes after a restart. See healthTone.
+  not_paired: "Collecting on this machine — finish pairing to send it.",
+  // ⚠️ NOT "reinstall to update it" ANY MORE. The daemon updates the engine
+  // itself, unasked (engineManager.autoStart), so telling somebody to do it by
+  // hand is an instruction for work already in progress — and the bar under
+  // this strip is showing that work.
+  sidecar_outdated: "The analysis service is updating itself.",
   sidecar_down: "The local analysis service isn't responding.",
+  // Not answering YET, nothing done about it — start-up or a missed check the
+  // daemon's own ladder calls noise. Never a fault. See SERVICE_SETTLING.
+  sidecar_starting: "The analysis service is starting.",
+  // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
+  sidecar_updating: "Signal is updating the analysis service.",
   sidecar_behind: "The local analysis service is still catching up.",
   attribute_failed: "Couldn't work out a project for this block after several tries.",
   no_rule_matched: "No project rule matched this yet.",
@@ -619,6 +634,27 @@ export function todayLedgerURL(now) {
  *  that is the number people already know from Android's build-number gesture —
  *  a hidden control is only useful if someone can be TOLD how to reach it, and
  *  the familiar number is the instruction. */
+/** Panes behind the Developer box. The Integrations pane is here while its
+ *  state machine settles: it is the surface that has cried wolf most — a
+ *  healthy machine reporting six different failures in one afternoon, every one
+ *  of them Signal misreading itself — and a pane nobody can trust is worse than
+ *  a pane nobody can see. Hidden is a decision to revisit, not a deletion: the
+ *  routes, the detector and their tests all stay live, so turning it back on is
+ *  removing a name from this list.
+ *
+ *  ⚠️ Hiding the LINK is not hiding the PANE. A bookmark, a reload on
+ *  `#/integrations`, or the hash left over from before the toggle flipped would
+ *  all still land there, and a pane reached that way renders with no way back
+ *  to it — which is worse than either state on purpose. paneFromHash consults
+ *  this too, so there is one rule and both callers read it. */
+export const DEV_ONLY_PANES = ["integrations"];
+
+/** paneVisible reports whether a pane may be shown at all. Pure so the rule can
+ *  be tested without a DOM, and so the nav and the router cannot drift. */
+export function paneVisible(pane, devMode) {
+  return devMode || !DEV_ONLY_PANES.includes(pane);
+}
+
 export const DEV_TAPS = 7;
 
 /** How long a tap streak survives without another tap.
@@ -795,7 +831,11 @@ const HEALTH_DETAIL_SHORT = {
   captive_portal: "captive network",
   atlas_off: "off",
   sidecar_outdated: "out of date",
+  not_paired: "not paired",
   sidecar_down: "not responding",
+  sidecar_starting: "starting",
+  // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
+  sidecar_updating: "updating",
   sidecar_behind: "catching up",
 };
 
@@ -828,6 +868,124 @@ export function visibleHealth(health, settings) {
   return list.filter((h) => h.key !== "atlas");
 }
 
+/** The one sentence a person reading a red badge is actually asking about.
+ *
+ *  Kept VERBATIM in docs/durability.md (between the `page-copy:durability`
+ *  markers) and pinned against it from both sides — ui/e2e/durability.spec.ts
+ *  reads the file, test/durability.test.js reads it too — because the page and
+ *  the document are the same claim in two registers and a drift between them
+ *  is the page quietly promising something the lanes do not do.
+ *
+ *  ⚠️ **"usually" IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY.** Three lanes
+ *  genuinely lose things: a transcript-mirror observation made while unpaired
+ *  has no spool (promptlog.NewPending), client events emitted before the
+ *  reporter starts sit in a bounded ring, and a feature flush drops what it
+ *  drained past the first failing chunk. The word is what keeps this sentence
+ *  true; docs/durability.md names each case. */
+export const DURABILITY_NOTE =
+  "Work is recorded on this machine first and delivered when Atlas can be reached, " +
+  "so a red badge here usually means late rather than lost.";
+
+/** Shown only when a visible health cell is NOT ok — the same rule
+ *  serviceQueueNote follows one screen over: a healthy machine gets no
+ *  reassurance it did not ask for, and the sentence appears exactly where the
+ *  question it answers is being asked. */
+export function durabilityNote(health, settings) {
+  const cells = visibleHealth(health, settings);
+  return cells.some((h) => h && h.status !== "ok") ? DURABILITY_NOTE : "";
+}
+
+/** What the page should say about the analysis engine, from GET /v1/engine.
+ *
+ *  ⚠️ IT REPORTS, IT DOES NOT ASK. The daemon keeps the engine in step with
+ *  itself (engineManager.autoStart) because a mismatched engine is version
+ *  SKEW, not a preference — the failure this project already paid three silent
+ *  weeks for. So there is no "Update" button on the normal path: by the time
+ *  the page renders, the fetch is already running. What is left to do is say
+ *  what is happening, show how far along it is, and name the version when it
+ *  lands.
+ *
+ *  This used to be a card with a Download button, and before that it was a
+ *  wizard pane that held the macOS installer hostage to the same 300 MB. Each
+ *  move removed a decision nobody had the information to make.
+ *
+ *  Returns null when there is nothing to say — every healthy machine. `action`
+ *  is "" except on `failed`, where a human choice genuinely exists again
+ *  (retry now, or leave it to the next daemon start). */
+/** How long the "updated" line stays after a swap lands.
+ *
+ *  ⚠️ IT IS A RECEIPT, NOT A STATE. The daemon keeps `status: "done"` until it
+ *  next restarts — correct for /v1/engine, whose readers want to know what
+ *  happened — but on the page that meant a green bar pinned to the bottom of
+ *  the screen for the rest of the day, announcing work that finished hours ago.
+ *  Long enough to read one short sentence and see which version landed; short
+ *  enough that it never becomes furniture. The daemon's own answer is
+ *  unchanged: this is purely how long the page shows it. */
+export const ENGINE_DONE_LINGER_MS = 5000;
+
+export function engineNotice(engine, { doneSince = 0, now = 0 } = {}) {
+  if (!engine || !engine.needed) return null;
+  if (engine.status === "running") {
+    const pct = engine.total > 0 ? Math.floor((engine.received * 100) / engine.total) : null;
+    // "Updating" and "Installing" are different facts to somebody reading this:
+    // one is a machine catching up with itself, the other is a machine getting
+    // the thing for the first time.
+    const verb = engine.installed ? "Updating" : "Installing";
+    return {
+      kind: "running",
+      title: `${verb} the analysis service…`,
+      // A percentage only when the server sent a total. "0%" for an
+      // indeterminate fetch is a number the page invented, and a bar sitting at
+      // zero while bytes arrive is the progress indicator lying — which is
+      // exactly how the installer pane read while its download had finished.
+      detail: pct === null ? "Starting…" : `${pct}%`,
+      percent: pct,
+      action: "",
+    };
+  }
+  if (engine.status === "failed") {
+    return {
+      kind: "failed",
+      title: "The analysis service couldn't update",
+      // The reason verbatim: "http status 504" means try later and "no space
+      // left on device" is a different action entirely. Signal retries on its
+      // own at the next start, so say that rather than leaving it looking
+      // abandoned.
+      detail: `${engine.error || "No reason was reported."} Signal will try again when it next starts.`,
+      action: "Try again",
+    };
+  }
+  if (engine.status === "done") {
+    // Said once, after an update lands: the version is the whole point of
+    // having watched it happen, and a bar that just disappears leaves somebody
+    // wondering whether it worked — then it goes, because a receipt that never
+    // clears is furniture. `doneSince` 0 means the caller is not tracking it
+    // (every pure test of the copy), so the line stays: a missing clock must
+    // not silently hide the message.
+    if (doneSince && now - doneSince >= ENGINE_DONE_LINGER_MS) return null;
+    return {
+      kind: "done",
+      title: "Analysis service updated",
+      detail: engine.version ? `Now running ${engine.version}.` : "Now up to date.",
+      percent: 100,
+      action: "",
+    };
+  }
+  // Idle and not yet matching: the daemon starts its own fetch once per run, so
+  // this is the moment before that lands — or a machine whose one attempt is
+  // done and failed, which the branch above already owns.
+  if (!engine.installed || engine.outdated) {
+    return {
+      kind: "pending",
+      title: engine.installed ? "Updating the analysis service…" : "Installing the analysis service…",
+      detail: "Starting…",
+      percent: null,
+      action: "",
+    };
+  }
+  return null;
+}
+
 /** ---- The analysis service's own health, which is NOT the `health` array ----
  *
  *  `GET /v1/ledger` carries a top-level `service` block beside `health`:
@@ -856,6 +1014,10 @@ export const SERVICE_OK = "ok";
 export const SERVICE_DEGRADED = "degraded";
 export const SERVICE_RESTARTING = "restarting";
 export const SERVICE_STUCK = "stuck";
+/** The service has not answered and NOTHING HAS BEEN DONE about it — start-up,
+ *  or a missed check or two the daemon itself calls noise. Deliberately NOT an
+ *  alarm state: see SERVICE_ALARM_STATES. */
+export const SERVICE_SETTLING = "settling";
 export const SERVICE_NOT_APPLICABLE = "not_applicable";
 
 /** The three states that put something on screen. `ok` and `not_applicable`
@@ -863,6 +1025,14 @@ export const SERVICE_NOT_APPLICABLE = "not_applicable";
  *  machine that legitimately has no analysis service installed is not broken
  *  (the daemon's own `noAnalysisService` path — see AGENTS.md's Model
  *  backends) and must never be reported as if it were. */
+//  ⚠️ `settling` IS ABSENT ON PURPOSE. It means the service has not answered and
+//  the daemon has not acted — start-up, or one or two missed checks its own
+//  ladder calls noise. Alarming there put a banner reading "The analysis service
+//  isn't healthy", with a Restart button, directly above the daemon's sentence
+//  "Nothing has been restarted — one missed check is usually noise" (seen
+//  2026-09-22, seconds after a good sidecar swap, cleared on its own moments
+//  later). A banner offering a remedy for something that self-heals, while
+//  saying so, teaches people to ignore the banner.
 const SERVICE_ALARM_STATES = [SERVICE_DEGRADED, SERVICE_RESTARTING, SERVICE_STUCK];
 
 /**
@@ -878,8 +1048,13 @@ const SERVICE_ALARM_STATES = [SERVICE_DEGRADED, SERVICE_RESTARTING, SERVICE_STUC
  * reach anything anyway. The offline banner already says the true thing, so
  * this one stands down rather than double-reporting it.
  */
-export function serviceAlert(ledger, { offline = false } = {}) {
+export function serviceAlert(ledger, { offline = false, replacing = false } = {}) {
   if (offline) return null;
+  // ⚠️ Signal stopped the service to replace it. It is not answering BECAUSE of
+  // that, the engine bar is already saying so, and a Restart button here invites
+  // somebody to interrupt the swap that is fixing it. Same stand-down the
+  // `offline` branch above makes, for the same reason. See engineReplacing.
+  if (replacing) return null;
   const s = ledger && ledger.service;
   if (!s || typeof s !== "object") return null;
   if (!SERVICE_ALARM_STATES.includes(s.state)) return null;
@@ -896,6 +1071,70 @@ export function serviceAlert(ledger, { offline = false } = {}) {
     // a meaning for a number in order to have something to print.
     failures: typeof s.failures === "number" ? s.failures : 0,
   };
+}
+
+/** Reasons that mean "Signal is working on this right now", and reasons that
+ *  mean "there is something for YOU to do". Both earn amber; everything else
+ *  that is not a failure does not. */
+export const HEALTH_IN_FLIGHT_REASONS = ["sidecar_updating", "sidecar_behind", "sidecar_starting"];
+export const HEALTH_ACTION_REASONS = ["not_paired"];
+
+/** The pill's colour, from the row's status AND its reason.
+ *
+ *  ⚠️ AMBER IS NOT A PLACE TO PUT "DON'T KNOW". It used to be: the expression
+ *  here read `ok ? green : failed ? red : amber`, so `n/a` — which on the Atlas
+ *  row means "paired, nothing has come back through this connector yet" —
+ *  wore the same colour as a real fault. Seen on a healthy machine two minutes
+ *  after a restart: a green Signal, a green analysis service, green records and
+ *  telemetry, and an amber Atlas, with nothing wrong and nothing to read, since
+ *  that state carries no reason text either. A colour that asks a question the
+ *  page cannot answer is worse than no colour.
+ *
+ *  So: green unless something SAID otherwise. Red is a fault we were told
+ *  about. Amber is reserved for the two cases where it earns its alarm —
+ *  Signal is mid-operation on that thing, or the person has a step left. */
+export function healthTone(status, detail) {
+  if (status === "failed") return "no";
+  const reason = detail || "";
+  if (HEALTH_ACTION_REASONS.includes(reason)) return "wait";
+  if (status === "pending" || HEALTH_IN_FLIGHT_REASONS.includes(reason)) return "wait";
+  return "ok";
+}
+
+/** Is Signal itself replacing the analysis service right now?
+ *
+ *  ⚠️ AN ENGINE BEING REPLACED IS NOT AN ENGINE THAT FAILED, and until this the
+ *  page said all three at once: a banner reading "The analysis service isn't
+ *  healthy" with a Restart button, a red "Analysis service not responding"
+ *  pill, and "service unhealthy" in the sidebar — directly above a progress bar
+ *  reading "Updating the analysis service… 47%". Every one of those was
+ *  literally true and the composite was a lie: the service was not answering
+ *  because Signal had stopped it to swap it, on purpose, and offering Restart
+ *  mid-swap invites somebody to interrupt the thing that is fixing it.
+ *
+ *  This is the same call serviceAlert already makes for `offline` — "the
+ *  offline banner already says the true thing, so this one stands down rather
+ *  than double-reporting it". The engine bar is that true thing here. */
+export function engineReplacing(engine) {
+  return !!engine && engine.needed && engine.status === "running";
+}
+
+/** The health rows as they should READ while the engine is being replaced.
+ *
+ *  The sidecar row is rewritten rather than dropped: a row that vanishes is a
+ *  fact nobody can see, and "we cannot reach it" is still worth showing — it
+ *  is the REASON that changes, from a fault to a step. Pending, not failed, so
+ *  the nav dot reads "catching up" instead of "needs attention".
+ *
+ *  Every other row is untouched: Atlas, Records and Telemetry have nothing to
+ *  do with the engine and must keep their own verdicts. */
+export function healthWhileReplacing(health, engine) {
+  if (!engineReplacing(engine)) return health || [];
+  return (health || []).map((h) =>
+    h && h.key === "sidecar" && h.status !== "ok"
+      ? { ...h, status: "pending", detail: "sidecar_updating" }
+      : h
+  );
 }
 
 /** The headline, per state. Names the thing the way the health strip already
@@ -1173,6 +1412,48 @@ export function rowInstructions(integration) {
   return out;
 }
 
+/**
+ * The window a person has to go and restart, named.
+ *
+ * ⚠️ "Restart this tool" is not an instruction once two windows are open — the
+ * server's own rule had to be widened to ask about every live session for that
+ * reason, and `stale_session_id` is the answer it already had. The id is
+ * SHORTENED the way `keld signal doctor` shortens it: eight characters is enough
+ * to pick the right window out of a handful, and both surfaces print the same
+ * prefix of the same id so a person reading one recognises the other.
+ *
+ * Absent means there is nothing to say — never a placeholder, and never a guess
+ * about which session the server meant. Decided on the FIELD's presence, never
+ * on the row's state: the server sends it only with the verdict it caused.
+ */
+export const STALE_SESSION_ID_CHARS = 8;
+export function staleSessionLabel(integration) {
+  const id = ((integration && integration.stale_session_id) || "").trim();
+  if (!id) return "";
+  return `session ${id.slice(0, STALE_SESSION_ID_CHARS)}`;
+}
+
+/**
+ * What Signal repaired in this tool's config, in the server's own words.
+ *
+ * ⚠️ A CONFIG CHANGING UNDER SOMEBODY WITH NO SENTENCE BESIDE IT IS THE SAME
+ * SILENCE THE REPAIR EXISTS TO END. Measured 2026-09-18 on the maintainer's
+ * machine: ~/.keld/agent.json held one telemetry secret while ~/.codex and
+ * ~/.claude held another, written by an older keld still on PATH; this pane read
+ * `broken · otel` and the fix waited on a human who had to know to re-run setup.
+ * The daemon now rewrites its own block — so the row has to say that it did, and
+ * that the tool needs one restart to pick it up.
+ *
+ * The SENTENCE is the server's (`integrations.RepairNotes`, beside the
+ * instruction sentences and there for the same reason): this prints it and maps
+ * nothing, so a reason a newer daemon invents cannot be rendered here as a raw
+ * enum. Absent means nothing to say — never a placeholder.
+ */
+export function repairLabel(integration) {
+  const r = (integration && integration.repaired) || null;
+  return ((r && r.note) || "").trim();
+}
+
 // A dash, never "unknown version": the version is read off the newest
 // transcript and is "" when there is nothing to read it from (AC-7). A word
 // where a number goes reads as a fact about the tool rather than about us.
@@ -1255,6 +1536,9 @@ if (typeof document !== "undefined") {
     ledger: null,
     settings: null,
     projects: null,
+    // engine: GET /v1/engine — see engineNotice. Null until the first load,
+    // which renders as no card rather than as "not installed".
+    engine: null,
     offline: false,
     local: loadLocalPrefs(),
     // restart: the bar's own state machine (see nextRestartStatus/
@@ -1354,11 +1638,32 @@ if (typeof document !== "undefined") {
       // is nothing to show, and the empty state below says so honestly.
       state.ledger = state.ledger || readJSONStorage(LEDGER_CACHE_KEY, null);
     }
+    // ⚠️ DELIBERATELY NOT IN THE Promise.all ABOVE. That set decides whether the
+    // page says "Signal is not running on this machine", and the engine is
+    // supplementary to every one of them — so a daemon without the route (an
+    // older build, or any harness serving the page without it) would have
+    // declared the whole machine down over a missing progress bar. Caught by
+    // the mock-shell specs, which is exactly the shape an older daemon has.
+    await loadEngine();
   }
 
   function paneFromHash() {
     const h = (location.hash || "#/today").replace(/^#\//, "");
-    return ["today", "projects", "integrations", "settings"].includes(h) ? h : "today";
+    if (!["today", "projects", "integrations", "settings"].includes(h)) return "today";
+    // A hidden pane is not reachable by hash either — see DEV_ONLY_PANES.
+    return paneVisible(h, devModeOn()) ? h : "today";
+  }
+
+  /** Show or hide the nav links for dev-only panes. Called from route(), so
+   *  flipping the Developer toggle takes effect on the same click that flips
+   *  it — the toggle already calls route(). */
+  function syncNavVisibility() {
+    const dev = devModeOn();
+    document.querySelectorAll("nav[aria-label='Panes'] a").forEach((a) => {
+      const p = a.dataset.pane;
+      if (!p) return;
+      a.hidden = !paneVisible(p, dev);
+    });
   }
 
   const PANE_TITLE = {
@@ -1610,6 +1915,8 @@ if (typeof document !== "undefined") {
 
     root.appendChild(scroller);
     root.appendChild(renderHealthStrip());
+    const engineCard = renderEngineCard();
+    if (engineCard) root.appendChild(engineCard);
   }
 
   async function retryBlock(block) {
@@ -1620,18 +1927,113 @@ if (typeof document !== "undefined") {
     route();
   }
 
+  // When this page first SAW the swap finish. Not the daemon's instant: the
+  // receipt is for whoever is looking, so the five seconds start when it could
+  // first have been read. 0 until a `done` actually arrives.
+  let engineDoneAt = 0;
+  let engineDoneTimer = null;
+
+  // The engine bar: one line under the health strip, not a card with a button.
+  // It reports work the daemon has already started — see engineNotice.
+  function renderEngineCard() {
+    // ⚠️ NOT WHILE THE DAEMON IS UNREACHABLE. loadEngine deliberately keeps the
+    // last known state on a failed fetch — an unreachable daemon is not an
+    // absent engine — but a PROGRESS BAR sourced from a daemon we cannot reach
+    // is a confident number about nothing. Seen on a real machine 2026-09-22:
+    // the daemon took itself down mid-install and the page sat on
+    // "Updating… 100%" indefinitely, which read as a hang over an install that
+    // had actually succeeded. The offline banner already says the page cannot
+    // reach the daemon; this must not talk over it.
+    if (state.offline) return null;
+    const n = engineNotice(state.engine, { doneSince: engineDoneAt, now: Date.now() });
+    if (!n) return null;
+    const text = el("div", { class: "engine-text" },
+      el("span", { class: "engine-title" }, n.title),
+      el("span", { class: "engine-detail" }, n.detail)
+    );
+    const kids = [text];
+    if (n.percent !== null && n.kind !== "failed") {
+      const bar = el("div", { class: "engine-bar" });
+      const fill = el("div", { class: "engine-fill" });
+      fill.style.width = `${n.percent}%`;
+      bar.appendChild(fill);
+      kids.push(bar);
+    } else if (n.kind !== "failed") {
+      // Indeterminate: a striped track and no fill, because the width would be
+      // a number nobody sent.
+      kids.push(el("div", { class: "engine-bar indeterminate" }, el("div", { class: "engine-fill" })));
+    }
+    if (n.action) {
+      kids.push(el("button", { class: "btn", type: "button", onclick: clickEngineInstall }, n.action));
+    }
+    return el("div", { class: `engine-bar-row ${n.kind}` }, ...kids);
+  }
+
+  // Only ever reached from the failed state's Try again — the ordinary path is
+  // the daemon's own autoStart. A 409 means it is already running, which the
+  // next poll shows; there is nothing to report from here.
+  async function clickEngineInstall() {
+    state.engine = { ...(state.engine || {}), status: "running", received: 0, total: 0, error: "" };
+    engineDoneAt = 0;
+    route();
+    await sendJSON("/v1/engine/install", "POST", {});
+    await loadEngine();
+    route();
+  }
+
+  /** Note a status transition into `done` and schedule the single re-render
+   *  that clears the receipt — without it the bar would sit there until the
+   *  next 30s poll happened to redraw, which is not the five seconds promised. */
+  function noteEngineDone(next) {
+    const wasDone = !!(state.engine && state.engine.status === "done");
+    const isDone = !!(next && next.status === "done");
+    if (isDone && !wasDone) {
+      engineDoneAt = Date.now();
+      clearTimeout(engineDoneTimer);
+      engineDoneTimer = setTimeout(route, ENGINE_DONE_LINGER_MS + 100);
+    }
+    if (!isDone) engineDoneAt = 0;
+  }
+
+  async function loadEngine() {
+    try {
+      const next = await fetchJSON("/v1/engine");
+      noteEngineDone(next);
+      state.engine = next;
+    } catch {
+      // Includes a daemon with no /v1/engine route at all — an older build, or
+      // a harness serving the page without it. That is "nothing to say about
+      // the engine", never "this machine is down": see the note in loadAll.
+      // Leave the last known state: an unreachable daemon is not an absent
+      // engine, and the offline banner already says the page cannot reach it.
+    }
+  }
+
+  /** The health rows every surface reads: the ledger's, adjusted for an engine
+   *  Signal is currently replacing. One accessor so the strip, the nav dot and
+   *  the durability line cannot disagree about the same machine. */
+  function currentHealth() {
+    return healthWhileReplacing(state.ledger ? state.ledger.health : [], state.engine);
+  }
+
   function renderHealthStrip() {
     const { ledger, settings } = state;
-    const health = visibleHealth(ledger ? ledger.health : [], settings);
+    const health = visibleHealth(currentHealth(), settings);
     const cells = health.map((h) => {
       const detail = healthDetailText(h.detail);
       return el(
         "span",
-        { class: `pill ${h.status === "ok" ? "ok" : h.status === "failed" ? "no" : "wait"}` },
+        { class: `pill ${healthTone(h.status, h.detail)}` },
         el("span", { class: "dot" }),
         `${healthLabel(h.key)}${detail ? " " + detail : ""}`
       );
     });
+    // The durability line sits INSIDE the strip, below the pills, and only when
+    // one of them is not ok — see durabilityNote. Its own row rather than a
+    // third flex item: the strip is `justify-content: space-between`, so a
+    // sentence sharing that row would be squeezed between the cells and the
+    // toggles at every width.
+    const note = durabilityNote(currentHealth(), settings);
     return el(
       "div",
       { class: "health-strip" },
@@ -1651,7 +2053,8 @@ if (typeof document !== "undefined") {
             route();
           },
         }))
-      )
+      ),
+      note ? el("div", { class: "durability-note" }, note) : null
     );
   }
 
@@ -2225,7 +2628,59 @@ if (typeof document !== "undefined") {
       dev ? el("div", { class: "settings-sep" }) : null,
       dev ? renderDevGenerate(settings) : null,
       dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null
+      dev ? renderDevAttribution(settings, readonly) : null,
+      dev ? el("div", { class: "settings-sep" }) : null,
+      dev ? renderDevToolOTLP(settings, readonly) : null
+    );
+  }
+
+  /** The copy for the OTLP row, hoisted out of the renderer so the page and its
+   *  Playwright assertions quote ONE string rather than two that drift. */
+  const TOOL_OTLP_TITLE = "Extended telemetry from the tool (OTLP)";
+  const TOOL_OTLP_BODY =
+    "Off. Signal reads usage from the tool's own transcript; this lane is scheduled for removal " +
+    "once we have confirmed nothing we need arrives only here. Turning it on writes into the " +
+    "tool's configuration, and the tool must be restarted once to pick it up.";
+  /** Shown only while the switch is on, and only once.
+   *
+   *  ⚠️ It is deliberately NOT a copy of the Integrations pane's `restart`
+   *  instruction. That sentence lives once, server-side, in
+   *  `integrations.Instructions`, and the pane prints what the server sent — a
+   *  second copy here would be a copy that drifts. This says the one thing the
+   *  person has to do after flipping the switch; the row that tracks whether
+   *  they have done it is the Integrations one, which arrives on its own once
+   *  the detector has written the config. */
+  const TOOL_OTLP_RESTART = "Restart the tool once to pick this up.";
+
+  /** renderDevToolOTLP is the tool-OTLP switch, a DEVELOPER control because the
+   *  lane is on its way out rather than because it is dangerous.
+   *
+   *  Signal reads a tool's usage from the tool's own transcript, so this export
+   *  adds nothing Atlas prices; what it does add is a credential inside a file
+   *  the tool reads once at startup, which is why it is the lane that keeps
+   *  breaking. It stays reachable, off by default, so someone can prove to
+   *  themselves that nothing needed arrives only here before it is removed.
+   *  The env pin (KELD_TOOL_OTLP) wins and renders read-only, like every other
+   *  row in this box. */
+  function renderDevToolOTLP(settings, readonly) {
+    const on = !!settings.tool_otlp;
+    return el(
+      "div",
+      {},
+      el(
+        "div",
+        { class: "settings-row" },
+        // ⚠️ The title is its OWN element rather than a bare text node beside
+        // the description, which is what every other row here uses. Both
+        // strings are asserted verbatim by the Playwright suite — a deprecation
+        // notice and a restart instruction are exactly the copy that must not
+        // drift unnoticed — and a bare text node cannot be matched exactly,
+        // because the span's text is then the title and the body run together.
+        el("span", {}, el("span", { class: "settings-title" }, TOOL_OTLP_TITLE), el("div", { class: "desc" }, TOOL_OTLP_BODY)),
+        switchEl({ checked: on, disabled: readonly.has("tool_otlp"), onChange: (v) => updateSettings({ tool_otlp: v }) })
+      ),
+      on ? el("div", { class: "settings-note tool-otlp-restart" }, TOOL_OTLP_RESTART) : null,
+      fieldNote("tool_otlp", readonly)
     );
   }
 
@@ -2528,7 +2983,7 @@ if (typeof document !== "undefined") {
     const s = navHealthState({
       offline: state.offline,
       alert,
-      health: state.ledger ? state.ledger.health : [],
+      health: currentHealth(),
       settings: state.settings,
     });
     dot.classList.add(s.tone);
@@ -2625,7 +3080,7 @@ if (typeof document !== "undefined") {
    * failure this whole piece of work exists to remove.
    */
   async function clickServiceRestart() {
-    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    const alert = serviceAlert(state.ledger, { offline: state.offline, replacing: engineReplacing(state.engine) });
     if (!alert) return;
     state.serviceRestart = {
       status: nextServiceRestart(state.serviceRestart.status, "clicked"),
@@ -2708,7 +3163,18 @@ if (typeof document !== "undefined") {
         checks.appendChild(
           el(
             "div",
-            { class: "intg-check", "data-kind": c.kind, "data-ok": c.ok ? "true" : "false" },
+            // ⚠️ A LANE THAT CANNOT FEED IS NOT A LANE THAT IS FAILING, and both
+            // landed in `data-ok="false"`, which the stylesheet paints amber. So
+            // a machine with the `tool_otlp` switch OFF — the shipped default —
+            // showed "OTEL · config not written" in warning colour on every
+            // tool, for a lane deliberately not in use. Reported as "I don't
+            // like that I see OTEL not healthy".
+            //
+            // Three states, not two: fed, failing, and not applicable. The
+            // third is muted. Marking it ✓ instead would be the other error —
+            // a tick on a lane carrying nothing is the confident-wrong signal
+            // this pane exists to remove.
+            { class: "intg-check", "data-kind": c.kind, "data-ok": !c.expected ? "n/a" : c.ok ? "true" : "false" },
             el("span", { class: "intg-glyph" }, c.ok ? "✓" : "—"),
             el("span", { class: "intg-lane" }, c.kind),
             el("span", { class: "intg-lane-verdict" }, c.label),
@@ -2718,9 +3184,20 @@ if (typeof document !== "undefined") {
       }
       if ((it.surfaces || []).length) body.appendChild(checks);
 
+      // What Signal repaired, FIRST — it explains why the restart below is being
+      // asked for at all, and a row that changed under someone without saying so
+      // is the silence the repair path exists to end.
+      const repair = repairLabel(it);
+      if (repair) body.appendChild(el("p", { class: "intg-repair" }, repair));
+
       for (const sentence of rowInstructions(it)) {
         body.appendChild(el("p", { class: "intg-instruction" }, sentence));
       }
+
+      // Which window, beside the sentence that tells you to restart one. Driven
+      // by the field's presence alone — the pane decides nothing about states.
+      const stale = staleSessionLabel(it);
+      if (stale) body.appendChild(el("p", { class: "intg-stale" }, stale));
     }
 
     const actions = el("div", { class: "intg-actions" });
@@ -2825,10 +3302,11 @@ if (typeof document !== "undefined") {
     state.pane = pane;
     setActiveNav(pane);
     renderEnvPill();
-    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    const alert = serviceAlert(state.ledger, { offline: state.offline, replacing: engineReplacing(state.engine) });
     renderServiceBanner(alert);
     renderNavHealth(alert);
     renderNavVersion();
+    syncNavVisibility();
     document.getElementById("offlineBanner").hidden = !state.offline;
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the
@@ -2870,6 +3348,19 @@ if (typeof document !== "undefined") {
     // looked at: a person who has just restarted a tool or approved a hook is
     // waiting for the row to change, and 30s of staring at a stale row reads
     // as "it did not work".
+    // While the engine is downloading the page polls it on its own clock: the
+    // 30s loop above is fine for a ledger and useless for a progress bar.
+    setInterval(async () => {
+      // Poll while a fetch is in flight AND while one is expected but has not
+      // started reporting yet — the daemon kicks its own off at startup, so the
+      // page must not sit on a stale "Starting…" for 30 seconds.
+      const st = state.engine;
+      if (!st || !st.needed) return;
+      const busy = st.status === "running" || (st.status === "idle" && (!st.installed || st.outdated));
+      if (!busy) return;
+      await loadEngine();
+      route();
+    }, 1500);
     setInterval(async () => {
       if (state.pane !== "integrations") return;
       await loadIntegrations();
