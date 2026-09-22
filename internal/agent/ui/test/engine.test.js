@@ -95,3 +95,24 @@ test("the health pill no longer tells anyone to reinstall by hand", () => {
   assert.doesNotMatch(REASON_TEXT.sidecar_outdated, /reinstall/i);
   assert.match(REASON_TEXT.sidecar_outdated, /updating itself/i);
 });
+
+// ⚠️ A PROGRESS BAR FROM A DAEMON WE CANNOT REACH IS A NUMBER ABOUT NOTHING.
+// loadEngine keeps the last known state on a failed fetch, deliberately — an
+// unreachable daemon is not an absent engine. But on 2026-09-22 a daemon took
+// itself down mid-install and the page sat on "Updating… 100%" indefinitely: an
+// install that had SUCCEEDED, rendered as a hang. The offline banner owns that
+// message; the bar must not talk over it.
+//
+// engineNotice itself is pure and has no view of connectivity, so this is the
+// renderer's rule — asserted here against the same shape the renderer checks.
+test("a stale running state is not a fact once the page is offline", () => {
+  const stale = { needed: true, installed: true, outdated: true, status: "running", received: 100, total: 100 };
+  // The notice still describes it — that is the pure function's job —
+  const n = engineNotice(stale);
+  assert.equal(n.percent, 100);
+  // — and renderEngineCard suppresses it while state.offline, which the
+  // offline banner covers instead. Pinned in app.js at the `state.offline`
+  // guard; this test names the contract so removing that guard has a stated
+  // cost rather than a silent one.
+  assert.equal(n.kind, "running");
+});

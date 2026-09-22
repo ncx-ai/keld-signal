@@ -69,6 +69,19 @@ type Opts struct {
 	// will try again, and removing it would leave a stale sidecar with nothing
 	// scheduled to fix it.
 	CleanupJob string
+	// Restart replaces RestartAfterSwap for this one install.
+	//
+	// ⚠️ THE DAEMON MUST NOT BOUNCE THE SERVICE IT IS RUNNING INSIDE. The CLI
+	// is a short-lived process installing for somebody else, so restarting the
+	// whole service is right there. The daemon is not: it IS the service, so
+	// the default kills the very process doing the install — measured on a real
+	// machine 2026-09-22, where the engine landed correctly and the daemon then
+	// took itself down mid-commit and did not come back, leaving the page
+	// polling a dead port and frozen on "Updating… 100%". It only ever needed
+	// the SIDECAR restarted, which it supervises directly.
+	//
+	// Nil keeps RestartAfterSwap, so every existing caller is unchanged.
+	Restart func() error
 }
 
 type Result struct {
@@ -215,7 +228,7 @@ func Install(opts Opts) (Result, error) {
 		res.StagedPath = stage
 		return res, nil
 	}
-	r, err := Commit(stage, dest)
+	r, err := commit(stage, dest, opts)
 	if err != nil {
 		return res, err
 	}
@@ -240,7 +253,9 @@ func cleanupJobPlist(path string) {
 }
 
 // Commit moves a staged tree into place and removes the staging dir.
-func Commit(staged, dest string) (Result, error) {
+func Commit(staged, dest string) (Result, error) { return commit(staged, dest, Opts{}) }
+
+func commit(staged, dest string, opts Opts) (Result, error) {
 	var res Result
 	tree := filepath.Join(staged, "keld-agent-sidecar")
 	if fi, err := os.Stat(tree); err != nil || !fi.IsDir() {
@@ -279,12 +294,21 @@ func Commit(staged, dest string) (Result, error) {
 	// reports in the meantime. Failing here would discard a completed ~190MB
 	// install over a recoverable condition — and on postinstall's background
 	// path nobody is reading the exit code at all.
-	if err := RestartAfterSwap(); err != nil {
+	if err := opts.restartFn()(); err != nil {
 		res.RestartErr = err.Error()
 	} else {
 		res.Restarted = true
 	}
 	return res, nil
+}
+
+// restartFn is the restart this install should perform: the caller's override
+// when it gave one, else the package default. See Opts.Restart.
+func (o Opts) restartFn() func() error {
+	if o.Restart != nil {
+		return o.Restart
+	}
+	return RestartAfterSwap
 }
 
 func ReadVersion(tree string) string {

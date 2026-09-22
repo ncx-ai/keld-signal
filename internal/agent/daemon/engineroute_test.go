@@ -433,3 +433,50 @@ func TestTryAgainStillWorksAfterTheAutomaticAttemptIsSpent(t *testing.T) {
 		t.Fatalf("installer ran %d times, want 2 (one automatic, one by hand)", calls)
 	}
 }
+
+// ⚠️ THE DAEMON MUST NOT BOUNCE THE SERVICE IT IS RUNNING INSIDE. sidecarinstall
+// restarts the local service after a swap — right for the CLI, which is a
+// short-lived process installing for somebody else, and fatal here, because
+// this process IS that service.
+//
+// Measured on a real machine 2026-09-22: the engine landed correctly
+// (v3.0.5-rc.4 on disk), the daemon then took itself down mid-commit and did
+// not come back, and the page sat polling a dead port frozen on
+// "Updating… 100%" — a successful install that looked exactly like a hang, and
+// left the machine with no daemon at all.
+//
+// The daemon supervises the sidecar CHILD directly and only ever needed that
+// restarted; it is the same call the page's Restart button makes.
+func TestTheDaemonRestartsTheSidecarChildNotItself(t *testing.T) {
+	version.CLI = "3.0.5"
+	t.Cleanup(func() { version.CLI = "dev" })
+
+	var restarted bool
+	var gotRestart func() error
+	m := newEngineManager()
+	m.locate = func() (string, bool) { return "", false }
+	m.mode = func() string { return "deterministic" }
+	m.restart = func() error { restarted = true; return nil }
+	m.install = func(o sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		gotRestart = o.Restart
+		if o.Restart != nil {
+			_ = o.Restart()
+		}
+		return sidecarinstall.Result{Version: "v3.0.5"}, nil
+	}
+	srv := engineServer(t, m)
+	resp, err := http.Post(srv.URL+"/v1/engine/install", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
+
+	if gotRestart == nil {
+		t.Fatal("Opts.Restart was nil, so sidecarinstall would bounce the whole service — the daemon would " +
+			"kill the process running this very install")
+	}
+	if !restarted {
+		t.Fatal("the sidecar child was never restarted, so the daemon keeps supervising the OLD engine image")
+	}
+}

@@ -69,6 +69,8 @@ type engineManager struct {
 	autoAttempted bool
 	// install is the seam tests replace. Nil means the real one.
 	install func(sidecarinstall.Opts) (sidecarinstall.Result, error)
+	// restart is the seam tests replace; nil means the sidecar-child restart.
+	restart func() error
 	// locate and mode are the two facts about this machine, as seams for the
 	// same reason: a test must not depend on what is installed where it runs.
 	locate func() (string, bool)
@@ -91,6 +93,16 @@ func (m *engineManager) locator() func() (string, bool) {
 		return m.locate
 	}
 	return sidecarBinPath
+}
+
+// restarter is how this daemon picks up a newly installed engine: it restarts
+// the sidecar CHILD it supervises, never the service it is itself running as.
+// See the note at the call site.
+func (m *engineManager) restarter() func() error {
+	if m.restart != nil {
+		return m.restart
+	}
+	return func() error { return currentServiceHealth.Load().RestartSidecar() }
 }
 
 func (m *engineManager) backend() string {
@@ -141,7 +153,21 @@ func (m *engineManager) start() bool {
 			m.received, m.total = received, total
 			m.mu.Unlock()
 		})
-		_, err := m.installer()(sidecarinstall.Opts{Tag: engineTag(), Progress: progress})
+		_, err := m.installer()(sidecarinstall.Opts{
+			Tag:      engineTag(),
+			Progress: progress,
+			// ⚠️ THE SIDECAR, NOT THE SERVICE. sidecarinstall's default restarts
+			// the whole local service after a swap, which is right for the CLI
+			// — a short-lived process installing for somebody else — and fatal
+			// here, because this process IS that service. Measured on a real
+			// machine 2026-09-22: the engine landed correctly, the daemon then
+			// bounced itself mid-commit, did not come back, and the page sat
+			// polling a dead port frozen on "Updating… 100%". The daemon
+			// supervises the sidecar child directly and only ever needed that
+			// restarted, which is the same call the page's own Restart button
+			// makes.
+			Restart: m.restarter(),
+		})
 		m.mu.Lock()
 		if err != nil {
 			m.status, m.errMsg = "failed", err.Error()

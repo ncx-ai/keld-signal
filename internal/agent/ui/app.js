@@ -1780,6 +1780,15 @@ if (typeof document !== "undefined") {
   // The engine bar: one line under the health strip, not a card with a button.
   // It reports work the daemon has already started — see engineNotice.
   function renderEngineCard() {
+    // ⚠️ NOT WHILE THE DAEMON IS UNREACHABLE. loadEngine deliberately keeps the
+    // last known state on a failed fetch — an unreachable daemon is not an
+    // absent engine — but a PROGRESS BAR sourced from a daemon we cannot reach
+    // is a confident number about nothing. Seen on a real machine 2026-09-22:
+    // the daemon took itself down mid-install and the page sat on
+    // "Updating… 100%" indefinitely, which read as a hang over an install that
+    // had actually succeeded. The offline banner already says the page cannot
+    // reach the daemon; this must not talk over it.
+    if (state.offline) return null;
     const n = engineNotice(state.engine);
     if (!n) return null;
     const text = el("div", { class: "engine-text" },
