@@ -2,6 +2,7 @@ package promptlog
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -282,5 +283,43 @@ func TestLogRecordJSON(t *testing.T) {
 	b, _ := json.Marshal(logRecord{Body: anyVal{StringValue: "x"}, Attributes: []kv{attr("a", "b")}})
 	if !strings.Contains(string(b), `"stringValue":"x"`) {
 		t.Fatalf("bad: %s", b)
+	}
+}
+
+// TestObserveAssistantEmitsUsageOncePerRequest pins Atlas ticket 327: Claude Code / Cowork
+// write one API request as several assistant lines carrying the identical usage object.
+// Usage (api_request + token metrics) must be reported once per (session, requestId);
+// assistant_response stays per line, since its response_length is per line and real.
+func TestObserveAssistantEmitsUsageOncePerRequest(t *testing.T) {
+	c, srv := newCapSink()
+	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+	tp := coworkPath(t)
+	line := func(uuid, reqID, text string) string {
+		return fmt.Sprintf(`{"type":"assistant","uuid":%q,"requestId":%q,"sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"msg_1","content":[{"type":"text","text":%q}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":3,"service_tier":"standard"}}}`, uuid, reqID, text)
+	}
+	// One request written as three lines, then a second, distinct request.
+	for _, l := range []string{
+		line("A1", "req_1", "first chunk"),
+		line("A2", "req_1", "tool_use chunk"),
+		line("A3", "req_1", "final chunk"),
+		line("A4", "req_2", "another request"),
+	} {
+		tel.Observe("cowork", tp, []byte(l))
+	}
+	logs := strings.Join(c.bodies("/v1/logs"), "\n")
+	if n := strings.Count(logs, `"claude_code.api_request"`); n != 2 {
+		t.Fatalf("expected exactly 2 api_request records (one per request), got %d: %s", n, logs)
+	}
+	if n := strings.Count(logs, `"claude_code.assistant_response"`); n != 4 {
+		t.Fatalf("expected an assistant_response per line (4), got %d: %s", n, logs)
+	}
+	if n := len(c.bodies("/v1/metrics")); n != 2 {
+		t.Fatalf("expected one token-usage metrics POST per request (2), got %d", n)
+	}
+	// A different session may legitimately reuse an id; it is not a duplicate there.
+	tel.Observe("cowork", tp, []byte(strings.Replace(line("B1", "req_1", "other session"), `"sessionId":"S1"`, `"sessionId":"S2"`, 1)))
+	if n := strings.Count(strings.Join(c.bodies("/v1/logs"), "\n"), `"claude_code.api_request"`); n != 3 {
+		t.Fatalf("a request id seen in another session must still be reported, got %d api_request records", n)
 	}
 }

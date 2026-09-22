@@ -46,7 +46,19 @@ type Telemetry struct {
 	mu         sync.Mutex
 	seq        map[string]int64  // per-session event.sequence counter
 	lastPrompt map[string]string // per-session last user prompt id, for prompt.id linkage
+	// seenReq is the set of request ids already reported per session. Claude Code / Cowork
+	// write ONE API request as several assistant transcript lines (median 2, up to 12
+	// measured) that repeat a byte-identical usage object, so emitting api_request + the
+	// token metrics per line counted every request's tokens ~1.84× (Atlas ticket 327).
+	// Atlas cannot collapse them downstream: its dedup key is session.id:event.sequence and
+	// the sequence is bumped per record. Bounded per session (see seenReqCap).
+	seenReq map[string]map[string]struct{}
 }
+
+// seenReqCap bounds the per-session request-id set. A session with more distinct requests
+// than this resets the set, so the worst case is one repeated request counted twice, not a
+// map that grows for the daemon's lifetime.
+const seenReqCap = 4096
 
 // New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
 // read live (re-auth swaps picked up); sources is the set of capture sources to
@@ -62,6 +74,7 @@ func New(logsURL, metricsURL string, token func() string, sources map[string]boo
 		client:     &http.Client{Timeout: 5 * time.Second},
 		seq:        map[string]int64{},
 		lastPrompt: map[string]string{},
+		seenReq:    map[string]map[string]struct{}{},
 	}
 }
 
@@ -170,6 +183,12 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 		if requestID == "" {
 			requestID = msg.ID
 		}
+		// One api_request + one set of token datapoints per (session, request): the first
+		// line that carries this request's usage reports it; later lines of the same request
+		// still emit assistant_response (their response_length is per line and real), but
+		// never the usage again. An empty request id cannot be deduplicated and is reported
+		// as before.
+		firstSight := requestID == "" || t.firstSight(r.SessionID, requestID)
 		common := []kv{
 			attr("session.id", r.SessionID),
 			attr("prompt.id", promptID),
@@ -190,14 +209,36 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			attrInt("cache_creation_5m_tokens", msg.Usage.CacheCreation.Ephemeral5m),
 			attr("service_tier", msg.Usage.ServiceTier),
 		)
-		api := t.record(eventAPIRequest, r, id, apiAttrs)
-		resp := t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
+		var recs []logRecord
+		if firstSight {
+			recs = append(recs, t.record(eventAPIRequest, r, id, apiAttrs))
+		}
+		recs = append(recs, t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
 			attr("message.uuid", r.UUID),
 			attrInt("response_length", respLen),
-		))
-		t.postLogs(res, []logRecord{api, resp})
-		t.postMetrics(res, r, msg, id)
+		)))
+		t.postLogs(res, recs)
+		if firstSight {
+			t.postMetrics(res, r, msg, id)
+		}
 	}
+}
+
+// firstSight records (session, requestID) and reports whether it was new. The per-session
+// set is reset once it reaches seenReqCap so it cannot grow without bound.
+func (t *Telemetry) firstSight(session, requestID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seen := t.seenReq[session]
+	if seen == nil || len(seen) >= seenReqCap {
+		seen = map[string]struct{}{}
+		t.seenReq[session] = seen
+	}
+	if _, dup := seen[requestID]; dup {
+		return false
+	}
+	seen[requestID] = struct{}{}
+	return true
 }
 
 // record builds a log record for an event with common event metadata + the given
