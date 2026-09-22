@@ -60,13 +60,26 @@ type engineManager struct {
 	received int64
 	total    int64
 	errMsg   string
-	// autoAttempted records that this daemon run has already tried on its own.
-	// ⚠️ It is NOT the same as `status == "running"`: a FAILED fetch leaves the
-	// status "failed", and without this flag anything that calls autoStart again
-	// would retry immediately — a flaky release host turned into a download
-	// loop. The page's Try again goes through start() and is unaffected, which
-	// is the point: automatic once, by hand as often as a person likes.
-	autoAttempted bool
+	// autoFor is the INSTALLED VERSION the automatic path last acted on ("" for
+	// an absent engine). It is the loop guard, and it is keyed on the mismatch
+	// rather than on "once per run".
+	//
+	// ⚠️ "ONCE PER RUN" LEFT A MACHINE STUCK IN A STATE IT COULD NOT LEAVE.
+	// Measured 2026-09-22: the daemon updated the engine to rc.6 correctly at
+	// 16:30, a bare `keld signal install-sidecar` put v3.0.4 over the top at
+	// 16:37, and nothing re-fixed it — the automatic attempt was spent, and the
+	// page had no button because it reports rather than asks. A red "out of
+	// date" with no way to act, until somebody restarted the daemon.
+	//
+	// Keyed on the version, both properties hold: a FAILED fetch leaves the same
+	// installed version, so it does not retry and a flaky host cannot become a
+	// download loop; a mismatch that is genuinely NEW — a downgrade, a hand
+	// install, a tree replaced underneath us — is acted on, because it is not
+	// the one already handled.
+	autoFor string
+	// autoDone says autoFor is meaningful. Without it an absent engine ("")
+	// would read as "already handled" before anything ran.
+	autoDone bool
 	// install is the seam tests replace. Nil means the real one.
 	install func(sidecarinstall.Opts) (sidecarinstall.Result, error)
 	// restart is the seam tests replace; nil means the sidecar-child restart.
@@ -154,7 +167,6 @@ func (m *engineManager) start() bool {
 			m.mu.Unlock()
 		})
 		_, err := m.installer()(sidecarinstall.Opts{
-			Tag:      engineTag(),
 			Progress: progress,
 			// ⚠️ THE SIDECAR, NOT THE SERVICE. sidecarinstall's default restarts
 			// the whole local service after a swap, which is right for the CLI
@@ -197,23 +209,23 @@ func (m *engineManager) start() bool {
 // more. That is the same shape KELD_ENRICH_MAX_ATTEMPTS and the update loop's
 // failed_versions already take: bounded, stated, and recoverable by hand.
 func (m *engineManager) autoStart() {
-	m.mu.Lock()
-	if m.autoAttempted {
-		m.mu.Unlock()
-		return
-	}
-	m.autoAttempted = true
-	m.mu.Unlock()
-
 	st := m.state()
 	if !st.Needed {
 		return
 	}
-	// Outdated OR absent. Both are "the engine on this disk is not the one this
-	// daemon needs", and neither is a choice.
+	// Already correct: nothing to do, and nothing to remember.
 	if st.Installed && !st.Outdated {
 		return
 	}
+	m.mu.Lock()
+	if m.autoDone && m.autoFor == st.Version {
+		// The same mismatch we already acted on — a fetch that failed will fail
+		// the same way now. See autoFor.
+		m.mu.Unlock()
+		return
+	}
+	m.autoFor, m.autoDone = st.Version, true
+	m.mu.Unlock()
 	m.start()
 }
 
@@ -230,6 +242,14 @@ func engineRoute(m *engineManager) ingress.Route {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
+			// ⚠️ THE READ RE-ARMS THE FIX. Without this the only automatic
+			// attempt happened at daemon start, so anything that broke the
+			// engine afterwards stayed broken until a restart — which is
+			// exactly what happened on 2026-09-22 (see autoFor). autoStart is
+			// guarded by the mismatch it already handled, so polling cannot
+			// turn into a download loop; it simply means a machine never sits
+			// in a state nothing is re-checking.
+			go m.autoStart()
 			writeJSON(w, http.StatusOK, m.state())
 		})))
 		mux.Handle("/v1/engine/install", auth(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -261,33 +281,6 @@ func engineRoute(m *engineManager) ingress.Route {
 // the version off the wrong directory is the failure that makes every
 // comparison silently say "no version" (see the stamp note in AGENTS.md).
 func sidecarTreeOf(bin string) string { return filepath.Dir(bin) }
-
-// engineTag pins the fetch to THIS daemon's own release.
-//
-// ⚠️ UNPINNED IT INSTALLS A STALE ENGINE, AND THIS SHIPPED THAT WAY IN
-// v3.0.5-rc.4. `sidecarinstall.Install` with an empty Tag resolves
-// `releases/latest`, and GoReleaser marks every `-rc.N` tag a PRERELEASE, which
-// that endpoint excludes by definition — so on a machine running 3.0.5-rc.4 it
-// answered **v3.0.4** and the page cheerfully installed it. Measured on the
-// maintainer's machine the day rc.4 shipped: daemon 3.0.5-rc.4, sidecar v3.0.4,
-// and the card correctly reporting "Installed v3.0.4, this version expects
-// 3.0.5-rc.4" — the detector working perfectly over an install target that was
-// wrong. It is the version-skew failure AGENTS.md documents at length (a 2.3.0
-// daemon against an Aug-11 sidecar: /blocks 404s, zero blocks published), and
-// both `postinstall` and `onboard.command` already pin against it. This was the
-// one fetch path that did not.
-//
-// A source build reports "dev", which names no release: there the tag stays
-// empty and `releases/latest` is the only answer available — the same branch
-// the installer pane took for its "dryrun" version. Nothing to pin to is not
-// the same as a pin nobody set.
-func engineTag() string {
-	v := version.Normalize(version.CLI)
-	if v == "" || v == version.Unknown {
-		return ""
-	}
-	return "v" + v
-}
 
 // currentEngineManager is the one manager this process uses, so the page's GET
 // and POST see the same install. A package-level value rather than a field for

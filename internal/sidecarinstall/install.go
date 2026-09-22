@@ -28,6 +28,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/agent/update"
 	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // The analysis sidecar is ~190MB and the macOS pkg cannot carry it (Apple's
@@ -173,6 +174,9 @@ func Install(opts Opts) (Result, error) {
 	}
 	tag := opts.Tag
 	if tag == "" {
+		tag = DefaultTag()
+	}
+	if tag == "" {
 		t, err := LatestTag(context.Background(), "")
 		if err != nil {
 			return res, err
@@ -309,6 +313,28 @@ func (o Opts) restartFn() func() error {
 		return o.Restart
 	}
 	return RestartAfterSwap
+}
+
+// DefaultTag is the release this binary belongs to — the tag every caller
+// should fetch unless told otherwise.
+//
+// ⚠️ "LATEST" IS NOT "MINE", AND THE DIFFERENCE HAS NOW DOWNGRADED A MACHINE
+// TWICE. An empty tag used to resolve `releases/latest`, which by definition
+// EXCLUDES pre-releases — so on any `-rc.N` machine it answers the last stable.
+// Measured 2026-09-22 on a 3.0.5-rc.6 daemon: the engine auto-updated to rc.6
+// correctly at 16:30, and a bare `keld signal install-sidecar` at 16:37 put
+// v3.0.4 over the top of it. The daemon route had already been pinned after the
+// first occurrence; the CLI had not, which is what a rule living at ONE caller
+// instead of at the shared function buys you.
+//
+// Empty on a source build ("dev"), which names no release: there the caller
+// falls through to LatestTag, the only answer available.
+func DefaultTag() string {
+	v := version.Normalize(version.CLI)
+	if v == "" || v == version.Unknown {
+		return ""
+	}
+	return "v" + v
 }
 
 func ReadVersion(tree string) string {

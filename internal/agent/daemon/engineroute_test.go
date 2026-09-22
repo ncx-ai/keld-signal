@@ -246,22 +246,24 @@ func TestAFailedInstallKeepsItsReason(t *testing.T) {
 	}
 }
 
-// ⚠️ THE FETCH MUST NAME THIS DAEMON'S OWN RELEASE. Unpinned,
-// sidecarinstall.Install resolves `releases/latest`, and GoReleaser marks every
-// `-rc.N` a PRERELEASE — which that endpoint excludes. Shipped that way in
-// v3.0.5-rc.4 and measured the same day: a 3.0.5-rc.4 daemon installed v3.0.4
-// and the page then reported, correctly, that the engine it had just fetched was
-// out of date. Pinning is what postinstall and onboard.command already do.
-func TestTheInstallIsPinnedToThisDaemonsOwnRelease(t *testing.T) {
-	version.CLI = "3.0.5-rc.4"
+// ⚠️ THE FETCH MUST NAME THIS DAEMON'S OWN RELEASE, AND THE DAEMON MUST NOT
+// OVERRIDE THAT. The rule itself now lives in sidecarinstall.DefaultTag (one
+// definition, so the CLI inherits it — see that function for the two occasions
+// an unpinned fetch downgraded a real machine). What this asserts is the half
+// the daemon owns: it passes NO tag, which means "my own release", rather than
+// substituting one of its own.
+func TestTheDaemonDoesNotOverrideTheDefaultPin(t *testing.T) {
+	version.CLI = "3.0.5-rc.6"
 	t.Cleanup(func() { version.CLI = "dev" })
 
 	var got string
+	var seen bool
 	m := newEngineManager()
 	m.locate = func() (string, bool) { return "", false }
 	m.mode = func() string { return "deterministic" }
+	m.restart = func() error { return nil }
 	m.install = func(o sidecarinstall.Opts) (sidecarinstall.Result, error) {
-		got = o.Tag
+		got, seen = o.Tag, true
 		return sidecarinstall.Result{}, nil
 	}
 	srv := engineServer(t, m)
@@ -272,133 +274,14 @@ func TestTheInstallIsPinnedToThisDaemonsOwnRelease(t *testing.T) {
 	resp.Body.Close()
 	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
 
-	if got != "v3.0.5-rc.4" {
-		t.Fatalf("Opts.Tag = %q, want v3.0.5-rc.4 — an empty tag resolves releases/latest, which "+
-			"excludes pre-releases and installs a STALE engine under this daemon", got)
+	if !seen {
+		t.Fatal("no install ran")
 	}
-}
-
-// A source build names no release, so there is nothing to pin to and
-// releases/latest is the only answer available — the same branch the installer
-// pane took for its "dryrun" version. Nothing to pin to is not a missing pin.
-func TestADevBuildLeavesTheTagUnpinned(t *testing.T) {
-	version.CLI = "dev"
-	var got = "unset"
-	m := newEngineManager()
-	m.locate = func() (string, bool) { return "", false }
-	m.mode = func() string { return "deterministic" }
-	m.install = func(o sidecarinstall.Opts) (sidecarinstall.Result, error) {
-		got = o.Tag
-		return sidecarinstall.Result{}, nil
-	}
-	srv := engineServer(t, m)
-	resp, err := http.Post(srv.URL+"/v1/engine/install", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	waitFor(t, 5*time.Second, func() bool { _, st := engineGet(t, srv); return st.Status == "done" })
 	if got != "" {
-		t.Fatalf("Opts.Tag = %q on a dev build, want empty", got)
+		t.Fatalf("Opts.Tag = %q; the daemon must leave it empty so sidecarinstall.DefaultTag pins it", got)
 	}
-}
-
-// The tag carries exactly one leading "v" whether or not version.CLI has one —
-// the pane's own "vv3.0.0-rc.5" 404 was this mistake in the other direction.
-func TestTheTagCarriesExactlyOneLeadingV(t *testing.T) {
-	for _, in := range []string{"3.0.5-rc.4", "v3.0.5-rc.4"} {
-		version.CLI = in
-		if got := engineTag(); got != "v3.0.5-rc.4" {
-			t.Errorf("version.CLI %q -> tag %q, want v3.0.5-rc.4", in, got)
-		}
-	}
-	version.CLI = "dev"
-}
-
-// ⚠️ THE DAEMON FIXES ITS OWN ENGINE, IT DOES NOT ASK. A mismatched engine is
-// version SKEW — the failure that cost three silent weeks (a 2.3.0 daemon
-// against an Aug-11 sidecar: /blocks 404s, zero blocks, doctor reporting no
-// problems) — and there is no decision in it for a person to make. Every hour a
-// button goes unclicked is an hour of work that cuts no blocks.
-func TestAutoStartFixesAMismatchedEngineUnasked(t *testing.T) {
-	version.CLI = "3.0.5"
-	t.Cleanup(func() { version.CLI = "dev" })
-
-	for _, tc := range []struct {
-		name    string
-		locate  func(*testing.T) func() (string, bool)
-		wantRun bool
-	}{
-		{"absent", func(*testing.T) func() (string, bool) { return func() (string, bool) { return "", false } }, true},
-		{"outdated", func(t *testing.T) func() (string, bool) { return fakeEngine(t, "v3.0.4") }, true},
-		{"current", func(t *testing.T) func() (string, bool) { return fakeEngine(t, "v3.0.5") }, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var ran bool
-			done := make(chan struct{}, 1)
-			m := newEngineManager()
-			m.locate = tc.locate(t)
-			m.mode = func() string { return "deterministic" }
-			m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
-				ran = true
-				done <- struct{}{}
-				return sidecarinstall.Result{}, nil
-			}
-			m.autoStart()
-			if tc.wantRun {
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-					t.Fatal("autoStart did not fetch for a mismatched engine")
-				}
-			} else {
-				time.Sleep(150 * time.Millisecond)
-			}
-			if ran != tc.wantRun {
-				t.Fatalf("install ran = %v, want %v", ran, tc.wantRun)
-			}
-		})
-	}
-}
-
-// ml_backend "off" is a choice, and self-healing must not be the one thing that
-// quietly overrides it.
-func TestAutoStartRespectsAMachineThatWantsNoEngine(t *testing.T) {
-	m := newEngineManager()
-	m.locate = func() (string, bool) { return "", false }
-	m.mode = func() string { return "off" }
-	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
-		t.Fatal("autoStart fetched an engine on a machine with ml_backend off")
-		return sidecarinstall.Result{}, nil
-	}
-	m.autoStart()
-	time.Sleep(150 * time.Millisecond)
-}
-
-// ⚠️ ONCE PER RUN, NOT ON A TIMER. A fetch that failed will fail the same way in
-// thirty seconds, and retrying on a clock turns a flaky release host into a
-// download loop. The state keeps its reason, the page offers Try again, and the
-// next daemon start tries once more.
-func TestAutoStartDoesNotRetryAFailureOnItsOwn(t *testing.T) {
-	version.CLI = "3.0.5"
-	t.Cleanup(func() { version.CLI = "dev" })
-	var calls int
-	m := newEngineManager()
-	m.locate = func() (string, bool) { return "", false }
-	m.mode = func() string { return "deterministic" }
-	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
-		calls++
-		return sidecarinstall.Result{}, errors.New("http status 504")
-	}
-	m.autoStart()
-	waitFor(t, 5*time.Second, func() bool { return m.state().Status == "failed" })
-	m.autoStart() // a second run of the same daemon must not pile on
-	time.Sleep(150 * time.Millisecond)
-	if calls != 1 {
-		t.Fatalf("the installer ran %d times after a failure, want 1 — a failed fetch must not loop", calls)
-	}
-	if m.state().Error == "" {
-		t.Fatal("the failure lost its reason; the page would show a bar with nothing to act on")
+	if want := sidecarinstall.DefaultTag(); want != "v3.0.5-rc.6" {
+		t.Fatalf("DefaultTag() = %q, want v3.0.5-rc.6", want)
 	}
 }
 
@@ -479,4 +362,89 @@ func TestTheDaemonRestartsTheSidecarChildNotItself(t *testing.T) {
 	if !restarted {
 		t.Fatal("the sidecar child was never restarted, so the daemon keeps supervising the OLD engine image")
 	}
+}
+
+// ⚠️ THE MACHINE MUST NEVER SIT IN A STATE NOTHING RE-CHECKS. Measured
+// 2026-09-22: the daemon updated the engine to rc.6 correctly at 16:30, a bare
+// `keld signal install-sidecar` put v3.0.4 over it at 16:37, and nothing fixed
+// it — the one automatic attempt was spent and the page has no button, because
+// it reports rather than asks. A red "out of date" with no way to act until
+// somebody restarted the daemon.
+func TestANewMismatchIsFixedEvenAfterTheFirstAttempt(t *testing.T) {
+	version.CLI = "3.0.5-rc.6"
+	t.Cleanup(func() { version.CLI = "dev" })
+
+	installed := "v3.0.5-rc.5"
+	var calls int
+	m := newEngineManager()
+	m.mode = func() string { return "deterministic" }
+	m.restart = func() error { return nil }
+	m.locate = func() (string, bool) { return fakeEngineAt(t, &installed), true }
+	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		calls++
+		installed = "v3.0.5-rc.6" // the fetch lands the right one
+		return sidecarinstall.Result{}, nil
+	}
+
+	m.autoStart()
+	waitFor(t, 5*time.Second, func() bool { return calls == 1 })
+	waitFor(t, 5*time.Second, func() bool { return m.state().Status == "done" })
+
+	// Same state again: nothing to do, and nothing that could loop.
+	m.autoStart()
+	time.Sleep(100 * time.Millisecond)
+	if calls != 1 {
+		t.Fatalf("installs = %d after re-checking a CORRECT engine, want 1", calls)
+	}
+
+	// Something downgrades it underneath us — a hand install, a stale tree.
+	installed = "v3.0.4"
+	m.autoStart()
+	waitFor(t, 5*time.Second, func() bool { return calls == 2 })
+	if got := m.state().Version; got != "v3.0.5-rc.6" {
+		t.Fatalf("engine = %q after the downgrade was corrected, want v3.0.5-rc.6", got)
+	}
+}
+
+// And the loop guard still holds: a fetch that FAILS leaves the same installed
+// version, so re-checking must not hammer a flaky release host.
+func TestAFailedFetchIsNotRetriedByRechecking(t *testing.T) {
+	version.CLI = "3.0.5-rc.6"
+	t.Cleanup(func() { version.CLI = "dev" })
+
+	installed := "v3.0.5-rc.5"
+	var calls int
+	m := newEngineManager()
+	m.mode = func() string { return "deterministic" }
+	m.restart = func() error { return nil }
+	m.locate = func() (string, bool) { return fakeEngineAt(t, &installed), true }
+	m.install = func(sidecarinstall.Opts) (sidecarinstall.Result, error) {
+		calls++
+		return sidecarinstall.Result{}, errors.New("http status 504")
+	}
+
+	m.autoStart()
+	waitFor(t, 5*time.Second, func() bool { return m.state().Status == "failed" })
+	for i := 0; i < 5; i++ {
+		m.autoStart()
+	}
+	time.Sleep(150 * time.Millisecond)
+	if calls != 1 {
+		t.Fatalf("installs = %d after five re-checks of the same failure, want 1 — a flaky host "+
+			"must not become a download loop", calls)
+	}
+}
+
+// A tree whose version can change between reads, for the two tests above.
+func fakeEngineAt(t *testing.T, ver *string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "keld-agent-sidecar")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte(*ver+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return bin
 }

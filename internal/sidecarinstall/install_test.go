@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/ncx-ai/keld-signal/internal/version"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -529,5 +530,55 @@ func TestCleanupJobSurvivesAFailedInstall(t *testing.T) {
 	}
 	if _, err := os.Stat(plist); err != nil {
 		t.Error("a failed fetch deleted its own retry job, leaving nothing to try again")
+	}
+}
+
+// ⚠️ "LATEST" IS NOT "MINE", AND THE DIFFERENCE DOWNGRADED A REAL MACHINE TWICE
+// IN ONE DAY. `releases/latest` excludes pre-releases by definition, so on any
+// -rc.N machine an unpinned fetch answers the last STABLE release. First
+// occurrence: a 3.0.5-rc.4 daemon installed v3.0.4. Second: the daemon route
+// had been pinned, the CLI had not, and a bare `keld signal install-sidecar`
+// put v3.0.4 over an engine the daemon had just correctly updated to rc.6.
+//
+// The rule lives HERE, at the shared function, so no caller can be the one that
+// forgot — which is exactly how the second occurrence happened.
+func TestDefaultTagIsThisBinarysOwnRelease(t *testing.T) {
+	prev := version.CLI
+	t.Cleanup(func() { version.CLI = prev })
+
+	for _, tc := range []struct{ cli, want string }{
+		{"3.0.5-rc.6", "v3.0.5-rc.6"},
+		// Exactly one leading v, whichever way the stamp carries it: the
+		// installer pane's own "vv3.0.0-rc.5" 404 was this in the other
+		// direction.
+		{"v3.0.5-rc.6", "v3.0.5-rc.6"},
+		{"3.0.4", "v3.0.4"},
+		// A source build names no release, so there is nothing to pin to and
+		// the caller falls through to LatestTag. Nothing-to-pin-to is not a
+		// missing pin.
+		{"dev", ""},
+		{"", ""},
+	} {
+		version.CLI = tc.cli
+		if got := DefaultTag(); got != tc.want {
+			t.Errorf("version.CLI %q -> DefaultTag() %q, want %q", tc.cli, got, tc.want)
+		}
+	}
+}
+
+// An explicit --tag still wins: that is what it is for.
+func TestAnExplicitTagBeatsTheDefault(t *testing.T) {
+	prev := version.CLI
+	version.CLI = "3.0.5-rc.6"
+	t.Cleanup(func() { version.CLI = prev })
+
+	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
+	dest := t.TempDir()
+	res, err := Install(Opts{BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if res.StagedPath == "" {
+		t.Fatal("nothing staged")
 	}
 }
