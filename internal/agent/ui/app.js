@@ -579,6 +579,11 @@ export const REASON_TEXT = {
   atlas_unavailable: "Couldn't reach Atlas — Signal will retry.",
   captive_portal: "Got a login page back instead of Atlas — check the network.",
   atlas_off: "Send to Atlas is off.",
+  // ⚠️ Two states that are NOT faults and must not read as one. `not_paired`
+  // is a step the person still has to take; the empty-reason `n/a` on the Atlas
+  // row is "paired, nothing has come back through this connector yet", which is
+  // every machine for the first few minutes after a restart. See healthTone.
+  not_paired: "Collecting on this machine — finish pairing to send it.",
   // ⚠️ NOT "reinstall to update it" ANY MORE. The daemon updates the engine
   // itself, unasked (engineManager.autoStart), so telling somebody to do it by
   // hand is an instruction for work already in progress — and the bar under
@@ -823,6 +828,7 @@ const HEALTH_DETAIL_SHORT = {
   captive_portal: "captive network",
   atlas_off: "off",
   sidecar_outdated: "out of date",
+  not_paired: "not paired",
   sidecar_down: "not responding",
   // Signal stopped it to swap it — a step, not a fault. See healthWhileReplacing.
   sidecar_updating: "updating",
@@ -1049,6 +1055,34 @@ export function serviceAlert(ledger, { offline = false, replacing = false } = {}
     // a meaning for a number in order to have something to print.
     failures: typeof s.failures === "number" ? s.failures : 0,
   };
+}
+
+/** Reasons that mean "Signal is working on this right now", and reasons that
+ *  mean "there is something for YOU to do". Both earn amber; everything else
+ *  that is not a failure does not. */
+export const HEALTH_IN_FLIGHT_REASONS = ["sidecar_updating", "sidecar_behind"];
+export const HEALTH_ACTION_REASONS = ["not_paired"];
+
+/** The pill's colour, from the row's status AND its reason.
+ *
+ *  ⚠️ AMBER IS NOT A PLACE TO PUT "DON'T KNOW". It used to be: the expression
+ *  here read `ok ? green : failed ? red : amber`, so `n/a` — which on the Atlas
+ *  row means "paired, nothing has come back through this connector yet" —
+ *  wore the same colour as a real fault. Seen on a healthy machine two minutes
+ *  after a restart: a green Signal, a green analysis service, green records and
+ *  telemetry, and an amber Atlas, with nothing wrong and nothing to read, since
+ *  that state carries no reason text either. A colour that asks a question the
+ *  page cannot answer is worse than no colour.
+ *
+ *  So: green unless something SAID otherwise. Red is a fault we were told
+ *  about. Amber is reserved for the two cases where it earns its alarm —
+ *  Signal is mid-operation on that thing, or the person has a step left. */
+export function healthTone(status, detail) {
+  if (status === "failed") return "no";
+  const reason = detail || "";
+  if (HEALTH_ACTION_REASONS.includes(reason)) return "wait";
+  if (status === "pending" || HEALTH_IN_FLIGHT_REASONS.includes(reason)) return "wait";
+  return "ok";
 }
 
 /** Is Signal itself replacing the analysis service right now?
@@ -1973,7 +2007,7 @@ if (typeof document !== "undefined") {
       const detail = healthDetailText(h.detail);
       return el(
         "span",
-        { class: `pill ${h.status === "ok" ? "ok" : h.status === "failed" ? "no" : "wait"}` },
+        { class: `pill ${healthTone(h.status, h.detail)}` },
         el("span", { class: "dot" }),
         `${healthLabel(h.key)}${detail ? " " + detail : ""}`
       );
