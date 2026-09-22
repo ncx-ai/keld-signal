@@ -182,13 +182,25 @@ func TestVerifierProvisionerFetchesOnDemandWhenAttributionIsOnAndOptedIn(t *test
 	}
 	p.sha = sha256Hex([]byte("w"))
 	p.demand()
-	encWaitFor(t, "the verifier fetch attribution authorised", func() bool { return fetches.Load() == 1 })
 
 	// Must land at the sidecar's own default lookup path, verbatim — no
 	// KELD_VERIFIER_GGUF wiring is added by this daemon.
 	want := filepath.Join(os.Getenv("KELD_HOME"), "models", "gemma-4-e2b", "model.gguf")
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("verifier GGUF not at the sidecar's default path %s: %v", want, err)
+
+	// ⚠️ WAIT FOR THE FILE, NOT FOR THE COUNTER. `fetches` increments when the
+	// fake fetcher is ENTERED; the provisioner then still has to verify and
+	// commit the staged tree to the path asserted below. Waiting on the counter
+	// and stat-ing immediately is a race the assertion loses on a loaded
+	// runner — it failed exactly once, on the v3.0.5-rc.5 tag build, while the
+	// same commit passed on its pull_request run minutes earlier. The file
+	// appearing is the fact this test is about; the counter is checked after,
+	// so "fetched once" is still asserted.
+	encWaitFor(t, "the verifier GGUF at the sidecar's default path", func() bool {
+		_, err := os.Stat(want)
+		return err == nil
+	})
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("verifier fetched %d time(s), want exactly 1", got)
 	}
 }
 
