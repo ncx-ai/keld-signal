@@ -607,3 +607,13 @@ jobs:
           KELD_VERIFY_DEMOTE: "1"
           TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: bash scripts/verify-release-assets.sh "$TAG"
+
+  # Copy the complete release to dl.keld.co. After verify-release, not alongside it: an incomplete
+  # release is demoted there and must never reach the bucket or move latest.json.
+  publish:
+    needs: verify-release
+    uses: ./.github/workflows/publish-releases.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.release_tag }}
+    permissions:
+      contents: read

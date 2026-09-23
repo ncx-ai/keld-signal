@@ -1,0 +1,78 @@
+name: publish-releases
+
+# Copies a published GitHub release into the R2 bucket behind https://dl.keld.co, which is where
+# every installer downloads from once this repo is private (ncx-ai/infrastructure,
+# pulumi/cloudflare/releases.py). GitHub releases stay the source of truth: this only ever copies.
+# The install scripts are publish-scripts.yml's job, not this one's.
+#
+# Called by installers.yml after verify-release passes, so an incomplete release never reaches the
+# bucket; by staple.yml after it re-uploads a stapled pkg; and by hand to backfill a tag.
+#
+# The R2 key is two secrets in the `releases` ENVIRONMENT, not the repository: it can replace every
+# installer, and the environment admits only main and v* tags (ncx-ai/infrastructure,
+# pulumi/github/release_publishing.py). Environment secrets are not passed through workflow_call,
+# so the job declares the environment itself.
+#
+# One job, never chosen by event: inside a workflow_call, github.event_name is the CALLER's (a tag
+# push arrives here as `push`), so branching on it misfires on every automated release.
+on:
+  workflow_call:
+    inputs:
+      tag: { type: string, required: true }
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)publish, e.g. v3.0.6. Safe to repeat."
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_DEFAULT_REGION: auto
+  # Newer AWS CLIs attach default integrity checksums that R2 has not always accepted; send one
+  # only when an operation requires it.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  # Not secret: an account's S3 endpoint and a bucket name grant nothing without the key.
+  R2_ENDPOINT: https://f0e85372ea223629d5b301d07fe5b71d.r2.cloudflarestorage.com
+  BUCKET: keld-signal-releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: releases
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TAG: ${{ inputs.tag }}
+      # install.sh derives the same prefix from the tag, so the two must agree: '-' means rc.
+      PREFIX: ${{ contains(inputs.tag, '-') && 'prereleases' || 'releases' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download every asset of the release
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D out
+
+      # --size-only: a freshly downloaded file is always newer than the bucket's copy, so a plain
+      # sync would re-upload the whole ~1.1 GB release on every run. A changed size still uploads,
+      # which is how staple.yml's re-stapled (larger) pkg reaches the bucket.
+      - name: Upload assets
+        run: |
+          aws s3 sync out "s3://${BUCKET}/${PREFIX}/${TAG}/" --endpoint-url "$R2_ENDPOINT" \
+            --size-only --cache-control "public, max-age=3600"
+
+      # latest.json mirrors GitHub's own "latest", which already excludes pre-releases and the
+      # incomplete releases verify-release-assets.sh demotes — so installs resolve exactly what
+      # releases/latest gave them. Backfilling or re-stapling an older tag leaves it alone.
+      - name: Point latest.json at this tag if it is GitHub's latest
+        run: |
+          latest=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          if [ "$latest" != "$TAG" ]; then
+            echo "$TAG is not the latest release ($latest); latest.json unchanged"
+            exit 0
+          fi
+          find out -maxdepth 1 -type f -exec basename {} \; | sort \
+            | jq -R . | jq -s --arg tag "$TAG" '{tag_name: $tag, assets: .}' > latest.json
+          aws s3 cp latest.json "s3://${BUCKET}/latest.json" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json --cache-control no-cache
