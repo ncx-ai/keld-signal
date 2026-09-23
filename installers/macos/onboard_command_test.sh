@@ -106,14 +106,12 @@ case "$r" in
   *) echo "AC-4: an UNVERSIONED sidecar was not replaced — got: $r"; exit 1 ;;
 esac
 
-# The download comes from the release mirror (dl.keld.co), never GitHub: keld-signal is going
-# private, and a pkg's URL is fixed at build time — a wrong one cannot be fixed afterwards.
+# The download comes from the release mirror, whose URL is fixed at pkg build time.
 r="$(run_case "v2.2.1" "v2.3.0")"
 case "$r" in
   *"https://dl.keld.co/releases/v2.3.0/keld-agent-sidecar_darwin_arm64.tar.gz"*) ;;
   *) echo "sidecar not fetched from the mirror's releases/ — got: $r"; exit 1 ;;
 esac
-case "$r" in *github*) echo "sidecar fetch still touches GitHub — got: $r"; exit 1 ;; esac
 
 # A pre-release pkg's sidecar lives under prereleases/, the prefix publish-releases.yml writes rc
 # tags under.

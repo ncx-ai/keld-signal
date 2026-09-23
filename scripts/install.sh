@@ -65,14 +65,9 @@ if [ -z "$tag" ]; then
 fi
 
 # ── Download and extract ──────────────────────────────────────────────────────
-# Pre-release tags (anything with a '-', e.g. v3.0.5-rc.7) live under prereleases/ and expire
-# after 30 days; stable tags under releases/. publish-releases.yml writes them by the same rule.
-# KELD_DOWNLOAD_BASE overrides the whole host+prefix — point it at a local file server
-# (e.g. http://localhost:8000) to test the installer without a real release.
-case "$tag" in
-  *-*) channel=prereleases ;;
-  *)   channel=releases ;;
-esac
+# A '-' in the tag marks a pre-release, which the mirror keeps under prereleases/. KELD_DOWNLOAD_BASE
+# replaces host and channel — point it at a local file server to test without a real release.
+case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
 dl_base="${KELD_DOWNLOAD_BASE:-${RELEASES_URL}/${channel}}"
 archive="keld_${os}_${arch}.tar.gz"
 url="${dl_base}/${tag}/${archive}"

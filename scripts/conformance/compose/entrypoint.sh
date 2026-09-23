@@ -41,8 +41,6 @@ ensure_sidecar() {
     return 0
   fi
 
-  # The public release mirror (dl.keld.co), not GitHub's API: keld-signal is going private, and an
-  # unauthenticated releases/latest call stops answering the moment it does.
   local releases=${KELD_RELEASES_URL:-https://dl.keld.co}
   releases=${releases%/}
   local tag=${KELD_CONFORM_SIDECAR_TAG:-}
@@ -65,8 +63,8 @@ ensure_sidecar() {
     say "  run this leg on an amd64 host, or mount a sidecar and set KELD_CONFORM_PYTHON."
   fi
   archive="keld-agent-sidecar_linux_${arch}.tar.gz"
-  local channel=releases
-  case "$tag" in *-*) channel=prereleases ;; esac
+  local channel
+  case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
   url="${KELD_DOWNLOAD_BASE:-${releases}/${channel}}/${tag}/${archive}"
   say "sidecar: fetching $url"
   mkdir -p "$dest" /tmp/sc

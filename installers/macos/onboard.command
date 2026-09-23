@@ -5,8 +5,8 @@
 set -uo pipefail
 AGENT="${KELD_AGENT_BIN:-/usr/local/bin/keld-agent}"
 PREFIX="${KELD_PREFIX:-/usr/local/keld}"
-# The public release mirror (R2 behind dl.keld.co). Fixed at pkg build time, so it must not be
-# GitHub: keld-signal is going private, and a shipped pkg cannot be pointed anywhere else.
+# The public release mirror (R2 behind dl.keld.co). Fixed at pkg build time: a shipped pkg cannot
+# be pointed anywhere else.
 RELEASES_URL="${KELD_RELEASES_URL:-https://dl.keld.co}"
 RELEASES_URL="${RELEASES_URL%/}"
 echo; echo "==== Set up Keld ===="; echo
@@ -86,7 +86,6 @@ fetch_sidecar() {
     echo "  … analysis sidecar is ${have:-unversioned}, this build wants ${tag} — replacing it"
   fi
   asset="keld-agent-sidecar_darwin_${arch}.tar.gz"
-  # '-' marks a pre-release — the same rule install.sh and publish-releases.yml use.
   case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
   url="${RELEASES_URL}/${channel}/${tag}/${asset}"
   echo "  … downloading analysis sidecar (${tag}, ~190MB) → ${dest}"

@@ -26,14 +26,13 @@ import (
 // or the reverse.
 var ErrNoPublishedHash = errors.New("update: no published SHA-256 for the release asset")
 
-// DefaultBaseURL is the public release mirror (R2 behind dl.keld.co) — the same
-// host scripts/install.sh fetches from. It is the mirror's ROOT: assets sit one
-// level down, under Channel(tag), so it is not itself a valid Fetcher.BaseURL.
-const DefaultBaseURL = "https://dl.keld.co"
+// DefaultMirrorURL is the root of the public release mirror (R2 behind
+// dl.keld.co), the host scripts/install.sh fetches from too.
+const DefaultMirrorURL = "https://dl.keld.co"
 
-// Channel is the mirror's top-level prefix for a tag. It must match
-// scripts/install.sh and publish-releases.yml: a '-' marks a pre-release.
-func Channel(tag string) string {
+// channel is the mirror's top-level prefix for a tag: a '-' marks a pre-release,
+// the rule publish-releases.yml writes by and every installer reads by.
+func channel(tag string) string {
 	if strings.Contains(tag, "-") {
 		return "prereleases"
 	}
@@ -88,7 +87,7 @@ func (f *Fetcher) releaseDir(tag string) string {
 	if f.BaseURL != "" {
 		return strings.TrimRight(f.BaseURL, "/") + "/" + tag
 	}
-	return DefaultBaseURL + "/" + Channel(tag) + "/" + tag
+	return DefaultMirrorURL + "/" + channel(tag) + "/" + tag
 }
 
 // fastPolicy is used by tests: the real backoff would make the retry cases
