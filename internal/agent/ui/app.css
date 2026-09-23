@@ -419,7 +419,16 @@ fieldset:disabled { opacity: .55; }
 .project-row .pill { justify-self: end; }
 .suggestion-row:last-child, .project-row:last-child { border-bottom: none; }
 .row-title { font-family: var(--mono); font-size: 13px; }
-.row-title small { display: block; font-family: var(--sans); color: var(--muted); font-size: 12px; margin-top: 2px; }
+.row-title small { display: block; font-family: var(--sans); color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+/* At phone width the three-column row squeezed the title to a word per line and
+   an unbreakable repo name pushed the pill past the card (measured: 84px of
+   sideways page scroll at 400px). Two columns — title and pill — with the
+   picker on its own line beneath; an org row's empty spacer takes no line. */
+@media (max-width: 560px) {
+  .project-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  .project-row > select { grid-column: 1 / -1; grid-row: 2; }
+  .project-row > .row-spacer { display: none; }
+}
 .row-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .group-card {
   background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
