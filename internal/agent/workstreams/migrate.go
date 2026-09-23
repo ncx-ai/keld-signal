@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// LegacyFileName is the pre-rename document, ~/.keld/state/projects.json.
+// LegacyFileName is the pre-rename document, ~/.keld/state/projects.json. // vocab:keep
 const LegacyFileName = "projects.json"
 
 // LegacyBackupSuffix is what the legacy file is renamed with once migrated. It

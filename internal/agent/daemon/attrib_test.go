@@ -90,7 +90,7 @@ func TestTheAttributionCapabilitiesAreServiceFacetsOfTheRealClient(t *testing.T)
 	}
 }
 
-// KELD_PROJECTS_FILE wins over the remote settings key.
+// KELD_WORKSTREAMS_FILE wins over the remote settings key.
 func TestResolveWorkstreamsPrecedence(t *testing.T) {
 	t.Run("env file wins", func(t *testing.T) {
 		dir := t.TempDir()
@@ -216,7 +216,7 @@ func TestMaybePostWorkstreamsAtStartupSkipsAnEmptyList(t *testing.T) {
 }
 
 // Finding 1 (round 3 review): an UNTRUSTWORTHY resolution (ok=false — a
-// transient KELD_PROJECTS_FILE read error) must never be posted either, even
+// transient KELD_WORKSTREAMS_FILE read error) must never be posted either, even
 // though a resolution can name a non-empty list — ok is checked before
 // content, not instead of the empty-list guard.
 func TestMaybePostWorkstreamsAtStartupSkipsAReadError(t *testing.T) {
@@ -283,7 +283,7 @@ func TestMaybePostWorkstreamsAtStartupDoesNotRecordOnFailure(t *testing.T) {
 
 // NB1's regression guard: run the startup helper and the poll helper
 // CONCURRENTLY, as real goroutines, with the startup side resolving an EMPTY
-// list (resolveWorkstreams(nil) — what every machine without KELD_PROJECTS_FILE
+// list (resolveWorkstreams(nil) — what every machine without KELD_WORKSTREAMS_FILE
 // resolves to today, since Atlas does not yet serve `projects`) and the poll
 // side resolving a REAL one. Regardless of goroutine scheduling, the sidecar
 // (the fake `post` sink here) must never end up holding the empty list.
@@ -299,7 +299,7 @@ func TestMaybePostWorkstreamsAtStartupDoesNotRecordOnFailure(t *testing.T) {
 // defense-in-depth for a narrower scenario this construction does not
 // exercise — two goroutines both resolving genuinely different NON-EMPTY
 // values (not reachable today, since resolveWorkstreams's env-file-wins
-// precedence makes the two call sites agree whenever KELD_PROJECTS_FILE is
+// precedence makes the two call sites agree whenever KELD_WORKSTREAMS_FILE is
 // set — see postWorkstreamsIfKnownNonEmpty's doc comment). Running many
 // concurrent iterations here is a real (not sleep-based) exercise of
 // goroutine scheduling and is worth keeping, but it does not itself prove
@@ -324,7 +324,7 @@ func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			maybePostWorkstreamsAtStartup(post, state, resolveWorkstreams(nil)) // empty: no KELD_PROJECTS_FILE
+			maybePostWorkstreamsAtStartup(post, state, resolveWorkstreams(nil)) // empty: no KELD_WORKSTREAMS_FILE
 		}()
 		go func() {
 			defer wg.Done()
@@ -364,7 +364,7 @@ func TestPostWorkstreamsOnChangeSkipsAnEmptyList(t *testing.T) {
 	}
 }
 
-// Finding 1's named covering test: a TRANSIENT KELD_PROJECTS_FILE read
+// Finding 1's named covering test: a TRANSIENT KELD_WORKSTREAMS_FILE read
 // failure at POLL time must NOT clear a previously-known-good list — that is
 // precisely NB1's permanent-mis-attribution outcome, arriving through the
 // poll door instead of the startup door. Before workstreamsResolution.ok

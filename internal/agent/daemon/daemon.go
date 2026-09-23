@@ -1083,7 +1083,7 @@ func Run(ctx context.Context) error {
 			updater.Maybe(ctx, updateTargetFrom(r))
 		}
 
-		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
+		// PROJECT ATTRIBUTION: KELD_WORKSTREAMS_FILE wins over the org's remote
 		// list (resolveWorkstreams), and the sidecar is only re-told when the
 		// resolved list actually changed — an org editing unrelated settings
 		// must not re-POST the same projects on every 5-minute poll.
@@ -1104,7 +1104,7 @@ func Run(ctx context.Context) error {
 		}
 	}
 	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
-	// (KELD_PROJECTS_FILE wins over the remote key — see resolveWorkstreams) and
+	// (KELD_WORKSTREAMS_FILE wins over the remote key — see resolveWorkstreams) and
 	// tell the sidecar before anything can ask it to attribute a block; later
 	// changes are picked up by onRemote (above) on the settings poll. Gated
 	// the same way onRemote's own call is — see the C4 note above.
@@ -1129,7 +1129,7 @@ func Run(ctx context.Context) error {
 	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostWorkstreamsAtStartup
 	// (projects.go) is what actually closes that: it never posts an EMPTY
 	// resolved list (which — before Atlas serves `projects` — is what every
-	// machine without KELD_PROJECTS_FILE resolves to, so it can never be the
+	// machine without KELD_WORKSTREAMS_FILE resolves to, so it can never be the
 	// stale write that clobbers a real one) and re-checks lastWorkstreams.changed
 	// immediately before posting a non-empty one, so a POST that raced a
 	// concurrent update becomes a no-op instead of overwriting it.
@@ -1214,7 +1214,7 @@ func Run(ctx context.Context) error {
 		// skipped:no_projects without opening a transcript — the models are
 		// never loaded, so fetching them buys literally nothing. Atlas does not
 		// serve `projects` yet, so TODAY that is every machine without
-		// KELD_PROJECTS_FILE: an org switching attribution on early would pull
+		// KELD_WORKSTREAMS_FILE: an org switching attribution on early would pull
 		// 4.2 GB onto every machine in the fleet for an answer that needs no
 		// model at all. The gate is read LIVE, per published block, not captured
 		// — a list arriving on a later settings poll starts the download with no

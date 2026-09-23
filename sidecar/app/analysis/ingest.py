@@ -225,7 +225,7 @@ def session_of(path):
     unrelated sessions summed into shared `bin` rows so a window was characterised from merged
     evidence, the UNIQUE/PK constraints merged rows that were genuinely distinct, a prompt id
     resolved against a transcript it is not in, and one file's reparse wiped every file sharing
-    its prefix. `claude_code` is ingest-eligible in production (`enrich.WorkstreamsEligible`),
+    its prefix. `claude_code` is ingest-eligible in production (`enrich.DimensionsEligible`),
     so this reached shipped code; the study that found it built a frame of 550 windows where the
     truth was 1,022, and nothing raised.
 

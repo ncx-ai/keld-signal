@@ -28,7 +28,7 @@ func attributedCell(t *testing.T, s *Store, k BlockKey) map[string]any {
 //
 // ⚠️ **Atlas NAMESPACES ITS IDS WITH A COLON AND THIS SHAPE DID NOT ADMIT ONE**,
 // so validProjectID clamped every org attribution to "" — after the match had
-// already succeeded — and an empty id renders as "no project". Measured on a
+// already succeeded — and an empty id renders as "no workstream". Measured on a
 // real machine: 94 of 105 blocks showed no project while the Projects pane,
 // which recomputes and never stores, reported 97 attributed.
 func TestAnAtlasWorkstreamIDSurvivesBeingStored(t *testing.T) {

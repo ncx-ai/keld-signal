@@ -185,7 +185,7 @@ var (
 	// `keld_projects:signal_on_device_client` — and this pattern did not admit
 	// `:`, so validProjectID clamped every one of them to "". The match had
 	// already SUCCEEDED; the id was discarded on the way into storage, and an
-	// empty id renders as "no project". Measured on a real machine: 6 rows
+	// empty id renders as "no workstream". Measured on a real machine: 6 rows
 	// recorded `attributed ok` with `method repo` and no project, which is a
 	// state the matcher cannot produce and only this could.
 	//
@@ -651,7 +651,7 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	// for a field that might carry junk out of a transcript; it is wrong here,
 	// because this id was computed by the daemon a microsecond earlier from its
 	// own project list. A silent clamp is exactly why the missing colon above
-	// went unnoticed for days while the page said "no project" — the write
+	// went unnoticed for days while the page said "no workstream" — the write
 	// succeeded, the row looked ordinary, and nothing anywhere disagreed.
 	rawWorkstream := a.WorkstreamID
 	a.WorkstreamID = validWorkstreamID(a.WorkstreamID)

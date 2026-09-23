@@ -79,7 +79,7 @@ def main():
     if args.projects:
         keep = set(args.projects.split(","))
         projects = [p for p in projects if p["id"] in keep]
-    A.set_projects(projects)
+    A.set_workstreams(projects)
     ids = [p["id"] for p in projects]
     declared_repos = sum(len(p.get("repos") or []) for p in projects)
 
@@ -107,7 +107,7 @@ def main():
         if path and os.path.exists(path):
             cache.update(pickle.load(open(path, "rb")))
     need = [t for r in rows for t in r["texts"] if t not in cache]
-    need += [A.project_doc(p) for p in projects if A.project_doc(p) not in cache]
+    need += [A.workstream_doc(p) for p in projects if A.workstream_doc(p) not in cache]
     if A.NULL_DOC not in cache:
         need.append(A.NULL_DOC)
     if need:
@@ -120,7 +120,7 @@ def main():
         os.makedirs(os.path.dirname(VEC_CACHE), exist_ok=True)
         pickle.dump(cache, open(VEC_CACHE, "wb"))
 
-    pv = {p["id"]: A._l2(cache[A.project_doc(p)]) for p in projects}
+    pv = {p["id"]: A._l2(cache[A.workstream_doc(p)]) for p in projects}
     nullv = A._l2(cache[A.NULL_DOC])
     for r in rows:
         r["tv"] = [A._l2(cache[t]) for t in r["texts"] if t in cache]

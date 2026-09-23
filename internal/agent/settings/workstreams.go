@@ -7,7 +7,7 @@ import (
 )
 
 // RemoteWorkstream is one org project definition, distributed via the settings
-// document (or KELD_PROJECTS_FILE while Atlas does not serve the key).
+// document (or KELD_WORKSTREAMS_FILE while Atlas does not serve the key).
 // Descriptions flow DOWN to the device; only project IDs ever flow up.
 type RemoteWorkstream struct {
 	ID          string   `json:"id"`
@@ -26,7 +26,7 @@ const EnvWorkstreamsFile = "KELD_WORKSTREAMS_FILE"
 
 // EnvWorkstreamsFileLegacy is the pre-rename name, still honoured when the new
 // one is unset: runbooks, smoke scripts and MDM payloads outlive a release.
-const EnvWorkstreamsFileLegacy = "KELD_PROJECTS_FILE"
+const EnvWorkstreamsFileLegacy = "KELD_PROJECTS_FILE" // vocab:keep
 
 // WorkstreamsFileFromEnv returns the workstream-list file the environment names
 // and the variable that named it — the new name first, then the legacy one.

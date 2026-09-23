@@ -1,0 +1,59 @@
+# Retired names from the 2026-09-23 rename (docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html, AC-11).
+# Signal says group (an Atlas group), workstream (a value in a group) and dimension (repo/branch/model...).
+# One extended regex per line; matched per line in Go, Python, JS, TS, HTML, CSS and shell sources.
+# A line carrying the marker `vocab:keep` is exempt: it is reading or naming an OLD stored name on purpose.
+#
+# Names that are NOT here on purpose — the keep list: the Atlas wire keys `projects`,
+# `projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
+# `POST /projects` and its `projects` body key; the dimension named `project` (workspace
+# basename); anything about Claude Code's ~/.claude/projects directories or a .keld.toml project.
+
+# --- Go: workstream sense (was project) ---
+\bRemoteProjects?\b
+\bFromRemoteProjects\b
+\bProjectAttribution\b
+\bProjectMatch(es)?\b
+\bLoadProjectsFile\b
+\bErrProjectNotFound\b
+\bMapProjectTo\b
+\bEnvProjectsFile\b
+\bprojectMatchesFor\b
+internal/agent/projects\b
+\bprojects\.(Project|Store|Document|Attribute|Load|Save|Rule)\b
+\bProjectsAttributed\b|\bProjectsPending\b|\bProjectsSkipped[A-Za-z]*\b|\bProjectsDegradedWeights\b
+# --- Go: group sense (was workstream) ---
+\bWorkstreamKey\b
+\bWorkstreamOffFunc\b
+\bSetWorkstreamOff\b
+\bErrWorkstreamOff\b
+\bWorkstreamsOff\b
+\bWorkstreamOrigin(Atlas|Local)\b
+# --- Go: dimension sense (was workstreams) ---
+\bWorkstreamsEligible\b
+\bWorkstreamsExtractor\b
+\bWorkstreamAnalyzer\b
+\bWorkstreamSpanMinutes\b
+\bKnownWorkstreamStatus\b
+\bWorkstreamStatuses\b
+\bWorkstreamAttributed\b
+# --- Python ---
+\bapp\.analysis\.workstreams\b
+\bset_projects\b
+\bproject_vectors\b
+\bcurrent_projects\b
+\bproject_doc\b
+\bSTATUS_SKIPPED_NO_PROJECTS\b
+# --- local routes, stored names, env ---
+/v1/projects\b
+/v1/workstreams/[^/"`]+/off
+workstreams_off
+KELD_PROJECTS_FILE
+state/projects\.json
+# --- page copy and page identifiers ---
+"New project"
+"Your projects"
+"No projects yet\."
+"Workstreams on"
+"Project", "Tokens"
+"no project"
+\bprojectCellInfo\b|\bprojectTitle\b|\brenderProjects\b|\bsetWorkstreamOff\b|\bworkstreamDisplayName\b

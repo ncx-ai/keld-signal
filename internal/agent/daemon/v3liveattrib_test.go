@@ -310,7 +310,7 @@ func TestGroupSwitchedOffHidesItsWorkstreamsFromTheRows(t *testing.T) {
 // codebase's standing rule demands: a check that could not run must not
 // publish a confident negative. The cell must be ABSENT, which the page
 // renders as "—" (unknown), and must not be present-and-empty, which it
-// renders as "no project".
+// renders as "no workstream".
 func TestUnreadableWorkstreamsDocumentYieldsUnknownNotNoWorkstream(t *testing.T) {
 	v := liveFixture(t)
 	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
@@ -336,7 +336,7 @@ func TestUnreadableWorkstreamsDocumentYieldsUnknownNotNoWorkstream(t *testing.T)
 // TestMissingWorkstreamsDocumentIsNoWorkstreamNotUnknown is the other half of the
 // pair above, and the reason the negative is about UNREADABLE rather than
 // about ABSENT: a machine where nobody has declared anything has a real
-// answer, and it is "no project".
+// answer, and it is "no workstream".
 func TestMissingWorkstreamsDocumentIsNoWorkstreamNotUnknown(t *testing.T) {
 	v := liveFixture(t)
 	k := cutBlock(t, v, "sess-ac3b", 30, "github.com/ncx-ai/keld-signal")

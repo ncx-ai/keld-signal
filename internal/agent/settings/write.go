@@ -34,7 +34,7 @@ type V3Patch struct {
 //
 // ⚠️ UNLIKE WriteInstallDefaults, this touches ONLY the keys p sets. A PUT
 // that means to flip send_to_atlas alone must not also rewrite
-// dev_blocks/show_breaks/workstreams_off/attribution back to whatever the
+// dev_blocks/show_breaks/groups_off/attribution back to whatever the
 // file already held — harmless today because every key here already lives in
 // the same file, but exactly the mistake that would silently reintroduce a
 // stale value the day one of these keys gains an independent writer (a
@@ -110,7 +110,7 @@ func WriteV3Settings(p V3Patch) error {
 		// The pre-rename key must not survive beside it: Load prefers
 		// groups_off, but a later write of an older binary would read the
 		// stale list back.
-		delete(cfg, "workstreams_off")
+		delete(cfg, "workstreams_off") // vocab:keep
 	}
 	if p.Attribution != nil {
 		if err := set("attribution", *p.Attribution); err != nil {

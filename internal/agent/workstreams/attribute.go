@@ -308,7 +308,7 @@ func ticketKeyIn(branch string) (string, bool) {
 // workstreamGroupOff reports whether p's bucket is switched off, checking
 // BOTH Workstream (a local project's key) and Team (an Atlas value's
 // workstream-name proxy — see Project's doc comment), because the wire gives
-// no way to tell which spelling an operator's workstreams_off entry used.
+// no way to tell which spelling an operator's groups_off entry used.
 func workstreamGroupOff(p Workstream, groupOff func(key string) bool) bool {
 	if groupOff == nil {
 		return false
@@ -354,7 +354,7 @@ func GroupOffFunc(s settings.Settings) func(string) bool {
 
 // FromRemoteWorkstreams converts the org's pooled workstream VALUES — as they
 // actually arrive today, via the settings poll's Remote.Projects or
-// KELD_PROJECTS_FILE — into attribution candidates.
+// KELD_WORKSTREAMS_FILE — into attribution candidates.
 //
 // docs/v3/contracts.md's verified note is the reason this exists rather than
 // treating settings.RemoteWorkstream as a Project directly: a real value is

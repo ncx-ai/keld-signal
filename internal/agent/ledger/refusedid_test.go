@@ -14,7 +14,7 @@ import (
 // ⚠️ **THE SILENCE IS WHY THE COLON DEFECT SURVIVED FOR DAYS.** Clamping is
 // right for a field that might carry junk out of a transcript; it is wrong for
 // one the daemon computed a microsecond earlier from its own project list. The
-// write succeeded, the row looked ordinary, the page said "no project", and
+// write succeeded, the row looked ordinary, the page said "no workstream", and
 // nothing anywhere disagreed. A line on disk is the difference between a defect
 // someone can find and one that has to be reasoned out from a ledger dump.
 //

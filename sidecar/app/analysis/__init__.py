@@ -296,7 +296,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           A window that answers with a key it did not answer with before is a window answered
 #           differently, which is exactly this number's trigger. Go's `enrich.SchemaVersion`
 #           moves 20 -> 21 for the same addition: `status` is a new five-value published
-#           vocabulary (`enrich.WorkstreamStatuses`) and `evidence` a new published field on
+#           vocabulary (`enrich.DimensionStatuses`) and `evidence` a new published field on
 #           `enrich.Labeled`.
 #
 #      17 - `POST /features` became a CURSOR route (`{path, since_ts, now, max_rows, resolved}` ->

@@ -156,11 +156,11 @@ type Settings struct {
 	// only; Atlas is never told. A developer's work can then never land in the
 	// Marketing group.
 	GroupsOff []string `json:"groups_off,omitempty"`
-	// LegacyGroupsOff is the pre-rename key, `workstreams_off`, still READ so a
+	// LegacyGroupsOff is the pre-rename key, `workstreams_off`, still READ so a // vocab:keep
 	// machine configured before 2026-09-23 keeps its groups switched off. Load
 	// folds it into GroupsOff (which wins when both exist) and clears it, so a
 	// whole-struct write never re-emits it; WriteV3Settings deletes the key.
-	LegacyGroupsOff []string `json:"workstreams_off,omitempty"`
+	LegacyGroupsOff []string `json:"workstreams_off,omitempty"` // vocab:keep
 
 	// AutoSetupIntegrations decides whether the daemon's integrations detector
 	// CONFIGURES a supported tool whose config dir appears after Signal was

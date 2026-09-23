@@ -32,7 +32,7 @@ import (
 // /attribute answers skipped:no_projects WITHOUT opening a transcript or
 // loading a model, so the 4.2 GB buys literally nothing — and since Atlas does
 // not serve `projects` yet, that is today every machine without
-// KELD_PROJECTS_FILE. An org switching attribution on early would otherwise
+// KELD_WORKSTREAMS_FILE. An org switching attribution on early would otherwise
 // pull both models onto its whole fleet for an answer that needs neither.
 //
 // `known` is read LIVE, per published block, never captured: a project list

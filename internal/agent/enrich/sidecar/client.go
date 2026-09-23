@@ -844,7 +844,7 @@ var postWorkstreamsCallTimeout = 30 * time.Second
 
 // PostWorkstreams tells the sidecar which projects are currently declared, so
 // /attribute has something to match a block against. The daemon calls this
-// once at startup (after resolving KELD_PROJECTS_FILE / the remote settings
+// once at startup (after resolving KELD_WORKSTREAMS_FILE / the remote settings
 // key) and again whenever the resolved list changes on a later settings poll
 // — never per block, since the declared set does not change per block.
 func (c *Client) PostWorkstreams(workstreams []settings.RemoteWorkstream) error {

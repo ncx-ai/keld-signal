@@ -1,3 +1,4 @@
+// vocab:keep-file — the upgrade from pre-rename stored names (AC-12).
 package daemon
 
 import (
@@ -126,7 +127,7 @@ func TestUpgradeFromTheRealEmptyPreRenameDocument(t *testing.T) {
 	}
 }
 
-// KELD_PROJECTS_FILE still points the daemon at a workstream list.
+// KELD_WORKSTREAMS_FILE still points the daemon at a workstream list.
 func TestTheLegacyWorkstreamsFileEnvIsStillRead(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	p := filepath.Join(t.TempDir(), "list.json")

@@ -1,12 +1,12 @@
 // Package projects is the on-device, deterministic project-attribution store
-// for the v3 health page: ~/.keld/state/projects.json, its Load/Save, and the
+// for the v3 health page: ~/.keld/state/workstreams.json, its Load/Save, and the
 // four-step attribution pass docs/v3/contracts.md's "Projects" section
 // specifies.
 //
 // This is DELIBERATELY NOT the same thing as internal/agent/attrib +
 // settings.RemoteWorkstream: that is Task 1's on-device EMBEDDING match (the
 // encoder + optional verifier, driven by the daemon against the sidecar's
-// /attribute), fed by KELD_PROJECTS_FILE / Atlas's remote `projects` key. This
+// /attribute), fed by KELD_WORKSTREAMS_FILE / Atlas's remote `projects` key. This
 // package is the RULE-based pass the health page's project inbox drives: a
 // person declares repo/ticket-key rules by bundling suggestions, and every
 // block is re-attributed live from those rules with no model in the loop.
@@ -65,7 +65,7 @@ const (
 // settings.RemoteWorkstream's Atlas-declared siblings for this document.
 //
 // Off is a DISPLAY MIRROR, not the authority: the authoritative flag is
-// settings.Settings.GroupsOff (agent-config.json's `workstreams_off`),
+// settings.Settings.GroupsOff (agent-config.json's `groups_off`),
 // read live via settings.Settings.GroupOff — see attribute.go's
 // groupOff parameter and the PUT /v1/groups/{key}/off route in
 // ingress/workstreams.go, which writes THAT file, not this one. It is carried
@@ -158,7 +158,7 @@ func DefaultPath() string {
 // project yet" must not be confused with "the file could not be read". Any
 // other read or decode error is returned, never silently swallowed into an
 // empty document — the same distinction settings.LoadWorkstreamsFile already
-// draws for the sibling KELD_PROJECTS_FILE loader.
+// draws for the sibling KELD_WORKSTREAMS_FILE loader.
 func Load(path string) (Document, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

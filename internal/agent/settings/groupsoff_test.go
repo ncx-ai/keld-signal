@@ -1,3 +1,5 @@
+// vocab:keep-file — pins that the pre-rename `workstreams_off` key and
+// KELD_PROJECTS_FILE are still read.
 package settings
 
 import (

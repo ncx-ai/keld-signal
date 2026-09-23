@@ -12,7 +12,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
-// Every mutation in this file is a LOCAL edit to ~/.keld/state/projects.json
+// Every mutation in this file is a LOCAL edit to ~/.keld/state/workstreams.json
 // (or, for SetGroupOff, ~/.keld/agent-config.json) and nothing else.
 // docs/v3/contracts.md's verified note is explicit that Atlas has no route a
 // machine's ingest token can write a project or a tag through today

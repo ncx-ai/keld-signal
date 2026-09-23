@@ -98,7 +98,7 @@ func TestStoreUpdateIsAtomicPerCall(t *testing.T) {
 	}
 }
 
-// T25: the saved file is byte-compatible with KELD_PROJECTS_FILE — a plain
+// T25: the saved file is byte-compatible with KELD_WORKSTREAMS_FILE — a plain
 // JSON array of Document.Projects, extended with v3-only fields the older
 // loader ignores, decodes cleanly through settings.LoadWorkstreamsFile and every
 // shared field survives.

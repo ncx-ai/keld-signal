@@ -136,7 +136,7 @@ func TestTheDaemonBelievesItsWorkstreamListBeforeTheFirstPostLands(t *testing.T)
 func TestAnUntrustworthyOrEmptyResolutionIsNeverBelieved(t *testing.T) {
 	state := &workstreamsState{}
 	state.observe(workstreamsResolution{list: []settings.RemoteWorkstream{{ID: "proj_a"}}, ok: true})
-	state.observe(workstreamsResolution{ok: false}) // a KELD_PROJECTS_FILE read error
+	state.observe(workstreamsResolution{ok: false}) // a KELD_WORKSTREAMS_FILE read error
 	state.observe(workstreamsResolution{ok: true})  // a trustworthy empty
 	if !state.knownNonEmpty() {
 		t.Fatal("neither a read error nor an empty resolution may erase a known list")

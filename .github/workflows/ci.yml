@@ -18,6 +18,13 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test ./...
+      # Signal says group / workstream / dimension, as Atlas does. The denylist
+      # is the exact set of retired names, so a hit is never a judgement call;
+      # the self-test proves the gate can fail.
+      - name: vocabulary gate
+        run: |
+          bash scripts/check_vocabulary.sh
+          bash scripts/check_vocabulary_test.sh
 
   # ⚠️ **169 TESTS THAT NOTHING RAN.** internal/agent/ui/test/ holds the daemon
   # page's unit tests — the money formatting, the health copy, the cell

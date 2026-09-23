@@ -552,7 +552,7 @@ tool_not_expected() {
   case "$1" in
     claude_code) echo "" ;;
     # Codex's reader (WS-D) and its capture (WS-B) both landed, and
-    # WorkstreamsEligible("codex") is true, so all five lanes are built and all
+    # DimensionsEligible("codex") is true, so all five lanes are built and all
     # five are REQUIRED. KELD_CONFORM_CODEX_NOT_EXPECTED is the lever for a
     # machine where one is known-broken, so a narrowing is always visible in
     # the command line rather than hidden in this table.
@@ -614,7 +614,7 @@ tool_not_expected() {
     # is not the same as excusing them.
     #
     # `store_rows` reads the sidecar's reference series, which is filled by the
-    # ingest signal — and that signal is scoped to enrich.WorkstreamsEligible
+    # ingest signal — and that signal is scoped to enrich.DimensionsEligible
     # (claude_code, cowork) because /analyze resolves a prompt by Claude-Code
     # JSONL shape. A Gemini prompt id 404s there by construction, so requiring
     # the row would be requiring a lane the product deliberately does not wire.

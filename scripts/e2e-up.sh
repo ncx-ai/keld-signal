@@ -100,14 +100,14 @@ cat > "$HOME_DIR/agent-config.json" <<JSON
 {"ml_backend":"deterministic","blocks":true,"auto_setup_integrations":false}
 JSON
 
-# One workstream so the Projects pane has a "counts for my work" switch to
-# drive and a bucket for "New project" to land in. This is the org-vocabulary
-# shape docs/v3/contracts.md defines; no projects yet, so every repository
+# One group so the Workstreams pane has a "counts for my work" switch to
+# drive and a bucket for "New workstream" to land in. This is the org-vocabulary
+# shape docs/v3/contracts.md defines; no workstreams yet, so every repository
 # starts out as a suggestion.
-cat > "$HOME_DIR/state/projects.json" <<JSON
-{"version":1,
- "workstreams":[{"key":"development","name":"Development","question":"Which project is this work for?","template_id":"project","origin":"local","off":false}],
- "projects":[]}
+cat > "$HOME_DIR/state/workstreams.json" <<JSON
+{"version":2,
+ "groups":[{"key":"development","name":"Development","question":"Which project is this work for?","template_id":"project","origin":"local","off":false}],
+ "workstreams":[]}
 JSON
 
 # The wrapper records its own pid before exec so teardown can reap the

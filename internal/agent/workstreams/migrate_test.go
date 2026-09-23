@@ -1,3 +1,4 @@
+// vocab:keep-file — the v1 document shape this migration reads.
 package workstreams
 
 import (
@@ -7,7 +8,7 @@ import (
 	"testing"
 )
 
-// legacyV1 is a pre-rename ~/.keld/state/projects.json exactly as the v1 code
+// legacyV1 is a pre-rename ~/.keld/state/workstreams.json exactly as the v1 code
 // wrote it: `workstreams` held the GROUPS and `projects` the workstreams, each
 // naming its group under `workstream`. The same bytes live in
 // internal/agent/daemon/testdata/prerename-home, produced by main's own Save.

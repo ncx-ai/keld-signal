@@ -13,7 +13,7 @@ import (
 //
 // ⚠️ ROUND 3 FIX (Finding 1): a bare []RemoteWorkstream collapses two different
 // facts into one nil — "the file/remote key genuinely declares zero
-// projects" and "I could not tell, because KELD_PROJECTS_FILE could not be
+// projects" and "I could not tell, because KELD_WORKSTREAMS_FILE could not be
 // read" — and only the first of those may ever reach a PostWorkstreams call.
 // Before this type existed, a TRANSIENT failure to read the env file at poll
 // time (a momentary permission glitch, the file mid-rewrite, a flaky mount —
@@ -28,7 +28,7 @@ import (
 type workstreamsResolution struct {
 	list []settings.RemoteWorkstream
 	// ok is false ONLY when the source that would have answered
-	// authoritatively (KELD_PROJECTS_FILE, when the env var is set) could not
+	// authoritatively (KELD_WORKSTREAMS_FILE, when the env var is set) could not
 	// be read. It is true for every other case, including "nothing is
 	// declared anywhere" — that is an honest, actionable "empty" the daemon
 	// may safely act on (though see the empty-skip guard in
@@ -38,13 +38,13 @@ type workstreamsResolution struct {
 }
 
 // resolveWorkstreams is the daemon's project-definition precedence:
-// KELD_PROJECTS_FILE wins if set (the mock path for tests/smoke, reproducible
+// KELD_WORKSTREAMS_FILE wins if set (the mock path for tests/smoke, reproducible
 // regardless of org state), else the remote settings doc's `projects` key,
 // else none. remote may be nil (startup, before the first settings poll
 // lands) — that is exactly "not known yet", the same reading a nil
 // Remote.Projects gets once polling has started.
 //
-// A KELD_PROJECTS_FILE that fails to load returns ok=false — see
+// A KELD_WORKSTREAMS_FILE that fails to load returns ok=false — see
 // workstreamsResolution's doc comment for why that must NOT collapse into the
 // same answer as "the file says there are no projects".
 // legacyEnvNotice keeps the deprecation line to once per process: resolve runs
@@ -125,7 +125,7 @@ func (p *workstreamsState) changed(next []settings.RemoteWorkstream) bool {
 
 // observe records a trustworthy, non-empty resolution as what the daemon
 // believes is declared — independent of whether the sidecar has been told yet.
-// A resolution that is untrustworthy (a KELD_PROJECTS_FILE read error) or
+// A resolution that is untrustworthy (a KELD_WORKSTREAMS_FILE read error) or
 // empty leaves the previous belief alone, for exactly the reasons
 // workstreamsResolution and postWorkstreamsIfKnownNonEmpty already give.
 func (p *workstreamsState) observe(r workstreamsResolution) {
@@ -189,7 +189,7 @@ func (p *workstreamsState) set(v []settings.RemoteWorkstream) {
 // reach `post` when it is:
 //
 //  1. TRUSTWORTHY (r.ok). An untrustworthy resolution (a transient
-//     KELD_PROJECTS_FILE read error) must leave state — and so the
+//     KELD_WORKSTREAMS_FILE read error) must leave state — and so the
 //     sidecar — exactly as it was; see workstreamsResolution's doc comment.
 //  2. NON-EMPTY. An empty resolution is never itself posted, from EITHER
 //     call site — the sidecar's own never-been-told-anything state already
@@ -197,7 +197,7 @@ func (p *workstreamsState) set(v []settings.RemoteWorkstream) {
 //     costs nothing when there is genuinely nothing to say, and it
 //     structurally cannot be the write that clobbers a real list, because it
 //     is never sent. (This means an operator cannot use an explicit `[]` in
-//     KELD_PROJECTS_FILE to CLEAR a previously-declared list via this path —
+//     KELD_WORKSTREAMS_FILE to CLEAR a previously-declared list via this path —
 //     an accepted, deliberate limitation of the simplest fix for the
 //     permanent-mis-attribution failure mode; see the NB1/round-2 report.)
 //  3. CHANGED. Re-checked immediately before posting, so a resolution that a
@@ -234,7 +234,7 @@ func postWorkstreamsIfKnownNonEmpty(post func([]settings.RemoteWorkstream) error
 // goroutine — both retrying against the same cold, just-spawned sidecar with
 // independent backoff. Before the guards existed, the startup call posted
 // resolveWorkstreams(nil) unconditionally, which is an EMPTY list on any
-// machine without KELD_PROJECTS_FILE (today, that is every machine — Atlas
+// machine without KELD_WORKSTREAMS_FILE (today, that is every machine — Atlas
 // does not serve `projects` yet). If the startup call's older,
 // longer-backing-off attempt happened to land AFTER onRemote's had already
 // told the sidecar about a real list, the sidecar would end up holding NO
@@ -257,7 +257,7 @@ func maybePostWorkstreamsAtStartup(post func([]settings.RemoteWorkstream) error,
 // this poll path posted resolveWorkstreams's result unconditionally, byte-
 // identical to the pre-NB1 inline code. That reopened the SAME
 // permanent-mis-attribution failure mode through a different door: a
-// transient KELD_PROJECTS_FILE read error at POLL time (not just at
+// transient KELD_WORKSTREAMS_FILE read error at POLL time (not just at
 // startup) resolved to nil exactly like an honest "nothing declared", and
 // nothing stopped that nil from being posted over a sidecar that already
 // held a real list. workstreamsResolution.ok is what closes that specific hole

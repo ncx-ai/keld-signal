@@ -297,7 +297,7 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 	}
 	doc, err := v.workstreams.Load()
 	if err != nil {
-		// The projects document could not be read. That is not "no project" —
+		// The projects document could not be read. That is not "no workstream" —
 		// it is "we could not tell" — so nothing is recorded and the cell stays
 		// ABSENT, which the page renders as unknown rather than as unattributed.
 		return
