@@ -17,7 +17,7 @@ func atlasValues() []Project {
 
 func blockOn(repo string) map[string]enrich.Labeled {
 	return map[string]enrich.Labeled{
-		DimRepo: {Value: repo, Status: enrich.WorkstreamAttributed},
+		DimRepo: {Value: repo, Status: enrich.DimensionAttributed},
 	}
 }
 

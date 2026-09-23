@@ -118,7 +118,7 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 // It rides ingestSignalHook rather than a second WithIngestSignal, because the
 // watcher takes ONE hook — and because the two want the identical scoping. A
 // transcript the analysis cannot serve is exactly a transcript no block can be
-// cut from, so enrich.WorkstreamsEligible gates both, in one place, and
+// cut from, so enrich.DimensionsEligible gates both, in one place, and
 // extending the analysis to a new source makes it eligible for both in the same
 // edit.
 var blockAdvance atomic.Pointer[func(source, path string)]

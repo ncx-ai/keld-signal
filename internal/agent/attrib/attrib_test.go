@@ -778,15 +778,15 @@ func TestA404FromAnOlderSidecarHoldsTheJobRatherThanConsumingAttempts(t *testing
 // `thin`/`tie`/`no_majority` leader fed to the sidecar as a repo is worth 0.15
 // of the 0.49 assignment threshold against the WRONG project.
 func TestDimsFromDropsEveryDimensionThatIsNotAttributed(t *testing.T) {
-	an := enrich.WindowAnalysis{Workstreams: map[string]enrich.Labeled{
-		"project":  {Value: "acme-billing", Status: enrich.WorkstreamAttributed},
+	an := enrich.WindowAnalysis{Dimensions: map[string]enrich.Labeled{
+		"project":  {Value: "acme-billing", Status: enrich.DimensionAttributed},
 		"branch":   {Value: "fix/rounding"}, // pre-16 sidecar: no status means attributed
 		"language": {Value: "python", Status: "thin"},
 		"skill":    {Value: "review", Status: "tie"},
 		"model":    {Value: "sonnet", Status: "no_majority"},
 		"tooling":  {Value: "pytest", Status: "absent"},
 		"output":   {Value: "docs", Status: "some_future_status"},
-		"empty":    {Value: "", Status: enrich.WorkstreamAttributed},
+		"empty":    {Value: "", Status: enrich.DimensionAttributed},
 	}}
 	got := dimsFrom(an)
 	want := map[string]string{"project": "acme-billing", "branch": "fix/rounding"}
@@ -804,7 +804,7 @@ func TestDimsFromDropsEveryDimensionThatIsNotAttributed(t *testing.T) {
 // an empty-but-present map — the sidecar's metadata boost must see nothing
 // rather than something wrong.
 func TestDimsFromIsNilWhenNothingIsAttributed(t *testing.T) {
-	an := enrich.WindowAnalysis{Workstreams: map[string]enrich.Labeled{
+	an := enrich.WindowAnalysis{Dimensions: map[string]enrich.Labeled{
 		"project": {Value: "acme-billing", Status: "thin"},
 	}}
 	if got := dimsFrom(an); got != nil {

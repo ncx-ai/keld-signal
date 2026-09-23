@@ -41,7 +41,7 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	end := start.Add(20 * time.Minute)
 	ws := map[string]enrich.Labeled{}
 	if repo != "" {
-		ws[projects.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.WorkstreamAttributed}
+		ws[projects.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.DimensionAttributed}
 	}
 	row := publish.BlockEnrichment{
 		SessionID: session,
@@ -50,7 +50,7 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 			End:   end.Format(time.RFC3339),
 		},
 	}
-	row.Workstreams = ws
+	row.Dimensions = ws
 	v.recordCut([]publish.BlockEnrichment{row}, "/p/"+session+".jsonl")
 	return ledger.BlockKey{Session: session, Start: start.Unix()}
 }

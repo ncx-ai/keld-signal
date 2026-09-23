@@ -304,7 +304,7 @@ func projectName(dir string) string {
 // Not gated on `enrich.ContextEligible` the way `contextMeta` is: that predicate
 // is about whether a coding-tool PREAMBLE makes sense for the source, and these
 // facts are about the filesystem. A cwd is a cwd whichever tool was invoked in
-// it. What DOES gate their use is `enrich.WorkstreamsEligible`, one level up,
+// it. What DOES gate their use is `enrich.DimensionsEligible`, one level up,
 // since the pass that consumes them is only registered for sources the analysis
 // can read.
 func resolvedFacts(cwd string) enrich.ResolvedFacts {

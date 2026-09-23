@@ -4,14 +4,14 @@ import "testing"
 
 // The pass carries the three file-path inventories exactly as it does
 // PhysicalActs: no second /analyze call, no inference.
-func TestWorkstreamsPassCarriesTheFilePathInventories(t *testing.T) {
+func TestDimensionsPassCarriesTheFilePathInventories(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
+		Dimensions:  map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		Files:       []PathCount{{"internal/agent/daemon/daemon.go", 5}, {"sidecar/app/main.py", 3}},
 		Directories: []PathCount{{"internal/agent/daemon", 5}},
 		Components:  []PathCount{{"internal/agent/daemon", 5}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -35,11 +35,11 @@ func TestWorkstreamsPassCarriesTheFilePathInventories(t *testing.T) {
 
 // An analysis with no path evidence at a dimension must publish no key for it,
 // not an empty list — same rule actsFrom/dynamicsFrom/effortFrom already follow.
-func TestWorkstreamsPassOmitsEmptyFilePathInventories(t *testing.T) {
+func TestDimensionsPassOmitsEmptyFilePathInventories(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -51,13 +51,13 @@ func TestWorkstreamsPassOmitsEmptyFilePathInventories(t *testing.T) {
 }
 
 // InventoryOmitted rides the same call and the same "empty means no key" rule.
-func TestWorkstreamsPassCarriesInventoryOmitted(t *testing.T) {
+func TestDimensionsPassCarriesInventoryOmitted(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams:      map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions:       map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 		Files:            []PathCount{{"a.go", 45}},
 		InventoryOmitted: map[string]int{"files": 5},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -67,11 +67,11 @@ func TestWorkstreamsPassCarriesInventoryOmitted(t *testing.T) {
 	}
 }
 
-func TestWorkstreamsPassOmitsEmptyInventoryOmitted(t *testing.T) {
+func TestDimensionsPassOmitsEmptyInventoryOmitted(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -86,9 +86,9 @@ func TestRunPublishesFilePathInventoriesWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams:      map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				Dimensions:       map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				Files:            []PathCount{{"internal/agent/daemon/daemon.go", 34}},
 				Directories:      []PathCount{{"internal/agent/daemon", 34}},
 				Components:       []PathCount{{"internal/agent/daemon", 34}},

@@ -50,11 +50,11 @@ func TestAnalyzeSendsCoordinatesAndNeverText(t *testing.T) {
 	if out.Evidence != 42 || out.Schema != 1 || out.Session != "453451c2" {
 		t.Errorf("bad decode: %+v", out)
 	}
-	proj := out.Workstreams["project"]
+	proj := out.Dimensions["project"]
 	if proj == nil || proj.Value != "acme" || proj.Share != 1.0 || proj.Evidence != 3 || proj.Provenance != "known:tool_inputs" {
 		t.Errorf("bad workstream decode: %+v", proj)
 	}
-	if tooling := out.Workstreams["tooling"]; tooling != nil {
+	if tooling := out.Dimensions["tooling"]; tooling != nil {
 		t.Errorf("null workstream should decode to nil, got %+v", tooling)
 	}
 }
@@ -127,7 +127,7 @@ func TestAnalyzeToleratesUnmodelledDynamicsFields(t *testing.T) {
 	if out.Evidence != 180 || out.Schema != 2 {
 		t.Errorf("the digest did not survive the added block: %+v", out)
 	}
-	if proj := out.Workstreams["project"]; proj == nil || proj.Value != "beacon-api" {
+	if proj := out.Dimensions["project"]; proj == nil || proj.Value != "beacon-api" {
 		t.Errorf("bad workstream decode: %+v", proj)
 	}
 	if br := out.Dynamics.Dimensions["branch"]; br == nil || br.Reading != "switched" {
@@ -140,8 +140,8 @@ func TestAnalyzeToleratesUnmodelledDynamicsFields(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if len(got.Workstreams) != 1 || got.Workstreams["project"].Value != "beacon-api" {
-		t.Errorf("workstreams view: %+v", got.Workstreams)
+	if len(got.Dimensions) != 1 || got.Dimensions["project"].Value != "beacon-api" {
+		t.Errorf("workstreams view: %+v", got.Dimensions)
 	}
 	if len(got.Dynamics) != 2 || got.Dynamics["branch"].Reading != "switched" {
 		t.Errorf("dynamics view: %+v", got.Dynamics)

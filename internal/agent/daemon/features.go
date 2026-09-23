@@ -24,7 +24,7 @@ import (
 // "auto" the subsystem is ABSENT — never registered, so it appears in neither
 // facets_skipped nor extractor_versions, which is this codebase's existing
 // distinction between a pass that was SKIPPED and one that was NEVER WIRED
-// (WithWorkstreams is the precedent). Lifting the restriction later is a
+// (WithDimensions is the precedent). Lifting the restriction later is a
 // registration condition, not a redesign: move featureSourceFor's call from
 // deterministicBackend into facetsFor and nothing else changes.
 //
@@ -180,7 +180,7 @@ func onOff(b bool) string {
 // It rides ingestSignalHook rather than a third WithIngestSignal, because the
 // watcher takes ONE hook — and because all three want the identical scoping. A
 // transcript the analysis cannot serve is exactly a transcript no feature row
-// can be computed from, so enrich.WorkstreamsEligible gates them together, in
+// can be computed from, so enrich.DimensionsEligible gates them together, in
 // one place.
 var featureAdvance atomic.Pointer[func(source, path string)]
 

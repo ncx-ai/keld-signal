@@ -123,7 +123,7 @@ func TestBlocksCharacterisedConvertsThroughTheSameGatesAWindowRowUses(t *testing
 	}
 	// The same convert* functions a window row goes through: the workstream
 	// carries its status and evidence, and the inventories arrive converted.
-	if w := b.Analysis.Workstreams["branch"]; w.Value != "main" || w.Status != "attributed" || w.Evidence != 9 {
+	if w := b.Analysis.Dimensions["branch"]; w.Value != "main" || w.Status != "attributed" || w.Evidence != 9 {
 		t.Errorf("branch = %+v", w)
 	}
 	if len(b.Analysis.PhysicalActs) != 1 || b.Analysis.PhysicalActs[0].Value != "read" {

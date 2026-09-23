@@ -160,19 +160,19 @@ func TestBuildCarriesJobCategoryFields(t *testing.T) {
 	}
 }
 
-func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
+func TestBuildCarriesDimensionsAndNoWindowMetadata(t *testing.T) {
 	// A REALISTIC profile: the payload legitimately contains "session_id" and
 	// "sensitivity_spans", so a guard on the substrings "session"/"span" would
 	// only be testing that the fixture left them empty.
 	p := enrich.Profile{
-		Workstreams: map[string]enrich.Labeled{
+		Dimensions: map[string]enrich.Labeled{
 			"project": {Value: "keld-signal", Confidence: 0.812, Producer: "workstreams-v6"},
 		},
 		SensitivitySpans: []enrich.Entity{{Label: "api_key", Start: 4, End: 24, Confidence: 1, Masked: "[REDACTED:api_key]"}},
 	}
 	e := Build(queue.Job{Source: "claude_code", SessionID: "453451c2-ab12"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
-	if e.Workstreams["project"].Value != "keld-signal" {
-		t.Fatalf("dimension not copied onto the wire shape: %+v", e.Workstreams)
+	if e.Dimensions["project"].Value != "keld-signal" {
+		t.Fatalf("dimension not copied onto the wire shape: %+v", e.Dimensions)
 	}
 	b, err := json.Marshal(e)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
 func TestBuildCarriesTheDynamicsReadingAndItsNumbers(t *testing.T) {
 	changed, turnover, decay, shift := false, 0.42, 0.0, -0.31
 	p := enrich.Profile{
-		Workstreams: map[string]enrich.Labeled{
+		Dimensions: map[string]enrich.Labeled{
 			"branch": {Value: "feat/ledger", Confidence: 1, Producer: "workstreams-v8"},
 		},
 		Dynamics: map[string]enrich.Dynamic{
@@ -276,7 +276,7 @@ func TestBuildOmitsAbsentDynamics(t *testing.T) {
 	}
 }
 
-func TestBuildOmitsAbsentWorkstreams(t *testing.T) {
+func TestBuildOmitsAbsentDimensions(t *testing.T) {
 	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "dg@keld.co", false, 0, time.Unix(0, 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -481,7 +481,7 @@ func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 	no, dep, yes := false, 0.516, true
 	p := enrich.Profile{
-		Workstreams: map[string]enrich.Labeled{"language": {Value: "Python", Confidence: 0.571}},
+		Dimensions: map[string]enrich.Labeled{"language": {Value: "Python", Confidence: 0.571}},
 		Prior: map[string]enrich.Prior{
 			"language": {Value: "TypeScript", Share: 0.886, Evidence: 271,
 				Status: "attributed", Agrees: &no, Departure: &dep, Novel: &no},
@@ -496,12 +496,12 @@ func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 	if len(e.Prior) != 3 {
 		t.Fatalf("prior dropped by Build: %+v", e.Prior)
 	}
-	if _, present := e.Workstreams["skill"]; present {
+	if _, present := e.Dimensions["skill"]; present {
 		t.Errorf("the window's skill was filled in from the session: %+v — an "+
-			"unattributed window stays unattributed", e.Workstreams)
+			"unattributed window stays unattributed", e.Dimensions)
 	}
-	if e.Workstreams["language"].Value != "Python" {
-		t.Errorf("the window's own answer was overwritten by its session: %+v", e.Workstreams)
+	if e.Dimensions["language"].Value != "Python" {
+		t.Errorf("the window's own answer was overwritten by its session: %+v", e.Dimensions)
 	}
 	b, err := json.Marshal(e)
 	if err != nil {
@@ -735,8 +735,8 @@ func TestBuildOmitsTheLastFourInventoriesWhenEmpty(t *testing.T) {
 // bespoke block. Pinned so a future "repo needs its own key" change has to
 // argue with an existing assertion, and because a map is exactly the shape whose
 // contents nothing else in this file checks.
-func TestBuildCarriesTheRepoWorkstreamThroughTheMap(t *testing.T) {
-	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+func TestBuildCarriesTheRepoDimensionThroughTheMap(t *testing.T) {
+	p := enrich.Profile{Dimensions: map[string]enrich.Labeled{
 		"repo":    {Value: "github.com/ncx-ai/keld-atlas", Confidence: 1, Producer: "w-v19"},
 		"project": {Value: "keld-atlas", Confidence: 1, Producer: "w-v19"},
 	}}
@@ -773,8 +773,8 @@ func TestBuildCarriesTheRepoWorkstreamThroughTheMap(t *testing.T) {
 // test_the_payload_never_calls_a_sub_floor_dimension_attributed. What this test
 // pins is that the label travels WITH the value, because a thin value published
 // without its status renders as a confident one.
-func TestBuildPublishesASubFloorWorkstreamWithItsEvidenceAndStatus(t *testing.T) {
-	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+func TestBuildPublishesASubFloorDimensionWithItsEvidenceAndStatus(t *testing.T) {
+	p := enrich.Profile{Dimensions: map[string]enrich.Labeled{
 		"toolchain": {Value: "pytest", Confidence: 1, Evidence: 4, Status: "thin",
 			Producer: "workstreams-v21"},
 		"project": {Value: "keld-signal", Confidence: 0.9, Evidence: 30, Status: "attributed",
@@ -810,7 +810,7 @@ func TestBuildPublishesASubFloorWorkstreamWithItsEvidenceAndStatus(t *testing.T)
 // Asserted on the EXACT serialisation of a facet rather than on the absence of a
 // substring elsewhere in the payload, so a field added to Labeled in future
 // fails here rather than silently appearing on seven facets at once.
-func TestAnMLFacetsLabeledPayloadIsUnchangedByTheWorkstreamFields(t *testing.T) {
+func TestAnMLFacetsLabeledPayloadIsUnchangedByTheDimensionFields(t *testing.T) {
 	l := enrich.Labeled{Value: "code_generation", Confidence: 0.83, Producer: "task_type-v21"}
 	b, err := json.Marshal(l)
 	if err != nil {

@@ -43,12 +43,12 @@ type Enrichment struct {
 	FunctionGuess    enrich.Labeled   `json:"function_guess"`
 	Subcategory      enrich.Labeled   `json:"subcategory"`
 	SubcategoryAlt   []enrich.Labeled `json:"subcategory_alt,omitempty"`
-	// Workstreams are the deterministic window dimensions (project, branch,
+	// Dimensions are the deterministic window dimensions (project, branch,
 	// model, ...), counted from tool-call metadata by the sidecar's /analyze —
 	// no inference, and no text: the analysis is asked for a window by
 	// COORDINATES and only its matched dimension values reach here. Absent when
 	// the window attributed none.
-	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	Dimensions map[string]enrich.Labeled `json:"workstreams,omitempty"`
 	// Dynamics is how those dimensions are CHANGING: the recent slice of the
 	// window read against the longer baseline before it, keyed by dimension.
 	// Same /analyze call, same no-inference path, no text either — and, unlike
@@ -226,7 +226,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		FunctionGuess:     p.FunctionGuess,
 		Subcategory:       p.Subcategory,
 		SubcategoryAlt:    p.SubcategoryAlt,
-		Workstreams:       p.Workstreams,
+		Dimensions:        p.Dimensions,
 		Dynamics:          p.Dynamics,
 		Effort:            p.Effort,
 		PhysicalActs:      p.PhysicalActs,

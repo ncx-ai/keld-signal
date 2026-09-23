@@ -512,7 +512,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 	// threaded in rather than derived from m, because ml_backend
 	// "deterministic" has an analysis service and no Model at all.
 	if svc.Analyze != nil {
-		opts = append(opts, enrich.WithWorkstreams(svc.Analyze))
+		opts = append(opts, enrich.WithDimensions(svc.Analyze))
 	}
 	// The personal-data scan is threaded the same way and for the same reason.
 	// Unlike the analyzer its absence does not unregister a pass: sensitivity

@@ -17,7 +17,7 @@ func org(id, title, team string, repos ...string) settings.RemoteProject {
 
 func repoDims(v string) map[string]enrich.Labeled {
 	return map[string]enrich.Labeled{
-		DimRepo: {Value: v, Status: enrich.WorkstreamAttributed},
+		DimRepo: {Value: v, Status: enrich.DimensionAttributed},
 	}
 }
 

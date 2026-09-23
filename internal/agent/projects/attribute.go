@@ -73,7 +73,7 @@ type Vector interface {
 
 // attributedValue reads dims[key], returning it only when the workstream
 // dimension actually reached the attributed floor. "Only 'attributed' may be
-// read as the window's answer" (enrich.WorkstreamStatuses' own rule) applies
+// read as the window's answer" (enrich.DimensionStatuses' own rule) applies
 // here identically: a `thin`/`tie`/`no_majority`/`absent` repo or branch
 // dimension is not evidence to attribute a person's work off of. A Status
 // left empty (a caller's hand-built test dims, or a facet with no status
@@ -84,7 +84,7 @@ func attributedValue(dims map[string]enrich.Labeled, key string) (string, bool) 
 	if !ok || l.Value == "" {
 		return "", false
 	}
-	if l.Status != "" && l.Status != enrich.WorkstreamAttributed {
+	if l.Status != "" && l.Status != enrich.DimensionAttributed {
 		return "", false
 	}
 	return l.Value, true

@@ -5,15 +5,15 @@ import "testing"
 // The pass carries the four identifier-shaped inventories exactly as it does
 // PhysicalActs/Files/Directories/Components: no second /analyze call, no
 // inference.
-func TestWorkstreamsPassCarriesTheIdentifierInventories(t *testing.T) {
+func TestDimensionsPassCarriesTheIdentifierInventories(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams:     map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
+		Dimensions:      map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		HarnessTools:    []NameCount{{"Bash", 30}, {"Read", 12}},
 		Programs:        []NameCount{{"git", 9}},
 		ExternalSystems: []NameCount{{"github.com", 4}},
 		Integrations:    []NameCount{{"notion-fetch", 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -41,11 +41,11 @@ func TestWorkstreamsPassCarriesTheIdentifierInventories(t *testing.T) {
 
 // An analysis with no evidence at a dimension must publish no key for it, not
 // an empty list — same rule the path inventories already follow.
-func TestWorkstreamsPassOmitsEmptyIdentifierInventories(t *testing.T) {
+func TestDimensionsPassOmitsEmptyIdentifierInventories(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -62,9 +62,9 @@ func TestRunPublishesIdentifierInventoriesWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams:     map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				Dimensions:      map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				HarnessTools:    []NameCount{{"Bash", 34}},
 				Programs:        []NameCount{{"git", 12}},
 				ExternalSystems: []NameCount{{"github.com", 3}},
@@ -113,16 +113,16 @@ func TestIdentsFromTreatsAnEmptyListAsNoAnswer(t *testing.T) {
 // analysis had always extracted and never published. Kept as one test over a
 // table rather than four copies: the properties are identical and the interesting
 // thing is that all four hold.
-func TestWorkstreamsPassCarriesTheLastFourInventories(t *testing.T) {
+func TestDimensionsPassCarriesTheLastFourInventories(t *testing.T) {
 	an := WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
-		FileTypes:   []NameCount{{".tsx", 12}},
-		ShellVerbs:  []NameCount{{"git rebase", 7}},
-		Subagents:   []NameCount{{"general-purpose", 4}},
-		McpServers:  []NameCount{{"notion", 5}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		FileTypes:  []NameCount{{".tsx", 12}},
+		ShellVerbs: []NameCount{{"git rebase", 7}},
+		Subagents:  []NameCount{{"general-purpose", 4}},
+		McpServers: []NameCount{{"notion", 5}},
 	}
 	fa := &fakeAnalyze{ok: true, out: an}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -141,8 +141,8 @@ func TestWorkstreamsPassCarriesTheLastFourInventories(t *testing.T) {
 	// Empty means NO KEY, never an empty list: an inventory of nothing is the
 	// absence of an answer, not an answer.
 	bare := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}}}}
-	got2, err := (WorkstreamsExtractor{Analyze: bare.fn}).Run(coords(t))
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}}}}
+	got2, err := (DimensionsExtractor{Analyze: bare.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -159,13 +159,13 @@ func TestRunPublishesTheLastFourInventoriesWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
-				FileTypes:   []NameCount{{".go", 14}},
-				ShellVerbs:  []NameCount{{"go test", 6}},
-				Subagents:   []NameCount{{"Explore", 2}},
-				McpServers:  []NameCount{{"notion", 1}},
+				Dimensions: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				FileTypes:  []NameCount{{".go", 14}},
+				ShellVerbs: []NameCount{{"go test", 6}},
+				Subagents:  []NameCount{{"Explore", 2}},
+				McpServers: []NameCount{{"notion", 1}},
 			}, true
 		}))
 	if len(p.FileTypes) != 1 || p.FileTypes[0].Value != ".go" || p.FileTypes[0].N != 14 {

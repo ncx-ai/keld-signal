@@ -518,9 +518,9 @@ could raise.
   It takes COORDINATES (transcript path + prompt id), never text, and publishes
   as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
   confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
-  the daemon has an analysis backend (`enrich.WithWorkstreams`) **and** the
+  the daemon has an analysis backend (`enrich.WithDimensions`) **and** the
   source is one the analysis can read — `claude_code`/`cowork` only
-  (`enrich.WorkstreamsEligible`): the analysis resolves a prompt by Claude-Code
+  (`enrich.DimensionsEligible`): the analysis resolves a prompt by Claude-Code
   JSONL shape, so Codex/Gemini prompt ids 404, and registering it there would
   downgrade every one of their jobs to `"partial"` for a facet that was never
   obtainable. Callers with no backend (eval, localagent) are unchanged. A failed analysis
@@ -541,7 +541,7 @@ could raise.
   the way to the published enrichment, so nothing downstream can tell one
   observation from five hundred". It isn't dropped any more: `Labeled` carries
   `evidence` (the count) and `status` (`attributed`/`thin`/`tie`/`no_majority`/
-  `absent` — `enrich.WorkstreamStatuses`, the sidecar's `window.REASONS`), both
+  `absent` — `enrich.DimensionStatuses`, the sidecar's `window.REASONS`), both
   `omitempty` so the ML facets that share the type are byte-unchanged. Deleting
   the dimension cost 924 of 12,016 measured dimension-slots (7.7%) that held
   **real evidence and published nothing** — 198 of them one observation short —
@@ -660,7 +660,7 @@ upgrade.**
   the watcher's poll loop — the loop that carries every hook-free prompt. Signals
   are **dropped, not retried**, because ingest resumes from the stored offset: the
   next signal catches up, and `/analyze`'s own on-demand ingest is the backstop if
-  none ever comes. Scoped to `enrich.WorkstreamsEligible` sources (the same
+  none ever comes. Scoped to `enrich.DimensionsEligible` sources (the same
   predicate the pass is gated on — a Codex/Gemini window can never be served, so
   ingesting it is pure cost). Forward-only by default, matching
   `KELD_WATCH_BACKFILL`: a first sighting consumes nothing, so a daemon restart is
@@ -1023,7 +1023,7 @@ report no `named_terms` forever. A changed fingerprint reparses.
 
 **The dynamics block (`analysis/dynamics.py`) — what MOVED in the window.** The same
 `/analyze` call that characterises the window also answers what changed inside it:
-`WorkstreamAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
+`DimensionAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
 round-trip and no inference at all** (two `rollup_window` calls, ~2ms each) and they
 publish under `ml_backend:"deterministic"` too. The span is cut into a recent
 **slice** and an abutting **baseline**, and each dimension is compared across the
@@ -1419,7 +1419,7 @@ selects one of three modes:
   every executed pass succeeded publishes `pipeline_status:"enriched"`.
   `"partial"` keeps its one meaning — something that should have worked did
   not (panic, error, pass deadline) — including for a model-free pass that
-  errors in this mode. This is `WithWorkstreams`' idiom one level down: don't
+  errors in this mode. This is `WithDimensions`' idiom one level down: don't
   downgrade a profile for a facet the run never had. The thinner facet set
   stays **visible** in the new `Profile.FacetsSkipped` / wire
   `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —

@@ -123,14 +123,14 @@ func TestEffortPublishesTheNumbersItDoesHave(t *testing.T) {
 // digest, the dynamics, and the effort block. The effort block needs no
 // inference at all — it is counted from timestamps and byte lengths — so it
 // survives ml_backend "deterministic" for the same reason the other two do.
-func TestWorkstreamsPassCarriesTheEffortBlock(t *testing.T) {
+func TestDimensionsPassCarriesTheEffortBlock(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
+		Dimensions: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		Effort: &Effort{AuthoredBytes: i64(6520), AuthoringTurns: 3,
 			AuthoredStatus: "attributed", FastShare: f(0.83), Gaps: 41,
 			Tempo: "steered", TempoStatus: "attributed"},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -152,11 +152,11 @@ func TestWorkstreamsPassCarriesTheEffortBlock(t *testing.T) {
 // An analysis with no effort block (an older sidecar) must not publish a zeroed
 // one: every count would read 0 and every status "", which is a real-looking
 // answer nobody measured.
-func TestWorkstreamsPassOmitsAnAbsentEffortBlock(t *testing.T) {
+func TestDimensionsPassOmitsAnAbsentEffortBlock(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -170,9 +170,9 @@ func TestRunPublishesEffortWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				Dimensions: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				Effort: &Effort{AuthoredBytes: i64(22187), AuthoringTurns: 1,
 					AuthoredStatus: "attributed", FastShare: f(0.0), Gaps: 16,
 					Tempo: "autonomous", TempoStatus: "attributed"},

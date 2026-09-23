@@ -82,7 +82,7 @@ func TestTickCharacterisedConvertsAWindowTheSameWayAPromptsIsConverted(t *testin
 	if w.SessionID != "sess-1" || w.Source != "claude_code" {
 		t.Errorf("identity not carried: %+v", w)
 	}
-	if got := w.Analysis.Workstreams["branch"]; got.Value != "main" || got.Confidence != 1.0 {
+	if got := w.Analysis.Dimensions["branch"]; got.Value != "main" || got.Confidence != 1.0 {
 		t.Errorf("share did not become confidence: %+v", got)
 	}
 	if len(w.Analysis.PhysicalActs) != 1 || w.Analysis.PhysicalActs[0].N != 4 {

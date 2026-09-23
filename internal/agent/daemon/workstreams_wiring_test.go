@@ -29,14 +29,14 @@ func (m *analyzingModel) AnalyzeLabeled(path, promptID string, spanMinutes int,
 	changed := true
 	turnover := 0.35
 	return enrich.WindowAnalysis{
-		Workstreams: map[string]enrich.Labeled{"project": {Value: "keld-signal", Confidence: 0.8}},
+		Dimensions: map[string]enrich.Labeled{"project": {Value: "keld-signal", Confidence: 0.8}},
 		Dynamics: map[string]enrich.Dynamic{
 			"branch": {Status: "compared", Reading: "switched", Changed: &changed, Turnover: &turnover},
 		},
 	}, true
 }
 
-func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
+func TestProcessPublishesDimensionsFromTheAnalyzer(t *testing.T) {
 	m := &analyzingModel{Model: enrichtest.NewFake()}
 	sender := &fakeSender{}
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "WS-1",
@@ -50,10 +50,10 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("want 1 publish, got %d", len(sent))
 	}
-	if sent[0].Workstreams["project"].Value != "keld-signal" {
-		t.Fatalf("workstreams not threaded into the published enrichment: %+v", sent[0].Workstreams)
+	if sent[0].Dimensions["project"].Value != "keld-signal" {
+		t.Fatalf("workstreams not threaded into the published enrichment: %+v", sent[0].Dimensions)
 	}
-	if m.path != "/tmp/t.jsonl" || m.prompt != "p1" || m.span != enrich.WorkstreamSpanMinutes {
+	if m.path != "/tmp/t.jsonl" || m.prompt != "p1" || m.span != enrich.DimensionSpanMinutes {
 		t.Errorf("job coordinates not threaded: path=%q prompt=%q span=%d", m.path, m.prompt, m.span)
 	}
 	// The dynamics half of the same /analyze call reaches the wire too — this is
@@ -74,7 +74,7 @@ func TestProcessPublishesDynamicsWithNoModel(t *testing.T) {
 	shift := -0.31
 	svc := serviceFacets{Analyze: func(path, promptID string, span int, _ enrich.ResolvedFacts) (enrich.WindowAnalysis, bool) {
 		return enrich.WindowAnalysis{
-			Workstreams: map[string]enrich.Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+			Dimensions: map[string]enrich.Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 			Dynamics: map[string]enrich.Dynamic{
 				"branch": {Status: "compared", Reading: "broadening", ConcentrationShift: &shift},
 			},
@@ -117,7 +117,7 @@ func TestFacetsForRequiresTheCapability(t *testing.T) {
 // A Codex job must not pay for a pass the analysis cannot serve: no sidecar
 // round-trip, no workstreams, and — critically, since ml_backend "auto" is what
 // nearly every user runs — no downgrade of the published pipeline_status.
-func TestProcessSkipsWorkstreamsForGemini(t *testing.T) {
+func TestProcessSkipsDimensionsForGemini(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
 	m := &analyzingModel{Model: enrichtest.NewFake()}
 	sender := &fakeSender{}
@@ -132,8 +132,8 @@ func TestProcessSkipsWorkstreamsForGemini(t *testing.T) {
 	if m.path != "" {
 		t.Errorf("analysis called for an unreadable source: path=%q", m.path)
 	}
-	if sent.Workstreams != nil {
-		t.Errorf("unexpected workstreams: %+v", sent.Workstreams)
+	if sent.Dimensions != nil {
+		t.Errorf("unexpected workstreams: %+v", sent.Dimensions)
 	}
 	if sent.PipelineStatus == "partial" {
 		t.Errorf("a pass that cannot serve this source must not downgrade it: status=%q versions=%v",
@@ -202,7 +202,7 @@ func TestFacetsForWithNoRegionProviderSendsNoOpinion(t *testing.T) {
 // only because sidecar/app/analysis/readers/codex.py can resolve a rollout's
 // prompt id. A regression that removes the reader must fail here, loudly, rather
 // than silently downgrading every Codex job to "partial" again.
-func TestProcessRunsWorkstreamsForCodex(t *testing.T) {
+func TestProcessRunsDimensionsForCodex(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
 	m := &analyzingModel{Model: enrichtest.NewFake()}
 	sender := &fakeSender{}

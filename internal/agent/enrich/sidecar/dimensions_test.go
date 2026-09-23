@@ -35,7 +35,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	proj, present := got.Workstreams["project"]
+	proj, present := got.Dimensions["project"]
 	if !present {
 		t.Fatalf("project dimension missing: %+v", got)
 	}
@@ -48,7 +48,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	// nothing to publish and it is dropped. A SCHEMA 16 sidecar sends an object
 	// saying `absent` instead — see
 	// TestAnalyzeLabeledCarriesThinAndAbsentDimensionsWithTheirStatus.
-	if _, present := got.Workstreams["branch"]; present {
+	if _, present := got.Dimensions["branch"]; present {
 		t.Error("a null dimension from a pre-16 sidecar must be absent, never a Labeled with an empty Value")
 	}
 	// The same fixture's `project` object carries NO status, which is the other
@@ -58,7 +58,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	if proj.Status != "attributed" {
 		t.Errorf("a statusless pre-16 dimension must read as attributed, got %+v", proj)
 	}
-	if len(got.Workstreams) != 1 {
+	if len(got.Dimensions) != 1 {
 		t.Errorf("unexpected dimensions: %+v", got)
 	}
 }
@@ -134,9 +134,9 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 	// two apart. Guarded from both ends: the workstream status below must BE
 	// "attributed" (so the scoping is real and not an accident of an empty
 	// payload), and the dynamics subtree must not contain it anywhere.
-	if got.Workstreams["project"].Status != "attributed" {
+	if got.Dimensions["project"].Status != "attributed" {
 		t.Fatalf("the workstream status is not what makes the scoping necessary; "+
-			"the check below would be vacuous: %+v", got.Workstreams)
+			"the check below would be vacuous: %+v", got.Dimensions)
 	}
 	dyn, err := json.Marshal(got.Dynamics)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestAnalyzeLabeledEmptyWindowIsASuccess(t *testing.T) {
 	if !ok {
 		t.Fatal("an all-unattributed window is a successful analysis, not a failure")
 	}
-	if len(got.Workstreams) != 0 {
+	if len(got.Dimensions) != 0 {
 		t.Errorf("want no dimensions, got %+v", got)
 	}
 }
@@ -200,8 +200,8 @@ func TestAnalyzeLabeledCarriesThinAndAbsentDimensionsWithTheirStatus(t *testing.
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if len(got.Workstreams) != 4 {
-		t.Fatalf("a sub-floor dimension was dropped: %+v", got.Workstreams)
+	if len(got.Dimensions) != 4 {
+		t.Fatalf("a sub-floor dimension was dropped: %+v", got.Dimensions)
 	}
 	for dim, want := range map[string]enrich.Labeled{
 		"project":  {Value: "keld-signal", Confidence: 0.9, Evidence: 30, Status: "attributed"},
@@ -209,8 +209,8 @@ func TestAnalyzeLabeledCarriesThinAndAbsentDimensionsWithTheirStatus(t *testing.
 		"skill":    {Status: "absent"},
 		"language": {Value: "Go", Confidence: 0.33, Evidence: 12, Status: "no_majority"},
 	} {
-		if got.Workstreams[dim] != want {
-			t.Errorf("%s: got %+v, want %+v", dim, got.Workstreams[dim], want)
+		if got.Dimensions[dim] != want {
+			t.Errorf("%s: got %+v, want %+v", dim, got.Dimensions[dim], want)
 		}
 	}
 }
@@ -237,12 +237,12 @@ func TestAnalyzeLabeledDropsADimensionWithAnUnreadableStatus(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if _, present := got.Workstreams["tooling"]; present {
-		t.Errorf("an unreadable status must drop the dimension: %+v", got.Workstreams)
+	if _, present := got.Dimensions["tooling"]; present {
+		t.Errorf("an unreadable status must drop the dimension: %+v", got.Dimensions)
 	}
 	// ... and only that one. One unreadable dimension must not cost the others,
 	// the same per-entry rule convertActs follows.
-	if len(got.Workstreams) != 1 || got.Workstreams["project"].Value != "keld-signal" {
-		t.Errorf("the readable dimensions were collateral damage: %+v", got.Workstreams)
+	if len(got.Dimensions) != 1 || got.Dimensions["project"].Value != "keld-signal" {
+		t.Errorf("the readable dimensions were collateral damage: %+v", got.Dimensions)
 	}
 }

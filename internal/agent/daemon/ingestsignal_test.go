@@ -61,7 +61,7 @@ func TestIngestSignalNeverBlocksTheWatcher(t *testing.T) {
 }
 
 // /analyze can only resolve a prompt id for a source the sidecar has a READER
-// for, so the workstreams pass is gated to WorkstreamsEligible sources.
+// for, so the workstreams pass is gated to DimensionsEligible sources.
 // (Codex joined that set on 2026-09-15; Gemini has not.) Ingesting a transcript whose windows
 // can never be served is pure cost — a whole-file parse and permanent store rows
 // for an answer nobody can ask for.
@@ -110,10 +110,10 @@ func TestIngestSignalOnlyForSourcesTheAnalysisCanServe(t *testing.T) {
 	// codex gained a reader and moved from the ineligible column to the eligible
 	// one. gemini_cli is the ineligible example now; when it gains a reader this
 	// check will say so too.
-	if !enrich.WorkstreamsEligible("claude_code") || !enrich.WorkstreamsEligible("codex") {
+	if !enrich.DimensionsEligible("claude_code") || !enrich.DimensionsEligible("codex") {
 		t.Error("an eligible source is no longer eligible; this test's expectations are stale")
 	}
-	if enrich.WorkstreamsEligible("gemini_cli") {
+	if enrich.DimensionsEligible("gemini_cli") {
 		t.Error("gemini_cli became eligible; this test needs a new ineligible example")
 	}
 }

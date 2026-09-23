@@ -197,8 +197,8 @@ func TestAnalyzeLabeledForwardsTheDynamics(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if got.Workstreams["branch"].Value != "feat/ledger" {
-		t.Errorf("workstreams half lost: %+v", got.Workstreams)
+	if got.Dimensions["branch"].Value != "feat/ledger" {
+		t.Errorf("workstreams half lost: %+v", got.Dimensions)
 	}
 	if len(got.Dynamics) != 3 {
 		t.Fatalf("want branch/skill/language, got %+v", got.Dynamics)
@@ -258,8 +258,8 @@ func TestAnalyzeLabeledDropsAnUnknownDynamicsVocabulary(t *testing.T) {
 	}
 	// The digest half is unaffected: dynamics vocabulary skew must not cost the
 	// facet that has been publishing since before this block existed.
-	if got.Workstreams["branch"].Value != "feat/ledger" {
-		t.Errorf("workstreams half dropped with the dynamic: %+v", got.Workstreams)
+	if got.Dimensions["branch"].Value != "feat/ledger" {
+		t.Errorf("workstreams half dropped with the dynamic: %+v", got.Dimensions)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestAnalyzeLabeledWithoutADynamicsBlock(t *testing.T) {
 	if got.Dynamics != nil {
 		t.Errorf("want nil dynamics, got %+v", got.Dynamics)
 	}
-	if got.Workstreams["branch"].Value != "main" {
-		t.Errorf("workstreams half lost: %+v", got.Workstreams)
+	if got.Dimensions["branch"].Value != "main" {
+		t.Errorf("workstreams half lost: %+v", got.Dimensions)
 	}
 }

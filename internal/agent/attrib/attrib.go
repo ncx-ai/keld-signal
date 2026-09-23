@@ -780,7 +780,7 @@ func closeEnough(a, b float64) bool {
 //
 // ⚠️ THE STATUS IS PART OF THE VALUE AND READING ONE WITHOUT THE OTHER IS I6.
 // A workstream dimension publishes `value` alongside a `status` from
-// enrich.WorkstreamStatuses, and only "attributed" may be read as the window's
+// enrich.DimensionStatuses, and only "attributed" may be read as the window's
 // answer — enrich/types.go states that contract in as many words, and says a
 // consumer rendering `thin` identically to `attributed` is misreporting. This
 // was such a consumer: it copied every Value regardless, so a `thin` (below
@@ -795,15 +795,15 @@ func closeEnough(a, b float64) bool {
 // non-"attributed" status is dropped — including one this binary does not
 // recognise, which is version skew and must not be read as the answer.
 func dimsFrom(an enrich.WindowAnalysis) map[string]string {
-	if len(an.Workstreams) == 0 {
+	if len(an.Dimensions) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(an.Workstreams))
-	for dim, l := range an.Workstreams {
+	out := make(map[string]string, len(an.Dimensions))
+	for dim, l := range an.Dimensions {
 		if l.Value == "" {
 			continue
 		}
-		if l.Status != "" && l.Status != enrich.WorkstreamAttributed {
+		if l.Status != "" && l.Status != enrich.DimensionAttributed {
 			continue
 		}
 		out[dim] = l.Value

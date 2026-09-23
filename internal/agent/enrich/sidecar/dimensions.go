@@ -12,8 +12,8 @@ import (
 // AnalyzeLabeled is Analyze in the shape the enrichment pipeline consumes: the
 // window's deterministic dimensions as enrich.Labeled, plus the same window's
 // dynamics as enrich.Dynamic, both keyed by dimension. It satisfies
-// enrich.WorkstreamAnalyzer, and is what the daemon wires into
-// enrich.WithWorkstreams.
+// enrich.DimensionAnalyzer, and is what the daemon wires into
+// enrich.WithDimensions.
 //
 // It is the ONE chokepoint where /analyze becomes publishable, which is why both
 // halves convert here rather than one here and one somewhere later.
@@ -89,13 +89,13 @@ import (
 //     reading without a readable status is not interpretable.
 //
 // Producer is left unset: the pass stamps its own version onto every dimension
-// it emits (see enrich.WorkstreamsExtractor), the same way every other pass
+// it emits (see enrich.DimensionsExtractor), the same way every other pass
 // does, so attribution does not depend on which analyzer supplied the map.
 //
 //   - The WORKSTREAM dimensions carry `status` and `evidence` through onto the
 //     Labeled, and that is the whole of what makes an unattributed dimension
 //     publishable rather than deleted. It is the SAME VOCABULARY GATE as the two
-//     blocks above (enrich.KnownWorkstreamStatus, mirroring the sidecar's
+//     blocks above (enrich.KnownDimensionStatus, mirroring the sidecar's
 //     window.REASONS): a status this binary cannot read is version skew, and the
 //     dimension drops whole rather than publishing a value with an unreadable
 //     outcome beside it — a `thin` value rendered as an attributed one is exactly
@@ -131,7 +131,7 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 	if !ok {
 		return enrich.WindowAnalysis{}, false
 	}
-	return analysisFrom(res.Workstreams, res.Inventory, res.InventoryOmitted,
+	return analysisFrom(res.Dimensions, res.Inventory, res.InventoryOmitted,
 		res.Dynamics, res.Effort, res.Prior), true
 }
 
@@ -151,18 +151,18 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 // It is not a v2-reaches-into-v1 seam either: it composes the per-field convert
 // functions, which are the measured definitions, and holds no window-specific
 // or block-specific knowledge at all.
-func analysisFrom(ws map[string]*Workstream, inv InventoryBlock, omitted map[string]int,
+func analysisFrom(ws map[string]*Dimension, inv InventoryBlock, omitted map[string]int,
 	dyn DynamicsBlock, eff *EffortBlock, prior PriorBlock) enrich.WindowAnalysis {
 	dims := make(map[string]enrich.Labeled, len(ws))
 	for dim, w := range ws {
-		l, keep := labeledWorkstream(w)
+		l, keep := labeledDimension(w)
 		if !keep {
 			continue
 		}
 		dims[dim] = l
 	}
 	return enrich.WindowAnalysis{
-		Workstreams:      dims,
+		Dimensions:       dims,
 		PhysicalActs:     convertActs(inv.PhysicalActs),
 		Files:            convertPathInventory(inv.Files),
 		Directories:      convertPathInventory(inv.Directories),
@@ -183,7 +183,7 @@ func analysisFrom(ws map[string]*Workstream, inv InventoryBlock, omitted map[str
 	}
 }
 
-// labeledWorkstream converts one /analyze dimension into the Labeled the pass
+// labeledDimension converts one /analyze dimension into the Labeled the pass
 // publishes, reporting whether it may be carried at all. Shared by AnalyzeLabeled
 // and the tick path so the two cannot answer the same dimension differently.
 //
@@ -197,7 +197,7 @@ func analysisFrom(ws map[string]*Workstream, inv InventoryBlock, omitted map[str
 // Confidence is the dimension's share, unchanged: a 0..1 dominance fraction is
 // the natural confidence, and it is now readable as such because Status says
 // what it is a fraction OF.
-func labeledWorkstream(w *Workstream) (enrich.Labeled, bool) {
+func labeledDimension(w *Dimension) (enrich.Labeled, bool) {
 	if w == nil {
 		return enrich.Labeled{}, false
 	}
@@ -205,7 +205,7 @@ func labeledWorkstream(w *Workstream) (enrich.Labeled, bool) {
 	if status == "" {
 		status = "attributed"
 	}
-	if !enrich.KnownWorkstreamStatus(status) {
+	if !enrich.KnownDimensionStatus(status) {
 		return enrich.Labeled{}, false
 	}
 	return enrich.Labeled{

@@ -20,7 +20,7 @@ type fakeBlocks struct{ rows []projects.BlockSummary }
 func (f fakeBlocks) SinceWeekStart() ([]projects.BlockSummary, error) { return f.rows, nil }
 
 func attributedDim(v string) enrich.Labeled {
-	return enrich.Labeled{Value: v, Confidence: 1, Status: enrich.WorkstreamAttributed}
+	return enrich.Labeled{Value: v, Confidence: 1, Status: enrich.DimensionAttributed}
 }
 
 func newTestStore(t *testing.T) *projects.Store {

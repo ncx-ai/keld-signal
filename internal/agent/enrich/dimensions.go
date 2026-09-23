@@ -2,12 +2,12 @@ package enrich
 
 import "errors"
 
-// WorkstreamSpanMinutes is the window the deterministic analysis characterises:
+// DimensionSpanMinutes is the window the deterministic analysis characterises:
 // the hour of work ending at this prompt. It matches the span the analysis was
 // developed and measured against (see sidecar/app/analysis/workstreams.py).
-const WorkstreamSpanMinutes = 60
+const DimensionSpanMinutes = 60
 
-// workstreamAnalyzableSources are the sources whose transcripts the window
+// dimensionAnalyzableSources are the sources whose transcripts the window
 // analysis can actually read — the one rule being that the sidecar has a READER
 // for that source's files and can resolve its prompt ids.
 //
@@ -33,17 +33,17 @@ const WorkstreamSpanMinutes = 60
 // chat files are a different shape again and no reader reads them. Extend this
 // set only alongside a reader in the analysis that resolves that source's prompt
 // ids — that is the whole of the rule.
-var workstreamAnalyzableSources = map[string]bool{
+var dimensionAnalyzableSources = map[string]bool{
 	"claude_code": true,
 	"cowork":      true,
 	"codex":       true,
 }
 
-// WorkstreamsEligible reports whether a source's transcripts can be read by the
+// DimensionsEligible reports whether a source's transcripts can be read by the
 // window analysis (mirrors ContextEligible's shape).
-func WorkstreamsEligible(source string) bool { return workstreamAnalyzableSources[source] }
+func DimensionsEligible(source string) bool { return dimensionAnalyzableSources[source] }
 
-// WorkstreamStatuses is the closed published vocabulary of Labeled.Status on a
+// DimensionStatuses is the closed published vocabulary of Labeled.Status on a
 // workstream dimension: the ATTRIBUTION OUTCOME, mirroring the sidecar's
 // window.REASONS.
 //
@@ -60,20 +60,20 @@ func WorkstreamsEligible(source string) bool { return workstreamAnalyzableSource
 // and "absent" now publish AS THEMSELVES instead of the dimension being deleted
 // — 924 of 12,016 measured dimension-slots held real evidence and published
 // nothing, 198 of them one observation short of the floor.
-var WorkstreamStatuses = PriorStatuses
+var DimensionStatuses = PriorStatuses
 
-// WorkstreamAttributed is the ONE member of WorkstreamStatuses a consumer may
+// DimensionAttributed is the ONE member of DimensionStatuses a consumer may
 // read as the window's answer. Named rather than spelled as a literal at each
 // site because a consumer that forgets to check it does not fail — it silently
 // reports a `thin`/`tie`/`no_majority` leader as the answer, which is exactly
 // what internal/agent/attrib's dims builder did (I6).
-const WorkstreamAttributed = "attributed"
+const DimensionAttributed = "attributed"
 
-// KnownWorkstreamStatus gates a status against the published set. A value this
+// KnownDimensionStatus gates a status against the published set. A value this
 // binary does not recognise is sidecar version skew — the sidecar is frozen and
 // shipped separately from keld-agent — and forwarding it would publish a label
 // no Atlas consumer's vocabulary contains.
-func KnownWorkstreamStatus(s string) bool { return KnownPriorStatus(s) }
+func KnownDimensionStatus(s string) bool { return KnownPriorStatus(s) }
 
 // errAnalysisUnavailable marks the pass failed because the window analysis
 // could not be obtained at all — a different fact from "the analysis ran and
@@ -81,7 +81,7 @@ func KnownWorkstreamStatus(s string) bool { return KnownPriorStatus(s) }
 // dimensions. Only the former downgrades the profile to "partial".
 var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailable")
 
-// WorkstreamAnalyzer resolves the deterministic workstream dimensions for the
+// DimensionAnalyzer resolves the deterministic workstream dimensions for the
 // window of spanMinutes ending at promptID in the transcript at path.
 //
 // It takes COORDINATES, never text — the same rule the enrichment hook and
@@ -102,10 +102,10 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // analyzer works out, because the analyzer is an HTTP client and must do no
 // filesystem IO — and because the analysis is the thing that should be given
 // them, not a prompt preamble. The zero value is normal.
-type WorkstreamAnalyzer func(path, promptID string, spanMinutes int,
+type DimensionAnalyzer func(path, promptID string, spanMinutes int,
 	resolved ResolvedFacts) (WindowAnalysis, bool)
 
-// WorkstreamsExtractor publishes the deterministic dimensions a cost report
+// DimensionsExtractor publishes the deterministic dimensions a cost report
 // buckets by (project, branch, model, output_type, language, skill,
 // tooling), plus the same window's dynamics, effort, PHYSICAL-ACTS INVENTORY,
 // FILE-PATH INVENTORIES (files/directories/components) and IDENTIFIER
@@ -120,19 +120,19 @@ type WorkstreamAnalyzer func(path, promptID string, spanMinutes int,
 // they stay valid for a turn the content gate filters out.
 //
 // Analyze is injected so the pass is testable without a sidecar; the daemon
-// wires it to sidecar.Client.AnalyzeLabeled (see enrich.WithWorkstreams).
-type WorkstreamsExtractor struct {
-	Analyze WorkstreamAnalyzer
-	// SpanMinutes overrides the window; <= 0 uses WorkstreamSpanMinutes.
+// wires it to sidecar.Client.AnalyzeLabeled (see enrich.WithDimensions).
+type DimensionsExtractor struct {
+	Analyze DimensionAnalyzer
+	// SpanMinutes overrides the window; <= 0 uses DimensionSpanMinutes.
 	SpanMinutes int
 }
 
-func (WorkstreamsExtractor) Name() string    { return "workstreams" }
-func (WorkstreamsExtractor) Version() string { return versioned("workstreams") }
-func (WorkstreamsExtractor) ModelFree() bool { return true }
-func (WorkstreamsExtractor) AlwaysRun() bool { return true }
+func (DimensionsExtractor) Name() string    { return "workstreams" }
+func (DimensionsExtractor) Version() string { return versioned("workstreams") }
+func (DimensionsExtractor) ModelFree() bool { return true }
+func (DimensionsExtractor) AlwaysRun() bool { return true }
 
-func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
+func (e DimensionsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// No analyzer wired, or no coordinates to analyze (inline text, the eval
 	// harness): there is nothing to ask, and asking anyway can only 404.
 	if e.Analyze == nil || ctx.TranscriptPath == "" || ctx.PromptID == "" {
@@ -140,7 +140,7 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	}
 	span := e.SpanMinutes
 	if span <= 0 {
-		span = WorkstreamSpanMinutes
+		span = DimensionSpanMinutes
 	}
 	// The resolved facts ride the call. `ctx.Resolved` is the zero value for a
 	// caller with no cwd, and an empty repo identity is a normal answer the
@@ -153,8 +153,8 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		// answer. Fail the pass instead — the profile publishes as "partial".
 		return nil, errAnalysisUnavailable
 	}
-	out := make(map[string]Labeled, len(an.Workstreams))
-	for dim, l := range an.Workstreams {
+	out := make(map[string]Labeled, len(an.Dimensions))
+	for dim, l := range an.Dimensions {
 		// EVERY dimension the analyzer answered with is carried, including the
 		// ones it could not attribute. The old `l.Value == ""` skip here was the
 		// Go-side half of a suppression that discarded the evidence count along

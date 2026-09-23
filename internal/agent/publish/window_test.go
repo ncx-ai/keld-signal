@@ -25,8 +25,8 @@ func sampleWindow() enrich.WindowCharacterisation {
 			SpanMinutes: 54.133, Evidence: 63,
 		},
 		Analysis: enrich.WindowAnalysis{
-			Workstreams: map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
-			Dynamics:    map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
+			Dimensions: map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
+			Dynamics:   map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
 			Effort: &enrich.Effort{
 				AuthoredBytes: &authoredBytes, AuthoringTurns: 3, AuthoredStatus: "attributed",
 				FastShare: &fastShare, Gaps: 41, Tempo: "steered", TempoStatus: "attributed",
@@ -132,7 +132,7 @@ func TestAWindowRowCarriesItsBoundsAndItsBlocks(t *testing.T) {
 	if got.Window.SpanMinutes != 54.133 {
 		t.Errorf("span = %v, want the fractional gap width", got.Window.SpanMinutes)
 	}
-	if len(got.Workstreams) == 0 || len(got.Dynamics) == 0 || len(got.PhysicalActs) == 0 ||
+	if len(got.Dimensions) == 0 || len(got.Dynamics) == 0 || len(got.PhysicalActs) == 0 ||
 		len(got.Files) == 0 || len(got.Directories) == 0 || len(got.Components) == 0 ||
 		len(got.HarnessTools) == 0 || len(got.Programs) == 0 || len(got.ExternalSystems) == 0 ||
 		len(got.Integrations) == 0 || len(got.NamedTerms) == 0 ||

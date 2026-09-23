@@ -14,9 +14,9 @@ func f(v float64) *float64 { return &v }
 // window contains (workstreams) and how it is changing (dynamics). A second
 // call would double the cost of the facet for a block the first one already
 // computed.
-func TestWorkstreamsPassCarriesTheDynamics(t *testing.T) {
+func TestDimensionsPassCarriesTheDynamics(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
+		Dimensions: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		Dynamics: map[string]Dynamic{
 			"branch": {Status: "compared", Reading: "switched", Changed: b(true), Turnover: f(0.4), Decay: f(0.25)},
 			"skill":  {Status: "both_absent", Changed: b(false)},
@@ -25,7 +25,7 @@ func TestWorkstreamsPassCarriesTheDynamics(t *testing.T) {
 	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil) // no Model: the point of this pass
 	ctx.TranscriptPath, ctx.PromptID = "/tmp/t.jsonl", "p1"
 
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(ctx)
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(ctx)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -48,11 +48,11 @@ func TestWorkstreamsPassCarriesTheDynamics(t *testing.T) {
 // series) must not put an empty object on the wire: absent and "we compared and
 // found nothing" are different facts, the same distinction the workstreams half
 // already draws.
-func TestWorkstreamsPassOmitsAbsentDynamics(t *testing.T) {
+func TestDimensionsPassOmitsAbsentDynamics(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -71,9 +71,9 @@ func TestRunPublishesDynamicsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				Dimensions: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				Dynamics: map[string]Dynamic{
 					"branch": {Status: "compared", Reading: "narrowing", ConcentrationShift: f(0.31)},
 				},
@@ -85,8 +85,8 @@ func TestRunPublishesDynamicsWithoutAModel(t *testing.T) {
 	if p.Dynamics["branch"].ConcentrationShift == nil || *p.Dynamics["branch"].ConcentrationShift != 0.31 {
 		t.Errorf("the number the reading was computed from was dropped: %+v", p.Dynamics["branch"])
 	}
-	if p.Workstreams["branch"].Value != "feat/ledger" {
-		t.Errorf("the digest half regressed: %+v", p.Workstreams)
+	if p.Dimensions["branch"].Value != "feat/ledger" {
+		t.Errorf("the digest half regressed: %+v", p.Dimensions)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 // attributed builds an enrich.Labeled the way a real block's workstreams map
 // carries a dimension that reached the attribution floor.
 func attributed(value string) enrich.Labeled {
-	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.WorkstreamAttributed}
+	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.DimensionAttributed}
 }
 
 func dimsWith(pairs map[string]string) map[string]enrich.Labeled {

@@ -142,7 +142,7 @@ func TestAMatchCanComeFromATicketKeyInTheBranch(t *testing.T) {
 	p := Project{ID: "org:one", Title: "One", Origin: OriginAtlas,
 		TicketKey: "KELD", Workstream: "eng"}
 	dims := map[string]enrich.Labeled{
-		DimBranch: {Value: "keld-637-auth-flow", Status: enrich.WorkstreamAttributed},
+		DimBranch: {Value: "keld-637-auth-flow", Status: enrich.DimensionAttributed},
 	}
 	got := MatchesFor(dims, []Project{p}, noneOff)
 	if len(got) != 1 || got[0].TicketKey != "KELD" {

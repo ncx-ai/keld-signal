@@ -44,7 +44,7 @@ func (v *v3) recordCut(rows []publish.BlockEnrichment, _ string) {
 			continue
 		}
 		v.ledger.Cut(k, end, r.StartReason, r.EndReason, r.Source.ID, now)
-		dims := dimsOf(r.Workstreams)
+		dims := dimsOf(r.Dimensions)
 		v.ledger.Observe(k, dims, now)
 		// ⚠️ **And teach this session's EARLIER blocks the checkout.** Resolving
 		// a workspace is a whole-file pre-pass in the sidecar, so the first
@@ -226,7 +226,7 @@ func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 		if !ok || l.Value == "" {
 			return ""
 		}
-		if l.Status != "" && l.Status != enrich.WorkstreamAttributed {
+		if l.Status != "" && l.Status != enrich.DimensionAttributed {
 			return ""
 		}
 		return l.Value
@@ -253,7 +253,7 @@ func measuredOf(r publish.BlockEnrichment) (ledger.Measured, bool) {
 		return ledger.Measured{}, false
 	}
 	m := ledger.Measured{
-		Model:               dominantModel(r.Workstreams),
+		Model:               dominantModel(r.Dimensions),
 		InputTokens:         r.Tokens.Input,
 		OutputTokens:        r.Tokens.Output,
 		CacheReadTokens:     r.Tokens.CacheRead,
@@ -276,7 +276,7 @@ func measuredOf(r publish.BlockEnrichment) (ledger.Measured, bool) {
 
 func dominantModel(ws map[string]enrich.Labeled) string {
 	if l, ok := ws["model"]; ok && l.Value != "" {
-		if l.Status == "" || l.Status == enrich.WorkstreamAttributed {
+		if l.Status == "" || l.Status == enrich.DimensionAttributed {
 			return l.Value
 		}
 	}
@@ -319,7 +319,7 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 	if v.projects.RemoteProjects != nil {
 		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
 	}
-	res := projects.Attribute(r.Workstreams, projects.MergeCandidates(doc.Projects, remote),
+	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
 		projects.WorkstreamOffFunc(settings.Load()), nil)
 	v.ledger.Attribute(k, ledger.Attributed{
 		ProjectID: res.ProjectID,
@@ -486,13 +486,13 @@ func reasonOr(r, fallback projects.Reason) projects.Reason {
 func dimsOfRecord(r ledger.BlockRecord) map[string]enrich.Labeled {
 	dims := map[string]enrich.Labeled{}
 	if r.Repo != "" {
-		dims[projects.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.WorkstreamAttributed}
+		dims[projects.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.DimensionAttributed}
 	}
 	if r.Branch != "" {
-		dims[projects.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.WorkstreamAttributed}
+		dims[projects.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.DimensionAttributed}
 	}
 	if r.Workspace != "" {
-		dims[projects.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.WorkstreamAttributed}
+		dims[projects.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.DimensionAttributed}
 	}
 	return dims
 }

@@ -326,7 +326,7 @@ func observedRepos(blocks []projects.BlockSummary) []string {
 		if !ok || l.Value == "" {
 			continue
 		}
-		if l.Status != "" && l.Status != enrich.WorkstreamAttributed {
+		if l.Status != "" && l.Status != enrich.DimensionAttributed {
 			continue
 		}
 		if seen[l.Value] {

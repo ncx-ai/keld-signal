@@ -61,7 +61,7 @@ func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 			candidates = projects.MergeCandidates(candidates, remote)
 		}
 	}
-	matches := projects.MatchesFor(b.Analysis.Workstreams, candidates,
+	matches := projects.MatchesFor(b.Analysis.Dimensions, candidates,
 		projects.WorkstreamOffFunc(settings.Load()))
 	if len(matches) == 0 {
 		return nil
