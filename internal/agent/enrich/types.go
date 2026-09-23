@@ -182,7 +182,7 @@ type Profile struct {
 	// member of a table — so the caps that bound them are measured rather than
 	// structural: 40/24/16 respectively, each set just above that level's own
 	// p90 over 70 corpus transcripts / 165 one-hour windows (see
-	// sidecar/app/analysis/workstreams.py's INVENTORY). Absent, never an empty
+	// sidecar/app/analysis/dimensions.py's INVENTORY). Absent, never an empty
 	// list, when the analysis produced none.
 	Files       []PathCount `json:"files,omitempty"`
 	Directories []PathCount `json:"directories,omitempty"`

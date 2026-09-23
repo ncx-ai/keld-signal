@@ -92,7 +92,7 @@ from app.analysis.dynamics import (DEFAULT_SIZER, EwmaSizer, FixedSizer,  # noqa
 from app.analysis.levels import quantize                                  # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                    # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                 # noqa: E402
-from app.analysis.workstreams import ALLOCATION, INVENTORY                 # noqa: E402
+from app.analysis.dimensions import ALLOCATION, INVENTORY                 # noqa: E402
 
 # --- PRE-REGISTERED, fixed before any score was looked at ---------------------------------
 OUT = os.path.expanduser("~/keld/refseries-context/dynamics")

@@ -77,12 +77,12 @@ class Verifier:
             messages=[{"role": "user", "content": "Answer with exactly one word: YES"}],
             max_tokens=1, temperature=0)
 
-    def verify(self, block_text, dims, project):
+    def verify(self, block_text, dims, workstream):
         d = dims or {}
         prompt = VERIFY_PROMPT.format(
-            title=project.get("title", ""), team=project.get("team", ""),
-            description=project.get("description", ""),
-            keywords=", ".join(project.get("keywords") or []),
+            title=workstream.get("title", ""), team=workstream.get("team", ""),
+            description=workstream.get("description", ""),
+            keywords=", ".join(workstream.get("keywords") or []),
             repo=d.get("repo", "?"), branch=d.get("branch", "?"),
             text=block_text[:MAX_BLOCK_CHARS])
         t0 = time.time()

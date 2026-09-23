@@ -486,7 +486,7 @@ def test_weighted_rollup_moves_the_dominant_value_when_weight_disagrees_with_cou
 
 
 def test_weighted_rollup_is_window_rollup_shaped_and_ordered():
-    """`window.dominant`/`attribution`/`workstreams.payload` consume `{level: [(ref, total)]}`
+    """`window.dominant`/`attribution`/`dimensions.payload` consume `{level: [(ref, total)]}`
     descending with ties alphabetical. The weighted rollup must be the same shape, and must get
     its order from `window.rollup` itself rather than a second ORDER BY."""
     with tempfile.TemporaryDirectory() as tmp:

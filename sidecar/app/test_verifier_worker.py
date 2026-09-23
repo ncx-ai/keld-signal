@@ -30,7 +30,7 @@ class _StubVerifierModel:
 def test_handle_verify_routes_to_the_model_and_returns_the_shape():
     model = _StubVerifierModel(verdict=True, seconds=0.017)
     out = handle({"op": "verify", "block_text": "did some payments work",
-                  "dims": {"repo": "acme-billing"}, "project": {"title": "Payments"}}, model)
+                  "dims": {"repo": "acme-billing"}, "workstream": {"title": "Payments"}}, model)
     assert out == {"verdict": True, "seconds": 0.017}, out
     assert model.calls == [("did some payments work", {"repo": "acme-billing"},
                             {"title": "Payments"})], model.calls
@@ -43,13 +43,13 @@ def test_handle_verify_coerces_verdict_and_seconds_types():
         def verify(self, block_text, dims, project):
             return 1, 3  # truthy int, int seconds
 
-    out = handle({"op": "verify", "block_text": "x", "dims": {}, "project": {}}, WeirdTypesModel())
+    out = handle({"op": "verify", "block_text": "x", "dims": {}, "workstream": {}}, WeirdTypesModel())
     assert out["verdict"] is True and isinstance(out["seconds"], float), out
 
 
 def test_handle_verify_no_verdict_is_false_not_dropped():
     model = _StubVerifierModel(verdict=False, seconds=0.01)
-    out = handle({"op": "verify", "block_text": "x", "dims": {}, "project": {}}, model)
+    out = handle({"op": "verify", "block_text": "x", "dims": {}, "workstream": {}}, model)
     assert out == {"verdict": False, "seconds": 0.01}, out
 
 
@@ -250,7 +250,7 @@ def test_attribute_block_with_a_stubbed_verifier_never_imports_llama_cpp():
 
     projects = [{"id": "proj_pay", "title": "Payments", "team": "Eng",
                 "description": "Stripe billing.", "repos": [], "keywords": []}]
-    attribution.set_projects(projects)
+    attribution.set_workstreams(projects)
     out = attribution.attribute_block(["stripe webhook retries again"], {"repo": "acme-billing"},
                                       encoder=StubEncoder(), verifier_obj=StubVerifier())
     assert out["status"] == "attributed", out

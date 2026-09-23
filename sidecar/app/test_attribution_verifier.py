@@ -3,17 +3,17 @@ import os
 from app.analysis import attribution
 from app import verifier
 
-PROJECTS = [{"id": "proj_pay", "title": "Payments", "team": "Eng",
+WORKSTREAMS = [{"id": "proj_pay", "title": "Payments", "team": "Eng",
              "description": "Stripe billing.", "repos": [], "keywords": [], "ticket_key": "PAY"}]
 
 class StubVerifier:
     def __init__(self, verdict): self.verdict, self.calls = verdict, 0
-    def verify(self, block_text, dims, project):
+    def verify(self, block_text, dims, workstream):
         self.calls += 1
         return self.verdict, 0.01
 
 def test_verdict_overrides_borderline():       # AC-5
-    attribution.set_projects(PROJECTS)
+    attribution.set_workstreams(WORKSTREAMS)
     v = StubVerifier(True)
     overrides, pairs, ms = attribution.apply_verifier(
         ["ambiguous"], {}, {"proj_pay": 0.45}, ["proj_pay"], v)
@@ -30,7 +30,7 @@ def test_no_verdict_rejects_a_borderline_pair():  # AC-5 — the rejection direc
     recorded as an explicit False override, not dropped. An implementation
     doing `if verdict: overrides[pid] = True` (silently omitting the pid on a
     NO) would pass every other test here but fails this one."""
-    attribution.set_projects(PROJECTS)
+    attribution.set_workstreams(WORKSTREAMS)
     v = StubVerifier(False)
     overrides, pairs, ms = attribution.apply_verifier(
         ["ambiguous"], {}, {"proj_pay": 0.52}, ["proj_pay"], v)
@@ -40,8 +40,8 @@ def test_mixed_borderline_verdicts_both_directions():  # AC-5
     """Two borderline projects in one block, one verdict each way — the shape
     a real block produces. Pins both the YES-override and NO-override
     directions in a single assertion."""
-    attribution.set_projects([
-        PROJECTS[0],
+    attribution.set_workstreams([
+        WORKSTREAMS[0],
         {"id": "proj_growth", "title": "Growth", "team": "Marketing",
          "description": "Landing pages.", "repos": [], "keywords": [], "ticket_key": "GRW"},
     ])
@@ -49,9 +49,9 @@ def test_mixed_borderline_verdicts_both_directions():  # AC-5
         class MixedVerifier:
             def __init__(self):
                 self.calls = []
-            def verify(self, block_text, dims, project):
-                self.calls.append(project["id"])
-                return project["id"] == "proj_pay", 0.01
+            def verify(self, block_text, dims, workstream):
+                self.calls.append(workstream["id"])
+                return workstream["id"] == "proj_pay", 0.01
 
         v = MixedVerifier()
         overrides, pairs, ms = attribution.apply_verifier(
@@ -60,7 +60,7 @@ def test_mixed_borderline_verdicts_both_directions():  # AC-5
         assert overrides == {"proj_pay": True, "proj_growth": False}
         assert pairs == 2 and sorted(v.calls) == ["proj_growth", "proj_pay"]
     finally:
-        attribution.set_projects(PROJECTS)
+        attribution.set_workstreams(WORKSTREAMS)
 
 def test_opt_in_env():                         # AC-6, default flipped 2026-09-03
     """OFF by default, even within the attribution gate; only the explicit-on vocabulary

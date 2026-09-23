@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import latency, magnitude, window, workstreams
+from app.analysis import latency, magnitude, window, dimensions
 from app.analysis.analyze import (PromptNotFound, StoreBehind, WindowExpired, _bounds,
                                   _effort_from_rows, _effort_from_store,
                                   analyze_window, analyze_window_by_parse, _rollup_by_parse,

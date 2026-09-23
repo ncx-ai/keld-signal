@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import workstreams
+from app.analysis import dimensions
 from app.analysis.analyze import analyze_window, analyze_window_by_parse
 from app.analysis import dynamics as dynamics_module
 from app.analysis.dynamics import (DEFAULT_SIZER, DYNAMIC_DIMENSIONS, MATERIAL, READINGS,
@@ -40,7 +40,7 @@ from app.analysis.ingest import RECONCILE_SLOT, ingest_file, session_of
 from app.analysis.store import BIN_SECONDS, open_store
 from app.analysis.window import MIN_EVIDENCE, rollup
 
-DIMS = {name: level for name, level, _floor in workstreams.ALLOCATION}
+DIMS = {name: level for name, level, _floor in dimensions.ALLOCATION}
 
 
 def _n(level, ref, n):
@@ -281,7 +281,7 @@ def test_decay_is_not_turnover():
 
 def test_every_reported_dimension_is_named_the_way_the_payload_names_it():
     """Dynamics speaks the payload's vocabulary (`output_type`, not `artifact`), DERIVED from
-    `workstreams.ALLOCATION` rather than restated, so the two cannot drift apart — and the drop
+    `dimensions.ALLOCATION` rather than restated, so the two cannot drift apart — and the drop
     is a filter over that list, not a second hand-written list beside it."""
     got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))
     assert set(got) == {n for n, _l, _f in DYNAMIC_DIMENSIONS}, sorted(got)
@@ -466,7 +466,7 @@ def test_the_reading_is_not_itself_a_constant():
 def test_the_measurement_that_justified_the_drop_can_still_be_recomputed():
     """A drop justified by a number nobody can recompute is a drop justified by a document. So
     `compare` takes the dimension set as an argument — defaulting to what is PUBLISHED — and
-    `scripts/sizer_eval.py dist` passes the full `workstreams.ALLOCATION` through this exact
+    `scripts/sizer_eval.py dist` passes the full `dimensions.ALLOCATION` through this exact
     arithmetic to re-derive the distributions behind `DROPPED_DIMENSIONS`. Re-running it after the
     drop shipped reproduced the pre-implementation tables bit-for-bit.
 
@@ -474,7 +474,7 @@ def test_the_measurement_that_justified_the_drop_can_still_be_recomputed():
     can flip. `dynamics()` — the only production entry point — does not accept one and does not
     forward one, so the published vocabulary cannot be widened by a caller."""
     wide = compare(_rl("branch", alpha=40), _rl("branch", alpha=90),
-                   dimensions=tuple(workstreams.ALLOCATION))
+                   dimensions=tuple(dimensions.ALLOCATION))
     assert set(wide) == set(DIMS), sorted(wide)
     assert wide["project"]["status"] == "both_absent", wide["project"]
     assert "dimensions" not in inspect.signature(dynamics).parameters, (
@@ -506,7 +506,7 @@ def test_inventory_dimensions_stay_out_and_the_reason_is_now_measured():
                    _n("term", "Aurora", 20), _n("service", "s3", 10),
                    _n("mcp_tool", "m", 10)])
     got = compare(both, both)
-    for name, _level, _cap in workstreams.INVENTORY:
+    for name, _level, _cap in dimensions.INVENTORY:
         assert name not in got, name
 
 

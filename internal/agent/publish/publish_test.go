@@ -434,7 +434,7 @@ func TestBuildOmitsAnAbsentEffortBlock(t *testing.T) {
 // of /analyze that publishes: `action` is derived from tool NAMES and shell argv
 // against a closed 22-value table, never from message text, which is exactly what
 // keeps `named_terms` on-device (see enrich.Act and the sidecar's
-// workstreams.payload docstring).
+// dimensions.payload docstring).
 func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 	p := enrich.Profile{PhysicalActs: []enrich.Act{
 		{Value: "read", N: 41}, {Value: "edit", N: 12}, {Value: "run a service", N: 2},

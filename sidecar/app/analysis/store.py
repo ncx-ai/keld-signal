@@ -49,7 +49,7 @@ sibling table rather than a column on `event`.
 
 ⚠️ One qualification, inherited rather than introduced here: the `term` level is the only one
 in this package drawn from message text rather than tool-call inputs (see `terms.py`), and a
-named term can legitimately be a person's name — `workstreams.payload`'s docstring records that
+named term can legitimately be a person's name — `dimensions.payload`'s docstring records that
 it was confirmed on a real window. That is acceptable on-device, which is all this store is; it
 is NOT acceptable to forward off-device unfiltered, exactly as that docstring already requires
 of the payload. Persisting it does not change the rule, but it does lengthen how long it lives,
@@ -64,7 +64,7 @@ import sqlite3
 import threading
 import time
 
-from app.analysis import magnitude, window, workstreams
+from app.analysis import magnitude, window, dimensions
 
 log = logging.getLogger("keld.sidecar.store")
 
@@ -98,7 +98,7 @@ BUSY_TIMEOUT_MS = 30000
 # the precomputed set drift apart silently, and the failure that produces — a level the payload
 # asks for that no bin holds — is an undercount, not an error.
 PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
-    [lv for _, lv, _ in workstreams.ALLOCATION] + [lv for _, lv, _ in workstreams.INVENTORY]))
+    [lv for _, lv, _ in dimensions.ALLOCATION] + [lv for _, lv, _ in dimensions.INVENTORY]))
 
 # 1 -> 2: `parse_state`, the cross-batch parse state incremental ingest carries between
 #         batches (see that table's comment). Additive — every v1 table is unchanged, and
@@ -1467,7 +1467,7 @@ class Store:
 
         Returns exactly `window.rollup`'s shape — `{level: [(ref, total), ...]}`, descending by
         total, ties alphabetical on `ref` — so `window.dominant`, `window.attribution` and
-        `workstreams.payload` consume it with no change at all. That is the whole point of
+        `dimensions.payload` consume it with no change at all. That is the whole point of
         matching the shape: the token-weighted share is the same question asked of a different
         denominator, not a different payload.
 

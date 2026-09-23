@@ -59,7 +59,7 @@ def handle(req: dict, model) -> dict:
         # so both models share worker.py's serve() loop and worker_manager.py's
         # spawn/recycle/RSS machinery unmodified — not because they share a request shape.
         # Checked before `text = req["text"]` below, which a verify request never sends.
-        verdict, seconds = model.verify(req.get("block_text", ""), req.get("dims"), req.get("project"))
+        verdict, seconds = model.verify(req.get("block_text", ""), req.get("dims"), req.get("workstream"))
         return {"verdict": bool(verdict), "seconds": float(seconds)}
     text = req["text"]
     max_len = _max_len(req)

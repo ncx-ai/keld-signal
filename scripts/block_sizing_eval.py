@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from app.analysis.dynamics import DETECT_LEVEL, DETECT_STEP_S, EwmaSizer  # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                    # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                 # noqa: E402
-from app.analysis.workstreams import ALLOCATION, payload                  # noqa: E402
+from app.analysis.dimensions import ALLOCATION, payload                  # noqa: E402
 from sizer_eval import CachingStore, DB, active_bins                      # noqa: E402
 
 # The duration-cap sweep Task 2 measures over. Minutes.
@@ -457,7 +457,7 @@ def sweep(store=None):
 # --- item 3: the merge-forward rule -------------------------------------------------------------
 
 def _dim_values(rl):
-    """`workstreams.payload(rl)["workstreams"]`, reduced to just `name -> value` (or `None`).
+    """`dimensions.payload(rl)["workstreams"]`, reduced to just `name -> value` (or `None`).
     Share/evidence are deliberately dropped here: the whole point of item 3 is that a merge is
     allowed to move them (that is "topping up an evidence count") and is only unsafe when it
     moves a `value` — the thing a reader actually reads."""

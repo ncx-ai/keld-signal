@@ -1057,7 +1057,7 @@ async def features(body: FeaturesIn):
     `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`. NOTHING IS PUBLISHED BY THIS
     ROUTE: it computes and returns, and the daemon's emitter (`internal/agent/features`) owns the
     cursor, the batching and the wire. See app/analysis/features.py for the disjoint shell ladder,
-    the frozen vocabulary manifest, the normalisation transforms and why `workstreams.payload` is
+    the frozen vocabulary manifest, the normalisation transforms and why `dimensions.payload` is
     the wrong input; app/analysis/featuretext.py for the text half.
 
     Returns `{"schema", "feature_spec", "spec_sha", "dims", "session", "rows": [...],
@@ -1402,17 +1402,19 @@ def install_vocabulary(body: VocabularyIn):
     return {"rejects": rejects}
 
 
-class ProjectsIn(BaseModel):
+class WorkstreamsIn(BaseModel):
+    # The body key stays `projects`: a daemon and a sidecar ship on separate
+    # cadences, and an older daemon posts `{"projects": [...]}`.
     projects: list[dict]
 
 
 @app.post("/projects")
-async def projects(body: ProjectsIn):
+async def post_workstreams(body: WorkstreamsIn):
     """Org project definitions for block attribution. A cache write, not
     inference — bypasses _dispatch for the same reason /vocabulary does.
     Embedding happens lazily on the first /attribute that needs vectors."""
     from app.analysis import attribution
-    h = attribution.set_projects(body.projects)
+    h = attribution.set_workstreams(body.projects)
     return {"count": len(body.projects), "hash": h}
 
 
@@ -1665,7 +1667,7 @@ def _verifier_manager():
         return wm
 
 
-def _verify_call(block_text, dims, project):
+def _verify_call(block_text, dims, workstream):
     """One verdict, via the dedicated verifier WorkerManager. The worker child is spawned
     lazily, on first call, by `_verifier_manager()`.
 
@@ -1677,7 +1679,7 @@ def _verify_call(block_text, dims, project):
     decision (AC-6)."""
     try:
         result = _verifier_manager().call({
-            "op": "verify", "block_text": block_text, "dims": dims or {}, "project": project,
+            "op": "verify", "block_text": block_text, "dims": dims or {}, "workstream": workstream,
         })
     except (WorkerTimeout, WorkerUnavailable, WorkerError):
         raise _VerifierUnavailable() from None
@@ -1698,8 +1700,8 @@ class _WorkerVerifier:
     executor thread already (called from `_attribute_blocking`), so blocking here blocks that
     thread, never the loop."""
 
-    def verify(self, block_text, dims, project):
-        return _verify_call(block_text, dims, project)
+    def verify(self, block_text, dims, workstream):
+        return _verify_call(block_text, dims, workstream)
 
 
 def _span_texts(path, start, end):
@@ -1772,10 +1774,10 @@ def _warm_encoder_async(child):
     something has to actually warm it or every sweep answers `pending` forever. This is that
     something, and it is not a second queue: it holds no block, no backlog and no state, and one
     thread runs at a time however many blocks arrive. The work it does is the work the next call
-    would otherwise pay first — `project_vectors` is memoised per project-list hash — so the
+    would otherwise pay first — `workstream_vectors` is memoised per project-list hash — so the
     spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller.
 
-    ⚠️ **THE SPAWN IS ASKED FOR, NEVER INFERRED FROM THE EMBEDDING.** `project_vectors` used to
+    ⚠️ **THE SPAWN IS ASKED FOR, NEVER INFERRED FROM THE EMBEDDING.** `workstream_vectors` used to
     be the whole of this function, and it brings the child up only as a SIDE EFFECT of having an
     encode to run — which it has exactly once per project list, because it is memoised on that
     list's hash. So the second time the child went down (`maybe_unload` kills it after ~5 idle
@@ -1793,7 +1795,7 @@ def _warm_encoder_async(child):
             # Independent of the memo below, and FIRST: a ready child is what the next sweep
             # needs, and it is needed even when every project doc is already embedded.
             child.warm()
-            attribution.project_vectors(_EncoderAdapter(child))
+            attribution.workstream_vectors(_EncoderAdapter(child))
         except Exception:      # noqa: BLE001 — a warm-up that failed is retried by the next sweep
             pass
 
@@ -2027,11 +2029,11 @@ async def attribute(body: AttributeIn):
                             detail="path is outside the configured transcript roots")
     from app.analysis import attribqueue, attribution, textembed
 
-    projects, _ = attribution.current_projects()
+    projects, _ = attribution.current_workstreams()
     if not projects:
         # Answered without opening anything: with nothing declared to match against, reading a
         # person's words would be reading them for no purpose.
-        return attribution.stated(attribution.STATUS_SKIPPED_NO_PROJECTS)
+        return attribution.stated(attribution.STATUS_SKIPPED_NO_WORKSTREAMS)
 
     # ⚠️ THE QUEUE IS CONSULTED BEFORE THE TRANSCRIPT IS OPENED, and the order is the point.
     # The daemon re-POSTs a `pending` block on every 45 s sweep, up to 24 of them, so a route

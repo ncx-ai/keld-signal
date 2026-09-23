@@ -7,7 +7,7 @@
 
 ## What is being measured, and why it does not exist today
 
-`action` appears ZERO times in `sidecar/app/analysis/workstreams.py`. The level is emitted by
+`action` appears ZERO times in `sidecar/app/analysis/dimensions.py`. The level is emitted by
 `levels.events_for_turns` (from tool names and, via `shell.bash_refs`, from the programs a Bash
 command actually runs), stored, and read by `dynamics`/`activity` — and never published. The
 published `ALLOCATION` set is project / branch / model / output_type / language / skill /
@@ -76,7 +76,7 @@ from app.analysis.reconcile import reconcile
 from app.analysis.transcript import iter_turns
 from app.analysis.vocab import action_for
 from app.analysis.window import MIN_EVIDENCE, REASONS, attribution, rollup
-from app.analysis.workstreams import ALLOCATION
+from app.analysis.dimensions import ALLOCATION
 
 SPAN, STRIDE = 60, 50                  # minutes; stride must not divide span (this series)
 EXPECTED_WINDOWS = 1022

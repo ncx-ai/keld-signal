@@ -53,7 +53,7 @@ dimension. No parameter fixes it and filling it is the fallback this design refu
 is emitted anyway, saying `absent` out loud: a suppressed block reads as an oversight, and an
 oversight is what someone eventually "fixes".
 """
-from app.analysis import workstreams
+from app.analysis import dimensions
 from app.analysis.window import MIN_EVIDENCE, attribution
 
 # The dimensions that publish a contrast. A LIST, not seven hardcoded fields, because the set is
@@ -103,7 +103,7 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 # could: `output_type` 6/7, `tooling` 4/7, every other dimension 0/7.
 #
 # That session's SHAPE is why it outweighs its sample size. It is skill-free, and 61.6% of the
-# 198-transcript corpus is skill-free (see `workstreams.ALLOCATION`). With `skill` `absent` for
+# 198-transcript corpus is skill-free (see `dimensions.ALLOCATION`). With `skill` `absent` for
 # most sessions, a three-dimension prior over `branch` (near-constant within a session) and
 # `language` is thin enough that the block would rarely say anything for the majority case.
 # `output_type` is what makes it worth emitting for them.
@@ -120,7 +120,7 @@ ENABLED = ("branch", "language", "output_type", "skill")
 # level read from message TEXT and has held real person names; keeping the prior's vocabulary a
 # subset of ALLOCATION means the block can only ever carry values that already publish in
 # `workstreams` beside it, which is what makes forwarding it to Atlas no new class of data.
-PRIOR_DIMENSIONS = tuple((name, level, floor) for name, level, floor in workstreams.ALLOCATION
+PRIOR_DIMENSIONS = tuple((name, level, floor) for name, level, floor in dimensions.ALLOCATION
                          if name in ENABLED)
 
 
@@ -135,7 +135,7 @@ def prior_at(rl, level, floor, min_evidence=MIN_EVIDENCE):
     `evidence` is here because the design asks for it by name: a prior over 6 observations and
     one over 600 are not the same frame of reference, and unlike the window (a fixed 60 minutes)
     a session's length is unbounded and unknowable from the other fields. It is the one place
-    this block deliberately carries what `sidecar/workstreams.go` drops from a Labeled.
+    this block deliberately carries what `sidecar/dimensions.go` drops from a Labeled.
 
     The status is named `status`, not `reason`: `reason` is on publish's `forbiddenWireKeys`
     because it is the dynamics per-side object's key, and a second meaning for it on the wire is

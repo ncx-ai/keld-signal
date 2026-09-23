@@ -121,7 +121,7 @@ def judge(rl, positive, min_evidence=MIN_EVIDENCE):
     """Was any act in `positive` observed this window? `Judgement(value, evidence, total, reason)`
     with `value=None` when the mapping abstains — see `REASONS` and the module docstring.
 
-    `rl` is `window.rollup`'s output, matching `workstreams.payload` and `window.dominant`:
+    `rl` is `window.rollup`'s output, matching `dimensions.payload` and `window.dominant`:
     production computes the rollup once and asks it several questions.
     """
     n_pos, n_act = counts(rl, positive)

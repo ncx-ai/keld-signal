@@ -1,7 +1,7 @@
 """Run: cd sidecar && PYTHONPATH=. ~/.keld/sidecar-venv/bin/python app/test_attribution_scoring.py"""
 from app.analysis import attribution
 
-PROJECTS = [
+WORKSTREAMS = [
     {"id": "proj_pay", "title": "Payments", "team": "Eng",
      "description": "Stripe billing migration.", "repos": ["acme-billing"],
      "keywords": ["stripe", "dunning"], "ticket_key": "PAY"},
@@ -22,9 +22,9 @@ class PayEncoder:
         return out
 
 def test_metadata_boost_model_free():          # AC-4 (AMENDED 2026-09-01)
-    attribution.set_projects(PROJECTS)
+    attribution.set_workstreams(WORKSTREAMS)
     dims = {"repo": "acme-billing", "branch": "fix/PAY-12-retry"}
-    b = attribution.metadata_boost(PROJECTS[0], dims, ["fix the dunning email"])
+    b = attribution.metadata_boost(WORKSTREAMS[0], dims, ["fix the dunning email"])
     assert b >= attribution.W_REPO + attribution.W_TICKET, f"boost {b}"
     # The boost is computed and reported, but with no encoder NOTHING is assigned:
     # one attribution path only, and exact matches alone never cross the threshold.
@@ -34,7 +34,7 @@ def test_metadata_boost_model_free():          # AC-4 (AMENDED 2026-09-01)
     assert scores["proj_pay"] == round(b, 4), "boost must still be visible in the scores"
 
 def test_embedding_ranking_assigns_the_winner():   # AC-3
-    attribution.set_projects(PROJECTS)
+    attribution.set_workstreams(WORKSTREAMS)
     scores, borderline, assigned, used, _tv, _c = attribution.score_block(
         ["we migrated stripe webhooks today"], {}, encoder=PayEncoder())
     assert used and scores["proj_pay"] > scores["proj_ui"]
@@ -66,11 +66,11 @@ class GeomEncoder:
         return out
 
 
-def _geom_projects(tag):
+def _geom_workstreams(tag):
     """A fresh copy of PROJECTS whose content differs per test: the vector memo
     is keyed on the project-list hash, so two tests reusing identical projects
     would silently share the FIRST test's encoder geometry."""
-    out = [dict(p) for p in PROJECTS]
+    out = [dict(p) for p in WORKSTREAMS]
     for p in out:
         p["description"] = f"{p['description']} ({tag})"
     return out
@@ -80,7 +80,7 @@ def test_runner_up_near_the_cut_is_borderline():   # AC-5 groundwork
     # pay=0.60, ui=0.49, null=0.0 -> cut = max(0, 0.60-MARGIN) = 0.52.
     # ui sits 0.03 below the cut: inside VERIFY_HALO (0.04), so borderline
     # and NOT assigned; pay is clear of the halo and assigned.
-    attribution.set_projects(_geom_projects("runner-up"))
+    attribution.set_workstreams(_geom_workstreams("runner-up"))
     enc = GeomEncoder([0.60, 0.49, 0.0, 0.6324])
     scores, borderline, assigned, used, _tv, _c = attribution.score_block(
         ["ambiguous work"], {}, encoder=enc)
@@ -92,7 +92,7 @@ def test_the_null_competitor_blocks_a_topical_lookalike():   # the LEVEL gate
     # The block reads like general chat: null=0.90 dominates pay=0.30.
     # top <= null, so nothing is assigned and nothing is borderline —
     # "belongs to nothing" won the same ranking the projects competed in.
-    attribution.set_projects(_geom_projects("null-gate"))
+    attribution.set_workstreams(_geom_workstreams("null-gate"))
     enc = GeomEncoder([0.30, 0.10, 0.90, 0.2915])
     scores, borderline, assigned, used, _tv, _c = attribution.score_block(
         ["hey, how was your weekend?"], {}, encoder=enc)
@@ -102,7 +102,7 @@ def test_the_null_competitor_blocks_a_topical_lookalike():   # the LEVEL gate
 def test_two_close_winners_are_both_assigned():   # the SHAPE gate, multi-label
     # pay=0.70, ui=0.66: within MARGIN (0.08) of each other and both far
     # above null -> both assigned. A block can genuinely serve two projects.
-    attribution.set_projects(_geom_projects("two-winners"))
+    attribution.set_workstreams(_geom_workstreams("two-winners"))
     enc = GeomEncoder([0.70, 0.66, 0.0, 0.2728])
     scores, borderline, assigned, used, _tv, _c = attribution.score_block(
         ["work spanning both"], {}, encoder=enc)
@@ -132,7 +132,7 @@ def test_pooling_is_mean_over_the_whole_block():
     nothing assigned); MEAN scores both 0.5 — still a tie, still nothing — so use three
     texts: A, A, B -> pay 0.667, null 0.333 under MEAN (assigned), 1.0 vs 1.0 under MAX
     (not). The block is judged as a whole, not by its single loudest message."""
-    attribution.set_projects(_geom_projects("pooling"))
+    attribution.set_workstreams(_geom_workstreams("pooling"))
     scores, borderline, assigned, used, tv, c = attribution.score_block(
         ["A", "A", "B"], {}, encoder=TwoTextEncoder())
     assert used and len(tv) == 3
@@ -146,7 +146,7 @@ def test_centring_waits_for_the_gate_then_subtracts_the_running_mean(tmp_dir=Non
     gate the per-document running mean is subtracted; and a block never centres on itself
     (observe runs after decide)."""
     import os, tempfile
-    attribution.set_projects(_geom_projects("centring"))
+    attribution.set_workstreams(_geom_workstreams("centring"))
     saved = attribution.MIN_BACKGROUND
     attribution.MIN_BACKGROUND = 4
     try:
@@ -170,8 +170,8 @@ def test_centring_waits_for_the_gate_then_subtracts_the_running_mean(tmp_dir=Non
         assert assigned == ["proj_pay"], (scores, assigned)
         # Persisted as scalars: a fresh Offsets on the same path has the same counts.
         again = attribution.Offsets(path)
-        keys = [attribution.Offsets.key(attribution.project_doc(p))
-                for p in attribution.current_projects()[0]] + [attribution.Offsets.key(attribution.NULL_DOC)]
+        keys = [attribution.Offsets.key(attribution.workstream_doc(p))
+                for p in attribution.current_workstreams()[0]] + [attribution.Offsets.key(attribution.NULL_DOC)]
         assert again.count(keys) == 5, again.count(keys)
         raw = open(path).read()
         assert "[" in raw and raw.count(",") < 40, "two floats per document, never a vector"
@@ -207,7 +207,7 @@ def test_each_stream_is_centred_against_its_own_baseline():
     asst B -> pay 0-0=0, null 1.0-1.0=0 -> everything cancels to a tie, nothing assigned.
     Under a single MIXED baseline the same block would not cancel. Measured reason to care:
     F1 0.717 vs 0.606 on real agent-only blocks."""
-    attribution.set_projects(_geom_projects("per-stream"))
+    attribution.set_workstreams(_geom_workstreams("per-stream"))
     saved = attribution.MIN_BACKGROUND
     attribution.MIN_BACKGROUND = 2
     try:
@@ -249,7 +249,7 @@ def test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly():
     """`KELD_ATTRIBUTION_SCORING=user-max` is the one-step rollback: user turns only,
     per-message MAX, no centring applied and none observed, and the fingerprint says so.
     The module reads the variable at import, so the test flips the resolved constant."""
-    attribution.set_projects(_geom_projects("legacy"))
+    attribution.set_workstreams(_geom_workstreams("legacy"))
     saved = attribution.SCORING
     attribution.SCORING = attribution.SCORING_LEGACY
     try:

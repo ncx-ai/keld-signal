@@ -20,13 +20,13 @@ deliberate and cheap here — it happens once per project-list change, for a
 handful of short documents, never per request.
 
 ⚠️ **The write side re-validates before installing, so a slow writer can
-never overwrite a fresher cache entry.** If `set_projects` runs while an
+never overwrite a fresher cache entry.** If `set_workstreams` runs while an
 encode is in flight, `_hash` can move out from under the snapshot that encode
 started against. The write back into `_vectors`/`_vectors_hash` compares the
 encode's target hash to the CURRENT `_hash` and refuses to install a result
-for a hash that is no longer current; `project_vectors` then loops and
+for a hash that is no longer current; `workstream_vectors` then loops and
 re-embeds against whatever hash is now live. No caller is ever served a
-vector set that does not match `current_projects()`'s hash at the moment it
+vector set that does not match `current_workstreams()`'s hash at the moment it
 was produced."""
 import hashlib
 import json
@@ -42,37 +42,37 @@ _log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _encode_lock = threading.Lock()
-_projects: list[dict] = []
+_workstreams: list[dict] = []
 _hash = ""
 _vectors: dict[str, list[float]] | None = None
 _vectors_hash = ""
 
 
-def set_projects(projects):
-    global _projects, _hash, _vectors, _vectors_hash
-    canon = json.dumps(projects, sort_keys=True, separators=(",", ":"))
+def set_workstreams(workstreams):
+    global _workstreams, _hash, _vectors, _vectors_hash
+    canon = json.dumps(workstreams, sort_keys=True, separators=(",", ":"))
     h = hashlib.sha256(canon.encode()).hexdigest()[:16]
     with _lock:
         if h != _hash:
-            _projects, _hash = list(projects), h
+            _workstreams, _hash = list(workstreams), h
             if _vectors_hash != h:
                 _vectors, _vectors_hash = None, ""
     return h
 
 
-def current_projects():
+def current_workstreams():
     with _lock:
-        return list(_projects), _hash
+        return list(_workstreams), _hash
 
 
-def project_doc(p):
+def workstream_doc(p):
     parts = [f"{p.get('title', '')} ({p.get('team', '')})", p.get("description", "")]
     if p.get("keywords"):
         parts.append("Keywords: " + ", ".join(p["keywords"]))
     return "\n".join(s for s in parts if s.strip())
 
 
-def project_vectors(encoder):
+def workstream_vectors(encoder):
     """id -> L2-normalised vector, embedded once per content hash — INCLUDING
     the reserved `NULL_ID` entry for `NULL_DOC`, the "belongs to nothing"
     competitor `score_block` ranks against. It rides the same encode call and
@@ -92,9 +92,9 @@ def project_vectors(encoder):
                 # for _encode_lock — re-check before doing any work.
                 if _vectors is not None and _vectors_hash == _hash:
                     return _vectors
-                projects, target_hash = list(_projects), _hash
-            vecs = encoder.encode([project_doc(p) for p in projects] + [NULL_DOC])
-            out = {p["id"]: _l2(v) for p, v in zip(projects, vecs)}
+                workstreams, target_hash = list(_workstreams), _hash
+            vecs = encoder.encode([workstream_doc(p) for p in workstreams] + [NULL_DOC])
+            out = {p["id"]: _l2(v) for p, v in zip(workstreams, vecs)}
             out[NULL_ID] = _l2(vecs[-1])
             with _lock:
                 if _hash == target_hash:
@@ -179,7 +179,7 @@ NULL_ID = "__none__"
 # null also beat every project on a REAL 50-hour session at every window size,
 # and that symptom is NOT lexical: deleting the offending clause left the
 # block-scale null score identical (0.623) and the session-scale one slightly
-# worse. Measured cause — this document describes SPEECH while `project_doc`
+# worse. Measured cause — this document describes SPEECH while `workstream_doc`
 # composes an ARTIFACT ("Title (Team)", description, keywords), so it is the
 # only register-matched document in the set and collects a similarity bonus on
 # anything a person types: a project beat it on just 34% of that session's 182
@@ -201,7 +201,7 @@ NULL_DOC = (
 )
 
 
-def metadata_boost(project, dims, texts):
+def metadata_boost(workstream, dims, texts):
     """Deterministic boost from exact matches — repo, ticket key, keywords.
 
     Works with no model resident; that is the point (spec AC-4): a machine
@@ -210,13 +210,13 @@ def metadata_boost(project, dims, texts):
     blob = " ".join(str(v) for v in (dims or {}).values()).lower()
     text = "\n".join(texts).lower()
     boost = 0.0
-    for repo in project.get("repos") or []:
+    for repo in workstream.get("repos") or []:
         if repo.lower() in blob or repo.lower() in text:
             boost += W_REPO
-    tk = project.get("ticket_key")
+    tk = workstream.get("ticket_key")
     if tk and re.search(rf"\b{re.escape(tk)}-\d+", text + " " + blob, re.I):
         boost += W_TICKET
-    boost += W_KEYWORD * sum(1 for kw in project.get("keywords") or []
+    boost += W_KEYWORD * sum(1 for kw in workstream.get("keywords") or []
                              if kw.lower() in text)
     return min(boost, BOOST_CAP)
 
@@ -412,7 +412,7 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
     is the legacy rule), then centred by subtracting
     each document's running baseline when `offsets` is given and its gate is
     met. Text vectors are L2-normalised here before the dot product (`_l2`,
-    the same helper `project_vectors` uses): the real encoder
+    the same helper `workstream_vectors` uses): the real encoder
     (`textembed._encode_batch`) already returns unit vectors, so this is a
     no-op in production, but the function does not trust an arbitrary
     `encoder` argument to have normalised its own output — a caller wiring in
@@ -454,20 +454,20 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
 
     Privacy: `texts` and project descriptions are held in memory only for this
     call; nothing here logs or persists block text or project text."""
-    projects, _ = current_projects()
+    workstreams, _ = current_workstreams()
     encoder_used = False
     null_sim = 0.0
     tvecs = []
-    sims = {p["id"]: 0.0 for p in projects}
+    sims = {p["id"]: 0.0 for p in workstreams}
     centring = {"applied": False, "background_n": 0}
     if encoder is not None and texts:
-        pvecs = project_vectors(encoder)
+        pvecs = workstream_vectors(encoder)
         tvecs = [_l2(v) for v in encoder.encode(texts)]
         n_u = len(texts) if n_user is None else max(0, min(n_user, len(texts)))
         streams = [USER_STREAM] * n_u + [ASST_STREAM] * (len(texts) - n_u)
-        docs = {p["id"]: pvecs[p["id"]] for p in projects}
+        docs = {p["id"]: pvecs[p["id"]] for p in workstreams}
         docs[NULL_ID] = pvecs[NULL_ID]
-        doc_text = {p["id"]: project_doc(p) for p in projects}
+        doc_text = {p["id"]: workstream_doc(p) for p in workstreams}
         doc_text[NULL_ID] = NULL_DOC
 
         how = "max" if legacy_scoring() else "mean"
@@ -487,7 +487,7 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
             for st, tv in zip(streams, tvecs):
                 yield _cos(tv, docs[did]) - (off[keys[(st, did)]] if off else 0.0)
 
-        for p in projects:
+        for p in workstreams:
             sims[p["id"]] = _pool(centred_sims(p["id"]), how)
         null_sim = _pool(centred_sims(NULL_ID), how)
         encoder_used = True
@@ -498,7 +498,7 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
                                   [tv for s_, tv in zip(streams, tvecs) if s_ == st])
                              for st in used_streams}, block_key)
     scores = {}
-    for p in projects:
+    for p in workstreams:
         boost = metadata_boost(p, dims, texts)
         scores[p["id"]] = round(sims[p["id"]] + boost, 4)
     borderline, assigned = [], []
@@ -532,13 +532,13 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
     the text never leaves the machine."""
     if not borderline or verifier_obj is None:
         return {}, 0, 0
-    projects, _ = current_projects()
-    by_id = {p["id"]: p for p in projects}
+    workstreams, _ = current_workstreams()
+    by_id = {p["id"]: p for p in workstreams}
     block_text = "\n".join(texts)
     overrides, total, verified = {}, 0.0, 0
     for pid in borderline:
         # ⚠️ `by_id.get`, NOT `by_id[pid]`. `borderline` was computed by score_block against
-        # a snapshot of current_projects(); this re-reads it, and a POST /projects landing
+        # a snapshot of current_workstreams(); this re-reads it, and a POST /projects landing
         # between the two calls (a settings poll, or the daemon re-posting after a sidecar
         # restart) can retire a project id. An unguarded index raised KeyError, which is an
         # uncaught 500 — and the daemon classes a 500 as non-retryable, so it spent one of
@@ -546,10 +546,10 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
         # project is simply gone: dropping the pair leaves that id un-overridden, so the
         # threshold's own verdict stands, which is the honest answer for a project the org
         # no longer declares.
-        project = by_id.get(pid)
-        if project is None:
+        workstream = by_id.get(pid)
+        if workstream is None:
             continue
-        verdict, secs = verifier_obj.verify(block_text, dims, project)
+        verdict, secs = verifier_obj.verify(block_text, dims, workstream)
         overrides[pid] = bool(verdict)
         verified += 1
         total += secs
@@ -569,10 +569,10 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
 STATUS_ATTRIBUTED = "attributed"
 STATUS_PENDING = "pending"
 STATUS_SKIPPED_DISABLED = "skipped:disabled"
-STATUS_SKIPPED_NO_PROJECTS = "skipped:no_projects"
+STATUS_SKIPPED_NO_WORKSTREAMS = "skipped:no_projects"
 STATUS_DEGRADED_WEIGHTS = "degraded:weights_unavailable"
 STATUSES = (STATUS_ATTRIBUTED, STATUS_PENDING, STATUS_SKIPPED_DISABLED,
-            STATUS_SKIPPED_NO_PROJECTS, STATUS_DEGRADED_WEIGHTS)
+            STATUS_SKIPPED_NO_WORKSTREAMS, STATUS_DEGRADED_WEIGHTS)
 
 # The models this attribution path runs on, reported with every answer. Two
 # corpora scored under different models are not comparable and nothing about
@@ -705,10 +705,10 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     duration of this call and nowhere else. The returned dict is the response
     body verbatim, and holds no text, no span and no offset.
     """
-    projects, _ = current_projects()
+    workstreams, _ = current_workstreams()
     encoder_state = "absent" if encoder is None else "warm"
-    if not projects:
-        return stated(STATUS_SKIPPED_NO_PROJECTS, encoder_state)
+    if not workstreams:
+        return stated(STATUS_SKIPPED_NO_WORKSTREAMS, encoder_state)
     texts = list(texts)
     # The legacy rule read the user stream alone; under it the assistant turns are dropped
     # here so `score_block` sees exactly the pre-2026-09-03 input.

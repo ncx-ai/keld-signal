@@ -79,7 +79,7 @@ from app.analysis.reconcile import reconcile                   # noqa: E402
 from app.analysis.transcript import iter_turns                 # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, REASONS, attribution, rollup   # noqa: E402
 from app.analysis.workspace import scan_workspace              # noqa: E402
-from app.analysis.workstreams import ALLOCATION                # noqa: E402
+from app.analysis.dimensions import ALLOCATION                # noqa: E402
 
 SPAN, STRIDE = 60, 50                  # minutes; the frame this series has used throughout
 EXPECTED_WINDOWS = 1022

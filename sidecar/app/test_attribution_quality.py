@@ -214,7 +214,7 @@ def _skip(msg):
     sys.exit(0)
 
 
-def _load_projects():
+def _load_workstreams():
     raw = json.loads(open(os.path.join(DATA_DIR, "projects.json")).read())
     out = []
     for p in raw:
@@ -353,9 +353,9 @@ def main():
 
     from app.analysis import attribution, textembed
 
-    projects = _load_projects()
+    workstreams = _load_workstreams()
     conversations = _load_conversations()
-    attribution.set_projects(projects)
+    attribution.set_workstreams(workstreams)
 
     encoder = _MemoEncoder(_EncoderAdapter(textembed.Encoder()))
     verifier_obj = verifier_mod.Verifier() if want_verifier else None
@@ -370,7 +370,7 @@ def main():
         attribution.score_block(_block_texts(conv), conv["metadata"], encoder, offsets,
                                 n_user=len(_user_texts(conv)), block_key=conv["id"])
     prime_s = time.time() - t_prime
-    keys = [attribution.Offsets.key(attribution.project_doc(p), st) for p in projects
+    keys = [attribution.Offsets.key(attribution.workstream_doc(p), st) for p in workstreams
             for st in (attribution.USER_STREAM, attribution.ASST_STREAM)] + \
            [attribution.Offsets.key(attribution.NULL_DOC, st)
             for st in (attribution.USER_STREAM, attribution.ASST_STREAM)]

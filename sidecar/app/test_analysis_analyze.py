@@ -94,7 +94,7 @@ def test_named_terms_are_populated_from_message_text():
     """`term` (published as inventory.named_terms) is the ONLY level in this whole package that
     reads message TEXT rather than tool-call inputs (see terms.py's module docstring) — a
     person's name is only ever spoken, never a tool argument, so every other level is
-    structurally blind to it. Regression: workstreams.INVENTORY originally omitted it, so
+    structurally blind to it. Regression: dimensions.INVENTORY originally omitted it, so
     analyze_window ran spaCy over every message (the expensive part of the call) and then threw
     the result away."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -165,7 +165,7 @@ def _busy_window(tmp):
 
 def test_physical_acts_publish_the_action_level():
     """`action` was extracted, stored, and fed to dynamics for the whole life of this package and
-    published NOWHERE — measured: zero occurrences in workstreams.py. It is an INVENTORY
+    published NOWHERE — measured: zero occurrences in dimensions.py. It is an INVENTORY
     dimension, not an ALLOCATION one: 97.8% coverage but a top share of only p50 0.403 over 22
     values, p50 7 distinct per window, and no floor recovers it (0.612 even at 0.30). That is
     `named_terms`' profile, and the same resolution applies — "what was done", not "what owns the

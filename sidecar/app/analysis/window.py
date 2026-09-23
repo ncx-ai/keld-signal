@@ -67,7 +67,7 @@ def min_evidence_for(floor=0.5, alpha=0.05):
 # attributed, touching 207 of 572 windows. 330 of those 347 are currently published at
 # share=1.0, and 129 of them rest on a SINGLE observation. That is the number this exists for:
 # `evidence` is dropped on the way to the published enrichment (see
-# internal/agent/enrich/sidecar/workstreams.go), so downstream cannot tell one observation from
+# internal/agent/enrich/sidecar/dimensions.go), so downstream cannot tell one observation from
 # five hundred, and a fresh session's first prompt in /tmp would otherwise publish `project` at
 # confidence 1.0.
 #
@@ -192,7 +192,7 @@ def dominant(rl, level, floor=0.5, min_evidence=MIN_EVIDENCE):
 
     Three distinct ways a level fails to have a dominant value:
       - the top value's share is below `floor` — a bucket holding under half the evidence is not
-        what the hour was about (0.5 is deliberate, same reasoning as `workstreams.ALLOCATION`'s
+        what the hour was about (0.5 is deliberate, same reasoning as `dimensions.ALLOCATION`'s
         floor);
       - the window holds fewer than `min_evidence` observations at this level. A share is a
         ratio, and a ratio over one observation is 1.0 by construction; see MIN_EVIDENCE above

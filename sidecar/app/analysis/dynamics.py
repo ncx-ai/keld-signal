@@ -145,7 +145,7 @@ import collections
 import math
 from datetime import datetime, timedelta, timezone
 
-from app.analysis import workstreams
+from app.analysis import dimensions
 from app.analysis.levels import quantize
 from app.analysis.store import BIN_SECONDS
 from app.analysis.window import MIN_EVIDENCE, attribution
@@ -247,7 +247,7 @@ STATUSES = ("compared", "both_absent", "slice_absent", "baseline_absent",
 #                  agrees 100% of the time with zero disagreements publishes a constant, which
 #                  is exactly why `project` is absent from that list too.
 #
-# The digest still reports all four as allocation workstreams (`workstreams.payload`); only
+# The digest still reports all four as allocation workstreams (`dimensions.payload`); only
 # their DYNAMICS are dropped. Do not restore one without re-running `dist` — "it seems useful"
 # is what the 16 KB characterisation was built on, and it scored below emitting nothing.
 DROPPED_DIMENSIONS = ("project", "model", "tooling", "repo")
@@ -267,7 +267,7 @@ DROPPED_DIMENSIONS = ("project", "model", "tooling", "repo")
 # no-transition windows against `branch`'s 1.8%, at a lift 7x smaller. Breadth shows up ACROSS
 # dimensions, not within one: the widest surfaces are exactly the highest non-transition firing
 # rates.
-DYNAMIC_DIMENSIONS = tuple((name, level, floor) for name, level, floor in workstreams.ALLOCATION
+DYNAMIC_DIMENSIONS = tuple((name, level, floor) for name, level, floor in dimensions.ALLOCATION
                            if name not in DROPPED_DIMENSIONS)
 
 
@@ -372,7 +372,7 @@ def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, dimensions=DYNAMIC
 
     `dimensions` defaults to what is PUBLISHED and exists so the measurement that decided that
     set stays reproducible against this exact arithmetic: `scripts/sizer_eval.py dist` passes the
-    full `workstreams.ALLOCATION` (and reads the inventory levels through `_absent_mass`/`_status`
+    full `dimensions.ALLOCATION` (and reads the inventory levels through `_absent_mass`/`_status`
     directly) to re-derive the distributions behind `DROPPED_DIMENSIONS`. It is NOT a switch
     /analyze may flip — `dynamics()` does not take it and does not forward one, so the published
     vocabulary cannot be widened by a caller. A drop justified by a number nobody can recompute

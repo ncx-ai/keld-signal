@@ -778,14 +778,14 @@ differ from it**.
   answered from events alone. The ordering rule is **not** reimplemented in SQL:
   SQLite computes the per-`(level, ref)` sums and `window.rollup` merges and applies
   its own alphabetical tie-break, so `rollup_window` returns exactly what
-  `window.rollup` returns over the same rows and `workstreams.payload` consumes it
+  `window.rollup` returns over the same rows and `dimensions.payload` consumes it
   unchanged.
 - **`bin` is sparse by design, and its absence must never read as "no evidence".**
   Two things make that unmisreadable rather than merely documented: a **`bin_level`
   registry that `bin.level` REFERENCES** (with `foreign_keys=ON`, so the table
   physically cannot hold an unregistered level — asserted with a direct INSERT), and
   `rollup_window` routing unbinned levels to `event`, so the sparseness never reaches
-  a caller. `PRECOMPUTED_LEVELS` is **derived** from `workstreams.ALLOCATION` +
+  a caller. `PRECOMPUTED_LEVELS` is **derived** from `dimensions.ALLOCATION` +
   `INVENTORY` (16 levels) rather than typed, against the 19 `events_for_turns` emits;
   registering a new level backfills its bins from the retained events, with no
   transcript re-read.
@@ -1170,7 +1170,7 @@ stated at the constant rather than smoothed. Inventory levels are excluded
 structurally and the exclusion was confirmed by distribution rather than by argument
 (`integrations` `compared` on **0** of 2,702 windows; `named_terms` non-zero on
 **98.3%** — no window in which it says no, a disqualifier needing no ground truth).
-`DYNAMIC_DIMENSIONS` is derived from `workstreams.ALLOCATION` minus the dropped set,
+`DYNAMIC_DIMENSIONS` is derived from `dimensions.ALLOCATION` minus the dropped set,
 and `dynamics()` neither takes nor forwards a `dimensions=` argument, so **the
 published vocabulary cannot be widened by a caller** — the parameter exists only to
 reproduce that measurement. The dropped three are still reported as allocation
@@ -1226,7 +1226,7 @@ case. `tooling` stays out, with the bar for revisiting it written into `prior.py
 test rather than remembered: agreement ≤ 0.90 **or** prior-attributed coverage ≥ 0.70,
 against its current 98.5% / 24.3%.
 
-`PRIOR_DIMENSIONS` is **derived** from `workstreams.ALLOCATION` rather than restated, so
+`PRIOR_DIMENSIONS` is **derived** from `dimensions.ALLOCATION` rather than restated, so
 the two cannot drift and **an INVENTORY level is structurally not addable** — which is
 what keeps `named_terms` (the one level read from message text, and which has held real
 person names) out of this block by construction rather than by care. `status` is named

@@ -6,7 +6,7 @@ workstreams earn a place, what their buckets look like, and how large the honest
 is. Nothing here infers — every value is a deterministic reference level, and a window with no
 dominant value is reported as unattributed rather than given a plausible one.
 
-A thin CLI over `app.analysis.window` + `app.analysis.workstreams`: the rollup, dominance and
+A thin CLI over `app.analysis.window` + `app.analysis.dimensions`: the rollup, dominance and
 payload assembly all live in the package now (Counter-based, pandas-free) so the study and the
 daemon share the same measured behaviour. Only the session/time windowing over the parquet events
 frame stays here — that frame is study-only.
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import pandas as pd
 
 from app.analysis.window import rollup  # noqa: E402
-from app.analysis.workstreams import ALLOCATION, INVENTORY, payload  # noqa: E402
+from app.analysis.dimensions import ALLOCATION, INVENTORY, payload  # noqa: E402
 
 SPAN, STRIDE = pd.Timedelta("60min"), pd.Timedelta("50min")
 

@@ -35,7 +35,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           It is now `ingest.session_of`: a digest of the transcript's absolute path, unique per
 #           transcript, and the key the answer's own rows are stored under. Nothing in the Go
 #           client reads the field (`sidecar.AnalyzeResult` decodes it and
-#           `sidecar/workstreams.go` documents it as local window metadata that never reaches
+#           `sidecar/dimensions.go` documents it as local window metadata that never reaches
 #           the published enrichment), so this breaks no consumer -- but the value a caller CAN
 #           see changed shape, and that is exactly what this number is for.
 #   4 -> 5: the `action` level answers DIFFERENTLY (app/analysis/vocab.py `action_for`). Three
@@ -62,7 +62,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #   6 -> 7: `inventory.physical_acts` is added -- the `action` level, published for the first
 #           time. It has been extracted, stored and fed to dynamics since this package existed
 #           and reached no payload at all: measured, `action` appeared ZERO times in
-#           workstreams.py. Assessed as an eighth ALLOCATION dimension it FAILED (coverage 0.185
+#           dimensions.py. Assessed as an eighth ALLOCATION dimension it FAILED (coverage 0.185
 #           against a 0.70 bar) and it fails for a reason no other dimension in that series did
 #           -- not thinness (it fires in 97.8% of windows at a median 34 observations, more than
 #           `output_type` or `language`, both of which ship) but PLURALITY: top share p50 0.403,
@@ -70,7 +70,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           `named_terms`' profile (97%/19% against this one's 97.8%/18.5%), and INVENTORY is
 #           where this package already resolves it. Published WHOLE, with no top-N cut, because
 #           `vocab.ACTIONS` is closed at 22 values -- see the third column of
-#           `workstreams.INVENTORY`. Measurements:
+#           `dimensions.INVENTORY`. Measurements:
 #           ~/keld/refseries-context/act-artifact/RESULTS.md (commit 6cf15eb).
 #   7 -> 8: the SESSION PRIOR block is added (app/analysis/prior.py) -- the session as it stood
 #           BEFORE this window, reported beside the window's own answer and NEVER supplying one

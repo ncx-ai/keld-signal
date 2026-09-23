@@ -10,7 +10,7 @@ into a vector.
 
 ## WHAT MAKES THIS DIFFERENT FROM EVERY OTHER PAYLOAD IN THIS PACKAGE
 
-⚠️ **`workstreams.payload` IS THE WRONG INPUT AND IS DELIBERATELY NOT CALLED.** It emits, per
+⚠️ **`dimensions.payload` IS THE WRONG INPUT AND IS DELIBERATELY NOT CALLED.** It emits, per
 ALLOCATION dimension, only the DOMINANT value's `value`/`share`/`evidence`/`status`. That is a
 presentation decision for a human reader — one line per dimension — and it throws away the
 distribution, which is the only thing a model can learn a shape from. A window that was 51% Go
@@ -219,7 +219,7 @@ DEFAULT_MAX_FEATURE_ROWS = 96
 OTHER = "other"
 
 # `action` — genuinely closed at 22 values by construction (every return path in
-# `vocab.action_for` is a literal or a table lookup), which is also why `workstreams.INVENTORY`
+# `vocab.action_for` is a literal or a table lookup), which is also why `dimensions.INVENTORY`
 # publishes it with no top-N cut at all.
 ACTION_SLOTS = tuple(sorted(ACTIONS)) + (OTHER,)
 

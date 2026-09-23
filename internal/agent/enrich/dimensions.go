@@ -4,7 +4,7 @@ import "errors"
 
 // DimensionSpanMinutes is the window the deterministic analysis characterises:
 // the hour of work ending at this prompt. It matches the span the analysis was
-// developed and measured against (see sidecar/app/analysis/workstreams.py).
+// developed and measured against (see sidecar/app/analysis/dimensions.py).
 const DimensionSpanMinutes = 60
 
 // dimensionAnalyzableSources are the sources whose transcripts the window

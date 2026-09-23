@@ -18,7 +18,7 @@ THE PROPERTIES THIS FILE EXISTS FOR, in order of how expensive getting them wron
     slot may name an open level's VALUE — and by a whole-row scan for the fixture's own strings.
  3. **THE SHELLS ARE DISJOINT.** Nested windows would count the same minutes four times. Asserted
     on the bounds arithmetic, and by the property that summing three shells reproduces the hour.
- 4. **`workstreams.payload` IS NOT THE INPUT.** A distribution cannot be recovered from a
+ 4. **`dimensions.payload` IS NOT THE INPUT.** A distribution cannot be recovered from a
     dominant value, so this is a mistake that cannot be repaired after a corpus is collected.
     Asserted against the module's own AST rather than its text — this module's DOCSTRINGS name
     the things it must not use, at length and on purpose, so a substring scan would fail on the
@@ -315,13 +315,13 @@ def test_shells_clamp_to_the_session_start_and_report_coverage():
         assert lo == hi == start and cov == 0.0, (name, lo, hi, cov)
 
 
-# --- 4. workstreams.payload is not the input --------------------------------------------------
+# --- 4. dimensions.payload is not the input --------------------------------------------------
 
 def _code_names(mod):
     """Every identifier the module's CODE actually references — names, attributes and imports.
 
     AST rather than a substring scan, and that is not fastidiousness: this module's docstrings
-    NAME the things it must not use, at length and on purpose (`workstreams.payload` is the wrong
+    NAME the things it must not use, at length and on purpose (`dimensions.payload` is the wrong
     input; `MIN_EVIDENCE` is a label and not a filter). A `"workstreams" not in src` test would
     therefore fail on the very prose that records the decision, and the obvious repair — deleting
     the prose — is the opposite of what should happen. Comments and strings are invisible here.
@@ -342,7 +342,7 @@ def _code_names(mod):
 
 
 def test_the_published_payload_is_never_the_input():
-    """⚠️ `workstreams.payload` emits only the DOMINANT value per dimension — a presentation
+    """⚠️ `dimensions.payload` emits only the DOMINANT value per dimension — a presentation
     decision. A distribution cannot be recovered from it, so this is a mistake that cannot be
     repaired after the corpus is collected. Pinned on the module's own AST."""
     names = _code_names(F)

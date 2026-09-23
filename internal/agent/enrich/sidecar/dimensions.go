@@ -284,7 +284,7 @@ func convertPrior(b PriorBlock) map[string]enrich.Prior {
 // NO TRUNCATION. The sidecar publishes this level whole on purpose: its vocabulary
 // is closed, so the payload is bounded at 22 entries by construction, and a top-N
 // cut would only reintroduce the arbitrary-tie-at-the-boundary effect the open
-// levels have to live with (see workstreams.INVENTORY's cap column). Do not add
+// levels have to live with (see dimensions.INVENTORY's cap column). Do not add
 // one here either.
 //
 // Nil rather than an empty slice when nothing survives — including when the whole
