@@ -104,9 +104,13 @@ func WriteV3Settings(p V3Patch) error {
 		if v == nil {
 			v = []string{}
 		}
-		if err := set("workstreams_off", v); err != nil {
+		if err := set("groups_off", v); err != nil {
 			return err
 		}
+		// The pre-rename key must not survive beside it: Load prefers
+		// groups_off, but a later write of an older binary would read the
+		// stale list back.
+		delete(cfg, "workstreams_off")
 	}
 	if p.Attribution != nil {
 		if err := set("attribution", *p.Attribution); err != nil {

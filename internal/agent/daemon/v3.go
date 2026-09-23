@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"log"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +49,16 @@ type v3 struct {
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	l := ledger.New()
-	p := workstreams.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
+	// The pre-rename projects.json moves to workstreams.json ONCE, here, before
+	// anything reads it; the old file is kept as projects.json.pre-rename.
+	if migrated, err := workstreams.MigrateLegacy(paths.StateDir()); err != nil {
+		log.Printf("keld-agent: could not migrate %s to %s: %v — it is still read in place",
+			workstreams.LegacyFileName, workstreams.FileName, err)
+	} else if migrated {
+		log.Printf("keld-agent: moved %s to %s (the old file is kept as %s%s)",
+			workstreams.LegacyFileName, workstreams.FileName, workstreams.LegacyFileName, workstreams.LegacyBackupSuffix)
+	}
+	p := workstreams.NewStore(workstreams.DefaultPath())
 
 	// The projects document needs two things this package owns: the blocks
 	// this machine has closed, and the org's vocabulary. Both are injected as

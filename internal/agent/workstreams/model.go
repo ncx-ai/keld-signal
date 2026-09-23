@@ -34,9 +34,18 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
-// CurrentVersion is the projects.json document version. Bump it and write a
+// CurrentVersion is the workstreams.json document version. Bump it and write a
 // migration in Load if the shape ever changes incompatibly.
-const CurrentVersion = 1
+//
+// Version 2 is the rename to Atlas's words (2026-09-23): the file moved from
+// projects.json to workstreams.json, the groups moved from `workstreams` to
+// `groups`, the workstreams from `projects` to `workstreams`, and each
+// workstream names its group under `group`. Version 1 is still read — see
+// migrate.go.
+const CurrentVersion = 2
+
+// FileName is the document's name under the state dir.
+const FileName = "workstreams.json"
 
 // Origin values for a Project: how it came to exist.
 const (
@@ -58,11 +67,11 @@ const (
 // Off is a DISPLAY MIRROR, not the authority: the authoritative flag is
 // settings.Settings.GroupsOff (agent-config.json's `workstreams_off`),
 // read live via settings.Settings.GroupOff — see attribute.go's
-// groupOff parameter and the PUT /v1/workstreams/{key}/off route in
+// groupOff parameter and the PUT /v1/groups/{key}/off route in
 // ingress/workstreams.go, which writes THAT file, not this one. It is carried
 // here too so a reader of this document alone (a backup, a support bundle)
 // is not missing the fact; ingress/workstreams.go overwrites it with the live
-// value before every GET /v1/projects response.
+// value before every GET /v1/workstreams response.
 type Group struct {
 	Key        string `json:"key"`
 	Name       string `json:"name"`
@@ -111,7 +120,7 @@ type Workstream struct {
 	// "What Atlas actually offers today", point 2) — so its bucket is carried
 	// in Team instead (see Team's doc comment) and projectGroupOff checks
 	// both.
-	Group string `json:"workstream,omitempty"`
+	Group string `json:"group,omitempty"`
 	// Origin says how this project came to exist: "suggested" (never
 	// happens — a suggestion is not persisted until bundled), "user"
 	// (bundled/edited by a person) or "atlas" (pushed down as an org
@@ -129,18 +138,18 @@ type Workstream struct {
 	AtlasValueID *string `json:"atlas_value_id"`
 }
 
-// Document is the whole ~/.keld/state/projects.json file.
+// Document is the whole ~/.keld/state/workstreams.json file.
 type Document struct {
 	Version     int          `json:"version"`
-	Groups      []Group      `json:"workstreams"`
-	Workstreams []Workstream `json:"projects"`
+	Groups      []Group      `json:"groups"`
+	Workstreams []Workstream `json:"workstreams"`
 }
 
-// DefaultPath is ~/.keld/state/projects.json (KELD_HOME-relative via
+// DefaultPath is ~/.keld/state/workstreams.json (KELD_HOME-relative via
 // internal/paths, so tests isolate it with t.TempDir()+KELD_HOME like every
 // other state file in this codebase).
 func DefaultPath() string {
-	return filepath.Join(paths.StateDir(), "projects.json")
+	return filepath.Join(paths.StateDir(), FileName)
 }
 
 // Load reads and decodes path. A MISSING file is not an error — it is a
@@ -153,17 +162,24 @@ func DefaultPath() string {
 func Load(path string) (Document, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return Document{}, err
+		}
+		// Not migrated yet: read the pre-rename file beside it, READ-ONLY.
+		// The daemon migrates once at startup (MigrateLegacy); a reader that
+		// runs before that must still see the person's setup, not an empty one.
+		legacy, lerr := readLegacySibling(path)
+		if lerr != nil || legacy == nil {
+			if lerr != nil {
+				return Document{}, lerr
+			}
 			return Document{Version: CurrentVersion}, nil
 		}
-		return Document{}, err
+		return *legacy, nil
 	}
-	var d Document
-	if err := json.Unmarshal(b, &d); err != nil {
-		return Document{}, fmt.Errorf("projects file %s: %w", path, err)
-	}
-	if d.Version == 0 {
-		d.Version = CurrentVersion
+	d, err := decodeDocument(b)
+	if err != nil {
+		return Document{}, fmt.Errorf("workstreams file %s: %w", path, err)
 	}
 	return d, nil
 }
@@ -224,7 +240,7 @@ type BlockSummary struct {
 }
 
 // BlocksSource is the read-only feed of this machine's recently-closed
-// blocks that GET /v1/projects needs for `suggestions` and `coverage`. It is
+// blocks that GET /v1/workstreams needs for `suggestions` and `coverage`. It is
 // an injectable interface — nil by default — for the same reason Vector is
 // in attribute.go: this package must not depend on the ledger store (D2) or
 // the block emitter's own storage, both edited elsewhere in this worktree.
@@ -254,7 +270,7 @@ type Store struct {
 	// that state itself — the settings poll lives in the daemon, which is
 	// wired separately from this deliverable — so it is a getter the daemon
 	// wiring supplies, mirroring Blocks. nil means "no remote projects known
-	// yet", which GET /v1/projects treats as an honest empty, never an error.
+	// yet", which GET /v1/workstreams treats as an honest empty, never an error.
 	RemoteWorkstreams func() []settings.RemoteWorkstream
 }
 

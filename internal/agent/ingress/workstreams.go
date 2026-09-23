@@ -17,7 +17,7 @@ import (
 // handful of ids and strings, never anything resembling prompt text.
 const maxWorkstreamsBody = 1 << 20 // 1 MiB
 
-// WorkstreamsRoute registers the six /v1/projects and /v1/workstreams routes
+// WorkstreamsRoute registers the six /v1/workstreams and /v1/workstreams routes
 // docs/v3/contracts.md's "Projects" section specifies, behind auth. s is the
 // only dependency: the file-backed Document store, plus its two OPTIONAL
 // getters (Blocks, RemoteWorkstreams) the daemon wiring may set later. Neither
@@ -30,7 +30,7 @@ const maxWorkstreamsBody = 1 << 20 // 1 MiB
 // `type Route` in route.go — a function literally named Route here would be
 // a redeclaration. Every v3 lane's constructor is named after what it
 // registers (see Handler's own doc comment for the sibling routes:
-// /v1/ledger, /v1/settings, /v1/projects, /v1/config, the page) and returns
+// /v1/ledger, /v1/settings, /v1/workstreams, /v1/config, the page) and returns
 // an ingress.Route value for Handler's `extras ...Route` to take.
 //
 // ⚠️ EVERY MUTATING ROUTE HERE IS A LOCAL EDIT, PERIOD. docs/v3/contracts.md's
@@ -43,29 +43,29 @@ const maxWorkstreamsBody = 1 << 20 // 1 MiB
 // page can say plainly that the change has not reached the org.
 func WorkstreamsRoute(s *workstreams.Store) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
-		mux.Handle("GET /v1/projects", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("GET /v1/workstreams", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleGetWorkstreams(w, r, s)
 		})))
-		mux.Handle("POST /v1/projects/bundle", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("POST /v1/workstreams/bundle", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleBundle(w, r, s)
 		})))
-		mux.Handle("POST /v1/projects/{id}/rules", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("POST /v1/workstreams/{id}/rules", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleRules(w, r, s)
 		})))
-		mux.Handle("POST /v1/projects/{id}/hide", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("POST /v1/workstreams/{id}/hide", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleHide(w, r, s)
 		})))
 		// Fold a LOCAL project into another (normally one of the org's). The
 		// rules move with it and the local entry goes — see
 		// workstreams.MapWorkstreamTo for why keeping it would make every one of its
 		// blocks a conflict.
-		mux.Handle("POST /v1/projects/{id}/same-as", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("POST /v1/workstreams/{id}/same-as", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleWorkstreamSameAs(w, r, s)
 		})))
-		mux.Handle("POST /v1/projects/place", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("POST /v1/workstreams/place", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlePlace(w, r, s)
 		})))
-		mux.Handle("PUT /v1/workstreams/{key}/off", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("PUT /v1/groups/{key}/off", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleGroupOff(w, r)
 		})))
 	})
@@ -123,7 +123,7 @@ func startOfWeek(t time.Time) time.Time {
 
 // groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
 // agent-config.json fresh per request, since a request may arrive right
-// after a PUT /v1/workstreams/{key}/off changed it. "call it, don't
+// after a PUT /v1/groups/{key}/off changed it. "call it, don't
 // reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
 func groupOffFunc() func(string) bool {
 	return settings.Load().GroupOff
@@ -200,7 +200,7 @@ func (a Attribution) Of(dims map[string]enrich.Labeled) workstreams.Result {
 }
 
 // currentSuggestions recomputes the suggestion list exactly as GET
-// /v1/projects would, so a mutating route resolving a suggestion id sees the
+// /v1/workstreams would, so a mutating route resolving a suggestion id sees the
 // same ids that route just handed the page. A nil Blocks getter yields no
 // suggestions at all (nothing to group), which is why Bundle/PlaceSameAs
 // against an unknown id fail with ErrUnknownSuggestion rather than a panic.
@@ -281,8 +281,8 @@ func handleGetWorkstreams(w http.ResponseWriter, r *http.Request, s *workstreams
 	// on the wire) are added to `workstreams` when the local document does not
 	// already name them.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"workstreams": withRemoteBuckets(groups, candidates, off),
-		"projects":    workstreamViews(candidates, observed),
+		"groups":      withRemoteBuckets(groups, candidates, off),
+		"workstreams": workstreamViews(candidates, observed),
 		"suggestions": suggestions,
 		"coverage": map[string]any{
 			"attributed": attributed,
@@ -341,7 +341,7 @@ func observedRepos(blocks []workstreams.BlockSummary) []string {
 func handleBundle(w http.ResponseWriter, r *http.Request, s *workstreams.Store) {
 	var body struct {
 		Title       string   `json:"title"`
-		Group       string   `json:"workstream"`
+		Group       string   `json:"group"`
 		Suggestions []string `json:"suggestions"`
 	}
 	if !decodeJSONBody(w, r, &body) {
@@ -378,7 +378,7 @@ func handleBundle(w http.ResponseWriter, r *http.Request, s *workstreams.Store) 
 		return
 	}
 
-	writeJSON(w, http.StatusOK, localOnly(map[string]any{"project": created}))
+	writeJSON(w, http.StatusOK, localOnly(map[string]any{"workstream": created}))
 }
 
 func handleRules(w http.ResponseWriter, r *http.Request, s *workstreams.Store) {
@@ -409,7 +409,7 @@ func handleRules(w http.ResponseWriter, r *http.Request, s *workstreams.Store) {
 	})
 	if err != nil {
 		if errors.Is(err, workstreams.ErrWorkstreamNotFound) {
-			writeError(w, http.StatusNotFound, "project_not_found")
+			writeError(w, http.StatusNotFound, "workstream_not_found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "store_write_failed")
@@ -433,7 +433,7 @@ func handleHide(w http.ResponseWriter, r *http.Request, s *workstreams.Store) {
 	})
 	if err != nil {
 		if errors.Is(err, workstreams.ErrWorkstreamNotFound) {
-			writeError(w, http.StatusNotFound, "project_not_found")
+			writeError(w, http.StatusNotFound, "workstream_not_found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "store_write_failed")
@@ -474,9 +474,9 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *workstreams.Store) {
 		case errors.Is(err, workstreams.ErrUnknownSuggestion):
 			writeError(w, http.StatusBadRequest, "unknown_suggestion")
 		case errors.Is(err, workstreams.ErrWorkstreamNotFound):
-			writeError(w, http.StatusNotFound, "project_not_found")
+			writeError(w, http.StatusNotFound, "workstream_not_found")
 		case errors.Is(err, workstreams.ErrGroupOff):
-			writeError(w, http.StatusConflict, "workstream_off")
+			writeError(w, http.StatusConflict, "group_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
 		}
@@ -509,9 +509,9 @@ func handleWorkstreamSameAs(w http.ResponseWriter, r *http.Request, s *workstrea
 	if err != nil {
 		switch {
 		case errors.Is(err, workstreams.ErrWorkstreamNotFound):
-			writeError(w, http.StatusNotFound, "project_not_found")
+			writeError(w, http.StatusNotFound, "workstream_not_found")
 		case errors.Is(err, workstreams.ErrGroupOff):
-			writeError(w, http.StatusConflict, "workstream_off")
+			writeError(w, http.StatusConflict, "group_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
 		}

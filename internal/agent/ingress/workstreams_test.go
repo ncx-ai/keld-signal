@@ -70,12 +70,12 @@ func TestWorkstreamsRoutesRequireTheSecret(t *testing.T) {
 	srv := httptest.NewServer(DiscardHandler("s3cret", WorkstreamsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodGet, "/v1/projects", "", nil)
+	res := doRequest(t, srv, http.MethodGet, "/v1/workstreams", "", nil)
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no secret: got %d, want 401", res.StatusCode)
 	}
 
-	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res = doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("with secret: got %d, want 200", res.StatusCode)
 	}
@@ -86,7 +86,7 @@ func TestGetWorkstreamsOnEmptyStoreIsHonestlyEmpty(t *testing.T) {
 	srv := httptest.NewServer(DiscardHandler("s3cret", WorkstreamsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res := doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
@@ -111,7 +111,7 @@ func TestGetWorkstreamsComputesSuggestionsFromInjectedBlocksSource(t *testing.T)
 	srv := httptest.NewServer(DiscardHandler("s3cret", WorkstreamsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res := doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	body := decodeBody(t, res)
 	cov := body["coverage"].(map[string]any)
 	if cov["total"].(float64) != 1 || cov["attributed"].(float64) != 0 {
@@ -132,7 +132,7 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	defer srv.Close()
 
 	// Discover the suggestion id via GET first.
-	res := doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res := doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	body := decodeBody(t, res)
 	sugs := body["suggestions"].([]any)
 	if len(sugs) != 1 {
@@ -141,8 +141,8 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	sugID := sugs[0].(map[string]any)["id"].(string)
 
 	// Bundle it.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/bundle", "s3cret", map[string]any{
-		"title": "SDK work", "workstream": "development", "suggestions": []string{sugID},
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/bundle", "s3cret", map[string]any{
+		"title": "SDK work", "group": "development", "suggestions": []string{sugID},
 	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("bundle status = %d", res.StatusCode)
@@ -154,14 +154,14 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	if _, ok := bundleBody["atlas_editor_url"].(string); !ok {
 		t.Fatalf("bundle response missing atlas_editor_url: %+v", bundleBody)
 	}
-	proj, ok := bundleBody["project"].(map[string]any)
+	proj, ok := bundleBody["workstream"].(map[string]any)
 	if !ok {
 		t.Fatalf("bundle response missing project: %+v", bundleBody)
 	}
 	workstreamID := proj["id"].(string)
 
 	// Hide it.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/"+workstreamID+"/hide", "s3cret", map[string]any{"hidden": true})
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/"+workstreamID+"/hide", "s3cret", map[string]any{"hidden": true})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("hide status = %d", res.StatusCode)
 	}
@@ -171,13 +171,13 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	}
 
 	// Unhide via rules is not a thing; unhide directly for the rest of the flow.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/"+workstreamID+"/hide", "s3cret", map[string]any{"hidden": false})
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/"+workstreamID+"/hide", "s3cret", map[string]any{"hidden": false})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("un-hide status = %d", res.StatusCode)
 	}
 
 	// Add a rule.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/"+workstreamID+"/rules", "s3cret", map[string]any{
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/"+workstreamID+"/rules", "s3cret", map[string]any{
 		"add": []map[string]string{{"kind": "repo", "value": "github.com/ncx-ai/atlas-telemetry-python"}},
 	})
 	if res.StatusCode != http.StatusOK {
@@ -189,7 +189,7 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	}
 
 	// Unknown project -> 404.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/does-not-exist/hide", "s3cret", map[string]any{"hidden": true})
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/does-not-exist/hide", "s3cret", map[string]any{"hidden": true})
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("hide unknown project status = %d, want 404", res.StatusCode)
 	}
@@ -200,7 +200,7 @@ func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	srv := httptest.NewServer(DiscardHandler("s3cret", WorkstreamsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodPut, "/v1/workstreams/marketing/off", "s3cret", map[string]any{"off": true})
+	res := doRequest(t, srv, http.MethodPut, "/v1/groups/marketing/off", "s3cret", map[string]any{"off": true})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
@@ -225,11 +225,11 @@ func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 		{Dims: map[string]enrich.Labeled{"repo": attributedDim("github.com/ncx-ai/keld-signal")}, Minutes: 1, Tokens: 1},
 	}}
 
-	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res = doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	got := decodeBody(t, res)
-	ws := got["workstreams"].([]any)[0].(map[string]any)
+	ws := got["groups"].([]any)[0].(map[string]any)
 	if ws["off"] != true {
-		t.Fatalf("workstream off flag not reflected: %+v", ws)
+		t.Fatalf("group off flag not reflected: %+v", ws)
 	}
 	cov := got["coverage"].(map[string]any)
 	if cov["attributed"].(float64) != 0 {
@@ -245,7 +245,7 @@ func TestPlaceRefusesUnknownSuggestion(t *testing.T) {
 	srv := httptest.NewServer(DiscardHandler("s3cret", WorkstreamsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodPost, "/v1/projects/place", "s3cret", map[string]any{
+	res := doRequest(t, srv, http.MethodPost, "/v1/workstreams/place", "s3cret", map[string]any{
 		"suggestion": "does-not-exist", "same_as": "p1",
 	})
 	if res.StatusCode != http.StatusBadRequest {
@@ -269,7 +269,7 @@ func TestGetWorkstreamsRulesOnlyShowMatchedKeywords(t *testing.T) {
 
 	// No blocks observed yet: the API must show p1 with no rules at all —
 	// neither the repo-shaped candidate nor the free-tag one.
-	res := doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res := doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	body := decodeBody(t, res)
 	p1 := findWorkstreamByID(t, body, "p1")
 	if rules, _ := p1["rules"].([]any); len(rules) != 0 {
@@ -281,7 +281,7 @@ func TestGetWorkstreamsRulesOnlyShowMatchedKeywords(t *testing.T) {
 	s.Blocks = fakeBlocks{rows: []workstreams.BlockSummary{
 		{Dims: map[string]enrich.Labeled{"repo": attributedDim("github.com/ncx-ai/keld-signal")}, Minutes: 5, Tokens: 50},
 	}}
-	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res = doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	body = decodeBody(t, res)
 	p1 = findWorkstreamByID(t, body, "p1")
 	rules, _ := p1["rules"].([]any)
@@ -295,14 +295,14 @@ func TestGetWorkstreamsRulesOnlyShowMatchedKeywords(t *testing.T) {
 
 	// Remove that rule: it must disappear from `rules`, and the block must
 	// return to suggestions.
-	res = doRequest(t, srv, http.MethodPost, "/v1/projects/p1/rules", "s3cret", map[string]any{
+	res = doRequest(t, srv, http.MethodPost, "/v1/workstreams/p1/rules", "s3cret", map[string]any{
 		"remove": []map[string]string{{"kind": "repo", "value": "ncx-ai/keld-signal"}},
 	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("remove rule status = %d", res.StatusCode)
 	}
 
-	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
+	res = doRequest(t, srv, http.MethodGet, "/v1/workstreams", "s3cret", nil)
 	body = decodeBody(t, res)
 	p1 = findWorkstreamByID(t, body, "p1")
 	if rules, _ := p1["rules"].([]any); len(rules) != 0 {
@@ -320,12 +320,12 @@ func TestGetWorkstreamsRulesOnlyShowMatchedKeywords(t *testing.T) {
 
 func findWorkstreamByID(t *testing.T, body map[string]any, id string) map[string]any {
 	t.Helper()
-	for _, raw := range body["projects"].([]any) {
+	for _, raw := range body["workstreams"].([]any) {
 		p := raw.(map[string]any)
 		if p["id"] == id {
 			return p
 		}
 	}
-	t.Fatalf("project %q not found in %+v", id, body["projects"])
+	t.Fatalf("workstream %q not found in %+v", id, body["workstreams"])
 	return nil
 }

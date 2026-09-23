@@ -16,7 +16,7 @@ test.describe("Today", () => {
     // Focus block: "HH:MM → HH:MM" plus its length and how it ended.
     await expect(cells.nth(0)).toContainText(/\d{2}:\d{2} → \d{2}:\d{2}/);
     await expect(cells.nth(0)).toContainText(/\d+ min|\d+h/);
-    // Project: a project name, or the honest "no project" — never the "—"
+    // Project: a project name, or the honest "no workstream" — never the "—"
     // that means attribution has not run (it runs right after the cut).
     await expect
       .poll(async () => (await cells.nth(1).innerText()).trim(), { timeout: 20_000 })

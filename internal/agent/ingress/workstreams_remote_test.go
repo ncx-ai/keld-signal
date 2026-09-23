@@ -13,7 +13,7 @@ import (
 
 // ⚠️ **Found by the D8 end-to-end against the real dev Atlas, not by a unit
 // test.** The org served eight project values on the settings poll, the daemon
-// attributed blocks against them, and GET /v1/projects answered
+// attributed blocks against them, and GET /v1/workstreams answered
 // `"projects": []` — because the handler returned the LOCAL document's projects
 // while attributing against the merged candidate list. The page's "Your
 // projects · from Atlas" section showed nothing on a machine paired with an org
@@ -36,25 +36,25 @@ func TestGetWorkstreamsReturnsTheOrgValuesAndTheirBuckets(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	res, err := http.Get(srv.URL + "/v1/projects")
+	res, err := http.Get(srv.URL + "/v1/workstreams")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
 	var body struct {
-		Workstreams []struct {
+		Groups []struct {
 			Key, Name, Origin string
-		} `json:"workstreams"`
-		Projects []json.RawMessage `json:"projects"`
+		} `json:"groups"`
+		Workstreams []json.RawMessage `json:"workstreams"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Projects) != 3 {
-		t.Fatalf("the org's three values must be returned as projects, got %d", len(body.Projects))
+	if len(body.Workstreams) != 3 {
+		t.Fatalf("the org's three values must be returned as workstreams, got %d", len(body.Workstreams))
 	}
 	var names []string
-	for _, ws := range body.Workstreams {
+	for _, ws := range body.Groups {
 		if ws.Origin != workstreams.OriginAtlas {
 			t.Fatalf("a derived bucket must carry origin %q, got %+v", workstreams.OriginAtlas, ws)
 		}
@@ -74,20 +74,20 @@ func TestGetWorkstreamsWithoutAnOrgIsTheLocalDocumentOnly(t *testing.T) {
 	WorkstreamsRoute(s)(mux, func(h http.Handler) http.Handler { return h })
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	res, err := http.Get(srv.URL + "/v1/projects")
+	res, err := http.Get(srv.URL + "/v1/workstreams")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
 	var body struct {
+		Groups      []json.RawMessage `json:"groups"`
 		Workstreams []json.RawMessage `json:"workstreams"`
-		Projects    []json.RawMessage `json:"projects"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Projects) != 0 || len(body.Workstreams) != 0 {
-		t.Fatalf("no org and an empty local document must yield nothing, got %d projects, %d workstreams",
-			len(body.Projects), len(body.Workstreams))
+	if len(body.Workstreams) != 0 || len(body.Groups) != 0 {
+		t.Fatalf("no org and an empty local document must yield nothing, got %d workstreams, %d groups",
+			len(body.Workstreams), len(body.Groups))
 	}
 }

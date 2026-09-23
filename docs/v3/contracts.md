@@ -160,7 +160,7 @@ one.
 `{"host": "https://atlas-dev.keld.co", "restart_required": true}`. Malformed → 400, no
 file touched. Refused with 409 while `send_to_atlas` is false.
 
-## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
+## Projects (`~/.keld/state/projects.json`) and `/v1/workstreams`
 
 The file is the **`KELD_PROJECTS_FILE` shape attribution already reads**, extended with
 fields the daemon ignores when it reads it as a project list:
@@ -239,12 +239,12 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/projects` | — | `{workstreams, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
-| `POST /v1/projects/bundle` | `{"title","workstream","suggestions":[ids]}` | one project with those rules; re-attributes |
-| `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
-| `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
-| `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
-| `PUT /v1/workstreams/{key}/off` | `{"off":true}` | writes `workstreams_off` |
+| `GET /v1/workstreams` | — | `{workstreams, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `POST /v1/workstreams/bundle` | `{"title","workstream","suggestions":[ids]}` | one project with those rules; re-attributes |
+| `POST /v1/workstreams/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
+| `POST /v1/workstreams/{id}/hide` | `{"hidden":true}` | local only |
+| `POST /v1/workstreams/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
+| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `workstreams_off` |
 
 Every one of these edits is local to this machine. The response carries
 `{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so

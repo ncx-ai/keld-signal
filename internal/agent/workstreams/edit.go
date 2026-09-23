@@ -507,7 +507,7 @@ func MapWorkstreamTo(d Document, remote []Workstream, localWorkstreamID, targetW
 // exclusion list Attribute's groupOff parameter reads (see
 // internal/agent/settings/v3.go's WorkstreamOff) — adding or removing key.
 // This is the one edit in this file that does not touch projects.json: the
-// PUT /v1/workstreams/{key}/off route writes agent-config.json instead, so
+// PUT /v1/groups/{key}/off route writes agent-config.json instead, so
 // this package never has two copies of the same fact to keep in sync. It
 // round-trips the WHOLE settings.Settings struct (read via settings.Load,
 // written back in full) rather than a hand-rolled partial-file patch, so any

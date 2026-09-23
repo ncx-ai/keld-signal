@@ -19,7 +19,7 @@ const (
 
 // Suggestion is one group of currently-unattributed blocks the health page
 // can offer to bundle into a project. See docs/v3/contracts.md's
-// `GET /v1/projects` response shape.
+// `GET /v1/workstreams` response shape.
 type Suggestion struct {
 	ID      string         `json:"id"`
 	Kind    SuggestionKind `json:"kind"`

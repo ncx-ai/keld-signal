@@ -81,7 +81,7 @@ test.describe("Analysis service health", () => {
 
   test("`stuck` names the problem, shows the reason VERBATIM, and offers Restart on every pane", async ({ signal, page }) => {
     await withService(page, STUCK);
-    for (const pane of ["today", "projects", "settings"] as const) {
+    for (const pane of ["today", "workstreams", "settings"] as const) {
       await signal.open(pane);
       await expect(banner(page)).toBeVisible();
       // The whole point of `stuck`'s reason is that it says restarting was

@@ -3,7 +3,6 @@ package daemon
 import (
 	"encoding/json"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
@@ -48,12 +47,22 @@ type workstreamsResolution struct {
 // A KELD_PROJECTS_FILE that fails to load returns ok=false — see
 // workstreamsResolution's doc comment for why that must NOT collapse into the
 // same answer as "the file says there are no projects".
+// legacyEnvNotice keeps the deprecation line to once per process: resolve runs
+// on every settings poll.
+var legacyEnvNotice sync.Once
+
 func resolveWorkstreams(remote *settings.Remote) workstreamsResolution {
-	if p := os.Getenv(settings.EnvWorkstreamsFile); p != "" {
+	if p, name := settings.WorkstreamsFileFromEnv(); p != "" {
+		if name == settings.EnvWorkstreamsFileLegacy {
+			legacyEnvNotice.Do(func() {
+				log.Printf("keld-agent: %s is deprecated; set %s instead (the old name is still read)",
+					settings.EnvWorkstreamsFileLegacy, settings.EnvWorkstreamsFile)
+			})
+		}
 		list, err := settings.LoadWorkstreamsFile(p)
 		if err != nil {
-			log.Printf("keld-agent: %s=%s could not be read: %v — leaving the previously known project list in place",
-				settings.EnvWorkstreamsFile, p, err)
+			log.Printf("keld-agent: %s=%s could not be read: %v — leaving the previously known workstream list in place",
+				name, p, err)
 			return workstreamsResolution{ok: false}
 		}
 		return workstreamsResolution{list: list, ok: true}

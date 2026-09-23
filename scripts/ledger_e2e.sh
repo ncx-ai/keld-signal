@@ -67,7 +67,7 @@ for i in $(seq 1 60); do [ -f "$HOME_DIR/agent.json" ] && break; sleep 1; done
 PORT=$(python3 -c "import json;print(json.load(open('$HOME_DIR/agent.json'))['port'])")
 SECRET=$(python3 -c "import json;print(json.load(open('$HOME_DIR/agent.json'))['secret'])")
 ledger() { curl -s -H "x-keld-agent-secret: $SECRET" "http://127.0.0.1:$PORT/v1/ledger"; }
-projects() { curl -s -H "x-keld-agent-secret: $SECRET" "http://127.0.0.1:$PORT/v1/projects"; }
+workstreams() { curl -s -H "x-keld-agent-secret: $SECRET" "http://127.0.0.1:$PORT/v1/workstreams"; }
 
 echo "== 4. wait for blocks to be cut AND received by Atlas (≤ 4 min)"
 for i in $(seq 1 120); do
@@ -103,20 +103,20 @@ else
 fi
 
 echo "== 6. the org's projects arrived on the poll, and attribution behaved"
-projects > "$WORK/projects.json"
-python3 - "$WORK/projects.json" <<'PY'
+workstreams > "$WORK/workstreams.json"
+python3 - "$WORK/workstreams.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
-ps=d.get('projects',[]); sug=d.get('suggestions',[]); cov=d.get('coverage',{})
+ps=d.get('workstreams',[]); sug=d.get('suggestions',[]); cov=d.get('coverage',{})
 atlas=[p for p in ps if (p.get('origin') or p.get('project',{}).get('origin'))=='atlas'] if ps else []
-print(f"  projects={len(ps)} from_atlas={len(atlas)} suggestions={len(sug)} coverage={cov}")
+print(f"  workstreams={len(ps)} from_atlas={len(atlas)} suggestions={len(sug)} coverage={cov}")
 for s in sug[:6]: print("   suggestion:", s.get('kind'), s.get('value'), s.get('blocks'), 'blocks')
 PY
-NP=$(python3 -c "import json;print(len(json.load(open('$WORK/projects.json')).get('projects',[])))")
-[ "$NP" -gt 0 ] && ok "org projects present ($NP)" || bad "no org projects — the settings poll did not populate the vocabulary"
-NS=$(python3 -c "import json;print(len(json.load(open('$WORK/projects.json')).get('suggestions',[])))")
+NP=$(python3 -c "import json;print(len(json.load(open('$WORK/workstreams.json')).get('workstreams',[])))")
+[ "$NP" -gt 0 ] && ok "org workstreams present ($NP)" || bad "no org workstreams — the settings poll did not populate the vocabulary"
+NS=$(python3 -c "import json;print(len(json.load(open('$WORK/workstreams.json')).get('suggestions',[])))")
 [ "$NS" -gt 0 ] && ok "suggestions exist for unattributed work ($NS) — expected: the org's values carry no repo tags yet" || bad "no suggestions"
-grep -q 'repo' <(python3 -c "import json;print([s.get('kind') for s in json.load(open('$WORK/projects.json')).get('suggestions',[])])") && ok "a suggestion is keyed by REPOSITORY (the real checkout resolved)" || bad "no repo-keyed suggestion; workspace fallback only"
+grep -q 'repo' <(python3 -c "import json;print([s.get('kind') for s in json.load(open('$WORK/workstreams.json')).get('suggestions',[])])") && ok "a suggestion is keyed by REPOSITORY (the real checkout resolved)" || bad "no repo-keyed suggestion; workspace fallback only"
 
 echo "== 7. pairing a second host via /v1/config"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "x-keld-agent-secret: $SECRET" -H 'content-type: application/json' -d '{"code":"not a code"}' "http://127.0.0.1:$PORT/v1/config")

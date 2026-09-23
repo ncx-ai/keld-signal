@@ -359,7 +359,7 @@ func chainOnPublished(first, second func([]publish.BlockEnrichment, string)) fun
 
 // liveAttribution wraps the ledger's Reader so every block row GET /v1/ledger
 // serves gets its `attributed` cell from the SAME recomputation GET
-// /v1/projects does, instead of from the cell frozen at cut time.
+// /v1/workstreams does, instead of from the cell frozen at cut time.
 //
 // ⚠️ **WHY ON READ RATHER THAN A SWEEP THAT REWRITES CELLS.** Attribution ran
 // once, when the block was cut, and was never revisited: eleven blocks on a

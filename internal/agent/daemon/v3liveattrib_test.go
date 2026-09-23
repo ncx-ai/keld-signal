@@ -103,9 +103,9 @@ func paneCoverage(t *testing.T, s *workstreams.Store) (attributed, total int) {
 	t.Helper()
 	h := mountRoutes(t, ingress.WorkstreamsRoute(s))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authed(http.MethodGet, "/v1/projects"))
+	h.ServeHTTP(rr, authed(http.MethodGet, "/v1/workstreams"))
 	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /v1/projects = %d, want 200", rr.Code)
+		t.Fatalf("GET /v1/workstreams = %d, want 200", rr.Code)
 	}
 	var body struct {
 		Coverage struct {
@@ -120,7 +120,7 @@ func paneCoverage(t *testing.T, s *workstreams.Store) (attributed, total int) {
 }
 
 // paneWorkstreams is the pane's PER-BLOCK answer, computed through the same entry
-// point GET /v1/projects uses for its coverage figure and its suggestions.
+// point GET /v1/workstreams uses for its coverage figure and its suggestions.
 func paneWorkstreams(t *testing.T, s *workstreams.Store) map[ledger.BlockKey]string {
 	t.Helper()
 	pass, err := ingress.NewAttribution(s)

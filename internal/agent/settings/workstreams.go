@@ -22,7 +22,24 @@ type RemoteWorkstream struct {
 // EnvWorkstreamsFile points at a local JSON array of RemoteWorkstream — the mock
 // path for tests and the smoke runbook. It WINS over the remote key so a
 // local run is reproducible regardless of org state.
-const EnvWorkstreamsFile = "KELD_PROJECTS_FILE"
+const EnvWorkstreamsFile = "KELD_WORKSTREAMS_FILE"
+
+// EnvWorkstreamsFileLegacy is the pre-rename name, still honoured when the new
+// one is unset: runbooks, smoke scripts and MDM payloads outlive a release.
+const EnvWorkstreamsFileLegacy = "KELD_PROJECTS_FILE"
+
+// WorkstreamsFileFromEnv returns the workstream-list file the environment names
+// and the variable that named it — the new name first, then the legacy one.
+// ("", "") when neither is set.
+func WorkstreamsFileFromEnv() (path, name string) {
+	if p := os.Getenv(EnvWorkstreamsFile); p != "" {
+		return p, EnvWorkstreamsFile
+	}
+	if p := os.Getenv(EnvWorkstreamsFileLegacy); p != "" {
+		return p, EnvWorkstreamsFileLegacy
+	}
+	return "", ""
+}
 
 // LoadWorkstreamsFile reads a strict JSON array of project definitions.
 // A missing or malformed file is an error, never an empty list — silence

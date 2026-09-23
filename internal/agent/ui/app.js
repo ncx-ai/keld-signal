@@ -6,7 +6,7 @@
 // file has zero side effects when imported under Node.
 //
 // Renders exactly the shapes docs/v3/contracts.md defines for GET /v1/ledger,
-// GET /v1/settings and GET /v1/projects. Nothing here invents a field that
+// GET /v1/settings and GET /v1/workstreams. Nothing here invents a field that
 // contract doesn't define; where the mocks show something the contract is
 // silent on (see the three "NOT IN CONTRACTS.MD" notes below), it is kept
 // entirely client-side rather than sent to the daemon as if it were real.
@@ -189,7 +189,7 @@ export function atlasEnabled(settings) {
  *  column at all (never an empty or greyed one) — one function both the
  *  renderer and the tests read, so the two cannot drift apart. */
 export function tableColumns(settings) {
-  const cols = ["Focus block", "Project", "Tokens", "Est.", "Model"];
+  const cols = ["Focus block", "Workstream", "Tokens", "Est.", "Model"];
   if (atlasEnabled(settings)) cols.push("Atlas");
   return cols;
 }
@@ -223,13 +223,13 @@ export function attributionOf(block) {
 }
 
 /** A project's title by id, or null if the ledger names an id GET
- *  /v1/projects never returned (a real, if unlikely, disagreement between
+ *  /v1/workstreams never returned (a real, if unlikely, disagreement between
  *  the two routes — not the common "no rule matched" case, which is a block
  *  whose project_id is empty, not one that names an id nobody knows). */
-export function projectTitle(projectId, projects) {
-  if (!projectId) return null;
-  const list = (projects && projects.projects) || [];
-  const match = list.find((p) => p.id === projectId);
+export function workstreamTitle(workstreamId, catalog) {
+  if (!workstreamId) return null;
+  const list = (catalog && catalog.workstreams) || [];
+  const match = list.find((p) => p.id === workstreamId);
   return match ? match.title : null;
 }
 
@@ -240,17 +240,17 @@ export function projectTitle(projectId, projects) {
  *   - "unknown"    — attribution hasn't run yet (the cell itself is absent)
  *   - "none"       — it ran and no rule matched this block
  *   - "attributed" — a project matched; `text` is its TITLE, never its id
- *   - "unresolved" — the ledger names a project id GET /v1/projects doesn't
+ *   - "unresolved" — the ledger names a project id GET /v1/workstreams doesn't
  *                    know about; `text` falls back to the raw id, but the
  *                    caller must style this like "unknown", not like a real
  *                    attributed project — showing an id at all here is
  *                    already the degraded case.
  */
-export function projectCellInfo(block, projects) {
+export function workstreamCellInfo(block, catalog) {
   const attr = attributionOf(block);
   if (!attr) return { kind: "unknown" };
   if (!attr.project_id) return { kind: "none" };
-  const title = projectTitle(attr.project_id, projects);
+  const title = workstreamTitle(attr.project_id, catalog);
   if (title) return { kind: "attributed", text: title, method: attr.method || "" };
   return { kind: "unresolved", text: attr.project_id };
 }
@@ -263,10 +263,10 @@ export function projectCellInfo(block, projects) {
 export const RHYTHM_PALETTE = ["var(--green)", "var(--sage)", "var(--indigo)", "var(--amber)"];
 export const RHYTHM_UNATTRIBUTED_COLOR = "var(--rule-strong)";
 
-export function rhythmColorFor(block, projects) {
+export function rhythmColorFor(block, catalog) {
   const attr = attributionOf(block);
   if (!attr || !attr.project_id) return RHYTHM_UNATTRIBUTED_COLOR;
-  const info = projectCellInfo(block, projects);
+  const info = workstreamCellInfo(block, catalog);
   if (info.kind !== "attributed") return RHYTHM_UNATTRIBUTED_COLOR;
   if (attr.method === "embedding") return "var(--indigo)";
   let h = 0;
@@ -277,9 +277,9 @@ export function rhythmColorFor(block, projects) {
 /** The rhythm strip's hover text for one block: its time range and whatever
  *  the Project column itself would show, so a square never explains itself
  *  in words the table doesn't also stand behind. */
-export function rhythmTitleFor(block, projects) {
-  const info = projectCellInfo(block, projects);
-  const label = info.kind === "attributed" || info.kind === "unresolved" ? info.text : "no project";
+export function rhythmTitleFor(block, catalog) {
+  const info = workstreamCellInfo(block, catalog);
+  const label = info.kind === "attributed" || info.kind === "unresolved" ? info.text : "no workstream";
   return `${formatRange(block.key.start, block.end)} · ${label}`;
 }
 
@@ -321,9 +321,9 @@ export function focusStats(blocks) {
  *  their rules conflict — computable from the projects list alone, with no
  *  extra field the contract doesn't already define. Hidden projects and
  *  projects in a switched-off workstream never conflict with anything. */
-export function findConflicts(projects, offWorkstreams) {
-  const off = new Set(offWorkstreams || []);
-  const live = projects.filter((p) => !p.hidden && !off.has(p.workstream));
+export function findConflicts(workstreams, offGroups) {
+  const off = new Set(offGroups || []);
+  const live = workstreams.filter((p) => !p.hidden && !off.has(p.group));
   const byRepo = new Map();
   const byTicket = new Map();
   for (const p of live) {
@@ -356,7 +356,7 @@ export function findConflicts(projects, offWorkstreams) {
   return out;
 }
 
-/** What a project card shows as "the rules": GET /v1/projects' own `rules`
+/** What a project card shows as "the rules": GET /v1/workstreams' own `rules`
  *  field (internal/agent/ingress/workstreams.go's workstreamView — declared repos
  *  always, a repo-shaped keyword only once it has actually matched an
  *  observed block), never the raw `repos ∪ keywords` the store holds. Reading
@@ -365,7 +365,7 @@ export function findConflicts(projects, offWorkstreams) {
  *  own split exists to prevent; the page must not re-introduce it by reading
  *  the wrong field. Falls back to `repos` only for a payload that predates the
  *  `rules` field (a fixture not yet updated), never as the normal path. */
-export function projectRulesSummary(p) {
+export function workstreamRulesSummary(p) {
   const rules = Array.isArray(p.rules) ? p.rules : p.repos || [];
   const bits = [];
   if (rules.length) bits.push(`repo ${rules[0]}${rules.length > 1 ? ` +${rules.length - 1}` : ""}`);
@@ -373,7 +373,7 @@ export function projectRulesSummary(p) {
   return bits.join(" · ") || "no rules yet";
 }
 
-/** Every mutating /v1/projects (or /v1/workstreams) route answers
+/** Every mutating /v1/workstreams (or /v1/workstreams) route answers
  *  `{local_only: true, atlas_editor_url: "..."}` (docs/v3/contracts.md's
  *  verified note: a machine cannot write to Atlas's vocabulary today). This
  *  is the ONE sentence the page ever shows for that fact — one function so
@@ -384,14 +384,14 @@ export function localOnlyConfirmationText() {
 }
 
 /** Every project a suggestion's "Same as" picker may offer — every project
- *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
+ *  GET /v1/workstreams returns, INCLUDING the org's own (origin `atlas`):
  *  internal/agent/ingress/workstreams.go's handleGetWorkstreams already merges the
  *  local document with the org's pooled workstream values into one list, so
  *  "same as" is never limited to local projects. A hidden project is left
  *  out — placing a suggestion on one a person chose to hide would silently
  *  un-hide nothing and just confuse the coverage count. */
-export function sameAsOptions(projects) {
-  return (projects || [])
+export function sameAsOptions(workstreams) {
+  return (workstreams || [])
     .filter((p) => !p.hidden)
     .map((p) => ({ id: p.id, label: p.origin === "atlas" ? `${p.title} · in Atlas` : p.title }));
 }
@@ -403,12 +403,12 @@ export function sameAsOptions(projects) {
  *  localOnlyConfirmationText(): that one's "edit the workstream in Atlas"
  *  reads as an invitation to go change the org's copy, which is backwards
  *  for a project this machine did not create. Placing onto a LOCAL project
- *  (or "New project", which only ever creates one) keeps the general
+ *  (or "New workstream", which only ever creates one) keeps the general
  *  sentence — there IS no org copy to leave alone in that case, so the
  *  "edit it in Atlas" advice is the real next step. */
 export function sameAsConfirmationText(targetOrigin) {
   if (targetOrigin === "atlas") {
-    return "Applied on this machine. The org's project is unchanged.";
+    return "Applied on this machine. The org's workstream is unchanged.";
   }
   return localOnlyConfirmationText();
 }
@@ -434,7 +434,7 @@ export const SETTINGS_ENV = {
   attribution: "KELD_ATTRIBUTION",
 };
 
-/** validProjectTitle is the one rule for naming a project from a suggestion:
+/** validWorkstreamTitle is the one rule for naming a project from a suggestion:
  *  trimmed, and empty means "no".
  *
  *  ⚠️ It is a named function rather than an inline `if (!title)` because that
@@ -444,7 +444,7 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
-/** projectGroups is what "Your projects" iterates: the org's workstreams, plus
+/** groupsForWorkstreams is what "Your workstreams" iterates: the org's workstreams, plus
  *  one group for any project whose workstream is in none of them.
  *
  *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
@@ -465,29 +465,29 @@ export const SETTINGS_ENV = {
  *  caller can decline to offer an org-level control on a bucket the org never
  *  declared.
  */
-export function projectGroups(workstreams, projects) {
-  const groups = (workstreams || []).map((w) => ({ ...w, synthetic: false }));
-  const known = new Set(groups.map((w) => w.key));
+export function groupsForWorkstreams(groups, workstreams) {
+  const out = (groups || []).map((w) => ({ ...w, synthetic: false }));
+  const known = new Set(out.map((w) => w.key));
   const extra = new Map();
-  for (const p of projects || []) {
+  for (const p of workstreams || []) {
     if (p.hidden) continue;
-    const key = p.workstream || "development";
+    const key = p.group || "development";
     if (known.has(key) || extra.has(key)) continue;
-    extra.set(key, { key, name: workstreamDisplayName(key), off: false, synthetic: true });
+    extra.set(key, { key, name: groupDisplayName(key), off: false, synthetic: true });
   }
-  return groups.concat([...extra.values()]);
+  return out.concat([...extra.values()]);
 }
 
-/** workstreamDisplayName turns a key into something a person reads. Mirrors the
+/** groupDisplayName turns a key into something a person reads. Mirrors the
  *  Go side's function of the same name so a locally-seeded workstream is
  *  labelled identically whether the page or the daemon named it. */
-export function workstreamDisplayName(key) {
+export function groupDisplayName(key) {
   const out = String(key || "").replace(/[_-]+/g, " ").trim();
   if (!out) return String(key || "");
   return out[0].toUpperCase() + out.slice(1);
 }
 
-export function validProjectTitle(title) {
+export function validWorkstreamTitle(title) {
   return String(title == null ? "" : title).trim();
 }
 
@@ -581,9 +581,9 @@ export const REASON_TEXT = {
   sidecar_outdated: "The local analysis service is out of date — reinstall to update it.",
   sidecar_down: "The local analysis service isn't responding.",
   sidecar_behind: "The local analysis service is still catching up.",
-  attribute_failed: "Couldn't work out a project for this block after several tries.",
-  no_rule_matched: "No project rule matched this yet.",
-  conflict: "Two projects claim this — pick one in Projects.",
+  attribute_failed: "Couldn't work out a workstream for this block after several tries.",
+  no_rule_matched: "No workstream rule matched this yet.",
+  conflict: "Two workstreams claim this — pick one in Workstreams.",
   no_tokens: "No usage was recorded in this block.",
   spooled: "Saved on this machine — will send once Atlas is reachable.",
   weights_unavailable: "Vector attribution needs a one-time download that hasn't finished.",
@@ -1254,7 +1254,7 @@ if (typeof document !== "undefined") {
     pane: "today",
     ledger: null,
     settings: null,
-    projects: null,
+    catalog: null,
     offline: false,
     local: loadLocalPrefs(),
     // restart: the bar's own state machine (see nextRestartStatus/
@@ -1279,9 +1279,9 @@ if (typeof document !== "undefined") {
     // DOM because `route()` re-renders the whole pane, so a value held only in
     // an input would be lost the moment anything else refreshed.
     naming: null,
-    // confirmations: rowKey -> {url}. Set after any /v1/projects (or
+    // confirmations: rowKey -> {url}. Set after any /v1/workstreams (or
     // /v1/workstreams) mutation whose response carries local_only — read by
-    // renderProjects to show localOnlyConfirmationText() under the row the
+    // renderWorkstreams to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
     // poll.
@@ -1332,7 +1332,7 @@ if (typeof document !== "undefined") {
 
   async function loadAll() {
     try {
-      const [ledger, settings, projects] = await Promise.all([
+      const [ledger, settings, catalog] = await Promise.all([
         // ⚠️ **BOUNDED TO TODAY, AND IT USED TO BE UNBOUNDED.** This asked for
         // the whole ledger and the pane drew all of it: measured on a real
         // machine, 108 blocks across FOUR days under a heading reading
@@ -1340,11 +1340,11 @@ if (typeof document !== "undefined") {
         // them. The route has always taken `since`; nothing passed one.
         fetchJSON(todayLedgerURL(Date.now())),
         fetchJSON("/v1/settings"),
-        fetchJSON("/v1/projects"),
+        fetchJSON("/v1/workstreams"),
       ]);
       state.ledger = ledger;
       state.settings = settings;
-      state.projects = projects;
+      state.catalog = catalog;
       state.offline = false;
       writeJSONStorage(LEDGER_CACHE_KEY, ledger);
     } catch (err) {
@@ -1358,12 +1358,12 @@ if (typeof document !== "undefined") {
 
   function paneFromHash() {
     const h = (location.hash || "#/today").replace(/^#\//, "");
-    return ["today", "projects", "integrations", "settings"].includes(h) ? h : "today";
+    return ["today", "workstreams", "integrations", "settings"].includes(h) ? h : "today";
   }
 
   const PANE_TITLE = {
     today: "Today",
-    projects: "Projects",
+    workstreams: "Workstreams",
     integrations: "Integrations",
     settings: "Settings",
   };
@@ -1411,7 +1411,7 @@ if (typeof document !== "undefined") {
   // ---- Today ----
 
   function renderToday(root) {
-    const { ledger, settings, projects } = state;
+    const { ledger, settings, catalog } = state;
     root.innerHTML = "";
     if (!ledger) {
       root.appendChild(el("p", { class: "loading" }, "No focus blocks yet. Once Signal has watched some work, they'll show up here."));
@@ -1455,8 +1455,8 @@ if (typeof document !== "undefined") {
         .map((b) =>
           el("span", {
             class: "sq",
-            style: `background:${rhythmColorFor(b, projects)}`,
-            title: rhythmTitleFor(b, projects),
+            style: `background:${rhythmColorFor(b, catalog)}`,
+            title: rhythmTitleFor(b, catalog),
           })
         );
       root.appendChild(
@@ -1492,20 +1492,20 @@ if (typeof document !== "undefined") {
       }
       const b = item.block;
       const measured = measuredOf(b);
-      const info = projectCellInfo(b, projects);
+      const info = workstreamCellInfo(b, catalog);
 
-      let projectCell;
+      let workstreamCell;
       if (info.kind === "attributed") {
-        projectCell = el("span", {}, el("span", { class: "pill ok" }, info.text), " ", el("small", { style: "color:var(--muted)" }, info.method));
+        workstreamCell = el("span", {}, el("span", { class: "pill ok" }, info.text), " ", el("small", { style: "color:var(--muted)" }, info.method));
       } else if (info.kind === "none") {
-        projectCell = el("span", { class: "pill wait" }, "no project");
+        workstreamCell = el("span", { class: "pill wait" }, "no workstream");
       } else if (info.kind === "unresolved") {
-        // The ledger names a project id GET /v1/projects doesn't know about —
+        // The ledger names a project id GET /v1/workstreams doesn't know about —
         // show the id (there is nothing better to show) but never dress it
         // up as a normal attributed project.
-        projectCell = el("span", { class: "pill unknown" }, info.text);
+        workstreamCell = el("span", { class: "pill unknown" }, info.text);
       } else {
-        projectCell = el("span", { class: "pill unknown" }, "—");
+        workstreamCell = el("span", { class: "pill unknown" }, "—");
       }
 
       const row = [
@@ -1515,7 +1515,7 @@ if (typeof document !== "undefined") {
           el("span", { class: "mono" }, formatRange(b.key.start, b.end)),
           el("small", {}, `${formatMinutes((b.end - b.key.start) / 60)} · ended: ${b.end_reason || "—"}`)
         ),
-        el("td", {}, projectCell),
+        el("td", {}, workstreamCell),
         el("td", { class: "mono" }, measured ? formatTokens(totalTokens(measured.tokens)) : "—"),
         el("td", { class: "mono" }, measured ? formatEstUSD(measured.estimate_usd) : "est. pending"),
         el("td", { class: "mono" }, measured ? measured.model || "—" : "—"),
@@ -1731,19 +1731,19 @@ if (typeof document !== "undefined") {
 
   // ---- Projects ----
 
-  function renderProjects(root) {
-    const { projects, settings } = state;
+  function renderWorkstreams(root) {
+    const { catalog, settings } = state;
     root.innerHTML = "";
-    if (!projects) {
-      root.appendChild(el("p", { class: "loading" }, "No project data yet."));
+    if (!catalog) {
+      root.appendChild(el("p", { class: "loading" }, "No workstream data yet."));
       return;
     }
-    const workstreams = projects.workstreams || [];
-    const allProjects = projects.projects || [];
-    const suggestions = projects.suggestions || [];
-    const coverage = projects.coverage || { attributed: 0, total: 0 };
-    const offKeys = workstreams.filter((w) => w.off).map((w) => w.key);
-    const conflicts = findConflicts(allProjects, offKeys);
+    const groups = catalog.groups || [];
+    const allWorkstreams = catalog.workstreams || [];
+    const suggestions = catalog.suggestions || [];
+    const coverage = catalog.coverage || { attributed: 0, total: 0 };
+    const offKeys = groups.filter((w) => w.off).map((w) => w.key);
+    const conflicts = findConflicts(allWorkstreams, offKeys);
 
     const leftOverBlocks = Math.max(0, (coverage.total || 0) - (coverage.attributed || 0));
     const pct = coverage.total ? Math.round((100 * coverage.attributed) / coverage.total) : 0;
@@ -1754,13 +1754,13 @@ if (typeof document !== "undefined") {
         { class: "tiles three" },
         el("div", { class: "tile" }, el("div", { class: "l" }, "Attributed"), el("div", { class: "v" }, `${pct}%`, el("small", {}, `${coverage.attributed || 0} of ${coverage.total || 0} focus blocks`))),
         el("div", { class: "tile" }, el("div", { class: "l" }, "Left over"), el("div", { class: "v", style: "color:var(--amber-strong)" }, `${leftOverBlocks} blocks`)),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Workstreams on"), el("div", { class: "v" }, `${workstreams.length - offKeys.length}`, el("small", {}, `of ${workstreams.length}`)))
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Groups on"), el("div", { class: "v" }, `${groups.length - offKeys.length}`, el("small", {}, `of ${groups.length}`)))
       )
     );
 
     root.appendChild(el("div", { class: "section-label suggested" }, `Suggested by your activity · ${suggestions.length}`));
     if (!suggestions.length) {
-      root.appendChild(el("p", { style: "color:var(--muted);font-size:13px" }, "Nothing left over — every focus block landed in a project."));
+      root.appendChild(el("p", { style: "color:var(--muted);font-size:13px" }, "Nothing left over — every focus block landed in a workstream."));
     } else {
       for (const s of suggestions) {
         root.appendChild(
@@ -1774,24 +1774,24 @@ if (typeof document !== "undefined") {
                   { class: "row-actions" },
                   el("input", {
                     type: "text",
-                    id: "projectNameInput",
-                    class: "project-name",
-                    "aria-label": "New project name",
+                    id: "workstreamNameInput",
+                    class: "workstream-name",
+                    "aria-label": "New workstream name",
                     value: state.naming.title,
                     oninput: (e) => { state.naming.title = e.target.value; },
                     onkeydown: (e) => {
-                      if (e.key === "Enter") bundleSuggestion(s, workstreams, state.naming.title);
-                      if (e.key === "Escape") cancelNamingProject();
+                      if (e.key === "Enter") bundleSuggestion(s, groups, state.naming.title);
+                      if (e.key === "Escape") cancelNamingWorkstream();
                     },
                   }),
-                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, workstreams, state.naming.title) }, "Create"),
-                  el("button", { class: "btn btn-quiet", onclick: cancelNamingProject }, "Cancel")
+                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, groups, state.naming.title) }, "Create"),
+                  el("button", { class: "btn btn-quiet", onclick: cancelNamingWorkstream }, "Cancel")
                 )
               : el(
                   "div",
                   { class: "row-actions" },
                   sameAsSelect(s),
-                  el("button", { class: "btn", onclick: () => startNamingProject(s) }, "New project")
+                  el("button", { class: "btn", onclick: () => startNamingWorkstream(s) }, "New workstream")
                 ),
             namingThis(s) && state.naming.error
               ? el("div", { class: "settings-note error-note" }, state.naming.error)
@@ -1801,15 +1801,15 @@ if (typeof document !== "undefined") {
       }
     }
 
-    root.appendChild(el("div", { class: "section-label" }, "Your projects"));
-    for (const w of projectGroups(workstreams, allProjects)) {
-      const inThis = allProjects.filter((p) => p.workstream === w.key && !p.hidden);
+    root.appendChild(el("div", { class: "section-label" }, "Your workstreams"));
+    for (const w of groupsForWorkstreams(groups, allWorkstreams)) {
+      const inThis = allWorkstreams.filter((p) => p.group === w.key && !p.hidden);
       const card = el(
         "div",
-        { class: "workstream-card" + (w.off ? " off" : "") },
+        { class: "group-card" + (w.off ? " off" : "") },
         el(
           "div",
-          { class: "workstream-head" },
+          { class: "group-head" },
           el("span", { class: "name" }, `${w.name}`),
           // A synthetic group is this machine's own bucket, not one the org
           // declared, so it offers no "counts for my work" switch: that flag is
@@ -1819,26 +1819,26 @@ if (typeof document !== "undefined") {
             ? null
             : el("label", {}, "counts for my work ", switchEl({
                 checked: !w.off,
-                onChange: (v) => setWorkstreamOff(w.key, !v),
+                onChange: (v) => setGroupOff(w.key, !v),
               }))
         )
       );
-      appendConfirmation(card, `workstream:${w.key}`);
+      appendConfirmation(card, `group:${w.key}`);
       if (w.off) {
-        card.appendChild(el("div", { class: "workstream-off-note" }, "Your work never lands here. Turn on if you work in this area."));
+        card.appendChild(el("div", { class: "group-off-note" }, "Your work never lands here. Turn on if you work in this area."));
       } else if (!inThis.length) {
-        card.appendChild(el("div", { class: "workstream-off-note" }, "No projects yet."));
+        card.appendChild(el("div", { class: "group-off-note" }, "No workstreams yet."));
       } else {
         for (const p of inThis) {
           const conflictIds = conflicts[p.id] || [];
           const row = el(
             "div",
-            { class: "project-row" },
+            { class: "workstream-row" },
             el(
               "div",
               { class: "row-title" },
               p.title,
-              el("small", {}, projectRulesSummary(p))
+              el("small", {}, workstreamRulesSummary(p))
             ),
             // ⚠️ **THE PICKER IS ON LOCAL PROJECTS ONLY.** An org project is not
             // ours to fold away: its identity lives in Atlas, and removing the
@@ -1853,7 +1853,7 @@ if (typeof document !== "undefined") {
             // column of misalignment from an absent element.
             p.origin === "atlas"
               ? el("span", { class: "row-spacer", "aria-hidden": "true" })
-              : mapProjectSelect(p),
+              : mapWorkstreamSelect(p),
             conflictIds.length
               ? el("span", { class: "pill no" }, "conflict · pick one")
               : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
@@ -1862,7 +1862,7 @@ if (typeof document !== "undefined") {
           if (conflictIds.length) {
             card.appendChild(el("div", { class: "conflict-note" }, `Also claimed by: ${conflictIds.join(", ")}`));
           }
-          appendConfirmation(card, `project:${p.id}`);
+          appendConfirmation(card, `workstream:${p.id}`);
         }
       }
       root.appendChild(card);
@@ -1921,11 +1921,11 @@ if (typeof document !== "undefined") {
    *  real one fires immediately and resets, so the control never shows a
    *  stale "current value" for something that is not a value. */
   function sameAsSelect(suggestion) {
-    const opts = sameAsOptions(state.projects.projects || []);
+    const opts = sameAsOptions(state.catalog.workstreams || []);
     const sel = el(
       "select",
-      { class: "btn", "aria-label": `Same as an existing project, for ${suggestion.value}` },
-      el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (no projects yet)")
+      { class: "btn", "aria-label": `Same as an existing workstream, for ${suggestion.value}` },
+      el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (no workstreams yet)")
     );
     for (const o of opts) sel.appendChild(el("option", { value: o.id }, o.label));
     sel.disabled = opts.length === 0;
@@ -1937,7 +1937,7 @@ if (typeof document !== "undefined") {
     return sel;
   }
 
-  /** mapProjectSelect folds a LOCAL project into another one — normally one of
+  /** mapWorkstreamSelect folds a LOCAL project into another one — normally one of
    *  the org's. The rules move with it and the local entry goes; see
    *  workstreams.MapWorkstreamTo for why keeping it beside its target would make
    *  every one of its blocks a conflict.
@@ -1945,8 +1945,8 @@ if (typeof document !== "undefined") {
    *  It offers every project except this one, so a person cannot map a project
    *  onto itself — which the daemon also refuses, since doing it would delete
    *  the entry and then put its rules back on the one just removed. */
-  function mapProjectSelect(project) {
-    const opts = sameAsOptions(state.projects.projects || []).filter((o) => o.id !== project.id);
+  function mapWorkstreamSelect(ws) {
+    const opts = sameAsOptions(state.catalog.workstreams || []).filter((o) => o.id !== ws.id);
     const sel = el(
       "select",
       // ⚠️ A DISTINCT ACCESSIBLE NAME from the suggestion picker's "Same as an
@@ -1955,7 +1955,7 @@ if (typeof document !== "undefined") {
       // pattern made a spec counting suggestion pickers find these too. A name
       // is an identity; two controls with one identity is a bug for a screen
       // reader before it is a bug for a test.
-      { class: "btn", "aria-label": `Map ${project.title} onto another project` },
+      { class: "btn", "aria-label": `Map ${ws.title} onto another workstream` },
       el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (nothing to map to)")
     );
     for (const o of opts) sel.appendChild(el("option", { value: o.id }, o.label));
@@ -1963,30 +1963,30 @@ if (typeof document !== "undefined") {
     sel.onchange = async () => {
       const target = sel.value;
       sel.selectedIndex = 0;
-      if (target) await mapProject(project, target);
+      if (target) await mapWorkstream(ws, target);
     };
     return sel;
   }
 
-  async function mapProject(project, target) {
+  async function mapWorkstream(ws, target) {
     if (!target) return;
-    const chosen = (state.projects.projects || []).find((p) => p.id === target);
-    const res = await sendJSON(`/v1/projects/${encodeURIComponent(project.id)}/same-as`, "POST", { same_as: target });
+    const chosen = (state.catalog.workstreams || []).find((p) => p.id === target);
+    const res = await sendJSON(`/v1/workstreams/${encodeURIComponent(ws.id)}/same-as`, "POST", { same_as: target });
     // The confirmation is placed on the TARGET row, because the source row is
     // about to stop existing — a note under a row that disappears is a note
     // nobody reads.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`workstream:${target}`, res.body, chosen && chosen.origin);
     await loadAll();
     route();
   }
 
   async function placeSuggestion(suggestion, target) {
     if (!target) return;
-    const chosen = (state.projects.projects || []).find((p) => p.id === target);
-    const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
+    const chosen = (state.catalog.workstreams || []).find((p) => p.id === target);
+    const res = await sendJSON("/v1/workstreams/place", "POST", { suggestion: suggestion.id, same_as: target });
     // The sentence depends on WHOSE project it was: an Atlas-origin target gets
     // "the org's project is unchanged", a local one gets the general advice.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`workstream:${target}`, res.body, chosen && chosen.origin);
     await loadAll();
     route();
   }
@@ -1995,7 +1995,7 @@ if (typeof document !== "undefined") {
   // AT ALL.** WKWebView — what the Tauri shell runs on — does not implement
   // `window.prompt` unless the host app provides a text-input panel, and Tauri
   // does not. So it returned null instantly, the `if (!title) return` swallowed
-  // it, and pressing "New project" was silent: no dialog, no project, no error.
+  // it, and pressing "New workstream" was silent: no dialog, no project, no error.
   //
   // It was invisible to the suite because Playwright AUTO-HANDLES native
   // dialogs, so the browser spec passed while the shipped app had no dialog to
@@ -2007,12 +2007,12 @@ if (typeof document !== "undefined") {
   // The prefill is the suggestion's own value — the repository name — because
   // that is what a person would type, and the field is selected on open so the
   // first keystroke replaces it.
-  function startNamingProject(suggestion) {
+  function startNamingWorkstream(suggestion) {
     state.naming = { id: suggestion.id, title: suggestion.value, error: "" };
     route();
     // After the render, not before: the input does not exist yet.
     requestAnimationFrame(() => {
-      const input = document.getElementById("projectNameInput");
+      const input = document.getElementById("workstreamNameInput");
       if (input) {
         input.focus();
         input.select();
@@ -2025,26 +2025,26 @@ if (typeof document !== "undefined") {
     return !!(state.naming && state.naming.id === suggestion.id);
   }
 
-  function cancelNamingProject() {
+  function cancelNamingWorkstream() {
     state.naming = null;
     route();
   }
 
-  async function bundleSuggestion(suggestion, workstreams, title) {
+  async function bundleSuggestion(suggestion, groups, title) {
     // NEGATIVE 1: an empty name creates nothing and leaves the suggestion where
     // it was. Said out loud rather than silently ignored — silence here is the
     // exact defect this replaced.
-    const name = validProjectTitle(title);
+    const name = validWorkstreamTitle(title);
     if (!name) {
-      state.naming = { id: suggestion.id, title: title || "", error: "Give the project a name first." };
+      state.naming = { id: suggestion.id, title: title || "", error: "Give the workstream a name first." };
       route();
       return;
     }
-    const workstream = (workstreams[0] && workstreams[0].key) || "development";
-    const res = await sendJSON("/v1/projects/bundle", "POST",
-      { title: name, workstream, suggestions: [suggestion.id] });
-    if (res.ok && res.body && res.body.project && res.body.project.id) {
-      noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
+    const group = (groups[0] && groups[0].key) || "development";
+    const res = await sendJSON("/v1/workstreams/bundle", "POST",
+      { title: name, group, suggestions: [suggestion.id] });
+    if (res.ok && res.body && res.body.workstream && res.body.workstream.id) {
+      noteLocalConfirmation(`workstream:${res.body.workstream.id}`, res.body);
       state.naming = null;
     } else {
       // NEGATIVE 2: a refusal is REPORTED. The page going quiet on a failed
@@ -2055,9 +2055,9 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function setWorkstreamOff(key, off) {
-    const res = await sendJSON(`/v1/workstreams/${encodeURIComponent(key)}/off`, "PUT", { off });
-    if (res.ok) noteLocalConfirmation(`workstream:${key}`, res.body);
+  async function setGroupOff(key, off) {
+    const res = await sendJSON(`/v1/groups/${encodeURIComponent(key)}/off`, "PUT", { off });
+    if (res.ok) noteLocalConfirmation(`group:${key}`, res.body);
     await loadAll();
     route();
   }
@@ -2112,7 +2112,7 @@ if (typeof document !== "undefined") {
           el(
             "div",
             { class: "settings-row" },
-            el("span", {}, "Suggest projects from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
+            el("span", {}, "Suggest workstreams from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
             switchEl({ checked: true, disabled: true })
           ),
           // Vector attribution used to be the second row here. It is a
@@ -2213,7 +2213,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's workstreams. Off: nothing leaves this machine.")),
+        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync workstreams, take the org's groups. Off: nothing leaves this machine.")),
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),
@@ -2244,7 +2244,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, "Vector attribution", el("div", { class: "desc" }, "In development. Downloads a 1.2 GB text model and reads your messages on this device to name projects for non-coding work. Off on every install.")),
+        el("span", {}, "Vector attribution", el("div", { class: "desc" }, "In development. Downloads a 1.2 GB text model and reads your messages on this device to name workstreams for non-coding work. Off on every install.")),
         switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
       ),
       fieldNote("attribution", readonly)
@@ -2839,7 +2839,7 @@ if (typeof document !== "undefined") {
     document.body.classList.toggle("pane-today", pane === "today");
     const root = document.getElementById("paneRoot");
     if (pane === "today") renderToday(root);
-    else if (pane === "projects") renderProjects(root);
+    else if (pane === "workstreams") renderWorkstreams(root);
     else if (pane === "integrations") {
       // The route is not part of loadAll(): it is this pane's own, polled at
       // its own cadence, and a person on Today should not be paying for it.

@@ -394,7 +394,7 @@ fieldset:disabled { opacity: .55; }
   color: var(--muted); margin: 20px 0 8px;
 }
 .section-label.suggested { color: var(--amber-strong); }
-.suggestion-row, .project-row {
+.suggestion-row, .workstream-row {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding: 10px 0; border-bottom: 1px solid var(--rule);
 }
@@ -405,38 +405,38 @@ fieldset:disabled { opacity: .55; }
    Measured: two rows whose pickers were the SAME width (338px) started at
    x=652 and x=636, so the column visibly stepped. Fixed columns put every
    picker and every pill on one vertical line, whatever the titles do. */
-.project-row {
+.workstream-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--row-picker-w) auto;
   align-items: center;
   column-gap: 16px;
 }
-.project-row .row-title { min-width: 0; }
-.project-row select { width: 100%; }
+.workstream-row .row-title { min-width: 0; }
+.workstream-row select { width: 100%; }
 /* The pill column is right-aligned so a shorter label ("local") still ends on
    the same edge as a longer one ("✓ in Atlas") — the edge the header's switch
    also sits on. */
-.project-row .pill { justify-self: end; }
-.suggestion-row:last-child, .project-row:last-child { border-bottom: none; }
+.workstream-row .pill { justify-self: end; }
+.suggestion-row:last-child, .workstream-row:last-child { border-bottom: none; }
 .row-title { font-family: var(--mono); font-size: 13px; }
 .row-title small { display: block; font-family: var(--sans); color: var(--muted); font-size: 12px; margin-top: 2px; }
 .row-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.workstream-card {
+.group-card {
   background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
   padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
 }
-.workstream-card.off { background: var(--nested); box-shadow: none; }
+.group-card.off { background: var(--nested); box-shadow: none; }
 /* The switch already lands on the same right edge as the rows' pills (measured:
    both end at the card's content edge). What it lacked was breathing room — the
    label text ran straight into it — so this is spacing, not a fix for an
    overflow that was never there. */
-.workstream-head {
+.group-head {
   display: flex; justify-content: space-between; align-items: center;
   gap: 16px; margin-bottom: 2px;
 }
-.workstream-head > label { display: inline-flex; align-items: center; gap: 8px; }
-.workstream-head .name { font: 600 13px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-.workstream-off-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.group-head > label { display: inline-flex; align-items: center; gap: 8px; }
+.group-head .name { font: 600 13px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.group-off-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .conflict-note { color: var(--error-strong); font-size: 11.5px; }
 .local-note { color: var(--sage); font-size: 11.5px; margin: 2px 0 8px; }
 .local-note a { color: var(--indigo); text-decoration: underline; margin-left: 4px; }
@@ -486,10 +486,10 @@ fieldset:disabled { opacity: .55; }
   margin: 14px 0 4px;
 }
 
-/* The inline "New project" name field. It replaces a native prompt(), which
+/* The inline "New workstream" name field. It replaces a native prompt(), which
    WKWebView does not implement — see bundleSuggestion in app.js. Sized to the
    row rather than the page: it sits where the button was. */
-.project-name {
+.workstream-name {
   padding: 5px 10px;
   border: 1px solid var(--rule-strong);
   border-radius: 8px;
@@ -499,7 +499,7 @@ fieldset:disabled { opacity: .55; }
   font-size: 12px;
   min-width: 220px;
 }
-.project-name:focus {
+.workstream-name:focus {
   outline: 2px solid var(--green-strong);
   outline-offset: 1px;
 }

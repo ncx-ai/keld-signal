@@ -151,11 +151,16 @@ type Settings struct {
 	// resets.
 	ShowBreaks bool `json:"show_breaks,omitempty"`
 
-	// GroupsOff lists workstream keys whose values are EXCLUDED from
+	// GroupsOff lists group keys whose workstreams are EXCLUDED from
 	// attribution on this machine ("counts for my work" switched off). Local
 	// only; Atlas is never told. A developer's work can then never land in the
-	// Marketing bucket.
-	GroupsOff []string `json:"workstreams_off,omitempty"`
+	// Marketing group.
+	GroupsOff []string `json:"groups_off,omitempty"`
+	// LegacyGroupsOff is the pre-rename key, `workstreams_off`, still READ so a
+	// machine configured before 2026-09-23 keeps its groups switched off. Load
+	// folds it into GroupsOff (which wins when both exist) and clears it, so a
+	// whole-struct write never re-emits it; WriteV3Settings deletes the key.
+	LegacyGroupsOff []string `json:"workstreams_off,omitempty"`
 
 	// AutoSetupIntegrations decides whether the daemon's integrations detector
 	// CONFIGURES a supported tool whose config dir appears after Signal was
@@ -295,6 +300,10 @@ func Load() Settings {
 		return s
 	}
 	_ = json.Unmarshal(data, &s) // invalid JSON -> keep zero-value defaults
+	if s.GroupsOff == nil && s.LegacyGroupsOff != nil {
+		s.GroupsOff = s.LegacyGroupsOff
+	}
+	s.LegacyGroupsOff = nil
 	return s
 }
 

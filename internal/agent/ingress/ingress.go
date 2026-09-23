@@ -34,7 +34,7 @@ func JobFrom(p spool.Pointer) queue.Job {
 }
 
 // Handler returns the daemon's HTTP handler. extras are the v3 loopback routes
-// (/v1/ledger, /v1/settings, /v1/projects, /v1/config, the page) — each lane
+// (/v1/ledger, /v1/settings, /v1/workstreams, /v1/config, the page) — each lane
 // contributes its own Route from its own file, so nobody edits this one.
 func Handler(q *queue.Queue, secret string, extras ...Route) http.Handler {
 	mux := http.NewServeMux()

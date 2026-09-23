@@ -87,7 +87,7 @@ test.describe("Signal not running", () => {
     await page.goto(`${shell.url}/?secret=irrelevant#/settings`);
     await expect(page.getByText("Signal is not running on this machine")).toBeVisible();
     await expect(page.getByText(/Signal may not be running/)).toBeVisible();
-    await page.getByRole("link", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "Workstreams" }).click();
     await expect(page.getByText("Signal is not running on this machine")).toBeVisible();
   });
 });

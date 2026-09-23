@@ -12,7 +12,7 @@ test("atlasEnabled: absent means on, matching Settings.AtlasEnabled() Go-side", 
 test("with Send to Atlas off, the Today table has no Atlas column at all", () => {
   const cols = tableColumns({ send_to_atlas: false });
   assert.ok(!cols.includes("Atlas"), "Atlas column must not exist when Send to Atlas is off");
-  assert.deepEqual(cols, ["Focus block", "Project", "Tokens", "Est.", "Model"]);
+  assert.deepEqual(cols, ["Focus block", "Workstream", "Tokens", "Est.", "Model"]);
 });
 
 test("with Send to Atlas on, the Today table carries the Atlas column", () => {

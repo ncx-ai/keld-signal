@@ -50,7 +50,7 @@ type settingsView struct {
 	SendToAtlas bool     `json:"send_to_atlas"`
 	DevBlocks   string   `json:"dev_blocks"`
 	ShowBreaks  bool     `json:"show_breaks"`
-	GroupsOff   []string `json:"workstreams_off"`
+	GroupsOff   []string `json:"groups_off"`
 	Attribution bool     `json:"attribution"`
 	Readonly    []string `json:"readonly"`
 	DevGenerate bool     `json:"dev_generate"`
@@ -137,7 +137,7 @@ type settingsPatch struct {
 	SendToAtlas *bool     `json:"send_to_atlas"`
 	DevBlocks   *string   `json:"dev_blocks"`
 	ShowBreaks  *bool     `json:"show_breaks"`
-	GroupsOff   *[]string `json:"workstreams_off"`
+	GroupsOff   *[]string `json:"groups_off"`
 	Attribution *bool     `json:"attribution"`
 	DevGenerate *bool     `json:"dev_generate"`
 	DevRepos    *[]string `json:"dev_repos"`

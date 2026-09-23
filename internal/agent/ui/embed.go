@@ -1,7 +1,7 @@
 // Package ui is the Keld Signal page — deliverable D6 of docs/v3/contracts.md:
 // one embedded, framework-free HTML/CSS/JS app with three panes (Today,
 // Projects, Settings) rendering exactly the JSON shapes that document defines
-// for GET /v1/ledger, GET /v1/settings and GET /v1/projects.
+// for GET /v1/ledger, GET /v1/settings and GET /v1/workstreams.
 //
 // This package owns only the page. The daemon wiring
 // that serves those routes for real, and mounting Route() on the live daemon
@@ -38,7 +38,7 @@ const (
 
 // Route registers the page at "/". Per the D6 scope, the static assets carry
 // no data about this machine and are therefore NOT wrapped in the auth
-// middleware — only /v1/ledger, /v1/settings, /v1/projects and /v1/config
+// middleware — only /v1/ledger, /v1/settings, /v1/workstreams and /v1/config
 // (each some other lane's own Route) are. The page takes the secret once from
 // its own URL's query parameter and sets it as the keld_secret cookie, so
 // every fetch after the first load carries it without the query parameter
