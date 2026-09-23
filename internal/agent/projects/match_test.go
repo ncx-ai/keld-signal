@@ -120,21 +120,20 @@ func TestMatchRulesAreSortedSoTwoMachinesAgree(t *testing.T) {
 }
 
 func TestProjectMatchesListEveryMatchRatherThanPickingOne(t *testing.T) {
-	// ⚠️ A match is not an attribution. Attribute picks one and REFUSES when
-	// two match; this lists everything, because two projects claiming one
-	// repository is precisely the state an admin needs to see. Reconcile should
-	// make it impossible for a local/org pair — and if it ever reappears, this
-	// carries the evidence instead of swallowing it.
+	// Attribute and MatchesFor agree on the set: both report every project a
+	// block matches. MatchesFor carries the rules, for Atlas's suggestions.
+	// Reconcile should make a local/org pair impossible — and if it ever
+	// reappears, this carries the evidence instead of swallowing it.
 	both := []Project{
 		localProject("p_a", "mine", "github.com/acme/a"),
 		{ID: "org:one", Title: "One", Origin: OriginAtlas, Repos: []string{"github.com/acme/a"}},
 	}
-	if res := Attribute(repoDims("github.com/acme/a"), both, noneOff, nil); res.Reason != ReasonConflict {
-		t.Fatalf("precondition: want a conflict, got %q", res.Reason)
+	if res := Attribute(repoDims("github.com/acme/a"), both, noneOff, nil); len(res.Projects) != 2 {
+		t.Fatalf("precondition: want both assigned, got %+v", res)
 	}
 	got := MatchesFor(repoDims("github.com/acme/a"), both, noneOff)
 	if len(got) != 2 {
-		t.Fatalf("a conflict must be reported as two entries, got %+v", got)
+		t.Fatalf("two matches must be reported as two entries, got %+v", got)
 	}
 }
 

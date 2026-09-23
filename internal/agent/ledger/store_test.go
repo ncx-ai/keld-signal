@@ -251,24 +251,25 @@ func TestAttributeOKShowsProjectAndMethod(t *testing.T) {
 	s := New()
 	k := BlockKey{Session: "s8", Start: 8000}
 	s.Cut(k, 8060, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one("p_keld_signal", MethodRepo), ReasonNone, time.Now())
 
 	snap, _ := s.Read(time.Time{}, 10)
 	cell := snap.Blocks[0].Cells["attributed"]
 	if cell["status"] != string(StatusOK) {
 		t.Fatalf("want ok, got %v", cell["status"])
 	}
-	if cell["project_id"] != "p_keld_signal" || cell["method"] != string(MethodRepo) {
+	if firstOf(cell, "project_id") != "p_keld_signal" || firstOf(cell, "method") != string(MethodRepo) {
 		t.Fatalf("want project_id/method, got %#v", cell)
 	}
 }
 
-func TestAttributeConflictShowsCompetingProjects(t *testing.T) {
+func TestALegacyConflictRowShowsCompetingProjects(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "s9", Start: 9500}
 	s.Cut(k, 9560, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{Conflict: []string{"p_a", "p_b"}}, ReasonConflict, time.Now())
+	s.Attribute(k, Attributed{}, ReasonConflict, time.Now())
+	setLegacyConflict(t, s, k, "p_a,p_b")
 
 	snap, _ := s.Read(time.Time{}, 10)
 	cell := snap.Blocks[0].Cells["attributed"]
@@ -279,7 +280,7 @@ func TestAttributeConflictShowsCompetingProjects(t *testing.T) {
 	if !ok || len(conflict) != 2 {
 		t.Fatalf("want 2 competing project ids, got %#v", cell["conflict"])
 	}
-	if _, ok := cell["project_id"]; ok {
+	if firstOf(cell, "project_id") != nil {
 		t.Fatal("a conflicted attribution must not also publish a winning project_id")
 	}
 }
@@ -296,7 +297,7 @@ func TestAttributeNoRuleMatchedIsFailedWithNoProject(t *testing.T) {
 	if cell["status"] != string(StatusFailed) || cell["reason"] != string(ReasonNoRuleMatched) {
 		t.Fatalf("want failed/no_rule_matched, got %#v", cell)
 	}
-	if _, ok := cell["project_id"]; ok {
+	if firstOf(cell, "project_id") != nil {
 		t.Fatal("no project_id should be published when nothing matched")
 	}
 }

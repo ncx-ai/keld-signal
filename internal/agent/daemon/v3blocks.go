@@ -321,11 +321,7 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 	}
 	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
 		projects.GroupOffFunc(settings.Load()), nil)
-	v.ledger.Attribute(k, ledger.Attributed{
-		ProjectID: res.ProjectID,
-		Method:    ledger.Method(res.Method),
-		Conflict:  res.Conflict,
-	}, ledger.Reason(res.Reason), now)
+	v.ledger.Attribute(k, ledger.Attributed{Projects: ledgerProjects(res)}, ledger.Reason(res.Reason), now)
 }
 
 // chainOnPublished runs two OnPublished hooks in order, tolerating a nil first
@@ -447,23 +443,37 @@ func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, erro
 // shape ledger.Store.Read produces for a recorded one — same keys, same
 // values — so no consumer needs to learn a second shape.
 func attributedCell(res projects.Result, at string) map[string]any {
-	if res.Reason == projects.ReasonNone && res.ProjectID != "" {
+	if res.Reason == projects.ReasonNone && res.Attributed() {
+		list := make([]map[string]any, 0, len(res.Projects))
+		for _, a := range res.Projects {
+			list = append(list, map[string]any{
+				"project_id": a.ProjectID,
+				"group":      a.Group,
+				"method":     string(a.Method),
+			})
+		}
 		return map[string]any{
-			"status":     string(ledger.StatusOK),
-			"at":         at,
-			"project_id": res.ProjectID,
-			"method":     string(res.Method),
+			"status":   string(ledger.StatusOK),
+			"at":       at,
+			"projects": list,
 		}
 	}
-	cell := map[string]any{
+	return map[string]any{
 		"status": string(ledger.StatusFailed),
 		"at":     at,
 		"reason": string(reasonOr(res.Reason, projects.ReasonNoRuleMatched)),
 	}
-	if res.Reason == projects.ReasonConflict && len(res.Conflict) > 0 {
-		cell["conflict"] = append([]string(nil), res.Conflict...)
+}
+
+// ledgerProjects is a rule-pass result as the ledger records it.
+func ledgerProjects(res projects.Result) []ledger.AttributedProject {
+	out := make([]ledger.AttributedProject, 0, len(res.Projects))
+	for _, a := range res.Projects {
+		out = append(out, ledger.AttributedProject{
+			ProjectID: a.ProjectID, Group: a.Group, Method: ledger.Method(a.Method),
+		})
 	}
-	return cell
+	return out
 }
 
 func reasonOr(r, fallback projects.Reason) projects.Reason {

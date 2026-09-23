@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,8 +92,7 @@ func rowProjects(t *testing.T, r ledger.Reader) (map[ledger.BlockKey]string, map
 		cell, present := b.Cells["attributed"]
 		if present {
 			cells[k] = cell
-			s, _ := cell["project_id"].(string)
-			ids[k] = s
+			ids[k] = joinWS(cell)
 		}
 	}
 	return ids, cells
@@ -133,7 +133,7 @@ func paneProjects(t *testing.T, s *projects.Store) map[ledger.BlockKey]string {
 	}
 	out := map[ledger.BlockKey]string{}
 	for _, b := range blocks {
-		out[ledger.BlockKey{Session: b.SessionID, Start: b.Start}] = pass.Of(b.Dims).ProjectID
+		out[ledger.BlockKey{Session: b.SessionID, Start: b.Start}] = strings.Join(pass.Of(b.Dims).IDs(), ",")
 	}
 	return out
 }
@@ -249,8 +249,8 @@ func TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared(t *testing.T)
 	if after[k] != "p_signal" {
 		t.Fatalf("after declaring the project the block must attribute to it, got %q", after[k])
 	}
-	if cells[k]["method"] != string(ledger.MethodRepo) {
-		t.Fatalf("method = %v, want %q", cells[k]["method"], ledger.MethodRepo)
+	if firstWS(cells[k], "method") != string(ledger.MethodRepo) {
+		t.Fatalf("method = %v, want %q", firstWS(cells[k], "method"), ledger.MethodRepo)
 	}
 }
 

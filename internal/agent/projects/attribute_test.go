@@ -8,7 +8,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
-// attributed builds an enrich.Labeled the way a real block's workstreams map
+// attributed builds an enrich.Labeled the way a real block's projects map
 // carries a dimension that reached the attribution floor.
 func attributed(value string) enrich.Labeled {
 	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.DimensionAttributed}
@@ -40,11 +40,11 @@ func TestRepoRuleAttributesWithoutAnyEncoder(t *testing.T) {
 
 	res := Attribute(dims, []Project{p}, nil, nil)
 
-	if res.Method != MethodRepo {
-		t.Fatalf("method = %q, want %q", res.Method, MethodRepo)
+	if only(res).Method != MethodRepo {
+		t.Fatalf("method = %q, want %q", only(res).Method, MethodRepo)
 	}
-	if res.ProjectID != "p_signal" {
-		t.Fatalf("project id = %q, want p_signal", res.ProjectID)
+	if only(res).ProjectID != "p_signal" {
+		t.Fatalf("project id = %q, want p_signal", only(res).ProjectID)
 	}
 	if res.Reason != ReasonNone {
 		t.Fatalf("reason = %q, want none", res.Reason)
@@ -63,7 +63,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		dims := dimsWith(map[string]string{DimRepo: unclaimed})
 		res := Attribute(dims, nil, nil, nil)
-		if res.ProjectID != "" || res.Reason != ReasonNoRuleMatched {
+		if only(res).ProjectID != "" || res.Reason != ReasonNoRuleMatched {
 			t.Fatalf("block %d: got %+v, want unattributed/no_rule_matched", i, res)
 		}
 		blocks = append(blocks, UnattributedBlock{Dims: dims, Minutes: 10, Tokens: 1000})
@@ -118,7 +118,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	// All three repos' blocks now re-attribute to the new project.
 	for _, r := range sdkRepos {
 		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
-		if res.Method != MethodRepo || res.ProjectID != created.ID {
+		if only(res).Method != MethodRepo || only(res).ProjectID != created.ID {
 			t.Fatalf("repo %s: got %+v after bundle, want method repo / project %s", r, res, created.ID)
 		}
 	}
@@ -127,7 +127,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	var stillUnattributed []UnattributedBlock
 	for _, r := range sdkRepos {
 		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
-		if res.ProjectID == "" {
+		if only(res).ProjectID == "" {
 			stillUnattributed = append(stillUnattributed, UnattributedBlock{Dims: sdkDims[r]})
 		}
 	}
@@ -153,7 +153,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	}
 
 	res := Attribute(sdkDims[repoSDKTestbench], doc.Projects, nil, nil)
-	if res.ProjectID != "" {
+	if only(res).ProjectID != "" {
 		t.Fatalf("sdk-testbench still attributed after RemoveRules: %+v", res)
 	}
 	back := Suggest([]UnattributedBlock{{Dims: sdkDims[repoSDKTestbench], Minutes: 5, Tokens: 500}})
@@ -167,42 +167,38 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	// The other two repos are unaffected.
 	for _, r := range []string{repoAtlasTSTel, repoAtlasPyTel} {
 		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
-		if res.Method != MethodRepo || res.ProjectID != created.ID {
+		if only(res).Method != MethodRepo || only(res).ProjectID != created.ID {
 			t.Fatalf("repo %s: got %+v after removing a DIFFERENT rule, want it unaffected", r, res)
 		}
 	}
 }
 
-// T21: two projects claiming the same repo -> conflict naming BOTH, never
-// silently the first.
-func TestTwoProjectsClaimingOneRepoConflicts(t *testing.T) {
+// T21 (reversed 2026-09-23): two projects claiming the same repo BOTH get
+// the block — overlap is allowed, and nothing is silently picked or dropped.
+func TestTwoProjectsClaimingOneRepoBothGetTheBlock(t *testing.T) {
 	a := Project{ID: "p_a", Title: "A", Repos: []string{repoKeldAtlas}}
 	b := Project{ID: "p_b", Title: "B", Repos: []string{repoKeldAtlas}}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldAtlas})
 
 	res := Attribute(dims, []Project{a, b}, nil, nil)
 
-	if res.Reason != ReasonConflict {
-		t.Fatalf("reason = %q, want conflict: %+v", res.Reason, res)
+	if res.Reason != ReasonNone {
+		t.Fatalf("reason = %q, want none: %+v", res.Reason, res)
 	}
-	if res.ProjectID != "" {
-		t.Fatalf("a conflict must not silently name a project, got %q", res.ProjectID)
-	}
-	want := []string{"p_a", "p_b"}
-	sort.Strings(want)
-	if len(res.Conflict) != 2 || res.Conflict[0] != want[0] || res.Conflict[1] != want[1] {
-		t.Fatalf("conflict list = %+v, want both ids %+v", res.Conflict, want)
+	got := res.IDs()
+	sort.Strings(got)
+	if len(got) != 2 || got[0] != "p_a" || got[1] != "p_b" {
+		t.Fatalf("both claimants must get the block, got %+v", res.Projects)
 	}
 
-	// Order of candidates must not matter — "never the first" means never
-	// picking b's id when a is passed first either.
+	// Order of candidates changes only the order, never the set.
 	res2 := Attribute(dims, []Project{b, a}, nil, nil)
-	if res2.Reason != ReasonConflict || len(res2.Conflict) != 2 {
-		t.Fatalf("conflict is order-dependent: %+v", res2)
+	if len(res2.Projects) != 2 {
+		t.Fatalf("the set is order-dependent: %+v", res2)
 	}
 }
 
-// T22: a workstream switched off excludes its projects from matching AND
+// T22: a project switched off excludes its projects from matching AND
 // from the "place same as" candidate list.
 func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 	off := func(key string) bool { return key == "marketing" }
@@ -210,14 +206,14 @@ func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{p}, off, nil)
-	if res.ProjectID != "" || res.Reason != ReasonNoRuleMatched {
-		t.Fatalf("group-off project still matched: %+v", res)
+	if only(res).ProjectID != "" || res.Reason != ReasonNoRuleMatched {
+		t.Fatalf("project-off project still matched: %+v", res)
 	}
 
 	same := SameAsCandidates(Document{Projects: []Project{p}}, off)
 	for _, c := range same {
 		if c.ID == p.ID {
-			t.Fatalf("group-off project appeared in same-as candidates: %+v", same)
+			t.Fatalf("project-off project appeared in same-as candidates: %+v", same)
 		}
 	}
 
@@ -243,7 +239,7 @@ func TestEvidenceFieldsAreNeverMatchInputs(t *testing.T) {
 	for name, dims := range cases {
 		t.Run(name, func(t *testing.T) {
 			res := Attribute(dims, []Project{p}, nil, nil)
-			if res.ProjectID != "" || res.Method != MethodNone {
+			if only(res).ProjectID != "" || only(res).Method != MethodNone {
 				t.Fatalf("%s dim attributed as if it were a rule: %+v", name, res)
 			}
 		})
@@ -295,7 +291,7 @@ func TestRemoteProjectAttributesByRepoShapedKeyword(t *testing.T) {
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, candidates, nil, nil)
-	if res.Method != MethodRepo || res.ProjectID != "v_web" {
+	if only(res).Method != MethodRepo || only(res).ProjectID != "v_web" {
 		t.Fatalf("got %+v, want method repo / project v_web", res)
 	}
 }
@@ -310,7 +306,7 @@ func TestRemoteProjectWithNoRepoLikeKeywordsNeverAttributesByRepo(t *testing.T) 
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, candidates, nil, nil)
-	if res.ProjectID != "" {
+	if only(res).ProjectID != "" {
 		t.Fatalf("non-repo-like keywords attributed by repo: %+v", res)
 	}
 }
@@ -325,19 +321,19 @@ func TestRemoteProjectWithNoRepoLikeKeywordsNeverAttributesByRepo(t *testing.T) 
 // projects sharing a genuinely repo-shaped keyword DO conflict, but only once
 // a real block on that exact repository is the one being attributed — the
 // conflict is never a property of the declaration alone.
-func TestConflictOnlyFromRealRepoMatchesNeverFromSharedFreeTags(t *testing.T) {
+func TestSharedMatchesComeOnlyFromRealRepoRulesNeverFromSharedFreeTags(t *testing.T) {
 	a := Project{ID: "p_a", Title: "A", Keywords: []string{"design/ux"}}
 	b := Project{ID: "p_b", Title: "B", Keywords: []string{"design/ux"}}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	if res := Attribute(dims, []Project{a, b}, nil, nil); res.Reason == ReasonConflict {
-		t.Fatalf("two projects sharing a non-repo keyword conflicted: %+v", res)
+	if res := Attribute(dims, []Project{a, b}, nil, nil); res.Attributed() {
+		t.Fatalf("a shared non-repo keyword must attribute nothing: %+v", res)
 	}
 
 	c := Project{ID: "p_c", Title: "C", Keywords: []string{"ncx-ai/keld-signal"}}
 	d := Project{ID: "p_d", Title: "D", Keywords: []string{"ncx-ai/keld-signal"}}
-	if res := Attribute(dims, []Project{c, d}, nil, nil); res.Reason != ReasonConflict {
-		t.Fatalf("two projects sharing a real repo-shaped keyword, with a block on that repo, did not conflict: %+v", res)
+	if res := Attribute(dims, []Project{c, d}, nil, nil); len(res.Projects) != 2 {
+		t.Fatalf("two projects sharing a real repo-shaped keyword, with a block on that repo, must both get it: %+v", res)
 	}
 }
 
@@ -387,7 +383,7 @@ func TestRemovingAMatchedKeywordRuleReturnsBlocksToSuggestions(t *testing.T) {
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, doc.Projects, nil, nil)
-	if res.Method != MethodRepo || res.ProjectID != "p1" {
+	if only(res).Method != MethodRepo || only(res).ProjectID != "p1" {
 		t.Fatalf("expected attribution via matched keyword candidate, got %+v", res)
 	}
 	if got := Rules(doc.Projects[0], []string{repoKeldSignal}); len(got) != 1 {
@@ -400,7 +396,7 @@ func TestRemovingAMatchedKeywordRuleReturnsBlocksToSuggestions(t *testing.T) {
 	}
 
 	res2 := Attribute(dims, doc.Projects, nil, nil)
-	if res2.ProjectID != "" {
+	if only(res2).ProjectID != "" {
 		t.Fatalf("still attributed after removing the matched keyword rule: %+v", res2)
 	}
 	back := Suggest([]UnattributedBlock{{Dims: dims, Minutes: 1, Tokens: 1}})

@@ -215,7 +215,7 @@ func currentSuggestions(s *projects.Store, d projects.Document) ([]projects.Sugg
 	pass := Attribution{Document: d, Candidates: candidatesFor(s, d), Off: groupOffFunc()}
 	var unattributed []projects.UnattributedBlock
 	for _, b := range blocks {
-		if pass.Of(b.Dims).ProjectID == "" {
+		if !pass.Of(b.Dims).Attributed() {
 			unattributed = append(unattributed, projects.UnattributedBlock{
 				Dims: b.Dims, Minutes: b.Minutes, Tokens: b.Tokens,
 			})
@@ -258,7 +258,7 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		for _, b := range blocks {
 			total++
 			res := pass.Of(b.Dims)
-			if res.ProjectID != "" {
+			if res.Attributed() {
 				attributed++
 				continue
 			}

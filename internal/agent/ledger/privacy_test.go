@@ -40,7 +40,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 		CacheCreationTokens: 86736, RequestTokens: 41000, Requests: 12,
 		Model: "claude-opus-4-8", EstimateUSD: 1.84,
 	}, ok)
-	s.Attribute(k1, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, ok)
+	s.Attribute(k1, one("p_keld_signal", MethodRepo), ReasonNone, ok)
 	s.Sent(k1, ok)
 	s.Received(k1, 200, ok)
 
@@ -48,7 +48,8 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	// and attribution is a conflict (publishes competing project ids).
 	k2 := BlockKey{Session: "9eb2b3ffabc12345", Start: 1788550000}
 	s.Cut(k2, 1788551200, "session_start", "session_end", "cowork", ok)
-	s.Attribute(k2, Attributed{Conflict: []string{"p_a", "p_b"}}, ReasonConflict, ok)
+	s.Attribute(k2, Attributed{}, ReasonConflict, ok)
+	setLegacyConflict(t, s, k2, "p_a,p_b") // a pre-2026-09-23 row; nothing writes one now
 	s.Received(k2, 200, ok)
 	s.Failed(k2, StageReceived, ReasonAtlasRejected, 401, fail)
 
@@ -66,7 +67,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	kAttack := BlockKey{Session: attack, Start: 999000}
 	s.Cut(kAttack, 999060, "idle", "budget", attack, ok)
 	s.Measure(kAttack, Measured{Model: attack, Requests: 1}, ok)
-	s.Attribute(kAttack, Attributed{ProjectID: attack}, ReasonNone, ok)
+	s.Attribute(kAttack, one(attack, ""), ReasonNone, ok)
 
 	// Block 4 (adversarial, VALID session): the same attack string in
 	// source/model/project_id only. The block DOES get written (its session
@@ -75,7 +76,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	k4 := BlockKey{Session: "s-attacked-fields", Start: 999500}
 	s.Cut(k4, 999560, "idle", "budget", attack, ok)
 	s.Measure(k4, Measured{Model: attack, Requests: 1}, ok)
-	s.Attribute(k4, Attributed{ProjectID: attack}, ReasonNone, ok)
+	s.Attribute(k4, one(attack, ""), ReasonNone, ok)
 
 	snap, err := s.Read(time.Time{}, 100)
 	if err != nil {
@@ -245,6 +246,12 @@ func walkNoFreeText(t *testing.T, key string, v any) {
 		case "project_id", "conflict":
 			if vv != "" && !projectIDShape.MatchString(vv) {
 				t.Errorf("field %q does not match the project id shape: %q", key, vv)
+			}
+		// A group key is an identifier too — projects.GroupKey of an org's
+		// group name — and is held to the store's own group shape.
+		case "group":
+			if vv != "" && validGroup(vv) != vv {
+				t.Errorf("field %q does not match the group key shape: %q", key, vv)
 			}
 		case "detail":
 			// Not one of the four attacked identifier fields (session,
