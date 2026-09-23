@@ -55,7 +55,7 @@ func TestT14ProjectMatchesCarryNoLocalIdentity(t *testing.T) {
 	local := Project{
 		ID: "p_super_secret_codename", Title: "Super Secret Codename",
 		Repos: []string{"github.com/acme/a"}, Origin: OriginUser,
-		Workstream: "development",
+		Group: "development",
 	}
 	got := MatchesFor(repoDims("github.com/acme/a"), []Project{local}, noneOff)
 	if len(got) != 1 {
@@ -92,7 +92,7 @@ func TestT15NoMatchIsAnEmptyAnswerNotAWrongOne(t *testing.T) {
 	}
 }
 
-func TestT16AWorkstreamThatIsOffIsNeverMatched(t *testing.T) {
+func TestT16AGroupThatIsOffIsNeverMatched(t *testing.T) {
 	// Its projects are excluded from matching, so reporting a block as having
 	// matching one would tell Atlas the opposite of what this machine did.
 	remote := FromRemoteProjects([]settings.RemoteProject{
@@ -140,7 +140,7 @@ func TestProjectMatchesListEveryMatchRatherThanPickingOne(t *testing.T) {
 
 func TestAMatchCanComeFromATicketKeyInTheBranch(t *testing.T) {
 	p := Project{ID: "org:one", Title: "One", Origin: OriginAtlas,
-		TicketKey: "KELD", Workstream: "eng"}
+		TicketKey: "KELD", Group: "eng"}
 	dims := map[string]enrich.Labeled{
 		DimBranch: {Value: "keld-637-auth-flow", Status: enrich.DimensionAttributed},
 	}

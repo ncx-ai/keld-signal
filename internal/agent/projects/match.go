@@ -54,7 +54,7 @@ type Match struct {
 // impossible for a local/org pair, and if it ever reappears this is what
 // carries the evidence rather than swallowing it.
 func MatchesFor(dims map[string]enrich.Labeled, candidates []Project,
-	workstreamOff func(key string) bool) []Match {
+	groupOff func(key string) bool) []Match {
 	repo, hasRepo := attributedValue(dims, DimRepo)
 	ticket, hasTicket := "", false
 	if branch, ok := attributedValue(dims, DimBranch); ok {
@@ -65,7 +65,7 @@ func MatchesFor(dims map[string]enrich.Labeled, candidates []Project,
 	}
 	var out []Match
 	for _, p := range candidates {
-		if p.Hidden || projectWorkstreamOff(p, workstreamOff) {
+		if p.Hidden || projectGroupOff(p, groupOff) {
 			continue
 		}
 		matched := false

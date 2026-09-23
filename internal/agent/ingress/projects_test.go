@@ -195,7 +195,7 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	}
 }
 
-func TestWorkstreamOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
+func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	s := newTestStore(t)
 	srv := httptest.NewServer(DiscardHandler("s3cret", ProjectsRoute(s)))
 	defer srv.Close()
@@ -213,9 +213,9 @@ func TestWorkstreamOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	// confirm GET reflects the off flag AND excludes the project's repo from
 	// attribution.
 	doc := projects.Document{
-		Workstreams: []projects.Workstream{{Key: "marketing", Name: "Marketing"}},
+		Groups: []projects.Group{{Key: "marketing", Name: "Marketing"}},
 		Projects: []projects.Project{
-			{ID: "p_mkt", Title: "Site", Repos: []string{"github.com/ncx-ai/keld-signal"}, Workstream: "marketing"},
+			{ID: "p_mkt", Title: "Site", Repos: []string{"github.com/ncx-ai/keld-signal"}, Group: "marketing"},
 		},
 	}
 	if err := s.Save(doc); err != nil {

@@ -9,7 +9,7 @@ import (
 )
 
 func localProject(id, title string, repos ...string) Project {
-	return Project{ID: id, Title: title, Repos: repos, Workstream: "development", Origin: OriginUser}
+	return Project{ID: id, Title: title, Repos: repos, Group: "development", Origin: OriginUser}
 }
 
 func orgValues() []Project {

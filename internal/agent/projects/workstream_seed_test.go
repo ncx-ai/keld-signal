@@ -17,7 +17,7 @@ func suggestionFor(value string) Suggestion {
 	return Suggestion{ID: SuggestionID(DimRepo, value), Kind: DimRepo, Value: value}
 }
 
-func TestBundleSeedsTheWorkstreamWhenTheOrgHasDeclaredNone(t *testing.T) {
+func TestBundleSeedsTheGroupWhenTheOrgHasDeclaredNone(t *testing.T) {
 	d := Document{Version: CurrentVersion} // no workstreams at all — Atlas off
 	sug := suggestionFor("github.com/acme/web")
 
@@ -25,13 +25,13 @@ func TestBundleSeedsTheWorkstreamWhenTheOrgHasDeclaredNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	if p.Workstream != "development" {
-		t.Fatalf("project workstream = %q", p.Workstream)
+	if p.Group != "development" {
+		t.Fatalf("project workstream = %q", p.Group)
 	}
-	var found *Workstream
-	for i := range next.Workstreams {
-		if next.Workstreams[i].Key == "development" {
-			found = &next.Workstreams[i]
+	var found *Group
+	for i := range next.Groups {
+		if next.Groups[i].Key == "development" {
+			found = &next.Groups[i]
 		}
 	}
 	if found == nil {
@@ -42,19 +42,19 @@ func TestBundleSeedsTheWorkstreamWhenTheOrgHasDeclaredNone(t *testing.T) {
 	}
 	// LOCAL, never atlas: this is the machine inventing a bucket to keep its own
 	// work visible, and it must not be mistaken for an org declaration.
-	if found.Origin != WorkstreamOriginLocal {
-		t.Fatalf("workstream origin = %q, want %q", found.Origin, WorkstreamOriginLocal)
+	if found.Origin != GroupOriginLocal {
+		t.Fatalf("workstream origin = %q, want %q", found.Origin, GroupOriginLocal)
 	}
 }
 
-func TestBundleDoesNotDuplicateAWorkstreamTheOrgAlreadyDeclared(t *testing.T) {
+func TestBundleDoesNotDuplicateAGroupTheOrgAlreadyDeclared(t *testing.T) {
 	// NEGATIVE: a machine that DOES have org workstreams must keep grouping
 	// projects under them. Matching is by key, so the org's own entry — with its
 	// own name and atlas origin — is the one that stays.
 	d := Document{
 		Version: CurrentVersion,
-		Workstreams: []Workstream{
-			{Key: "development", Name: "Engineering", Origin: WorkstreamOriginAtlas},
+		Groups: []Group{
+			{Key: "development", Name: "Engineering", Origin: GroupOriginAtlas},
 		},
 	}
 	sug := suggestionFor("github.com/acme/web")
@@ -63,19 +63,19 @@ func TestBundleDoesNotDuplicateAWorkstreamTheOrgAlreadyDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	if len(next.Workstreams) != 1 {
-		t.Fatalf("want the org's single workstream, got %d", len(next.Workstreams))
+	if len(next.Groups) != 1 {
+		t.Fatalf("want the org's single workstream, got %d", len(next.Groups))
 	}
-	if next.Workstreams[0].Name != "Engineering" ||
-		next.Workstreams[0].Origin != WorkstreamOriginAtlas {
-		t.Fatalf("the org's workstream was overwritten: %+v", next.Workstreams[0])
+	if next.Groups[0].Name != "Engineering" ||
+		next.Groups[0].Origin != GroupOriginAtlas {
+		t.Fatalf("the org's workstream was overwritten: %+v", next.Groups[0])
 	}
 }
 
-func TestBundleAddsASecondWorkstreamRatherThanRenamingTheFirst(t *testing.T) {
+func TestBundleAddsASecondGroupRatherThanRenamingTheFirst(t *testing.T) {
 	d := Document{
-		Version:     CurrentVersion,
-		Workstreams: []Workstream{{Key: "marketing", Name: "Marketing", Origin: WorkstreamOriginAtlas}},
+		Version: CurrentVersion,
+		Groups:  []Group{{Key: "marketing", Name: "Marketing", Origin: GroupOriginAtlas}},
 	}
 	sug := suggestionFor("github.com/acme/web")
 
@@ -83,23 +83,23 @@ func TestBundleAddsASecondWorkstreamRatherThanRenamingTheFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	if len(next.Workstreams) != 2 {
-		t.Fatalf("want both workstreams, got %+v", next.Workstreams)
+	if len(next.Groups) != 2 {
+		t.Fatalf("want both workstreams, got %+v", next.Groups)
 	}
-	if next.Workstreams[0].Key != "marketing" {
-		t.Fatalf("the existing workstream must keep its place: %+v", next.Workstreams)
+	if next.Groups[0].Key != "marketing" {
+		t.Fatalf("the existing workstream must keep its place: %+v", next.Groups)
 	}
 }
 
-func TestWorkstreamDisplayName(t *testing.T) {
+func TestGroupDisplayName(t *testing.T) {
 	for key, want := range map[string]string{
 		"development":    "Development",
 		"product_design": "Product design",
 		"go-to-market":   "Go to market",
 		"":               "",
 	} {
-		if got := workstreamDisplayName(key); got != want {
-			t.Fatalf("workstreamDisplayName(%q) = %q, want %q", key, got, want)
+		if got := groupDisplayName(key); got != want {
+			t.Fatalf("groupDisplayName(%q) = %q, want %q", key, got, want)
 		}
 	}
 }

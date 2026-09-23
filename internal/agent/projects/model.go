@@ -47,23 +47,23 @@ const (
 
 // Origin values for a Workstream.
 const (
-	WorkstreamOriginAtlas = "atlas"
-	WorkstreamOriginLocal = "local"
+	GroupOriginAtlas = "atlas"
+	GroupOriginLocal = "local"
 )
 
-// Workstream is one of the org's declared workstreams (the "which project is
+// Group is one of the org's declared workstreams (the "which project is
 // this work for" categories a project belongs to), mirroring
 // settings.RemoteProject's Atlas-declared siblings for this document.
 //
 // Off is a DISPLAY MIRROR, not the authority: the authoritative flag is
-// settings.Settings.WorkstreamsOff (agent-config.json's `workstreams_off`),
-// read live via settings.Settings.WorkstreamOff — see attribute.go's
-// workstreamOff parameter and the PUT /v1/workstreams/{key}/off route in
+// settings.Settings.GroupsOff (agent-config.json's `workstreams_off`),
+// read live via settings.Settings.GroupOff — see attribute.go's
+// groupOff parameter and the PUT /v1/workstreams/{key}/off route in
 // ingress/projects.go, which writes THAT file, not this one. It is carried
 // here too so a reader of this document alone (a backup, a support bundle)
 // is not missing the fact; ingress/projects.go overwrites it with the live
 // value before every GET /v1/projects response.
-type Workstream struct {
+type Group struct {
 	Key        string `json:"key"`
 	Name       string `json:"name"`
 	Question   string `json:"question,omitempty"`
@@ -90,9 +90,9 @@ type Workstream struct {
 // actually offers today", point 1): for a locally-declared project it is a
 // real owning sub-team (informational only, never matched on); for a value
 // converted by FromRemoteProjects it is that value's WORKSTREAM'S NAME
-// whenever the value has no owning team of its own. projectWorkstreamOff
+// whenever the value has no owning team of its own. projectGroupOff
 // checks both Workstream (the local key) and Team (the Atlas name proxy)
-// against settings.Settings.WorkstreamOff, case-insensitively, so a workstream
+// against settings.Settings.GroupOff, case-insensitively, so a workstream
 // switched off excludes a project however its bucket happens to be spelled.
 type Project struct {
 	ID          string   `json:"id"`
@@ -103,15 +103,15 @@ type Project struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	TicketKey   string   `json:"ticket_key,omitempty"`
 
-	// Workstream is this project's workstream KEY (Workstream.Key above), set
+	// Group is this project's workstream KEY (Group.Key above), set
 	// for a locally-declared project. An Atlas-sourced value (see
 	// FromRemoteProjects) never carries one — Atlas pools its values across
 	// every workstream and derives the workstream from the value id itself
 	// when a block is later matched server-side (docs/v3/contracts.md,
 	// "What Atlas actually offers today", point 2) — so its bucket is carried
-	// in Team instead (see Team's doc comment) and projectWorkstreamOff checks
+	// in Team instead (see Team's doc comment) and projectGroupOff checks
 	// both.
-	Workstream string `json:"workstream,omitempty"`
+	Group string `json:"workstream,omitempty"`
 	// Origin says how this project came to exist: "suggested" (never
 	// happens — a suggestion is not persisted until bundled), "user"
 	// (bundled/edited by a person) or "atlas" (pushed down as an org
@@ -131,9 +131,9 @@ type Project struct {
 
 // Document is the whole ~/.keld/state/projects.json file.
 type Document struct {
-	Version     int          `json:"version"`
-	Workstreams []Workstream `json:"workstreams"`
-	Projects    []Project    `json:"projects"`
+	Version  int       `json:"version"`
+	Groups   []Group   `json:"workstreams"`
+	Projects []Project `json:"projects"`
 }
 
 // DefaultPath is ~/.keld/state/projects.json (KELD_HOME-relative via

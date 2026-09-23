@@ -179,7 +179,7 @@ func TestT8ReconcileIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestT9AWorkstreamThatIsOffCoversNothing(t *testing.T) {
+func TestT9AGroupThatIsOffCoversNothing(t *testing.T) {
 	// ⚠️ Its projects are excluded from matching entirely, so counting their
 	// rules as coverage would delete a local project and leave its blocks in NO
 	// project — the opposite of what coverage guarantees.
@@ -201,7 +201,7 @@ func TestT9AWorkstreamThatIsOffCoversNothing(t *testing.T) {
 func TestT10ARulelessLocalProjectIsNeverRemoved(t *testing.T) {
 	// The empty set is contained in every set, so the naive reading silently
 	// removes anything a person named before giving it a rule.
-	d := doc(Project{ID: "p_empty", Title: "Thinking", Workstream: "development", Origin: OriginUser})
+	d := doc(Project{ID: "p_empty", Title: "Thinking", Group: "development", Origin: OriginUser})
 	remote := FromRemoteProjects([]settings.RemoteProject{
 		org("org:one", "One", "Eng", "github.com/acme/a"),
 	})

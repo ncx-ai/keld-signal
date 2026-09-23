@@ -79,8 +79,8 @@ func TestGetSettingsReturnsDefaultsAndEmptyReadonly(t *testing.T) {
 	if v.ShowBreaks {
 		t.Fatal("show_breaks defaults to false")
 	}
-	if len(v.WorkstreamsOff) != 0 {
-		t.Fatalf("want an empty (never nil) list, got %v", v.WorkstreamsOff)
+	if len(v.GroupsOff) != 0 {
+		t.Fatalf("want an empty (never nil) list, got %v", v.GroupsOff)
 	}
 	if v.Attribution {
 		t.Fatal("attribution defaults to false")

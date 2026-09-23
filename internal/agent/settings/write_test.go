@@ -92,10 +92,10 @@ func TestWriteV3SettingsAcceptsEveryKnownDevBlocksMode(t *testing.T) {
 	}
 }
 
-func TestWriteV3SettingsWorkstreamsOffNilBecomesEmptyList(t *testing.T) {
+func TestWriteV3SettingsGroupsOffNilBecomesEmptyList(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	var nilSlice []string
-	if err := WriteV3Settings(V3Patch{WorkstreamsOff: &nilSlice}); err != nil {
+	if err := WriteV3Settings(V3Patch{GroupsOff: &nilSlice}); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(paths.AgentConfigPath())

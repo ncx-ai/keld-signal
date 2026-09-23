@@ -127,7 +127,7 @@ func (v *v3) reconcileWithRemote() {
 	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
 		// Read fresh, not captured: the exclusion list is a local setting a
 		// person can change between polls.
-		next, rm, tr := projects.Reconcile(d, remote, projects.WorkstreamOffFunc(settings.Load()))
+		next, rm, tr := projects.Reconcile(d, remote, projects.GroupOffFunc(settings.Load()))
 		removed, trimmed = rm, tr
 		return next, nil
 	}); err != nil {

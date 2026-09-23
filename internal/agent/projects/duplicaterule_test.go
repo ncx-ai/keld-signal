@@ -21,10 +21,10 @@ import "testing"
 // actually regress.
 func TestOneProjectNamingTheSameRepoTwiceAttributesRatherThanConflicts(t *testing.T) {
 	p := Project{
-		ID:         "keld_projects:signal_on_device_client",
-		Title:      "Signal On-Device Client",
-		Repos:      []string{repoKeldSignal, repoKeldSignal}, // named twice, as observed
-		Workstream: "development",
+		ID:    "keld_projects:signal_on_device_client",
+		Title: "Signal On-Device Client",
+		Repos: []string{repoKeldSignal, repoKeldSignal}, // named twice, as observed
+		Group: "development",
 	}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
@@ -48,8 +48,8 @@ func TestOneProjectNamingTheSameRepoTwiceAttributesRatherThanConflicts(t *testin
 // is still a conflict, and still names both. Without this, "fixing" the test
 // above by dropping conflict detection entirely would go unnoticed.
 func TestTwoDifferentProjectsClaimingOneRepoIsStillAConflict(t *testing.T) {
-	a := Project{ID: "keld_projects:a", Title: "A", Repos: []string{repoKeldSignal}, Workstream: "development"}
-	b := Project{ID: "keld_projects:b", Title: "B", Repos: []string{repoKeldSignal}, Workstream: "development"}
+	a := Project{ID: "keld_projects:a", Title: "A", Repos: []string{repoKeldSignal}, Group: "development"}
+	b := Project{ID: "keld_projects:b", Title: "B", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{a, b}, nil, nil)

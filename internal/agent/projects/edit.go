@@ -13,13 +13,13 @@ import (
 )
 
 // Every mutation in this file is a LOCAL edit to ~/.keld/state/projects.json
-// (or, for SetWorkstreamOff, ~/.keld/agent-config.json) and nothing else.
+// (or, for SetGroupOff, ~/.keld/agent-config.json) and nothing else.
 // docs/v3/contracts.md's verified note is explicit that Atlas has no route a
 // machine's ingest token can write a project or a tag through today
 // (`PATCH /api/workstreams/{key}` needs an admin USER SESSION) — so this
 // package makes NO outbound call of any kind. Re-attribution after an edit is
 // TOTAL by construction rather than by a cache-invalidation step: Attribute is
-// a pure function of (dims, current Document.Projects, workstreamOff,
+// a pure function of (dims, current Document.Projects, groupOff,
 // vector), so once the caller re-runs it over every block with the document
 // this file just saved, no block can be reading a stale project — there is no
 // memoised answer anywhere in this package for an edit to invalidate.
@@ -43,11 +43,11 @@ type Rule struct {
 // document does not have.
 var ErrProjectNotFound = fmt.Errorf("projects: project not found")
 
-// ErrWorkstreamOff is returned by PlaceSameAs when the target project's
+// ErrGroupOff is returned by PlaceSameAs when the target project's
 // workstream is switched off — such a project must not gain new rules while
 // its bucket is excluded from matching, or a "same as" click would silently
 // resurrect it.
-var ErrWorkstreamOff = fmt.Errorf("projects: target project's workstream is off")
+var ErrGroupOff = fmt.Errorf("projects: target project's workstream is off")
 
 // ErrUnknownSuggestion is returned by Bundle/PlaceSameAs when a suggestion id
 // does not appear in the suggestions slice the caller passed.
@@ -174,11 +174,11 @@ func removeFold(list []string, v string) []string {
 // After Bundle, calling Attribute again for every block that fed those
 // suggestions returns the new project — nothing further to invalidate (see
 // this file's package-level comment).
-func Bundle(d Document, title, workstream string, suggestionIDs []string, suggestions []Suggestion) (Document, Project, error) {
+func Bundle(d Document, title, group string, suggestionIDs []string, suggestions []Suggestion) (Document, Project, error) {
 	p := Project{
-		Title:      title,
-		Workstream: workstream,
-		Origin:     OriginUser,
+		Title:  title,
+		Group:  group,
+		Origin: OriginUser,
 	}
 	for _, sid := range suggestionIDs {
 		s, ok := findSuggestion(suggestions, sid)
@@ -197,11 +197,11 @@ func Bundle(d Document, title, workstream string, suggestionIDs []string, sugges
 	p.ID = newProjectID(d, title)
 	next := d
 	next.Projects = append(append([]Project(nil), d.Projects...), p)
-	next.Workstreams = ensureWorkstream(d.Workstreams, p.Workstream)
+	next.Groups = ensureGroup(d.Groups, p.Group)
 	return next, p, nil
 }
 
-// ensureWorkstream adds the project's workstream to the document if the org has
+// ensureGroup adds the project's workstream to the document if the org has
 // not declared one by that key.
 //
 // ⚠️ **A PROJECT FILED UNDER A WORKSTREAM THAT DOES NOT EXIST IS AN INVISIBLE
@@ -225,7 +225,7 @@ func Bundle(d Document, title, workstream string, suggestionIDs []string, sugges
 // visible, and it must never be mistaken for something the org declared. If
 // Atlas later declares a workstream with the same key, the match is by key and
 // the org's own entry is the one already present, so this adds nothing.
-func ensureWorkstream(existing []Workstream, key string) []Workstream {
+func ensureGroup(existing []Group, key string) []Group {
 	if key == "" {
 		return existing
 	}
@@ -234,18 +234,18 @@ func ensureWorkstream(existing []Workstream, key string) []Workstream {
 			return existing
 		}
 	}
-	return append(append([]Workstream(nil), existing...), Workstream{
+	return append(append([]Group(nil), existing...), Group{
 		Key:      key,
-		Name:     workstreamDisplayName(key),
-		Origin:   WorkstreamOriginLocal,
+		Name:     groupDisplayName(key),
+		Origin:   GroupOriginLocal,
 		Question: "Which project is this work for?",
 	})
 }
 
-// workstreamDisplayName turns a key into something a person reads:
+// groupDisplayName turns a key into something a person reads:
 // "development" -> "Development", "product_design" -> "Product design". The
 // key stays the identity; only the label changes.
-func workstreamDisplayName(key string) string {
+func groupDisplayName(key string) string {
 	out := strings.Map(func(r rune) rune {
 		if r == '_' || r == '-' {
 			return ' '
@@ -310,8 +310,8 @@ func Hide(d Document, projectID string, hidden bool) (Document, error) {
 // SameAsCandidates lists the projects a suggestion may be placed under: not
 // hidden, not in a workstream that is off. Mirrors Visible so the "place same
 // as" picker can never offer a target Attribute itself would ignore.
-func SameAsCandidates(d Document, workstreamOff func(key string) bool) []Project {
-	return SameAsCandidatesWithRemote(d, nil, workstreamOff)
+func SameAsCandidates(d Document, groupOff func(key string) bool) []Project {
+	return SameAsCandidatesWithRemote(d, nil, groupOff)
 }
 
 // SameAsCandidatesWithRemote is SameAsCandidates over the merged candidate set —
@@ -319,17 +319,17 @@ func SameAsCandidates(d Document, workstreamOff func(key string) bool) []Project
 // offered as a target. That is the decided scope of "same as" (2026-09-05): an
 // unattributed local suggestion merges into ANY attributed project, and when
 // that project is the org's the merge lives in a local overlay.
-func SameAsCandidatesWithRemote(d Document, remote []Project, workstreamOff func(key string) bool) []Project {
-	return Visible(MergeCandidates(d.Projects, remote), workstreamOff)
+func SameAsCandidatesWithRemote(d Document, remote []Project, groupOff func(key string) bool) []Project {
+	return Visible(MergeCandidates(d.Projects, remote), groupOff)
 }
 
 // PlaceSameAs adds the rule a suggestion represents to an existing project.
-// Refuses (ErrWorkstreamOff) when the target's workstream is off, and
+// Refuses (ErrGroupOff) when the target's workstream is off, and
 // (ErrProjectNotFound) when hidden or missing — both cases SameAsCandidates
 // already excludes, so a caller that only offers those candidates cannot hit
 // either refusal by surprise.
-func PlaceSameAs(d Document, suggestionID, targetProjectID string, suggestions []Suggestion, workstreamOff func(key string) bool) (Document, error) {
-	return PlaceSameAsWithRemote(d, nil, suggestionID, targetProjectID, suggestions, workstreamOff)
+func PlaceSameAs(d Document, suggestionID, targetProjectID string, suggestions []Suggestion, groupOff func(key string) bool) (Document, error) {
+	return PlaceSameAsWithRemote(d, nil, suggestionID, targetProjectID, suggestions, groupOff)
 }
 
 // PlaceSameAsWithRemote is PlaceSameAs that can target one of the org's values.
@@ -343,7 +343,7 @@ func PlaceSameAs(d Document, suggestionID, targetProjectID string, suggestions [
 // unions the overlay onto the value at read time, so the next attribution pass
 // puts the suggestion's blocks under the Atlas value's id — which is what Atlas
 // already matches workstreams against.
-func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetProjectID string, suggestions []Suggestion, workstreamOff func(key string) bool) (Document, error) {
+func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetProjectID string, suggestions []Suggestion, groupOff func(key string) bool) (Document, error) {
 	s, ok := findSuggestion(suggestions, suggestionID)
 	if !ok {
 		return d, fmt.Errorf("%w: %s", ErrUnknownSuggestion, suggestionID)
@@ -365,15 +365,15 @@ func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetPro
 		if rv.Hidden {
 			return d, ErrProjectNotFound
 		}
-		if projectWorkstreamOff(*rv, workstreamOff) {
-			return d, ErrWorkstreamOff
+		if projectGroupOff(*rv, groupOff) {
+			return d, ErrGroupOff
 		}
 		d.Projects = append(append([]Project(nil), d.Projects...), Project{
-			ID:         rv.ID,
-			Title:      rv.Title,
-			Team:       rv.Team,
-			Workstream: rv.Workstream,
-			Origin:     OriginAtlas,
+			ID:     rv.ID,
+			Title:  rv.Title,
+			Team:   rv.Team,
+			Group:  rv.Group,
+			Origin: OriginAtlas,
 		})
 		i = len(d.Projects) - 1
 	}
@@ -381,8 +381,8 @@ func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetPro
 	if target.Hidden {
 		return d, ErrProjectNotFound
 	}
-	if projectWorkstreamOff(target, workstreamOff) {
-		return d, ErrWorkstreamOff
+	if projectGroupOff(target, groupOff) {
+		return d, ErrGroupOff
 	}
 	next := d
 	next.Projects = append([]Project(nil), d.Projects...)
@@ -419,7 +419,7 @@ func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetPro
 // with the value's own keywords at read time and never sent anywhere. Nothing
 // about this reaches Atlas — see docs/v3/contracts.md's "no Atlas write-back".
 func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID string,
-	workstreamOff func(key string) bool) (Document, error) {
+	groupOff func(key string) bool) (Document, error) {
 	if localProjectID == "" || targetProjectID == "" {
 		return d, ErrProjectNotFound
 	}
@@ -457,15 +457,15 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 		if rv == nil || rv.Hidden {
 			return d, ErrProjectNotFound
 		}
-		if projectWorkstreamOff(*rv, workstreamOff) {
-			return d, ErrWorkstreamOff
+		if projectGroupOff(*rv, groupOff) {
+			return d, ErrGroupOff
 		}
 		next.Projects = append(next.Projects, Project{
-			ID:         rv.ID,
-			Title:      rv.Title,
-			Team:       rv.Team,
-			Workstream: rv.Workstream,
-			Origin:     OriginAtlas,
+			ID:     rv.ID,
+			Title:  rv.Title,
+			Team:   rv.Team,
+			Group:  rv.Group,
+			Origin: OriginAtlas,
 		})
 		ti = len(next.Projects) - 1
 	}
@@ -473,8 +473,8 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 	if target.Hidden {
 		return d, ErrProjectNotFound
 	}
-	if projectWorkstreamOff(target, workstreamOff) {
-		return d, ErrWorkstreamOff
+	if projectGroupOff(target, groupOff) {
+		return d, ErrGroupOff
 	}
 
 	for _, r := range src.Repos {
@@ -503,8 +503,8 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 	return next, nil
 }
 
-// SetWorkstreamOff writes settings.Settings.WorkstreamsOff — the AUTHORITATIVE
-// exclusion list Attribute's workstreamOff parameter reads (see
+// SetGroupOff writes settings.Settings.GroupsOff — the AUTHORITATIVE
+// exclusion list Attribute's groupOff parameter reads (see
 // internal/agent/settings/v3.go's WorkstreamOff) — adding or removing key.
 // This is the one edit in this file that does not touch projects.json: the
 // PUT /v1/workstreams/{key}/off route writes agent-config.json instead, so
@@ -514,11 +514,11 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 // other key already in the file survives untouched — the same merge
 // discipline settings.WriteInstallDefaults already applies to a different
 // subset of keys.
-func SetWorkstreamOff(key string, off bool) error {
+func SetGroupOff(key string, off bool) error {
 	s := settings.Load()
 	present := false
-	out := make([]string, 0, len(s.WorkstreamsOff)+1)
-	for _, k := range s.WorkstreamsOff {
+	out := make([]string, 0, len(s.GroupsOff)+1)
+	for _, k := range s.GroupsOff {
 		if strings.EqualFold(strings.TrimSpace(k), strings.TrimSpace(key)) {
 			present = true
 			if !off {
@@ -530,7 +530,7 @@ func SetWorkstreamOff(key string, off bool) error {
 	if off && !present {
 		out = append(out, key)
 	}
-	s.WorkstreamsOff = out
+	s.GroupsOff = out
 
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

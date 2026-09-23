@@ -151,11 +151,11 @@ type Settings struct {
 	// resets.
 	ShowBreaks bool `json:"show_breaks,omitempty"`
 
-	// WorkstreamsOff lists workstream keys whose values are EXCLUDED from
+	// GroupsOff lists workstream keys whose values are EXCLUDED from
 	// attribution on this machine ("counts for my work" switched off). Local
 	// only; Atlas is never told. A developer's work can then never land in the
 	// Marketing bucket.
-	WorkstreamsOff []string `json:"workstreams_off,omitempty"`
+	GroupsOff []string `json:"workstreams_off,omitempty"`
 
 	// AutoSetupIntegrations decides whether the daemon's integrations detector
 	// CONFIGURES a supported tool whose config dir appears after Signal was

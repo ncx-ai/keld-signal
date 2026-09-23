@@ -35,7 +35,7 @@ const (
 // all — Attribute is called with a nil Vector throughout this file — and the
 // method it reports is "repo".
 func TestRepoRuleAttributesWithoutAnyEncoder(t *testing.T) {
-	p := Project{ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal}, Workstream: "development"}
+	p := Project{ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{p}, nil, nil)
@@ -204,9 +204,9 @@ func TestTwoProjectsClaimingOneRepoConflicts(t *testing.T) {
 
 // T22: a workstream switched off excludes its projects from matching AND
 // from the "place same as" candidate list.
-func TestWorkstreamOffExcludesFromMatchingAndSameAs(t *testing.T) {
+func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 	off := func(key string) bool { return key == "marketing" }
-	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Workstream: "marketing"}
+	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Group: "marketing"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{p}, off, nil)
@@ -223,8 +223,8 @@ func TestWorkstreamOffExcludesFromMatchingAndSameAs(t *testing.T) {
 
 	doc := Document{Projects: []Project{p}}
 	suggestions := []Suggestion{{ID: "s1", Kind: SuggestKindRepo, Value: normalizeRepo(repoKeldSignal)}}
-	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions, off); err != ErrWorkstreamOff {
-		t.Fatalf("PlaceSameAs onto an off-workstream project: err = %v, want ErrWorkstreamOff", err)
+	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions, off); err != ErrGroupOff {
+		t.Fatalf("PlaceSameAs onto an off-workstream project: err = %v, want ErrGroupOff", err)
 	}
 }
 

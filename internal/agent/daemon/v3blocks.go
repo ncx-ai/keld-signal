@@ -320,7 +320,7 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
 	}
 	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
-		projects.WorkstreamOffFunc(settings.Load()), nil)
+		projects.GroupOffFunc(settings.Load()), nil)
 	v.ledger.Attribute(k, ledger.Attributed{
 		ProjectID: res.ProjectID,
 		Method:    ledger.Method(res.Method),

@@ -14,13 +14,13 @@ import (
 // "unset is distinguishable from false/empty" idiom Settings.SendToAtlas
 // already uses, extended to every key this endpoint can write.
 type V3Patch struct {
-	SendToAtlas    *bool
-	DevGenerate    *bool
-	DevRepos       *[]string
-	DevBlocks      *string
-	ShowBreaks     *bool
-	WorkstreamsOff *[]string
-	Attribution    *bool
+	SendToAtlas *bool
+	DevGenerate *bool
+	DevRepos    *[]string
+	DevBlocks   *string
+	ShowBreaks  *bool
+	GroupsOff   *[]string
+	Attribution *bool
 }
 
 // WriteV3Settings merges p onto ~/.keld/agent-config.json.
@@ -99,8 +99,8 @@ func WriteV3Settings(p V3Patch) error {
 			return err
 		}
 	}
-	if p.WorkstreamsOff != nil {
-		v := *p.WorkstreamsOff
+	if p.GroupsOff != nil {
+		v := *p.GroupsOff
 		if v == nil {
 			v = []string{}
 		}

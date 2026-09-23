@@ -99,10 +99,10 @@ func validDevBlocks(m string) bool {
 	return false
 }
 
-// WorkstreamOff reports whether a workstream key is excluded from attribution
+// GroupOff reports whether a workstream key is excluded from attribution
 // on this machine.
-func (s Settings) WorkstreamOff(key string) bool {
-	for _, k := range s.WorkstreamsOff {
+func (s Settings) GroupOff(key string) bool {
+	for _, k := range s.GroupsOff {
 		if strings.EqualFold(strings.TrimSpace(k), strings.TrimSpace(key)) {
 			return true
 		}

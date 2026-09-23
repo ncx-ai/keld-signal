@@ -66,7 +66,7 @@ func ProjectsRoute(s *projects.Store) Route {
 			handlePlace(w, r, s)
 		})))
 		mux.Handle("PUT /v1/workstreams/{key}/off", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleWorkstreamOff(w, r)
+			handleGroupOff(w, r)
 		})))
 	})
 }
@@ -121,12 +121,12 @@ func startOfWeek(t time.Time) time.Time {
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// workstreamOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
+// groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
 // agent-config.json fresh per request, since a request may arrive right
 // after a PUT /v1/workstreams/{key}/off changed it. "call it, don't
 // reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
-func workstreamOffFunc() func(string) bool {
-	return settings.Load().WorkstreamOff
+func groupOffFunc() func(string) bool {
+	return settings.Load().GroupOff
 }
 
 // candidatesFor is every project Attribute/Suggest may consider: this
@@ -187,7 +187,7 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 	return Attribution{
 		Document:   d,
 		Candidates: candidatesFor(s, d),
-		Off:        workstreamOffFunc(),
+		Off:        groupOffFunc(),
 	}, nil
 }
 
@@ -212,7 +212,7 @@ func currentSuggestions(s *projects.Store, d projects.Document) ([]projects.Sugg
 	if err != nil {
 		return nil, err
 	}
-	pass := Attribution{Document: d, Candidates: candidatesFor(s, d), Off: workstreamOffFunc()}
+	pass := Attribution{Document: d, Candidates: candidatesFor(s, d), Off: groupOffFunc()}
 	var unattributed []projects.UnattributedBlock
 	for _, b := range blocks {
 		if pass.Of(b.Dims).ProjectID == "" {
@@ -236,10 +236,10 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 	}
 	d, off, candidates := pass.Document, pass.Off, pass.Candidates
 
-	workstreams := make([]projects.Workstream, len(d.Workstreams))
-	for i, ws := range d.Workstreams {
+	groups := make([]projects.Group, len(d.Groups))
+	for i, ws := range d.Groups {
 		ws.Off = off(ws.Key)
-		workstreams[i] = ws
+		groups[i] = ws
 	}
 
 	since := startOfWeek(time.Now())
@@ -281,7 +281,7 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 	// on the wire) are added to `workstreams` when the local document does not
 	// already name them.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"workstreams": withRemoteBuckets(workstreams, candidates, off),
+		"workstreams": withRemoteBuckets(groups, candidates, off),
 		"projects":    projectViews(candidates, observed),
 		"suggestions": suggestions,
 		"coverage": map[string]any{
@@ -341,7 +341,7 @@ func observedRepos(blocks []projects.BlockSummary) []string {
 func handleBundle(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 	var body struct {
 		Title       string   `json:"title"`
-		Workstream  string   `json:"workstream"`
+		Group       string   `json:"workstream"`
 		Suggestions []string `json:"suggestions"`
 	}
 	if !decodeJSONBody(w, r, &body) {
@@ -365,7 +365,7 @@ func handleBundle(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 
 	var created projects.Project
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
-		next, p, err := projects.Bundle(d, body.Title, body.Workstream, body.Suggestions, suggestions)
+		next, p, err := projects.Bundle(d, body.Title, body.Group, body.Suggestions, suggestions)
 		created = p
 		return next, err
 	})
@@ -462,7 +462,7 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 		writeError(w, http.StatusInternalServerError, "blocks_unreadable")
 		return
 	}
-	off := workstreamOffFunc()
+	off := groupOffFunc()
 
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
 		// An Atlas value may be the target: the merge lives in a local overlay
@@ -475,7 +475,7 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 			writeError(w, http.StatusBadRequest, "unknown_suggestion")
 		case errors.Is(err, projects.ErrProjectNotFound):
 			writeError(w, http.StatusNotFound, "project_not_found")
-		case errors.Is(err, projects.ErrWorkstreamOff):
+		case errors.Is(err, projects.ErrGroupOff):
 			writeError(w, http.StatusConflict, "workstream_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
@@ -500,7 +500,7 @@ func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Sto
 		writeError(w, http.StatusBadRequest, "id_and_same_as_required")
 		return
 	}
-	off := workstreamOffFunc()
+	off := groupOffFunc()
 	_, err := s.Update(func(d projects.Document) (projects.Document, error) {
 		// An Atlas value may be the target: the merge lives in a local overlay
 		// and nothing is sent to Atlas (decided 2026-09-05).
@@ -510,7 +510,7 @@ func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Sto
 		switch {
 		case errors.Is(err, projects.ErrProjectNotFound):
 			writeError(w, http.StatusNotFound, "project_not_found")
-		case errors.Is(err, projects.ErrWorkstreamOff):
+		case errors.Is(err, projects.ErrGroupOff):
 			writeError(w, http.StatusConflict, "workstream_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
@@ -520,7 +520,7 @@ func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Sto
 	writeJSON(w, http.StatusOK, localOnly(nil))
 }
 
-func handleWorkstreamOff(w http.ResponseWriter, r *http.Request) {
+func handleGroupOff(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	var body struct {
 		Off bool `json:"off"`
@@ -532,7 +532,7 @@ func handleWorkstreamOff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "key_required")
 		return
 	}
-	if err := projects.SetWorkstreamOff(key, body.Off); err != nil {
+	if err := projects.SetGroupOff(key, body.Off); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_write_failed")
 		return
 	}
@@ -544,16 +544,16 @@ func handleWorkstreamOff(w http.ResponseWriter, r *http.Request) {
 // page can group "Your projects · from Atlas" under the org's own names. A
 // remote project's bucket is its Team when its Workstream is empty — that is
 // where wire_projects puts the workstream's name (docs/v3/contracts.md).
-func withRemoteBuckets(local []projects.Workstream, candidates []projects.Project, off func(string) bool) []projects.Workstream {
+func withRemoteBuckets(local []projects.Group, candidates []projects.Project, off func(string) bool) []projects.Group {
 	// Seeded with KEYS only. It used to hold lower-cased keys AND names, so a
 	// bucket could be skipped because some other bucket's NAME collided with
 	// this one's key — a membership test about two different things.
 	seen := map[string]bool{}
 	for _, ws := range local {
 		seen[strings.ToLower(ws.Key)] = true
-		seen[projects.WorkstreamKey(ws.Name)] = true
+		seen[projects.GroupKey(ws.Name)] = true
 	}
-	out := append([]projects.Workstream(nil), local...)
+	out := append([]projects.Group(nil), local...)
 	for _, p := range candidates {
 		if p.Origin != projects.OriginAtlas {
 			continue
@@ -566,17 +566,17 @@ func withRemoteBuckets(local []projects.Workstream, candidates []projects.Projec
 		// group nothing.
 		name := p.Team
 		if name == "" {
-			name = p.Workstream
+			name = p.Group
 		}
-		key := projects.WorkstreamKey(name)
-		if p.Workstream != "" {
-			key = p.Workstream
+		key := projects.GroupKey(name)
+		if p.Group != "" {
+			key = p.Group
 		}
 		if name == "" || key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		out = append(out, projects.Workstream{
+		out = append(out, projects.Group{
 			Key:    key,
 			Name:   name,
 			Origin: "atlas",

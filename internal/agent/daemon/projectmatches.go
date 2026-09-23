@@ -62,7 +62,7 @@ func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 		}
 	}
 	matches := projects.MatchesFor(b.Analysis.Dimensions, candidates,
-		projects.WorkstreamOffFunc(settings.Load()))
+		projects.GroupOffFunc(settings.Load()))
 	if len(matches) == 0 {
 		return nil
 	}

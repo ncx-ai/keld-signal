@@ -70,7 +70,7 @@ func TestPlaceSameAsAddsRuleAndReattributes(t *testing.T) {
 	}
 }
 
-func TestSetWorkstreamOffTogglesAndSurvivesOtherSettings(t *testing.T) {
+func TestSetGroupOffTogglesAndSurvivesOtherSettings(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 
 	// A pre-existing, unrelated setting must survive the round trip (merge,
@@ -78,7 +78,7 @@ func TestSetWorkstreamOffTogglesAndSurvivesOtherSettings(t *testing.T) {
 	before := settings.Load()
 	before.Attribution = true
 	// Seed agent-config.json directly (Settings' fields are exported and
-	// match the file's JSON shape 1:1) rather than through SetWorkstreamOff
+	// match the file's JSON shape 1:1) rather than through SetGroupOff
 	// itself, which would make this test circular.
 	b, err := json.MarshalIndent(before, "", "  ")
 	if err != nil {
@@ -91,22 +91,22 @@ func TestSetWorkstreamOffTogglesAndSurvivesOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := SetWorkstreamOff("marketing", true); err != nil {
-		t.Fatalf("SetWorkstreamOff(on): %v", err)
+	if err := SetGroupOff("marketing", true); err != nil {
+		t.Fatalf("SetGroupOff(on): %v", err)
 	}
 	s := settings.Load()
-	if !s.WorkstreamOff("marketing") {
-		t.Fatalf("marketing not off after SetWorkstreamOff(true): %+v", s.WorkstreamsOff)
+	if !s.GroupOff("marketing") {
+		t.Fatalf("marketing not off after SetGroupOff(true): %+v", s.GroupsOff)
 	}
 	if !s.Attribution {
-		t.Fatalf("unrelated setting (Attribution) was lost by SetWorkstreamOff")
+		t.Fatalf("unrelated setting (Attribution) was lost by SetGroupOff")
 	}
 
-	if err := SetWorkstreamOff("marketing", false); err != nil {
-		t.Fatalf("SetWorkstreamOff(off): %v", err)
+	if err := SetGroupOff("marketing", false); err != nil {
+		t.Fatalf("SetGroupOff(off): %v", err)
 	}
 	s = settings.Load()
-	if s.WorkstreamOff("marketing") {
-		t.Fatalf("marketing still off after SetWorkstreamOff(false): %+v", s.WorkstreamsOff)
+	if s.GroupOff("marketing") {
+		t.Fatalf("marketing still off after SetGroupOff(false): %+v", s.GroupsOff)
 	}
 }

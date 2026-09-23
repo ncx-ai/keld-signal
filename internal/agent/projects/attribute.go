@@ -305,18 +305,18 @@ func ticketKeyIn(branch string) (string, bool) {
 	return strings.ToUpper(m[1]), true
 }
 
-// projectWorkstreamOff reports whether p's bucket is switched off, checking
+// projectGroupOff reports whether p's bucket is switched off, checking
 // BOTH Workstream (a local project's key) and Team (an Atlas value's
 // workstream-name proxy — see Project's doc comment), because the wire gives
 // no way to tell which spelling an operator's workstreams_off entry used.
-func projectWorkstreamOff(p Project, workstreamOff func(key string) bool) bool {
-	if workstreamOff == nil {
+func projectGroupOff(p Project, groupOff func(key string) bool) bool {
+	if groupOff == nil {
 		return false
 	}
-	if p.Workstream != "" && workstreamOff(p.Workstream) {
+	if p.Group != "" && groupOff(p.Group) {
 		return true
 	}
-	if p.Team != "" && workstreamOff(p.Team) {
+	if p.Team != "" && groupOff(p.Team) {
 		return true
 	}
 	return false
@@ -324,10 +324,10 @@ func projectWorkstreamOff(p Project, workstreamOff func(key string) bool) bool {
 
 // Visible returns the projects Attribute (and a same-as picker) may ever
 // consider: not hidden, and not in a workstream switched off.
-func Visible(projects []Project, workstreamOff func(key string) bool) []Project {
+func Visible(projects []Project, groupOff func(key string) bool) []Project {
 	out := make([]Project, 0, len(projects))
 	for _, p := range projects {
-		if p.Hidden || projectWorkstreamOff(p, workstreamOff) {
+		if p.Hidden || projectGroupOff(p, groupOff) {
 			continue
 		}
 		out = append(out, p)
@@ -344,12 +344,12 @@ func conflictIDs(matches []Project) []string {
 	return ids
 }
 
-// WorkstreamOffFunc adapts settings.Settings.WorkstreamOff to the
+// GroupOffFunc adapts settings.Settings.GroupOff to the
 // func(string) bool this package's helpers take, so a caller does not have to
 // write the closure itself. "call it, don't reimplement" — see
 // internal/agent/settings/v3.go.
-func WorkstreamOffFunc(s settings.Settings) func(string) bool {
-	return s.WorkstreamOff
+func GroupOffFunc(s settings.Settings) func(string) bool {
+	return s.GroupOff
 }
 
 // FromRemoteProjects converts the org's pooled workstream VALUES — as they
@@ -365,7 +365,7 @@ func WorkstreamOffFunc(s settings.Settings) func(string) bool {
 // the value's workstream NAME when it has no owning team of its own (Atlas
 // does not distinguish the two on the wire), which is why it rides straight
 // into Project.Team rather than Workstream — see Project's doc comment and
-// projectWorkstreamOff.
+// projectGroupOff.
 // NOTE: this is the ONLY converter from settings.RemoteProject. internal/atlas
 // used to carry a second one (grouping into its own Workstream/Value types for
 // a consumer that never materialised); it was removed on 2026-09-10 as dead.
@@ -493,26 +493,26 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 			// fetched, attribution at 91% — and all four cards empty.
 			//
 			// The rule that prevents the next one: a project and its card derive
-			// the key from the SAME function. WorkstreamKey is that function, and
+			// the key from the SAME function. GroupKey is that function, and
 			// withRemoteBuckets now calls it too, so the two cannot disagree.
 			// `team` is the ONLY bucket Atlas serves (settings.RemoteProject has
 			// no workstream field); docs/v3/contracts.md records that it carries
 			// the workstream's name when a value has no owning team.
-			Workstream: WorkstreamKey(v.Team),
-			Repos:      repos,
-			Keywords:   keywords,
-			TicketKey:  v.TicketKey,
-			Origin:     OriginAtlas,
+			Group:     GroupKey(v.Team),
+			Repos:     repos,
+			Keywords:  keywords,
+			TicketKey: v.TicketKey,
+			Origin:    OriginAtlas,
 		})
 	}
 	return out
 }
 
-// WorkstreamKey is the ONE normalisation from a workstream's display name to
+// GroupKey is the ONE normalisation from a workstream's display name to
 // its key: lowercased, spaces to hyphens. Exported because the bucket list and
 // the projects inside it must derive it identically — deriving it in two places
 // is what made twenty projects invisible.
-func WorkstreamKey(name string) string {
+func GroupKey(name string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
 }
 
@@ -529,10 +529,10 @@ func WorkstreamKey(name string) string {
 //     or ReasonWeightsUnavailable if it could not run).
 //  4. else unattributed (ReasonNoRuleMatched).
 //
-// workstreamOff may be nil (treated as "nothing is off") — production wiring
-// passes settings.Load().WorkstreamOff (WorkstreamOffFunc).
-func Attribute(dims map[string]enrich.Labeled, candidates []Project, workstreamOff func(key string) bool, vector Vector) Result {
-	visible := Visible(candidates, workstreamOff)
+// groupOff may be nil (treated as "nothing is off") — production wiring
+// passes settings.Load().WorkstreamOff (GroupOffFunc).
+func Attribute(dims map[string]enrich.Labeled, candidates []Project, groupOff func(key string) bool, vector Vector) Result {
+	visible := Visible(candidates, groupOff)
 
 	if repo, ok := attributedValue(dims, DimRepo); ok {
 		var matches []Project
@@ -609,8 +609,8 @@ func MergeCandidates(local, remote []Project) []Project {
 				r.TicketKey = o.TicketKey
 			}
 			r.Hidden = o.Hidden
-			if r.Workstream == "" {
-				r.Workstream = o.Workstream
+			if r.Group == "" {
+				r.Group = o.Group
 			}
 		}
 		out = append(out, r)

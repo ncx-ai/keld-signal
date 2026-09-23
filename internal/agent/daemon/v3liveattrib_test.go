@@ -55,12 +55,12 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	return ledger.BlockKey{Session: session, Start: start.Unix()}
 }
 
-func declareProject(t *testing.T, v *v3, id, title, repo, workstream string) {
+func declareProject(t *testing.T, v *v3, id, title, repo, group string) {
 	t.Helper()
 	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
 		d.Projects = append(d.Projects, projects.Project{
 			ID: id, Title: title, Repos: []string{repo},
-			Workstream: workstream, Origin: projects.OriginUser,
+			Group: group, Origin: projects.OriginUser,
 		})
 		return d, nil
 	}); err != nil {
@@ -281,10 +281,10 @@ func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T)
 	}
 }
 
-// TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
+// TestGroupSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
 // exclusion a person sets on the page applies to what the page then shows
 // them, without a restart.
-func TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
+func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 	v := liveFixture(t)
 	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac2b", 30, "github.com/ncx-ai/keld-signal")
@@ -292,7 +292,7 @@ func TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
-	if err := projects.SetWorkstreamOff("eng", true); err != nil {
+	if err := projects.SetGroupOff("eng", true); err != nil {
 		t.Fatalf("workstream off: %v", err)
 	}
 

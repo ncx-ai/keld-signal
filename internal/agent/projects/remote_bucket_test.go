@@ -30,12 +30,12 @@ func TestARemoteProjectCarriesItsBucketKey(t *testing.T) {
 	if len(ps) != 2 {
 		t.Fatalf("got %d projects", len(ps))
 	}
-	if ps[0].Workstream != "keld-projects" {
+	if ps[0].Group != "keld-projects" {
 		t.Fatalf("workstream = %q, want the normalised team key — an empty one "+
-			"puts the project under no card at all", ps[0].Workstream)
+			"puts the project under no card at all", ps[0].Group)
 	}
-	if ps[1].Workstream != "keld-campaigns" {
-		t.Fatalf("workstream = %q", ps[1].Workstream)
+	if ps[1].Group != "keld-campaigns" {
+		t.Fatalf("workstream = %q", ps[1].Group)
 	}
 	// The human label is NOT the key: it stays on Team, so a heading can read
 	// "Keld Projects" rather than "keld-projects".
@@ -54,22 +54,22 @@ func TestAProjectAndItsBucketDeriveTheSameKey(t *testing.T) {
 		"Publish Destinations", "Go To Market",
 	} {
 		p := FromRemoteProjects([]settings.RemoteProject{atlasValue("x", "X", team)})[0]
-		if got := WorkstreamKey(team); got != p.Workstream {
+		if got := GroupKey(team); got != p.Group {
 			t.Fatalf("bucket key %q != project workstream %q for team %q",
-				got, p.Workstream, team)
+				got, p.Group, team)
 		}
 	}
 }
 
-func TestWorkstreamKeyNormalisation(t *testing.T) {
+func TestGroupKeyNormalisation(t *testing.T) {
 	for name, want := range map[string]string{
 		"Keld Projects":         "keld-projects",
 		"  Customer Lifecycle ": "customer-lifecycle",
 		"Development":           "development",
 		"":                      "",
 	} {
-		if got := WorkstreamKey(name); got != want {
-			t.Fatalf("WorkstreamKey(%q) = %q, want %q", name, got, want)
+		if got := GroupKey(name); got != want {
+			t.Fatalf("GroupKey(%q) = %q, want %q", name, got, want)
 		}
 	}
 }
@@ -79,7 +79,7 @@ func TestARemoteProjectWithNoTeamGetsNoBucketRatherThanAWrongOne(t *testing.T) {
 	// in a card that does not exist. Empty is the honest answer, and the page's
 	// own fallback then groups it — see projectGroups in app.js.
 	p := FromRemoteProjects([]settings.RemoteProject{atlasValue("x", "X", "")})[0]
-	if p.Workstream != "" {
-		t.Fatalf("workstream = %q, want empty for a value with no team", p.Workstream)
+	if p.Group != "" {
+		t.Fatalf("workstream = %q, want empty for a value with no team", p.Group)
 	}
 }
