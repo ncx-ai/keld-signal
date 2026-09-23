@@ -163,8 +163,8 @@ the real `~/.keld` shows the same workstreams and groups (manual, screenshot).
 ### B5. Totals (AC-9) — TDD
 - `workstreams.Rollup(blocks []AttributedBlock) Totals`: per group distinct blocks
   (minutes, tokens, est. USD), per workstream its blocks in full, and `overlap` per group
-  (Σ workstreams − group). Source: ledger rule cells for the current week (same window as
-  `coverage`).
+  (Σ workstreams − group). Source (as shipped): the LIVE rule pass over the same blocks as
+  `coverage`, so totals, coverage and the Today rows agree by construction.
 - `GET /v1/workstreams` gains `totals: {groups:[{key, blocks, minutes, tokens, usd}],
   workstreams:[{id, group, blocks, minutes, tokens, usd}]}`.
 - Tests first: `TestRollupCountsGroupOnce` (X $5 in A+B, Y $5 in A → group $10, A $10, B $5,
