@@ -39,6 +39,33 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 	}
 }
 
+// Each posted project carries the GROUP it competes in — the key the rule
+// pass and the page use, derived from the value's `team`, which Atlas fills with
+// the group's name. The sidecar decides each group on its own.
+func TestPostProjectsSendsEachProjectsGroup(t *testing.T) {
+	var got struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(map[string]any{"count": 2, "hash": "abc"})
+	}))
+	defer srv.Close()
+	list := []settings.RemoteProject{
+		{ID: "products:atlas", Title: "Atlas", Team: "Products"},
+		{ID: "q3:launch", Title: "Launch", Team: "Q3 Initiatives"},
+	}
+	if err := New(srv.URL, 5*time.Second).PostProjects(list); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Projects) != 2 || got.Projects[0]["group"] != "products" || got.Projects[1]["group"] != "q3-initiatives" {
+		t.Fatalf("groups not posted: %+v", got.Projects)
+	}
+	if got.Projects[1]["team"] != "Q3 Initiatives" {
+		t.Fatalf("the org's own fields must ride unchanged: %+v", got.Projects[1])
+	}
+}
+
 func TestPostProjectsFailsOnTransportError(t *testing.T) {
 	old := postProjectsCallTimeout
 	postProjectsCallTimeout = 300 * time.Millisecond
