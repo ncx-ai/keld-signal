@@ -271,6 +271,95 @@ def test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly():
     finally:
         attribution.SCORING = saved
 
+# --- Per-group decision (2026-09-23, AC-3 / AC-4 / AC-5) ------------------------
+
+def _grouped(tag, groups):
+    """_geom_projects, with each project placed in a group."""
+    out = _geom_projects(tag)
+    for p in out:
+        p["group"] = groups[p["id"]]
+    return out
+
+
+def test_one_group_does_not_suppress_another():   # AC-4
+    # pay=0.62 (products), ui=0.51 (features), null=0.45. Pooled, the cut is
+    # max(0.45, 0.62-0.08)=0.54 and ui is dropped although it is the ONLY
+    # candidate its group has. Per group, each group's top beats the null.
+    attribution.set_projects(_grouped("per-group", {"proj_pay": "products", "proj_ui": "features"}))
+    enc = GeomEncoder([0.62, 0.51, 0.45, 0.3912])
+    scores, borderline, assigned, used, _tv, _c = attribution.score_block(["work"], {}, encoder=enc)
+    assert used and set(assigned) == {"proj_pay", "proj_ui"}, (scores, assigned)
+
+
+def test_group_below_null_assigns_nothing():   # AC-3
+    # features' only candidate (ui=0.41) does not beat the null (0.45): that
+    # group gets nothing, while products still does.
+    attribution.set_projects(_grouped("below-null", {"proj_pay": "products", "proj_ui": "features"}))
+    enc = GeomEncoder([0.62, 0.41, 0.45, 0.4950])
+    scores, borderline, assigned, used, _tv, _c = attribution.score_block(["work"], {}, encoder=enc)
+    assert assigned == ["proj_pay"], (scores, assigned)
+
+
+def test_overlap_inside_a_group_keeps_everything_within_margin():   # AC-3
+    # Both in one group, within MARGIN of the group's top: both assigned — the
+    # overlap model, applied per group.
+    attribution.set_projects(_grouped("overlap", {"proj_pay": "g", "proj_ui": "g"}))
+    enc = GeomEncoder([0.70, 0.66, 0.0, 0.2728])
+    _s, _b, assigned, _u, _tv, _c = attribution.score_block(["work"], {}, encoder=enc)
+    assert set(assigned) == {"proj_pay", "proj_ui"}, assigned
+
+
+def test_missing_group_is_one_pooled_group():
+    # A list posted with no `group` key at all — an older daemon — is decided
+    # exactly as before: one pooled competition, whatever the teams say.
+    attribution.set_projects(_geom_projects("no-group"))
+    enc = GeomEncoder([0.62, 0.51, 0.45, 0.3912])
+    _s, _b, assigned, _u, _tv, _c = attribution.score_block(["work"], {}, encoder=enc)
+    assert assigned == ["proj_pay"], assigned
+
+
+def _pooled_decision(scores, null_sim):
+    """The pre-2026-09-23 decision, verbatim: ONE competition over every
+    project. The oracle AC-5 compares the per-group rule against."""
+    borderline, assigned = [], []
+    top = max(scores.values())
+    cut = max(null_sim, top - attribution.MARGIN)
+    for pid, s in scores.items():
+        if abs(s - cut) < attribution.VERIFY_HALO:
+            borderline.append(pid)
+        if s >= cut and top > null_sim:
+            assigned.append(pid)
+    return borderline, assigned
+
+
+def test_single_group_is_todays_decision():   # AC-5
+    # Every project in ONE group: the per-group rule must reproduce the pooled
+    # one exactly — same ids, same order, same borderline — over a grid of score
+    # vectors wide enough to put every id on both sides of the cut and the null.
+    import itertools
+    ids = ["a", "b", "c", "d"]
+    grid = [round(x * 0.07, 4) for x in range(-3, 15)]
+    checked = 0
+    for vals in itertools.product(grid, repeat=3):
+        for null_sim in (0.0, 0.3, 0.5, 0.8):
+            scores = dict(zip(ids, vals + (0.4,)))
+            want = _pooled_decision(scores, null_sim)
+            got = attribution._decide(scores, null_sim, {i: "one" for i in ids})
+            assert got == want, (scores, null_sim, got, want)
+            checked += 1
+    assert checked > 20000, checked
+
+
+def test_attribute_block_orders_by_confidence_and_names_the_decision():   # AC-6
+    attribution.set_projects(_grouped("order", {"proj_pay": "products", "proj_ui": "features"}))
+    # ui scores higher than pay here, and is declared second.
+    enc = GeomEncoder([0.51, 0.62, 0.45, 0.3912])
+    out = attribution.attribute_block(["work"], {}, enc, None)
+    ids = [p["id"] for p in out["projects"]]
+    assert ids == ["proj_ui", "proj_pay"], out["projects"]
+    assert out["attribution"]["model_versions"]["decision"] == "per-group-margin-v1", out["attribution"]
+
+
 if __name__ == "__main__":
     test_metadata_boost_model_free()
     test_embedding_ranking_assigns_the_winner()
@@ -283,4 +372,10 @@ if __name__ == "__main__":
     test_each_stream_is_centred_against_its_own_baseline()
     test_a_retried_block_is_folded_into_the_baseline_once()
     test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly()
-    print("test_attribution_scoring: 11 passed")
+    test_one_group_does_not_suppress_another()
+    test_group_below_null_assigns_nothing()
+    test_overlap_inside_a_group_keeps_everything_within_margin()
+    test_missing_group_is_one_pooled_group()
+    test_single_group_is_todays_decision()
+    test_attribute_block_orders_by_confidence_and_names_the_decision()
+    print("test_attribution_scoring: 17 passed")

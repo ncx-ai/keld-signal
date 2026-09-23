@@ -822,7 +822,18 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 // list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
 // device for the sidecar to embed; nothing here is derived from a prompt.
 type projectsReq struct {
-	Projects []settings.RemoteProject `json:"projects"`
+	Projects []postedProject `json:"projects"`
+}
+
+// postedProject is one project as the sidecar receives it: the org's
+// definition unchanged, plus the GROUP it competes in. /attribute decides each
+// group on its own (a block can land in one project per angle on the work),
+// so the sidecar must know which group each project is in. The key is
+// settings.GroupKeyOf the value's `team` — which Atlas fills with the group's
+// name — the same key the rule pass and the page use.
+type postedProject struct {
+	settings.RemoteProject
+	Group string `json:"group"`
 }
 
 // projectsResp is decoded but its fields are not read further than error
@@ -853,7 +864,11 @@ func (c *Client) PostProjects(projects []settings.RemoteProject) error {
 	defer cancel()
 	cp.ctx = ctx
 	var r projectsResp
-	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
+	req := projectsReq{Projects: make([]postedProject, 0, len(projects))}
+	for _, w := range projects {
+		req.Projects = append(req.Projects, postedProject{RemoteProject: w, Group: settings.GroupKeyOf(w.Team)})
+	}
+	if !cp.post("/projects", req, &r) {
 		return fmt.Errorf("sidecar: POST /projects failed")
 	}
 	return nil

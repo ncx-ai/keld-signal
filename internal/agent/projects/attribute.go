@@ -531,13 +531,13 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 	return out
 }
 
-// GroupKey is the ONE normalisation from a project's display name to
-// its key: lowercased, spaces to hyphens. Exported because the bucket list and
-// the projects inside it must derive it identically — deriving it in two places
-// is what made twenty projects invisible.
-func GroupKey(name string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
-}
+// GroupKey is the ONE normalisation from a group's display name to its key:
+// lowercased, spaces to hyphens. Exported because the bucket list and the
+// projects inside it must derive it identically — deriving it in two places
+// is what made twenty projects invisible. The definition lives in settings
+// (settings.GroupKeyOf) only so the sidecar client, which cannot import this
+// package, posts the same key; this is that function, not a copy of it.
+func GroupKey(name string) string { return settings.GroupKeyOf(name) }
 
 // Attribute decides which projects a block lands in, per the rules each
 // project declares:
