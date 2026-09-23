@@ -126,7 +126,7 @@ If this is wrong, the Signal page keeps telling people a valid setup is broken.
 The on-device semantic pass also keeps hiding work from every group but one.</p>
 
 <div class="meta">
-  <span class="chip chip-signed">Signed off — 2026-09-23</span>
+  <span class="chip chip-reviewed">Reviewed — 10/12 met, ship with follow-ups</span>
   <span>Opus 5.5 (1M context) — thinking: high</span>
   <span class="mono">2026-09-23</span>
 </div>
@@ -312,7 +312,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <tr><td>On-disk document</td><td class="mono">state/projects.json {workstreams, projects}</td><td class="mono">state/workstreams.json {groups, workstreams}</td><td>read old if new absent; write new; keep old as <span class="mono">projects.json.pre-rename</span></td></tr>
   <tr><td>Operator config</td><td class="mono">agent-config.json workstreams_off</td><td class="mono">groups_off</td><td>old key still read; new key wins</td></tr>
   <tr><td>Env var</td><td class="mono">KELD_PROJECTS_FILE</td><td class="mono">KELD_WORKSTREAMS_FILE</td><td>old name still read, logs one deprecation line</td></tr>
-  <tr><td>Ledger JSON</td><td class="mono">project_id · vector_project_id columns</td><td class="mono">groups JSON with workstream_id</td><td>old columns kept and read (AC-7)</td></tr>
+  <tr><td>Ledger JSON</td><td class="mono">project_id · vector_project_id columns</td><td class="mono">cells carry a <span class="mono">workstreams</span> list with workstream_id + group; stored in the added JSON columns <span class="mono">workstreams</span> / <span class="mono">vector_workstreams</span> (as shipped)</td><td>old columns kept, still written with the first entry, and read (AC-7)</td></tr>
   <tr><td>Page copy</td><td>“Projects” tab · “Workstreams on” · “New project”</td><td>“Workstreams” tab · “Groups on” · “New workstream”</td><td>—</td></tr>
   <tr><td>Python internals</td><td class="mono">attribution.py _projects, project_vectors…</td><td class="mono">_workstreams, workstream_vectors…</td><td>—</td></tr>
 </tbody>
@@ -339,7 +339,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <li><strong>Group of a workstream:</strong> <span class="mono">Workstream.Group</span> (today <span class="mono">Project.Workstream</span>). Atlas values already get <span class="mono">GroupKey(team)</span>. Local workstreams use their local group. One with none joins an ungrouped bucket <span class="mono">""</span>.</li>
   <li><strong>Rule pass (step 2):</strong> <span class="mono">Attribute</span> returns <span class="mono">Result{Groups map[string]GroupResult}</span>. Each group lists every workstream id that matched, with its method. The per-group refusal is deleted; no tie-break exists.</li>
   <li><strong>Semantic pass (step 2):</strong> today's rule, run per group. <span class="mono">cut_G = max(null_sim, top_G − MARGIN)</span>; assign every id at or above it when <span class="mono">top_G &gt; null_sim</span>. The verifier halo is around <span class="mono">cut_G</span>.</li>
-  <li><strong>Totals (step 3):</strong> one Go helper, <span class="mono">workstreams.Rollup</span>, over the ledger's rule cells. Group = distinct blocks; workstream = its blocks in full. <span class="mono">GET /v1/workstreams</span> returns both for the current week, beside <span class="mono">coverage</span>.</li>
+  <li><strong>Totals (step 3):</strong> one Go helper, <span class="mono">workstreams.Rollup</span>, over the <em>live</em> rule pass on the same blocks <span class="mono">coverage</span> uses — as shipped, so totals, coverage and the Today rows agree by construction (the page already recomputes those live). Group = distinct blocks; workstream = its blocks in full. <span class="mono">GET /v1/workstreams</span> returns both for the current week, beside <span class="mono">coverage</span>.</li>
   <li><strong>Sidecar input:</strong> each posted workstream carries <span class="mono">group</span>. <strong>Amended during the build (2026-09-23):</strong> a list with no <span class="mono">group</span> key at all — an older daemon — is one pooled competition, today's decision, <em>not</em> grouped by <span class="mono">team</span>. The fixtures showed why: workstreams the old rule pooled have different teams, so falling back to <span class="mono">team</span> would have silently changed an older daemon's answers. The posted list's hash changes once, so workstream documents re-embed once. Message vectors do not.</li>
   <li><strong>Sidecar output:</strong> same shape. Sorted by confidence, fixing the order bug at <span class="mono">attrib.go:392</span>. The ledger keeps every id, not just index 0.</li>
   <li><strong>Wire to Atlas:</strong> same keys. Every assigned id. A new <span class="mono">model_versions.decision</span> marks the rule.</li>
@@ -725,6 +725,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
 <tbody>
   <tr><td>Signal: <span class="mono">conflict</span> retired; every match inside a group is assigned</td><td>yes, revert</td><td>blocks matching 2+ workstreams, forward only</td><td>the page labels overlap</td></tr>
+  <tr><td>Signal: a ticket rule now counts beside a repo rule (a repo match used to stop the ticket step), and the vector hook is asked per group the rules left empty. <strong>Declared after the review.</strong></td><td>yes, revert</td><td>blocks whose branch names a ticket key of a workstream other than the repo's</td><td>TestRepoAndTicketMatchesBothAssign pins it</td></tr>
   <tr><td>Semantic decision: pooled MARGIN → per-group top vs null</td><td>yes, code revert</td><td>machines with attribution on</td><td><span class="mono">model_versions.decision</span> marks every new row</td></tr>
   <tr><td>Wire <span class="mono">projects[]</span>: cut per group, sorted</td><td>yes</td><td>Atlas <span class="mono">raw</span> readers</td><td>Atlas collapses per group anyway; single-group output unchanged (AC-5)</td></tr>
   <tr><td>Ledger: two added columns</td><td>no — columns stay</td><td>local ledger.db</td><td>additive, defaults <span class="mono">''</span></td></tr>
@@ -770,7 +771,43 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <h2 id="s9">9 · Review log</h2>
 <p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to
 match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
-<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+<p><strong>10/12 criteria met</strong> — ship with follow-ups. Graded by a read-only reviewer agent against <span class="mono">git diff main...feat/per-group-attribution</span>, 2026-09-23. No blockers.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#ac-1">AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/workstreams/attribute.go · TestAttributePerGroup PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-2">AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">TestSameGroupMatchesAreAllAssigned PASS · TestWorkstreamsCellAndLegacyRow PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-3">AC-3</a></td><td><span class="pill p-met">MET</span></td><td class="mono">sidecar/app/analysis/attribution.py _decide · test_attribution_scoring.py: 17 passed</td></tr>
+  <tr><td class="mono"><a href="#ac-4">AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">test_one_group_does_not_suppress_another (0.62 / 0.51 / null 0.45 → both assigned)</td></tr>
+  <tr><td class="mono"><a href="#ac-5">AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">test_single_group_is_todays_decision (&gt;20,000 cases vs the verbatim pooled rule) · eval: one group == pooled on 100/100 fixtures</td></tr>
+  <tr><td class="mono"><a href="#ac-6">AC-6</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">the named test was renamed by PR A (now TestBlockWireCarriesWorkstreams); TestAMultiGroupBlockKeepsEveryIDInOrder + TestGoldenBlockIsTheCurrentWire PASS · contract_test_atlas.sh NOT run (needs a live Atlas, which was out of bounds)</td></tr>
+  <tr><td class="mono"><a href="#ac-7">AC-7</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ledger/store.go · TestWorkstreamsCellAndLegacyRow PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-8">AC-8</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ui/app.js switcher · ui/e2e/groups.spec.ts · Playwright 122 passed, 1 skipped · screenshots at 1280 px and 400 px, no sideways scroll</td></tr>
+  <tr><td class="mono"><a href="#ac-9">AC-9</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/workstreams/rollup.go · TestRollupCountsGroupOnce + TestGetWorkstreamsReturnsTotalsCountingAGroupOnce PASS · real daemon: Products 1 block / shared 1, workstreams $5.37 each</td></tr>
+  <tr><td class="mono"><a href="#ac-10">AC-10</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">eval PASS f1=0.811 ≥ 0.79 · ids per block 1.21 pooled / 4.03 grouped by team · numbers were not yet in whats-next-attribution.md (recorded after the review, §10)</td></tr>
+  <tr><td class="mono"><a href="#ac-11">AC-11</a></td><td><span class="pill p-met">MET</span></td><td class="mono">scripts/check_vocabulary.sh clean · self-test 6/6 · wired in .github/workflows/ci.yml</td></tr>
+  <tr><td class="mono"><a href="#ac-12">AC-12</a></td><td><span class="pill p-met">MET</span></td><td class="mono">TestUpgradeFromPreRenameHome (fixture written by main's own Save) + TestTheLegacyWorkstreamsFileEnvIsStillRead PASS</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Findings, and what was done after the review</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Finding</th><th>Done</th></tr></thead>
+<tbody>
+  <tr><td><strong>Per group, the semantic pass lands a block in almost every group:</strong> 4.03 workstreams per block grouped by team, precision 0.253, recall 0.962. "Beats the null" rarely says no. This is gap #1, now measured.</td><td>Recorded in whats-next-attribution.md §10 with candidate fixes. Not fixed: it needs labelled multi-group blocks. Attribution stays off by default.</td></tr>
+  <tr><td>AC-10's numbers were not recorded.</td><td>Recorded (whats-next-attribution.md §10).</td></tr>
+  <tr><td>A legacy vector cell read <span class="mono">group: ""</span>, contrary to "resolved from the current document".</td><td>Fixed: the daemon's ledger reader fills it from the current candidates (TestAVectorCellWithNoGroupReadsTheCurrentGroup).</td></tr>
+  <tr><td>Undeclared behaviour change: a ticket rule now counts beside a repo rule, and the vector hook runs per group the rules left empty.</td><td>Declared in the destructive change ledger above.</td></tr>
+  <tr><td>The <span class="mono">user-max</span> rollback is no longer "exactly" pre-change for multi-group lists.</td><td>AGENTS.md now says precisely what it restores.</td></tr>
+  <tr><td>Totals use the live rule pass, not the ledger's recorded cells.</td><td>Kept deliberately (totals, coverage and the Today rows agree by construction); the page and plan now say so.</td></tr>
+  <tr><td>Stored column names differ from this page's wording.</td><td>Page updated to the shipped names.</td></tr>
+  <tr><td>The sidecar amendment (no <span class="mono">group</span> key = one pooled group).</td><td>Reviewer: visible on the page and plan, acceptable, pinned by test_missing_group_is_one_pooled_group.</td></tr>
+</tbody>
+</table>
+</div>
 
 <section class="qa">
 <h2 id="objections">Objections</h2>

@@ -2019,7 +2019,10 @@ timings — no text, no span, no offset, in either direction.
   because centred and uncentred rows differ on ~40% of blocks and nothing else would say so.
   **Rollback is one environment variable:** `KELD_ATTRIBUTION_SCORING=user-max` restores the
   pre-2026-09-03 decision exactly (user turns only, MAX, no centring, no baseline observed)
-  and stamps `scoring: user-max-uncentred-v0`. The baseline file is `{"stats", "seen"}`:
+  and stamps `scoring: user-max-uncentred-v0`. ⚠️ It restores the SCORING rule, and since 2026-09-23 the decision on top of it is cut per group:
+  for a list posted with no `group` key, or with every workstream in one group, that is the
+  pre-2026-09-03 decision exactly; for a multi-group list it is that decision run once per group
+  (`model_versions.decision` says which). The baseline file is `{"stats", "seen"}`:
   `seen` is the last 2,000 block keys folded in, so a RETRIED job (held on publish failure,
   re-POSTed after a sidecar respawn) enters the running mean once, not once per attempt. A
   baseline that cannot be saved is re-learned after a restart and warned about ONCE per

@@ -436,7 +436,33 @@ func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, erro
 		}
 		b.Cells[string(ledger.StageAttributed)] = attributedCell(pass.Of(d), at)
 	}
+
+	// A vector cell stored before the list carried groups (or naming an id whose
+	// group the sidecar could not be told) reads with group "". Fill it from the
+	// CURRENT candidates — the same document and org list the rule pass above
+	// just used — so the page can place it under a group filter. An id no longer
+	// declared keeps "": unknown, never a guessed group. Nothing stored changes.
+	groups := make(map[string]string, len(pass.Candidates))
+	for _, c := range pass.Candidates {
+		groups[c.ID] = c.Group
+	}
+	for i := range snap.Blocks {
+		fillGroups(snap.Blocks[i].Cells["vector"], groups)
+	}
 	return snap, nil
+}
+
+// fillGroups sets each empty `group` in a cell's `projects` list from groups.
+func fillGroups(cell map[string]any, groups map[string]string) {
+	list, _ := cell["projects"].([]map[string]any)
+	for _, w := range list {
+		if g, _ := w["group"].(string); g != "" {
+			continue
+		}
+		if id, _ := w["project_id"].(string); groups[id] != "" {
+			w["group"] = groups[id]
+		}
+	}
 }
 
 // attributedCell builds the wire cell for one recomputed decision, in the
