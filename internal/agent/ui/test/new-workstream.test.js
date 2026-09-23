@@ -9,7 +9,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_JS = fs.readFileSync(path.join(HERE, "..", "app.js"), "utf8");
 
 // The naming rule behind "New workstream". The journey itself is a UI one and is
-// asserted in ui/e2e/projects.spec.ts against a real daemon; what is unit-
+// asserted in ui/e2e/workstreams.spec.ts against a real daemon; what is unit-
 // testable here is the rule that decides whether a name is a name.
 
 test("NEGATIVE: an empty or blank name is not a name", () => {

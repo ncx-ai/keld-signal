@@ -57,3 +57,4 @@ state/projects\.json
 "Project", "Tokens"
 "no project"
 \bprojectCellInfo\b|\bprojectTitle\b|\brenderProjects\b|\bsetWorkstreamOff\b|\bworkstreamDisplayName\b
+map-project\.spec|\bprojects\.spec\.ts
