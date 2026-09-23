@@ -272,6 +272,7 @@ type BlockSummary struct {
 	Dims      map[string]enrich.Labeled
 	Minutes   float64
 	Tokens    int64
+	USD       float64 // the block's estimated cost, for the totals
 }
 
 // BlocksSource is the read-only feed of this machine's recently-closed

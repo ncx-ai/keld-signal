@@ -246,6 +246,7 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 	attributed, total := 0, 0
 	var suggestions []projects.Suggestion
 	var observed []string
+	var rollup []projects.RollupBlock
 
 	if s.Blocks != nil {
 		blocks, err := s.Blocks.SinceWeekStart()
@@ -260,6 +261,9 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 			res := pass.Of(b.Dims)
 			if res.Attributed() {
 				attributed++
+				rollup = append(rollup, projects.RollupBlock{
+					Minutes: b.Minutes, Tokens: b.Tokens, USD: b.USD, Result: res,
+				})
 				continue
 			}
 			unattributed = append(unattributed, projects.UnattributedBlock{
@@ -284,6 +288,10 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		"groups":      withRemoteBuckets(groups, candidates, off),
 		"projects":    projectViews(candidates, observed),
 		"suggestions": suggestions,
+		// The same blocks and the same live pass as `coverage`: a group counts
+		// each block once, a project counts each of its blocks in full
+		// (projects.Rollup).
+		"totals": projects.Rollup(rollup),
 		"coverage": map[string]any{
 			"attributed": attributed,
 			"total":      total,
