@@ -118,7 +118,7 @@ func newInstallSidecarCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dest, "dest", "", "Directory that holds keld-agent-sidecar/ (default: ~/.local/bin).")
 	cmd.Flags().BoolVar(&stageOnly, "stage-only", false, "Download and unpack, but do not replace the installed sidecar.")
 	cmd.Flags().StringVar(&commit, "commit", "", "Install a previously staged tree (the path from --stage-only).")
-	cmd.Flags().StringVar(&baseURL, "base-url", "", "Release download base URL (testing).")
+	cmd.Flags().StringVar(&baseURL, "base-url", "", "Release download base URL, as <base>/<tag>/<asset> — not the mirror root (testing).")
 	cmd.Flags().StringVar(&cleanupJob, "cleanup-job", "",
 		"launchd plist to delete after a successful install (the installer's one-shot fetch job).")
 	return cmd

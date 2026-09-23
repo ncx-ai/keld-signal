@@ -74,14 +74,22 @@ broken: enrichment spools until it lands.
 ## Linux — install.sh
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh \
+curl -fsSL https://atlas.keld.co/signal/install.sh \
   | sh -s -- --code "$CODE"
 ```
 
 Environment it honours: `KELD_SETUP_CODE` (instead of `--code`), `KELD_API_URL`
 (pair against a specific host), `KELD_INSTALL_DIR` (default `~/.local/bin`),
+`KELD_RELEASES_URL` (the release mirror, default `https://dl.keld.co`), and
 `KELD_RELEASE_TAG` and `KELD_DOWNLOAD_BASE` (pin a version, or install from a
 mirror — which is how the conformance harness installs a local build).
+`KELD_DOWNLOAD_BASE` replaces the channel level too: it is the directory that
+holds `<tag>/`, e.g. `https://dl.keld.co/releases`, not `https://dl.keld.co`.
+
+Pre-release (`-rc.N`) builds live under `prereleases/` on the mirror and expire
+after 30 days, so pinning one — or a machine running one fetching its own
+version's engine — stops working after that. Never put a `-` in a stable tag:
+every consumer, the publish workflow included, reads it as a pre-release.
 
 With a code it onboards non-interactively; without one it installs, registers
 the service, and prints the two commands that finish it. It **aborts** if the

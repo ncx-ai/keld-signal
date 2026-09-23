@@ -43,7 +43,7 @@ import (
 // degrades for. So a missing hash is reported and the fetch continues; a
 // MISMATCH is always fatal.
 type Opts struct {
-	BaseURL   string // release download base; empty = update.DefaultBaseURL
+	BaseURL   string // release download base; empty = update.DefaultBaseURL (dl.keld.co, by channel)
 	Tag       string // release tag; empty = resolve the latest release
 	Dest      string // directory that holds keld-agent-sidecar/; empty = ~/.local/bin
 	StageOnly bool
@@ -126,12 +126,17 @@ func DestDir() (string, error) {
 	return filepath.Join(home, ".local", "bin"), nil
 }
 
+// LatestTagURL is the release mirror's pointer to the latest stable release —
+// the same {tag_name, ...} shape GitHub's releases API returned, which is why
+// LatestTag parses it unchanged.
+const LatestTagURL = update.DefaultBaseURL + "/latest.json"
+
 // LatestTag resolves the newest published release. Used only when no tag
 // is supplied — a real pkg always supplies its own version, so this is the
 // dry-run path (VERSION reads 0.0.0-dryrun, which is not a release).
 func LatestTag(ctx context.Context, api string) (string, error) {
 	if api == "" {
-		api = "https://api.github.com/repos/ncx-ai/keld-signal/releases/latest"
+		api = LatestTagURL
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	if err != nil {

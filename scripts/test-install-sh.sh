@@ -68,3 +68,32 @@ mv "$tmp/dl/testtag/_sidecar.hidden" "$tmp/dl/testtag/keld-agent-sidecar_linux_a
 grep -q "keld-agent install" "$KELD_TEST_LOG" \
   && { echo "FAIL: keld-agent install ran despite the sidecar abort"; exit 1; }
 echo "PASS: missing analysis sidecar aborts the install"
+
+# 3b) the shipped default is the mirror. Cases 4-5 override KELD_RELEASES_URL, so without this a
+#     wrong default would pass them.
+grep -qF 'RELEASES_URL="${KELD_RELEASES_URL:-https://dl.keld.co}"' "$here/scripts/install.sh" \
+  || { echo "FAIL: install.sh's default mirror is not https://dl.keld.co"; exit 1; }
+echo "PASS: install.sh defaults to the dl.keld.co mirror"
+
+# 4) no KELD_RELEASE_TAG: the tag comes from <KELD_RELEASES_URL>/latest.json (the release mirror,
+#    dl.keld.co) and assets from <KELD_RELEASES_URL>/releases/<tag>/ — no GitHub API involved.
+mkdir -p "$tmp/rel"
+ln -s "$tmp/dl" "$tmp/rel/releases"
+printf '{"tag_name": "testtag", "assets": []}\n' > "$tmp/rel/latest.json"
+: > "$KELD_TEST_LOG"; rm -rf "$tmp/bin"
+KELD_RELEASES_URL="file://$tmp/rel" KELD_INSTALL_DIR="$tmp/bin" \
+  sh "$here/scripts/install.sh" --code LATESTCODE >/dev/null 2>&1 || true
+grep -q "^keld-agent install --code LATESTCODE$" "$KELD_TEST_LOG" \
+  || { echo "FAIL: latest.json resolution did not install. Log:"; cat "$KELD_TEST_LOG"; exit 1; }
+echo "PASS: tag resolved from the mirror's latest.json"
+
+# 5) a pinned pre-release tag (anything with a '-') downloads from prereleases/<tag>/, the prefix
+#    publish-releases.yml writes rc builds under.
+mkdir -p "$tmp/rel/prereleases"
+cp -R "$tmp/dl/testtag" "$tmp/rel/prereleases/v9.9.9-rc.1"
+: > "$KELD_TEST_LOG"; rm -rf "$tmp/bin"
+KELD_RELEASES_URL="file://$tmp/rel" KELD_RELEASE_TAG=v9.9.9-rc.1 KELD_INSTALL_DIR="$tmp/bin" \
+  sh "$here/scripts/install.sh" --code RCCODE >/dev/null 2>&1 || true
+grep -q "^keld-agent install --code RCCODE$" "$KELD_TEST_LOG" \
+  || { echo "FAIL: pre-release tag did not install from prereleases/. Log:"; cat "$KELD_TEST_LOG"; exit 1; }
+echo "PASS: pre-release tag installs from prereleases/"

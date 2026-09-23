@@ -27,8 +27,9 @@ type Release struct {
 }
 
 // Target reports the pinned version, the asset base URL override (empty means
-// "use the default GitHub release download path"), and whether the org has
-// enabled updates at all.
+// the default release mirror, dl.keld.co — and note the updater does not apply a
+// non-empty one yet: daemon/update.go builds its Fetcher without it), and
+// whether the org has enabled updates at all.
 //
 // Nil-receiver safe on purpose: the caller's common case is an absent block,
 // and answering it here means no caller can forget the nil check and

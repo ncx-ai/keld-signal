@@ -267,8 +267,10 @@ governed per-org (on by default).
 
 ## Install
 
-The **platform installers are the recommended path**. Grab the latest from
-[**GitHub Releases**](https://github.com/ncx-ai/keld-signal/releases/latest).
+The **platform installers are the recommended path**. Download them from your Atlas deploy's
+**Connect** page, or directly from the public release mirror at `https://dl.keld.co` —
+[`latest.json`](https://dl.keld.co/latest.json) names the current version, and every asset is at
+`https://dl.keld.co/releases/<version>/<asset>` (pre-releases under `prereleases/`).
 
 | Platform | Download | What it does |
 |---|---|---|
@@ -311,7 +313,7 @@ An MDM `/SILENT` push skips that console; finish such a machine with
 ### Linux / macOS — one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
+curl -fsSL https://atlas.keld.co/signal/install.sh | sh
 ```
 
 Detects OS/arch, fetches the latest release, verifies checksums, and installs
@@ -326,10 +328,12 @@ model, which a v2 install never downloads.
 Windows PowerShell equivalent:
 
 ```powershell
-irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
+irm https://atlas.keld.co/signal/install.ps1 | iex
 ```
 
 ### Raw archives
+
+On the mirror beside the installers — `https://dl.keld.co/releases/<version>/<archive>`:
 
 | Platform | Architecture | Archive |
 |----------|--------------|-----------------------------|
