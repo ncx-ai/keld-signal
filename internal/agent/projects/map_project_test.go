@@ -62,8 +62,8 @@ func TestNEGATIVEBlocksKeepAttributingAfterTheMove(t *testing.T) {
 	}
 
 	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), noneOff, nil)
-	if got.ProjectID != "p_signal" {
-		t.Fatalf("before the move, attributed to %q", got.ProjectID)
+	if only(got).ProjectID != "p_signal" {
+		t.Fatalf("before the move, attributed to %q", only(got).ProjectID)
 	}
 
 	after, err := MapProjectTo(before, orgValues(), "p_signal", "keld_projects:signal", noneOff)
@@ -71,16 +71,17 @@ func TestNEGATIVEBlocksKeepAttributingAfterTheMove(t *testing.T) {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
 	got = Attribute(dims, MergeCandidates(after.Projects, orgValues()), noneOff, nil)
-	if got.ProjectID != "keld_projects:signal" {
+	if only(got).ProjectID != "keld_projects:signal" {
 		t.Fatalf("after the move, attributed to %q (reason %q) — the block fell out",
-			got.ProjectID, got.Reason)
+			only(got).ProjectID, got.Reason)
 	}
 }
 
-func TestNEGATIVEKeepingBothWouldConflictWhichIsWhyOneIsRemoved(t *testing.T) {
+func TestNEGATIVEKeepingBothWouldDoubleCountWhichIsWhyOneIsRemoved(t *testing.T) {
 	// The reason the local entry is deleted rather than kept as a reference,
 	// asserted rather than argued: two visible projects sharing a repo rule
-	// attribute to NEITHER.
+	// BOTH get the block (overlap is allowed since 2026-09-23), so a local copy
+	// of an org project's rule would count the block twice.
 	both := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 		{ID: "keld_projects:signal", Title: "Signal On-Device Client",
@@ -89,10 +90,10 @@ func TestNEGATIVEKeepingBothWouldConflictWhichIsWhyOneIsRemoved(t *testing.T) {
 	got := Attribute(map[string]enrich.Labeled{
 		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
 	}, both.Projects, noneOff, nil)
-	if got.Reason != ReasonConflict {
-		t.Fatalf("reason = %q, want %q — if this ever stops being a conflict, "+
-			"keeping the local entry as a reference becomes viable and MapProjectTo's "+
-			"deletion should be revisited", got.Reason, ReasonConflict)
+	if len(got.Projects) != 2 {
+		t.Fatalf("assigned = %+v, want both — if a shared rule ever stops assigning "+
+			"both, keeping the local entry as a reference becomes viable and "+
+			"MapProjectTo's deletion should be revisited", got.Projects)
 	}
 }
 

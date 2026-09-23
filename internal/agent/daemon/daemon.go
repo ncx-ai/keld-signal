@@ -951,7 +951,9 @@ func Run(ctx context.Context) error {
 	// this path a method with `v.ledger` in scope — actually cost.
 	vecLedger := sig.vectorLedger()
 	setAttribQuarantineHandler(vecLedger.recordQuarantine)
-	setAttribOutcomeHandler(vecLedger.recordOutcome)
+	setAttribOutcomeHandler(func(o attrib.Outcome) {
+		vecLedger.recordOutcome(withOutcomeGroups(o, sig.remote.Load()))
+	})
 	// telemetryLast reads the running telemetry proxy's own record of its
 	// last successful forward — TelemetryLastForward already returns the zero
 	// time when no proxy is running at all, which startHealth's own note()

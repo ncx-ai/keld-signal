@@ -47,8 +47,8 @@ func TestT1LocalFullyCoveredIsDeletedAndItsBlocksStillAttribute(t *testing.T) {
 	// ⚠️ THE REASON DELETION IS SAFE: the rule that placed those blocks is still
 	// matched — by Atlas. Asserted through the matcher, not by reading the file.
 	got := Attribute(repoDims("github.com/acme/a"), MergeCandidates(next.Projects, remote), noneOff, nil)
-	if got.ProjectID != "org:one" {
-		t.Fatalf("after deletion, attributed to %q (reason %q)", got.ProjectID, got.Reason)
+	if only(got).ProjectID != "org:one" {
+		t.Fatalf("after deletion, attributed to %q (reason %q)", only(got).ProjectID, got.Reason)
 	}
 }
 
@@ -87,9 +87,10 @@ func TestT3LocalKeepsOnlyWhatTheOrgDoesNotCover(t *testing.T) {
 	}
 }
 
-func TestT4AfterTrimmingAnOverlappingRuleIsNoLongerAConflict(t *testing.T) {
+func TestT4AfterTrimmingAnOverlappingRuleIsNoLongerDoubleCounted(t *testing.T) {
 	// ⚠️ THE WHOLE POINT OF PRECEDENCE. Without the trim these two both claim
-	// A and the matcher refuses to pick, so the block lands in neither.
+	// A, so the block counts for the org's workstream AND for the local copy of
+	// its rule — the same work twice, once under a name the org never made.
 	d := doc(localProject("p_abc", "mine",
 		"github.com/acme/a", "github.com/acme/b", "github.com/acme/c"))
 	remote := FromRemoteProjects([]settings.RemoteProject{
@@ -97,18 +98,17 @@ func TestT4AfterTrimmingAnOverlappingRuleIsNoLongerAConflict(t *testing.T) {
 	})
 
 	before := Attribute(repoDims("github.com/acme/a"), MergeCandidates(d.Projects, remote), noneOff, nil)
-	if before.Reason != ReasonConflict {
-		t.Fatalf("precondition: want %q, got %q — if two projects sharing a rule is no "+
-			"longer a conflict, trimming can be revisited", ReasonConflict, before.Reason)
+	if len(before.Projects) != 2 {
+		t.Fatalf("precondition: want both assigned before the trim, got %+v", before.Projects)
 	}
 
 	next, _, _ := Reconcile(d, remote, noneOff)
 	after := Attribute(repoDims("github.com/acme/a"), MergeCandidates(next.Projects, remote), noneOff, nil)
-	if after.Reason == ReasonConflict {
-		t.Fatal("still a conflict after trimming")
+	if len(after.Projects) != 1 {
+		t.Fatalf("still assigned twice after trimming: %+v", after.Projects)
 	}
-	if after.ProjectID != "org:one" {
-		t.Fatalf("attributed to %q, want the org's project", after.ProjectID)
+	if only(after).ProjectID != "org:one" {
+		t.Fatalf("attributed to %q, want the org's project", only(after).ProjectID)
 	}
 }
 
@@ -121,8 +121,8 @@ func TestT5TheRemainderStillAttributes(t *testing.T) {
 	})
 	next, _, _ := Reconcile(d, remote, noneOff)
 	got := Attribute(repoDims("github.com/acme/c"), MergeCandidates(next.Projects, remote), noneOff, nil)
-	if got.ProjectID != "p_abc" {
-		t.Fatalf("the remainder stopped attributing: %q (reason %q)", got.ProjectID, got.Reason)
+	if only(got).ProjectID != "p_abc" {
+		t.Fatalf("the remainder stopped attributing: %q (reason %q)", only(got).ProjectID, got.Reason)
 	}
 }
 

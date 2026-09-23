@@ -36,9 +36,9 @@ func TestAnAtlasProjectIDSurvivesBeingStored(t *testing.T) {
 	s := New()
 	k := BlockKey{Session: "9eb2b3ffaaaa1111", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{ProjectID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one(atlasID, MethodRepo), ReasonNone, time.Now())
 
-	if got := attributedCell(t, s, k)["project_id"]; got != atlasID {
+	if got := firstOf(attributedCell(t, s, k), "project_id"); got != atlasID {
 		t.Fatalf("project_id = %v, want %q — the id was discarded on write", got, atlasID)
 	}
 }
@@ -50,9 +50,9 @@ func TestALocalProjectIDIsUnaffected(t *testing.T) {
 	s := New()
 	k := BlockKey{Session: "9eb2b3ffbbbb2222", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{ProjectID: "p_github_com_ncx_ai_keld_signal", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one("p_github_com_ncx_ai_keld_signal", MethodRepo), ReasonNone, time.Now())
 
-	if got := attributedCell(t, s, k)["project_id"]; got != "p_github_com_ncx_ai_keld_signal" {
+	if got := firstOf(attributedCell(t, s, k), "project_id"); got != "p_github_com_ncx_ai_keld_signal" {
 		t.Fatalf("a local id stopped round-tripping: %v", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestOnlyTheColonWasAdmitted(t *testing.T) {
 			s := New()
 			k := BlockKey{Session: "9eb2b3ffcccc3333", Start: 1788600000}
 			s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-			s.Attribute(k, Attributed{ProjectID: id, Method: MethodRepo}, ReasonNone, time.Now())
+			s.Attribute(k, one(id, MethodRepo), ReasonNone, time.Now())
 
 			if cell := attributedCell(t, s, k); cell != nil {
 				t.Fatalf("%s was accepted and recorded as %v", name, cell)
@@ -111,7 +111,7 @@ func TestAnAttributionCanNeverBeOKWithNoProject(t *testing.T) {
 
 	// Status is OK because the reason is None; the project id is empty. This is
 	// the impossible pairing.
-	s.Attribute(k, Attributed{ProjectID: "", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one("", MethodRepo), ReasonNone, time.Now())
 
 	if cell := attributedCell(t, s, k); cell != nil {
 		t.Fatalf("recorded a successful attribution that names no project: %v", cell)
@@ -143,15 +143,15 @@ func TestAFailedAttributionWithNoProjectIsStillRecorded(t *testing.T) {
 // same clamp ate the ids — while the code comment promised the list holds every
 // matching project "NEVER just the first one silently chosen". "Two projects
 // claim this" is unactionable without their names.
-func TestAConflictBetweenAtlasProjectsKeepsBothIDs(t *testing.T) {
+func TestALegacyConflictBetweenAtlasProjectsStillReadsBothIDs(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "9eb2b3ffffff6666", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{Conflict: []string{
-		"keld_projects:signal_on_device_client",
-		"keld_projects:atlas_platform",
-	}}, ReasonConflict, time.Now())
+	// Nothing produces a conflict since 2026-09-23; a row that holds one must
+	// still read, with both ids intact.
+	s.Attribute(k, Attributed{}, ReasonConflict, time.Now())
+	setLegacyConflict(t, s, k, "keld_projects:signal_on_device_client,keld_projects:atlas_platform")
 
 	got, ok := attributedCell(t, s, k)["conflict"].([]string)
 	if !ok || len(got) != 2 {
@@ -172,7 +172,7 @@ func TestAnAttributedBlockCarriesNoConflictList(t *testing.T) {
 	s := New()
 	k := BlockKey{Session: "9eb2b3ff11117777", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{ProjectID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one(atlasID, MethodRepo), ReasonNone, time.Now())
 
 	if got, present := attributedCell(t, s, k)["conflict"]; present {
 		t.Fatalf("an attributed block carries a conflict list: %#v", got)

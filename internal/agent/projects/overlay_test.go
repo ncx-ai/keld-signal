@@ -36,7 +36,7 @@ func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	// Before: the block on keld-cli matches nothing — the org's values carry
 	// free-text keywords, not repositories.
 	before := Attribute(blockOn("github.com/ncx-ai/keld-cli"), MergeCandidates(d.Projects, remote), off, nil)
-	if before.ProjectID != "" {
+	if only(before).ProjectID != "" {
 		t.Fatalf("precondition: the block must be unattributed, got %+v", before)
 	}
 	sugs := Suggest([]UnattributedBlock{{Dims: blockOn("github.com/ncx-ai/keld-cli"), Minutes: 20, Tokens: 1000}})
@@ -57,11 +57,11 @@ func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	// ATLAS ID (what Atlas matches workstreams against), by repo.
 	merged := MergeCandidates(next.Projects, remote)
 	after := Attribute(blockOn("github.com/ncx-ai/keld-cli"), merged, off, nil)
-	if after.ProjectID != "keld_projects:signal" || after.Method != MethodRepo {
+	if only(after).ProjectID != "keld_projects:signal" || only(after).Method != MethodRepo {
 		t.Fatalf("after same-as the block must attribute to the Atlas value by repo, got %+v", after)
 	}
-	if after.Reason == ReasonConflict {
-		t.Fatal("an overlay sharing the value's id must merge, never conflict with itself")
+	if len(after.Projects) != 1 {
+		t.Fatalf("an overlay sharing the value's id must merge, never count twice: %+v", after.Projects)
 	}
 }
 

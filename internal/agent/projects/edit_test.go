@@ -26,7 +26,7 @@ func TestHideExcludesFromMatchingButKeepsRules(t *testing.T) {
 
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 	res := Attribute(dims, doc.Projects, nil, nil)
-	if res.ProjectID != "" {
+	if only(res).ProjectID != "" {
 		t.Fatalf("hidden project still attributed: %+v", res)
 	}
 }
@@ -65,7 +65,7 @@ func TestPlaceSameAsAddsRuleAndReattributes(t *testing.T) {
 
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 	res := Attribute(dims, doc.Projects, nil, nil)
-	if res.Method != MethodRepo || res.ProjectID != "p1" {
+	if only(res).Method != MethodRepo || only(res).ProjectID != "p1" {
 		t.Fatalf("block did not re-attribute after PlaceSameAs: %+v", res)
 	}
 }
