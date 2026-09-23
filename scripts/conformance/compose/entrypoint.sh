@@ -41,10 +41,11 @@ ensure_sidecar() {
     return 0
   fi
 
-  local repo=${KELD_CONFORM_GH_REPO:-ncx-ai/keld-signal}
+  local releases=${KELD_RELEASES_URL:-https://dl.keld.co}
+  releases=${releases%/}
   local tag=${KELD_CONFORM_SIDECAR_TAG:-}
   if [ -z "$tag" ]; then
-    tag=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" | jq -r .tag_name 2>/dev/null)
+    tag=$(curl -fsSL "${releases}/latest.json" | jq -r .tag_name 2>/dev/null)
   fi
   [ -n "$tag" ] && [ "$tag" != "null" ] || { say "sidecar: could not resolve a release tag; set KELD_CONFORM_SIDECAR_TAG"; return 0; }
 
@@ -62,7 +63,9 @@ ensure_sidecar() {
     say "  run this leg on an amd64 host, or mount a sidecar and set KELD_CONFORM_PYTHON."
   fi
   archive="keld-agent-sidecar_linux_${arch}.tar.gz"
-  url="${KELD_DOWNLOAD_BASE:-https://github.com/${repo}/releases/download}/${tag}/${archive}"
+  local channel
+  case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
+  url="${KELD_DOWNLOAD_BASE:-${releases}/${channel}}/${tag}/${archive}"
   say "sidecar: fetching $url"
   mkdir -p "$dest" /tmp/sc
   if ! curl -fsSL "$url" -o /tmp/sc/"$archive"; then

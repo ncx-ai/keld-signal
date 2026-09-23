@@ -27,7 +27,7 @@ type Release struct {
 }
 
 // Target reports the pinned version, the asset base URL override (empty means
-// "use the default GitHub release download path"), and whether the org has
+// the release mirror; the daemon does not apply it yet), and whether the org has
 // enabled updates at all.
 //
 // Nil-receiver safe on purpose: the caller's common case is an absent block,

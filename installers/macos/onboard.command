@@ -5,7 +5,10 @@
 set -uo pipefail
 AGENT="${KELD_AGENT_BIN:-/usr/local/bin/keld-agent}"
 PREFIX="${KELD_PREFIX:-/usr/local/keld}"
-REPO="ncx-ai/keld-signal"
+# The public release mirror (R2 behind dl.keld.co). Fixed at pkg build time: a shipped pkg cannot
+# be pointed anywhere else.
+RELEASES_URL="${KELD_RELEASES_URL:-https://dl.keld.co}"
+RELEASES_URL="${RELEASES_URL%/}"
 echo; echo "==== Set up Keld ===="; echo
 
 # ── Analysis sidecar ──────────────────────────────────────────────────────────
@@ -70,7 +73,7 @@ fetch_sidecar() {
   tag=""
   [ -f "${PREFIX}/VERSION" ] && tag=$(tr -d ' \n' < "${PREFIX}/VERSION")
   case "$tag" in ""|*dryrun*)
-    tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    tag=$(curl -fsSL "${RELEASES_URL}/latest.json" \
           | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4) ;;
   esac
   [ -n "$tag" ] || { echo "  ! could not determine a release to fetch the analysis sidecar from" >&2; return 1; }
@@ -83,7 +86,8 @@ fetch_sidecar() {
     echo "  … analysis sidecar is ${have:-unversioned}, this build wants ${tag} — replacing it"
   fi
   asset="keld-agent-sidecar_darwin_${arch}.tar.gz"
-  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
+  url="${RELEASES_URL}/${channel}/${tag}/${asset}"
   echo "  … downloading analysis sidecar (${tag}, ~190MB) → ${dest}"
   mkdir -p "$dest"
   # Download → verify → extract → swap, all inside a temp dir under $dest (same

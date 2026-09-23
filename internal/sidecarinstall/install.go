@@ -43,7 +43,7 @@ import (
 // degrades for. So a missing hash is reported and the fetch continues; a
 // MISMATCH is always fatal.
 type Opts struct {
-	BaseURL   string // release download base; empty = update.DefaultBaseURL
+	BaseURL   string // release download base; empty = the release mirror
 	Tag       string // release tag; empty = resolve the latest release
 	Dest      string // directory that holds keld-agent-sidecar/; empty = ~/.local/bin
 	StageOnly bool
@@ -131,7 +131,7 @@ func DestDir() (string, error) {
 // dry-run path (VERSION reads 0.0.0-dryrun, which is not a release).
 func LatestTag(ctx context.Context, api string) (string, error) {
 	if api == "" {
-		api = "https://api.github.com/repos/ncx-ai/keld-signal/releases/latest"
+		api = update.DefaultMirrorURL + "/latest.json"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	if err != nil {

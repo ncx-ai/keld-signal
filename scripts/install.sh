@@ -1,9 +1,11 @@
 #!/bin/sh
 # keld installer — POSIX sh, no jq required
-# Usage: curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://atlas.keld.co/signal/install.sh | sh
 set -e
 
-REPO="ncx-ai/keld-signal"
+# The public release mirror (R2 behind dl.keld.co) — latest.json, releases/, prereleases/.
+RELEASES_URL="${KELD_RELEASES_URL:-https://dl.keld.co}"
+RELEASES_URL="${RELEASES_URL%/}"
 DEST="${KELD_INSTALL_DIR:-${HOME}/.local/bin}"
 
 # ── One-time setup code (pre-authenticated onboarding) ────────────────────────
@@ -27,7 +29,7 @@ case "$os" in
     echo "keld installer: unsupported operating system: $os" >&2
     echo "  Supported: Linux, macOS (Darwin)." >&2
     echo "  For Windows, use the PowerShell installer:" >&2
-    echo "  irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex" >&2
+    echo "  irm https://atlas.keld.co/signal/install.ps1 | iex" >&2
     exit 1
     ;;
 esac
@@ -45,12 +47,11 @@ case "$arch" in
 esac
 
 # ── Release tag ───────────────────────────────────────────────────────────────
-# KELD_RELEASE_TAG overrides the GitHub API lookup (pin a version, or test offline
-# against a local server where the "latest" API isn't available).
+# KELD_RELEASE_TAG pins a version (or tests offline against a local server that has no
+# latest.json). Otherwise: the latest stable release, from the mirror's latest.json.
 tag="${KELD_RELEASE_TAG:-}"
 if [ -z "$tag" ]; then
-  api_url="https://api.github.com/repos/${REPO}/releases/latest"
-  tag=$(curl -fsSL "$api_url" \
+  tag=$(curl -fsSL "${RELEASES_URL}/latest.json" \
     | grep -o '"tag_name": *"[^"]*"' \
     | head -1 \
     | cut -d'"' -f4)
@@ -58,17 +59,16 @@ fi
 
 if [ -z "$tag" ]; then
   echo "keld installer: could not determine the latest release tag." >&2
-  echo "  Check your network connection or visit:" >&2
-  echo "  https://github.com/${REPO}/releases/latest" >&2
+  echo "  Check that this machine can reach ${RELEASES_URL}" >&2
   echo "  (or set KELD_RELEASE_TAG to pin a version)." >&2
   exit 1
 fi
 
 # ── Download and extract ──────────────────────────────────────────────────────
-# KELD_DOWNLOAD_BASE overrides the release download host — point it at a local
-# file server (e.g. http://localhost:8000) to test the installer without a real
-# release. Default: the GitHub release download path.
-dl_base="${KELD_DOWNLOAD_BASE:-https://github.com/${REPO}/releases/download}"
+# A '-' in the tag marks a pre-release, which the mirror keeps under prereleases/. KELD_DOWNLOAD_BASE
+# replaces host and channel — point it at a local file server to test without a real release.
+case "$tag" in *-*) channel=prereleases ;; *) channel=releases ;; esac
+dl_base="${KELD_DOWNLOAD_BASE:-${RELEASES_URL}/${channel}}"
 archive="keld_${os}_${arch}.tar.gz"
 url="${dl_base}/${tag}/${archive}"
 
@@ -166,7 +166,7 @@ if ! curl -fsSL "$url" -o "${work}/${archive}"; then
   echo "" >&2
   echo "keld installer: download failed." >&2
   echo "  URL: ${url}" >&2
-  echo "  Make sure the release exists and your network can reach github.com." >&2
+  echo "  Make sure the release exists and your network can reach ${dl_base}." >&2
   exit 1
 fi
 verify_archive "${work}/${archive}" "$archive"
@@ -245,7 +245,7 @@ agent_ok=1
 # Pair against the origin this installer was fetched from. KELD_API_URL is set by the
 # copy-paste line Atlas generates — `curl -fsSL <base>/install.sh | KELD_API_URL=<base> sh`
 # (keld-atlas services/api/app/telemetry_snippets.py). NOT by a response header: /install.sh
-# is a redirect to raw.githubusercontent.com, so the serving deploy never touches this body.
+# is a redirect to (or proxy of) the release mirror, so the serving deploy never touches this body.
 # Pass it as --api-url so login/setup target THIS host explicitly. Without the flag, keld
 # reuses the API URL of any previously stored token (device.go), so re-installing from a new
 # origin over an existing install would silently keep signing in against the old host.

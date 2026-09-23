@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -580,5 +581,16 @@ func TestAnExplicitTagBeatsTheDefault(t *testing.T) {
 	}
 	if res.StagedPath == "" {
 		t.Fatal("nothing staged")
+	}
+}
+
+func TestLatestTagReadsLatestJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"tag_name": "v3.0.6", "assets": ["keld-agent-sidecar_darwin_arm64.tar.gz"]}`)
+	}))
+	defer srv.Close()
+	got, err := LatestTag(context.Background(), srv.URL+"/latest.json")
+	if err != nil || got != "v3.0.6" {
+		t.Fatalf("LatestTag = %q, %v", got, err)
 	}
 }

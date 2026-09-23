@@ -129,7 +129,7 @@ else
 fi
 
 iv_step "install-sh"
-iv_say "\$ KELD_RELEASE_TAG=$TAG KELD_DOWNLOAD_BASE=${DL_BASE:-<github>} sh scripts/install.sh"
+iv_say "\$ KELD_RELEASE_TAG=$TAG KELD_DOWNLOAD_BASE=${DL_BASE:-<dl.keld.co>} sh scripts/install.sh"
 # shellcheck disable=SC2086  # INSTALL_ARGS must word-split into two args
 INSTALL_ARGS=""
 if [ "$INSTALLER_CODE" = "1" ] && [ -n "$CODE" ]; then

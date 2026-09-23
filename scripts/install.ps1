@@ -1,5 +1,5 @@
 # keld installer for Windows (PowerShell)
-# Usage: irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
+# Usage: irm https://atlas.keld.co/signal/install.ps1 | iex
 #Requires -Version 5.1
 param(
     [string]$Code = $env:KELD_SETUP_CODE
@@ -7,7 +7,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$REPO = 'ncx-ai/keld-signal'
+# The public release mirror (R2 behind dl.keld.co) — latest.json, releases/, prereleases/.
+$ReleasesUrl = if ($env:KELD_RELEASES_URL) { $env:KELD_RELEASES_URL.TrimEnd('/') } else { 'https://dl.keld.co' }
 $InstallDir = if ($env:KELD_INSTALL_DIR) { $env:KELD_INSTALL_DIR } `
               else { Join-Path $env:LOCALAPPDATA 'Programs\keld' }
 
@@ -19,23 +20,32 @@ if ($arch -ne 'AMD64') {
     exit 1
 }
 
-# ── Latest release tag ────────────────────────────────────────────────────────
-$apiUrl = "https://api.github.com/repos/$REPO/releases/latest"
-try {
-    $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
-} catch {
-    Write-Error "keld installer: could not reach GitHub API.`n  Check your network connection or visit: https://github.com/$REPO/releases/latest`n  Error: $_"
-    exit 1
+# ── Release tag ───────────────────────────────────────────────────────────────
+# KELD_RELEASE_TAG pins a version; otherwise the latest stable release, from the mirror.
+$tag = $env:KELD_RELEASE_TAG
+if (-not $tag) {
+    try {
+        $latest = Invoke-RestMethod -Uri "$ReleasesUrl/latest.json" -UseBasicParsing
+    } catch {
+        Write-Error "keld installer: could not reach $ReleasesUrl.`n  Check your network connection.`n  Error: $_"
+        exit 1
+    }
+    # A non-JSON answer (a captive portal's HTML) parses to a string with no tag_name; under
+    # StrictMode reading it would throw, so fall through to the clear message below instead.
+    $tag = if ($latest -and $latest.PSObject.Properties['tag_name']) { $latest.tag_name } else { $null }
 }
-$tag = $release.tag_name
 if (-not $tag) {
     Write-Error "keld installer: could not determine the latest release tag."
     exit 1
 }
 
 # ── Download and extract ──────────────────────────────────────────────────────
+# Pre-release tags (anything with a '-') live under prereleases/, stable ones under releases/ —
+# the rule install.sh and publish-releases.yml use. KELD_DOWNLOAD_BASE overrides host+prefix.
+$channel  = if ($tag -like '*-*') { 'prereleases' } else { 'releases' }
+$dlBase   = if ($env:KELD_DOWNLOAD_BASE) { $env:KELD_DOWNLOAD_BASE.TrimEnd('/') } else { "$ReleasesUrl/$channel" }
 $archive  = "keld_windows_amd64.zip"
-$url      = "https://github.com/$REPO/releases/download/$tag/$archive"
+$url      = "$dlBase/$tag/$archive"
 $tmpZip   = Join-Path $env:TEMP "keld_windows_amd64.zip"
 
 Write-Host "Installing keld $tag (windows/amd64)..."
@@ -45,7 +55,7 @@ Write-Host "  Destination: $InstallDir\keld.exe"
 try {
     Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing
 } catch {
-    Write-Error "keld installer: download failed.`n  URL: $url`n  Make sure the release exists and your network can reach github.com.`n  Error: $_"
+    Write-Error "keld installer: download failed.`n  URL: $url`n  Make sure the release exists and your network can reach $dlBase.`n  Error: $_"
     exit 1
 }
 
@@ -57,7 +67,7 @@ try {
 # break installs of releases published before it existed.
 $expected = $null
 try {
-    $sumsUrl = "https://github.com/$REPO/releases/download/$tag/checksums.txt"
+    $sumsUrl = "$dlBase/$tag/checksums.txt"
     $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
     foreach ($line in ($sums -split "`n")) {
         $parts = ($line.Trim() -split '\s+')

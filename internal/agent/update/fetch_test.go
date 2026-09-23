@@ -330,3 +330,24 @@ func TestFetchWithoutProgressCallbackStillWorks(t *testing.T) {
 		t.Fatalf("Fetch with nil Progress: %v", err)
 	}
 }
+
+// The default is the public release mirror, split by channel exactly as scripts/install.sh and
+// publish-releases.yml split it: a '-' marks a pre-release.
+func TestDefaultReleaseDirUsesTheMirrorAndChannel(t *testing.T) {
+	f := &Fetcher{}
+	if got, want := f.releaseDir("v3.0.6"), "https://dl.keld.co/releases/v3.0.6"; got != want {
+		t.Fatalf("stable: got %q, want %q", got, want)
+	}
+	if got, want := f.releaseDir("v3.0.7-rc.1"), "https://dl.keld.co/prereleases/v3.0.7-rc.1"; got != want {
+		t.Fatalf("rc: got %q, want %q", got, want)
+	}
+}
+
+// An explicit BaseURL (Atlas's Release.BaseURL) is used as-is — <base>/<tag>/<asset> — so an
+// override written for GitHub's layout, or a mirror of any other shape, keeps working.
+func TestExplicitBaseURLKeepsItsMeaning(t *testing.T) {
+	f := &Fetcher{BaseURL: "https://mirror.example/releases/download/"}
+	if got, want := f.releaseDir("v3.0.7-rc.1"), "https://mirror.example/releases/download/v3.0.7-rc.1"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

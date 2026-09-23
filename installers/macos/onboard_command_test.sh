@@ -57,13 +57,19 @@ grep -q 'onboard.command' "$d/scripts/postinstall" || { echo "postinstall does n
 # download → verify → extract → swap install.sh already performs.
 sidecar_fns="$(awk '/^sidecar_installed_version\(\) \{/,/^\}/' "$cmd"
                awk '/^fetch_sidecar\(\) \{/,/^\}/' "$cmd")"
+# The mirror default is taken from onboard.command itself rather than set here: it is baked into
+# every pkg, so a test that supplies its own value cannot notice when the shipped one is wrong.
+releases_default="$(grep '^RELEASES_URL=' "$cmd")"
+[ -n "$releases_default" ] || { echo "onboard.command has no RELEASES_URL default"; exit 1; }
 
 run_case() {
   # $1 = installed VERSION content ("" = no VERSION file at all), $2 = pkg VERSION
   ( set +e
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    HOME="$tmp/home"; PREFIX="$tmp/prefix"; REPO="ncx-ai/keld-signal"
-    export HOME PREFIX REPO
+    HOME="$tmp/home"; PREFIX="$tmp/prefix"
+    export HOME PREFIX
+    unset KELD_RELEASES_URL
+    eval "$releases_default"
     mkdir -p "$HOME/.local/bin/keld-agent-sidecar" "$PREFIX"
     : > "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar"
     chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar"
@@ -74,9 +80,9 @@ run_case() {
     uname() { echo arm64; }
     # Records the attempt and fails, so the decision is observable without a
     # 190MB download or a stubbed tar/shasum/mv chain.
-    curl() { echo "FETCHED" >> "$tmp/calls"; return 1; }
+    curl() { echo "FETCHED $*" >> "$tmp/calls"; return 1; }
     fetch_sidecar > "$tmp/out" 2>&1
-    printf '%s|%s' "$(grep -c FETCHED "$tmp/calls" 2>/dev/null || echo 0)" "$(cat "$tmp/out")"
+    printf '%s|%s|%s' "$(grep -c FETCHED "$tmp/calls" 2>/dev/null || echo 0)" "$(cat "$tmp/out")" "$(cat "$tmp/calls" 2>/dev/null)"
   )
 }
 
@@ -98,6 +104,28 @@ case "$r" in
   0\|*) echo "AC-4: an UNVERSIONED sidecar was not replaced — got: $r"; exit 1 ;;
   *unversioned*) ;;
   *) echo "AC-4: an UNVERSIONED sidecar was not replaced — got: $r"; exit 1 ;;
+esac
+
+# The download comes from the release mirror, whose URL is fixed at pkg build time.
+r="$(run_case "v2.2.1" "v2.3.0")"
+case "$r" in
+  *"https://dl.keld.co/releases/v2.3.0/keld-agent-sidecar_darwin_arm64.tar.gz"*) ;;
+  *) echo "sidecar not fetched from the mirror's releases/ — got: $r"; exit 1 ;;
+esac
+
+# A pre-release pkg's sidecar lives under prereleases/, the prefix publish-releases.yml writes rc
+# tags under.
+r="$(run_case "v2.2.1" "v2.3.1-rc.1")"
+case "$r" in
+  *"https://dl.keld.co/prereleases/v2.3.1-rc.1/keld-agent-sidecar_darwin_arm64.tar.gz"*) ;;
+  *) echo "rc sidecar not fetched from prereleases/ — got: $r"; exit 1 ;;
+esac
+
+# A dry-run pkg (VERSION *dryrun*) has no tag of its own, so it asks the mirror for the latest.
+r="$(run_case "v2.2.1" "0.0.0-dryrun")"
+case "$r" in
+  *"https://dl.keld.co/latest.json"*) ;;
+  *) echo "dry-run pkg did not resolve its tag from the mirror's latest.json — got: $r"; exit 1 ;;
 esac
 
 echo "onboard checks passed"

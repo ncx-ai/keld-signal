@@ -26,10 +26,18 @@ import (
 // or the reverse.
 var ErrNoPublishedHash = errors.New("update: no published SHA-256 for the release asset")
 
-// DefaultBaseURL is the GitHub release download path — the same host
-// scripts/install.sh fetches from. Atlas can override it (Release.BaseURL) so
-// a mirrored or air-gapped fleet is a server change rather than a client one.
-const DefaultBaseURL = "https://github.com/ncx-ai/keld-signal/releases/download"
+// DefaultMirrorURL is the root of the public release mirror (R2 behind
+// dl.keld.co), the host scripts/install.sh fetches from too.
+const DefaultMirrorURL = "https://dl.keld.co"
+
+// channel is the mirror's top-level prefix for a tag: a '-' marks a pre-release,
+// the rule publish-releases.yml writes by and every installer reads by.
+func channel(tag string) string {
+	if strings.Contains(tag, "-") {
+		return "prereleases"
+	}
+	return "releases"
+}
 
 // AssetNames returns the release asset names for an OS/arch: the archive
 // holding keld + keld-agent, and the frozen analysis sidecar's tarball. These
@@ -73,11 +81,13 @@ func (f *Fetcher) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Minute}
 }
 
-func (f *Fetcher) base() string {
+// releaseDir is where a tag's assets live. An explicit BaseURL (the
+// `install-sidecar --base-url` flag, and tests) is used as-is, <base>/<tag>.
+func (f *Fetcher) releaseDir(tag string) string {
 	if f.BaseURL != "" {
-		return strings.TrimRight(f.BaseURL, "/")
+		return strings.TrimRight(f.BaseURL, "/") + "/" + tag
 	}
-	return DefaultBaseURL
+	return DefaultMirrorURL + "/" + channel(tag) + "/" + tag
 }
 
 // fastPolicy is used by tests: the real backoff would make the retry cases
@@ -105,8 +115,9 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// Fetch downloads <base>/<tag>/<asset> to dest and verifies its SHA-256
-// against the release's published hash.
+// Fetch downloads the asset to dest — <mirror>/<channel>/<tag>/<asset> by
+// default, or <BaseURL>/<tag>/<asset> when BaseURL is set — and verifies its
+// SHA-256 against the release's published hash.
 //
 // NO PUBLISHED HASH IS FATAL. scripts/install.sh warns and continues in that
 // case, deliberately, because a human is reading its output and can abort. An
@@ -120,7 +131,7 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 	if want == "" {
 		return fmt.Errorf("update: no published SHA-256 for %s in release %s; refusing to install an unverified asset: %w", asset, tag, ErrNoPublishedHash)
 	}
-	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
+	url := f.releaseDir(tag) + "/" + asset
 	sum, err := f.download(ctx, url, dest)
 	if err != nil {
 		_ = os.Remove(dest)
@@ -138,7 +149,7 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 // scripts/install.sh has always degraded this way. Auto-update must never call
 // it: an unattended swap has no reader who can abort.
 func (f *Fetcher) FetchUnverified(ctx context.Context, tag, asset, dest string) error {
-	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
+	url := f.releaseDir(tag) + "/" + asset
 	if _, err := f.download(ctx, url, dest); err != nil {
 		_ = os.Remove(dest)
 		return err
@@ -201,14 +212,14 @@ func (f *Fetcher) download(ctx context.Context, url, dest string) (string, error
 // is what CI publishes for the separately-built sidecar. An empty return means
 // the release published no hash for this asset at all.
 func (f *Fetcher) publishedSHA(ctx context.Context, tag, asset string) (string, error) {
-	if body, ok, err := f.get(ctx, fmt.Sprintf("%s/%s/checksums.txt", f.base(), tag)); err != nil {
+	if body, ok, err := f.get(ctx, f.releaseDir(tag)+"/checksums.txt"); err != nil {
 		return "", err
 	} else if ok {
 		if v := ParseChecksums(strings.NewReader(string(body)))[asset]; v != "" {
 			return v, nil
 		}
 	}
-	body, ok, err := f.get(ctx, fmt.Sprintf("%s/%s/%s.sha256", f.base(), tag, asset))
+	body, ok, err := f.get(ctx, f.releaseDir(tag)+"/"+asset+".sha256")
 	if err != nil || !ok {
 		return "", err
 	}

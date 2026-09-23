@@ -29,7 +29,7 @@ Atlas serves an `agent_release` block on the existing
 |---|---|
 | `enabled` | Absent or false ⇒ **no updates**. Never defaults on. |
 | `version` | A **pin, not a floor** — machines move to it in either direction. This is the rollback lever. |
-| `base_url` | Asset host override. Null ⇒ the GitHub release download path. |
+| `base_url` | Asset host override. Null ⇒ the release mirror (`https://dl.keld.co`, `releases/` or `prereleases/` by tag). **Not yet applied** — the daemon parses it but builds its fetcher without it; see the open question below. |
 
 Roll out by moving the pin forward; roll back by moving it backward. There is no
 other lever — `ml_backend` and `blocks` have no remote override, and this is the
