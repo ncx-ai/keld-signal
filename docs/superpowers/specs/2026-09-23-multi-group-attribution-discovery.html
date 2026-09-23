@@ -1,0 +1,801 @@
+<!-- Discovery document. Style: sentences <=15 words, paragraphs <=3 sentences,
+     a diagram / list / table under every heading. Shell shared with explainer-page. -->
+
+<title>Multi-Group Attribution</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1; --panel:#FFFFFF;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:46px 0 8px;text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3 .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+p{max-width:66ch;margin:0 0 12px}
+ul{max-width:68ch;margin:0 0 12px;padding-left:20px}
+li{margin:0 0 4px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+.meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:14px 0 0;
+  font-size:13px;color:var(--muted)}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.06em;text-transform:uppercase}
+.chip-draft{background:var(--enc-soft);color:var(--enc);border:1px solid var(--enc)}
+.chip-signed{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+.chip-reviewed{background:var(--daemon-soft);color:var(--daemon);border:1px solid var(--daemon)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:18px 0 0;max-width:680px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+
+.wrap{overflow-x:auto;margin:0 0 4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase;white-space:nowrap}
+td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.ac td:first-child,table.tests td:first-child{width:52px;color:var(--muted);white-space:nowrap}
+table.ac td:nth-child(2){width:42%}
+table.tests td:nth-child(2){width:38%}
+tr:target td{background:var(--daemon-soft)}
+
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.04em;white-space:nowrap}
+.p-met{background:var(--good-soft);color:var(--good)}
+.p-partial{background:var(--enc-soft);color:var(--enc)}
+.p-missed{background:var(--bad-soft);color:var(--bad)}
+.p-unver{background:var(--rule);color:var(--muted)}
+.p-reuse{background:var(--good-soft);color:var(--good)}
+.p-extend{background:var(--daemon-soft);color:var(--daemon)}
+.p-new{background:var(--enc-soft);color:var(--enc)}
+.p-pattern{background:var(--bad-soft);color:var(--bad)}
+.p-h{background:var(--bad-soft);color:var(--bad)}
+.p-m{background:var(--enc-soft);color:var(--enc)}
+.p-l{background:var(--good-soft);color:var(--good)}
+
+pre.gherkin{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--daemon);
+  border-radius:4px;padding:14px 16px;margin:0 0 12px;overflow-x:auto;
+  font:13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+pre.gherkin .kw{color:var(--daemon);font-weight:500}
+pre.gherkin .cov{color:var(--muted)}
+
+.note{border-left:3px solid var(--enc);background:var(--enc-soft);padding:10px 14px;
+  margin:0 0 14px;max-width:68ch;font-size:14px}
+.note strong{color:var(--enc)}
+
+figure{margin:18px 0 0;padding:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.lane{stroke:var(--rule);stroke-width:1}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.small{fill:var(--muted);font-size:11px}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-new{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4;stroke-dasharray:5 3}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.tick{stroke:var(--rule);stroke-width:1}
+svg{color:var(--ink)}
+
+.qa{border-top:1px solid var(--rule);margin-top:48px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+</style>
+
+<main>
+
+<h1>Multi-Group Attribution — Discovery</h1>
+<p class="lede">Settles how Signal attributes one block to one workstream <em>per group</em>, not one overall A block may belong to <strong>several workstreams, even inside one group</strong>. A group counts each block once; a workstream counts every block it holds.
+If this is wrong, the Signal page keeps telling people a valid setup is broken.
+The on-device semantic pass also keeps hiding work from every group but one.</p>
+
+<div class="meta">
+  <span class="chip chip-signed">Signed off — 2026-09-23</span>
+  <span>Opus 5.5 (1M context) — thinking: high</span>
+  <span class="mono">2026-09-23</span>
+</div>
+
+<dl class="kv">
+  <dt>Repo / branch</dt><dd class="mono">keld-signal · main @ f83171ff (Atlas read at main 3cb5c52c)</dd>
+  <dt>Spec source</dt><dd class="mono">docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html</dd>
+  <dt>Conflicts on this machine</dt><dd class="mono">0 of 1,204 ledger blocks · read from ~/.keld/state/ledger.db today · this machine has no multi-group setup, so it is not a baseline for the org</dd>
+  <dt>Rename reach</dt><dd class="mono">104 Go files · 74 Python/UI files · word-boundary grep of Project, RemoteProject, Workstream(s) and friends · includes tests</dd>
+  <dt>Ids per block today</dt><dd class="mono">4.9 · from the comment at internal/agent/publish/block.go:110 ("a real machine") · not re-measured</dd>
+  <dt>Semantic accuracy today</dt><dd class="mono">92% of 61 labelled blocks · docs/notes/whats-next-attribution.md §9 · single-group fixtures</dd>
+  <dt>Semantic pass default</dt><dd class="mono">OFF · a developer toggle (KELD_ATTRIBUTION) · limits who a wrong decision can affect</dd>
+</dl>
+
+<h2 id="s1">1 · Hypothesis &amp; scope</h2>
+
+<h3>Words: Signal adopts Atlas's, as part of this work</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Atlas says</th><th>Signal says today</th><th>Signal says after</th><th>Where it lives today</th></tr></thead>
+<tbody>
+  <tr><td>group (<span class="mono">WorkstreamGroup</span>, e.g. “Products”)</td><td>workstream</td><td><strong>group</strong></td><td class="mono">projects.Workstream{key,name,question,template_id} · internal/agent/projects/model.go</td></tr>
+  <tr><td>workstream (a value, e.g. “Atlas Platform”)</td><td>project</td><td><strong>workstream</strong></td><td class="mono">projects.Project, settings.RemoteProject · 35 + 21 Go files</td></tr>
+  <tr><td>dimensions / facets (repo, branch, model…)</td><td>workstreams</td><td><strong>dimensions</strong></td><td class="mono">Analysis.Workstreams, sidecar analysis/workstreams.py · 44 Go files</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>“workstream” means two things in Signal today:</strong> the group bucket and the allocation facets. The page copy already mixes in a third (“Open the workstream in Atlas” names a project, <span class="mono">app.js:1905</span>).</li>
+  <li><strong>So the facets are renamed too.</strong> Renaming project → workstream alone would leave “workstream” with two meanings still.</li>
+  <li>This page uses <strong>Atlas's words</strong> from here on.</li>
+</ul>
+
+<h3>The why</h3>
+<ul>
+  <li><strong>Problem:</strong> Signal decides one project per block across all groups. It runs one pooled race.</li>
+  <li><strong>What people see:</strong> two workstreams in different groups claim one repo. The Signal page says “Two projects claim this — pick one in Projects.” The block lands nowhere locally (<span class="mono">internal/agent/ui/app.js:586</span>).</li>
+  <li><strong>What Atlas already does:</strong> it keeps one value per group key, highest confidence first. It also runs the org's repo and workspace rules itself, per group (<span class="mono">atlas services/api/app/services/workstream_attribution.py:345-394, 449-479</span>).</li>
+  <li><strong>So Atlas's rule-based numbers are already right.</strong> Signal's page is wrong, and Signal's semantic pass under-reports groups.</li>
+  <li><strong>Hypothesis:</strong> if Signal decides per group, the page matches Atlas. Each group then gets its own winner, with no extra model work.</li>
+</ul>
+
+<h3>Goals</h3>
+<ul>
+  <li><strong>G1</strong> — A block lands in every workstream that matches it, in any group, on the page and on the wire.</li>
+  <li><strong>G2</strong> — Nothing is ever dropped for matching twice. “Pick one” goes away.</li>
+  <li><strong>G3</strong> — One group's strong match never hides another group's winner.</li>
+  <li><strong>G4</strong> — A group's total counts each block once. A workstream's total counts each of its blocks in full.</li>
+  <li><strong>G5</strong> — A single-group org gets the same on-device answer it gets today.</li>
+  <li><strong>G6</strong> — Signal's code, local contracts and page say group / workstream / dimension, as Atlas does.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<p>Binary, observable at a seam, each naming its own verification. These IDs are the contract the reviewer grades.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="ac-1"><td class="mono">AC-1</td><td>Two visible workstreams in <em>different</em> groups claim one repo. The rule pass attributes the block to both, method <span class="mono">repo</span>, with no conflict.</td><td><span class="mono">workstreams.Attribute</span> result</td><td class="mono">go test ./internal/agent/workstreams/ -run TestAttributePerGroup</td></tr>
+  <tr id="ac-2"><td class="mono">AC-2</td><td>Two workstreams in the <em>same</em> group match a block by rule. The block is attributed to both. The reason <span class="mono">conflict</span> is never produced.</td><td><span class="mono">workstreams.Attribute</span> result · ledger cell</td><td class="mono">go test ./internal/agent/workstreams/ -run TestSameGroupMatchesAreAllAssigned</td></tr>
+  <tr id="ac-3"><td class="mono">AC-3</td><td><span class="mono">POST /attribute</span> decides each group alone. It assigns every id with score ≥ <span class="mono">max(null, top_G − MARGIN)</span>, and nothing when <span class="mono">top_G</span> does not beat the null.</td><td>sidecar <span class="mono">/attribute</span> response</td><td class="mono">sidecar/app/test_attribution_scoring.py (new per-group cases)</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td>Group A scores 0.62, group B's top scores 0.51, null 0.45. Both A and B are assigned. Today B is cut by MARGIN.</td><td>sidecar <span class="mono">score_block</span></td><td class="mono">test_attribution_scoring.py::test_one_group_does_not_suppress_another</td></tr>
+  <tr id="ac-5"><td class="mono">AC-5</td><td>For a single-group org, <span class="mono">/attribute</span> returns the same ids and confidences as today on every eval fixture.</td><td>sidecar <span class="mono">/attribute</span> response</td><td class="mono">test_attribution_scoring.py::test_single_group_is_todays_decision</td></tr>
+  <tr id="ac-6"><td class="mono">AC-6</td><td>The Atlas-bound block row keeps its keys: <span class="mono">projects[{id,confidence,source}]</span>. Every assigned id is sent, sorted by confidence. <span class="mono">attribution.model_versions.decision</span> is <span class="mono">"per-group-margin-v1"</span>. <span class="mono">project_matches</span> is unchanged.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/publish/ -run TestBlockWireCarriesProjects · scripts/contract_test_atlas.sh with a regenerated golden</td></tr>
+  <tr id="ac-7"><td class="mono">AC-7</td><td>The ledger's <span class="mono">attributed</span> and <span class="mono">vector</span> cells carry a <span class="mono">workstreams</span> list, each entry naming <span class="mono">workstream_id</span> and <span class="mono">group</span>. A pre-change row reads back as a one-entry list.</td><td><span class="mono">GET /v1/ledger</span></td><td class="mono">go test ./internal/agent/ledger/ -run TestWorkstreamsCellAndLegacyRow</td></tr>
+  <tr id="ac-8"><td class="mono">AC-8</td><td>The Today view has a group switcher. Its workstream column lists every workstream the block holds in that group. The words “pick one” no longer appear.</td><td>local Signal page</td><td class="mono">manual: two-group fixture, browser at 1280px and 400px, screenshot both</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td>Block X ($5) is in A and B; block Y ($5) is in A; both in one group. The group shows $10, A $10, B $5. The page says workstream totals overlap.</td><td><span class="mono">GET /v1/workstreams</span> totals · Workstreams pane</td><td class="mono">go test ./internal/agent/workstreams/ -run TestRollupCountsGroupOnce · manual screenshot</td></tr>
+  <tr id="ac-10"><td class="mono">AC-10</td><td>The opt-in quality eval passes at its current floor under the per-group decision. Mean ids per block is reported next to 4.9.</td><td>eval output</td><td class="mono">KELD_ATTRIBUTION_EVAL=1 python app/test_attribution_quality.py · numbers recorded in whats-next-attribution.md</td></tr>
+  <tr id="ac-11"><td class="mono">AC-11</td><td>No Go, Python or JS identifier, local route or page string uses “project” for a workstream, or “workstream” for a group or a dimension. The only survivors are the names on the keep list below. <span class="mono">GroupKey</span> is the one group-key normaliser.</td><td>source + page</td><td class="mono">scripts/check_vocabulary.sh (new, run in CI) · allowlist = the keep list</td></tr>
+  <tr id="ac-12"><td class="mono">AC-12</td><td>An upgraded machine keeps its setup. The old <span class="mono">projects.json</span>, <span class="mono">workstreams_off</span> and <span class="mono">KELD_PROJECTS_FILE</span> are all read, and the page shows the same workstreams and groups as before.</td><td>daemon start on a pre-rename <span class="mono">~/.keld</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestUpgradeFromPreRenameHome (fixture copied from a real ~/.keld)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Delivery — two pull requests, one discovery</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>PR</th><th>What</th><th>Behaviour change</th><th>Graded by</th><th>Order</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>Rename: project → workstream, workstream → group, facets → dimensions. Stored-name migration.</td><td>none</td><td class="mono"><a href="#ac-11">AC-11</a>, <a href="#ac-12">AC-12</a></td><td>merges first</td></tr>
+  <tr><td class="mono">B</td><td>Per-group decision, overlap inside a group, group and workstream totals, page.</td><td>yes</td><td class="mono"><a href="#ac-1">AC-1</a> – <a href="#ac-10">AC-10</a></td><td>on top of A</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li>PR A's tests change names only. Any changed assertion is a finding.</li>
+  <li>PR A is cut from main now. Signal PR #41 is ignored; if it is revived later, it rebases onto the rename.</li>
+</ul>
+
+<h3>Explicit exclusions</h3>
+<ul>
+  <li>No Atlas change, and no dependency on Atlas work in flight. Atlas runs its own attribution; Signal sends what Signal decided.</li>
+  <li>Reading Atlas's upcoming <span class="mono">rules</span> field. It is not on Atlas main; see section 8 #9.</li>
+  <li>Totals come from the rule-based cell, as the Today table's column does today. The semantic cell stays a second opinion and feeds no total.</li>
+  <li>No new Atlas <span class="mono">group</span> key on the settings wire. Deferred, see section 8 #2.</li>
+  <li>No re-attribution of blocks already published. Jobs are deleted after publish; this is forward-only.</li>
+  <li>No per-group calibration of MARGIN or the null gate. That needs labelled multi-group blocks (section 8 #1).</li>
+  <li>No reconciling of the rule cell with the semantic cell. They stay two opinions, as today.</li>
+  <li>No rename of names Atlas owns or reads on the wire (<span class="mono">projects</span>, <span class="mono">project_matches</span>, <span class="mono">workstreams</span>). That needs Atlas; see the keep list.</li>
+  <li>No rewrite of past specs and plans. Only live docs change (AGENTS.md, docs/v3/contracts.md, attribution-smoke.md).</li>
+</ul>
+
+<h2 id="s2">2 · Proposed solution</h2>
+
+<h3>The model: overlap is allowed, the group counts once</h3>
+<p>One group, two blocks. Block X matches both Atlas Platform and Signal Client. Block Y matches only Atlas Platform.</p>
+<div class="wrap">
+<table>
+<thead><tr><th>Row</th><th>Blocks counted</th><th>Est. cost</th><th>How it is counted</th></tr></thead>
+<tbody>
+  <tr><td><strong>Products</strong> (group)</td><td class="mono">X, Y</td><td class="mono">$10</td><td>distinct blocks · each once</td></tr>
+  <tr><td>Atlas Platform</td><td class="mono">X, Y</td><td class="mono">$10</td><td>every block it holds, in full</td></tr>
+  <tr><td>Signal Client</td><td class="mono">X</td><td class="mono">$5</td><td>every block it holds, in full</td></tr>
+  <tr><td class="mono">Σ workstreams</td><td class="mono">—</td><td class="mono">$15</td><td>not a total · overlap is $5</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>The group answers “what did this area cost”.</strong> Each block once, so it never double counts.</li>
+  <li><strong>A workstream answers “how much work touched this”.</strong> Overlap is information, not an error.</li>
+  <li>The page labels it: “Workstreams can share blocks, so they add up to more than the group.”</li>
+  <li><strong>No conflicts to resolve, no precedence to learn, no order to maintain.</strong> That is what keeps Signal light.</li>
+</ul>
+
+<h3>Signal decides; Atlas does its own thing</h3>
+<ul>
+  <li><strong>Signal attributes on the device and sends its answer.</strong> Every assigned id goes up in <span class="mono">projects</span>, every rule match in <span class="mono">project_matches</span>.</li>
+  <li><strong>Atlas is not changed and not waited on.</strong> Today it keeps one workstream per group from that answer. Its open work (#246 → #265 → #266) runs its own rules server-side.</li>
+  <li>So Atlas and the Signal page can show different per-workstream numbers for a shared block. That is accepted.</li>
+</ul>
+
+<h3>Prior art — what this builds on</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Existing thing</th><th>Path</th><th>Role here</th></tr></thead>
+<tbody>
+  <tr><td>Group key from the group name</td><td class="mono">internal/agent/projects/attribute.go:501, 530</td><td><span class="pill p-reuse">reuse</span> already the group key</td></tr>
+  <tr><td>Atlas settings wire: <span class="mono">team</span> = group name</td><td class="mono">atlas …/workstream_attribution.py:482-511</td><td><span class="pill p-reuse">reuse</span> unchanged</td></tr>
+  <tr><td>Rule pass with conflict refusal (deleted)</td><td class="mono">internal/agent/projects/attribute.go:534-575</td><td><span class="pill p-extend">extend</span> run per group</td></tr>
+  <tr><td>Rule matches on the wire</td><td class="mono">internal/agent/daemon/projectmatches.go:49; projects/match.go:56</td><td><span class="pill p-reuse">reuse</span> already lists every match</td></tr>
+  <tr><td>Semantic decision (null + MARGIN)</td><td class="mono">sidecar/app/analysis/attribution.py:505-512</td><td><span class="pill p-extend">extend</span> cut per group</td></tr>
+  <tr><td>Centring offsets, keyed by doc text</td><td class="mono">sidecar/app/analysis/attribution.py:327-345</td><td><span class="pill p-reuse">reuse</span> doc text unchanged</td></tr>
+  <tr><td>Project post to sidecar</td><td class="mono">internal/agent/daemon/projects.go:197-217; enrich/sidecar/client.go:824</td><td><span class="pill p-extend">extend</span> add <span class="mono">group</span></td></tr>
+  <tr><td>Ledger cells + additive columns</td><td class="mono">internal/agent/ledger/store.go:61-71, 421</td><td><span class="pill p-extend">extend</span> two JSON columns</td></tr>
+  <tr><td><span class="mono">model_versions</span> open map</td><td class="mono">internal/agent/enrich/attribution.go:84-92</td><td><span class="pill p-reuse">reuse</span> new key, no schema bump</td></tr>
+  <tr><td>Atlas max-per-group collapse</td><td class="mono">atlas …/workstream_attribution.py:449-479</td><td><span class="pill p-reuse">reuse</span> the oracle for AC-5</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reuse ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
+<tbody>
+  <tr><td>Rename (step 1): project → workstream, workstream → group, facets → dimensions</td><td><span class="pill p-extend">generalize</span></td><td>Pure rename plus read-old/write-new for three stored names.</td></tr>
+  <tr><td><span class="mono">Attribute</span> loops groups; every match is assigned</td><td><span class="pill p-extend">extend</span></td><td>Same four-step order, run once per group bucket. The refusal is deleted.</td></tr>
+  <tr><td><span class="mono">score_block</span> cut computed per group</td><td><span class="pill p-extend">extend</span></td><td>Same scores, same MARGIN rule. Only its scope moves. Zero extra inference.</td></tr>
+  <tr><td><span class="mono">workstreams.Rollup</span> totals</td><td><span class="pill p-new">new</span></td><td>No per-workstream total exists today; <span class="mono">focusStats</span> sums the day, not a workstream.</td></tr>
+  <tr><td>Posted project gains <span class="mono">group</span></td><td><span class="pill p-extend">extend</span></td><td>The sidecar takes arbitrary dicts (main.py:1405). One field.</td></tr>
+  <tr><td>Ledger <span class="mono">groups</span> / <span class="mono">vector_groups</span> columns</td><td><span class="pill p-extend">extend</span></td><td>Additive <span class="mono">ALTER TABLE</span>, the store's existing migration idiom.</td></tr>
+  <tr><td>Page renders one line per group</td><td><span class="pill p-extend">extend</span></td><td>The block card and the Projects pane already group by workstream key.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>New patterns introduced:</strong> None. <span class="mono">check_vocabulary.sh</span> is a grep gate in the repo's existing <span class="mono">scripts/</span> + CI idiom.</li>
+  <li><strong>Shared-decision helper:</strong> the group key is <span class="mono">GroupKey</span> (today <span class="mono">projects.WorkstreamKey</span>), the one normaliser that exists. Go computes it and posts it. The sidecar never derives it.</li>
+</ul>
+
+<h3>The rename — what changes, what stays</h3>
+<p>Done as <strong>step 1, a behaviour-free commit</strong>, before any per-group logic. Tests must pass unchanged in meaning, so the rename cannot hide a behaviour change.</p>
+<div class="wrap">
+<table>
+<thead><tr><th>Surface</th><th>Today</th><th>After</th><th>Compatibility</th></tr></thead>
+<tbody>
+  <tr><td>Go package</td><td class="mono">internal/agent/projects</td><td class="mono">internal/agent/workstreams</td><td>none needed · one binary</td></tr>
+  <tr><td>Go types</td><td class="mono">Project · Workstream · Document{Workstreams,Projects}</td><td class="mono">Workstream · Group · Document{Groups,Workstreams}</td><td>none needed</td></tr>
+  <tr><td>Group key helper</td><td class="mono">WorkstreamKey · WorkstreamOffFunc</td><td class="mono">GroupKey · GroupOffFunc</td><td>none needed</td></tr>
+  <tr><td>Settings type</td><td class="mono">settings.RemoteProject</td><td class="mono">settings.RemoteWorkstream</td><td>json tags unchanged (Atlas wire)</td></tr>
+  <tr><td>Allocation facets</td><td class="mono">Analysis.Workstreams · WorkstreamsEligible · sidecar workstreams.py</td><td class="mono">Analysis.Dimensions · DimensionsEligible · sidecar dimensions.py</td><td>json/wire key <span class="mono">workstreams</span> kept</td></tr>
+  <tr><td>Local routes</td><td class="mono">/v1/projects/* · /v1/workstreams/{key}/off</td><td class="mono">/v1/workstreams/* · /v1/groups/{key}/off</td><td>none · page is embedded in the daemon (ui/embed.go)</td></tr>
+  <tr><td>On-disk document</td><td class="mono">state/projects.json {workstreams, projects}</td><td class="mono">state/workstreams.json {groups, workstreams}</td><td>read old if new absent; write new; keep old as <span class="mono">projects.json.pre-rename</span></td></tr>
+  <tr><td>Operator config</td><td class="mono">agent-config.json workstreams_off</td><td class="mono">groups_off</td><td>old key still read; new key wins</td></tr>
+  <tr><td>Env var</td><td class="mono">KELD_PROJECTS_FILE</td><td class="mono">KELD_WORKSTREAMS_FILE</td><td>old name still read, logs one deprecation line</td></tr>
+  <tr><td>Ledger JSON</td><td class="mono">project_id · vector_project_id columns</td><td class="mono">groups JSON with workstream_id</td><td>old columns kept and read (AC-7)</td></tr>
+  <tr><td>Page copy</td><td>“Projects” tab · “Workstreams on” · “New project”</td><td>“Workstreams” tab · “Groups on” · “New workstream”</td><td>—</td></tr>
+  <tr><td>Python internals</td><td class="mono">attribution.py _projects, project_vectors…</td><td class="mono">_workstreams, workstream_vectors…</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Keep list — names that stay, and why</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Name</th><th>Where</th><th>Why it stays</th></tr></thead>
+<tbody>
+  <tr><td class="mono">projects</td><td>Atlas settings wire; block row</td><td>Atlas writes and reads it. Renaming needs an Atlas release first.</td></tr>
+  <tr><td class="mono">projects_status · project_matches</td><td>block row</td><td>Atlas reads <span class="mono">project_matches</span> for matcher suggestions.</td></tr>
+  <tr><td class="mono">workstreams</td><td>block row facets; sidecar <span class="mono">/analyze</span>, <span class="mono">/blocks</span></td><td>Atlas reads it as <span class="mono">raw.workstreams</span>. The sidecar ships on its own cadence.</td></tr>
+  <tr><td class="mono">POST /projects · body key projects</td><td>sidecar route</td><td>Version skew: an old sidecar would 404 a renamed route and stop attribution.</td></tr>
+  <tr><td class="mono">project</td><td>allocation dimension (workspace basename)</td><td>Atlas matches workspace rules against it (<span class="mono">_MATCHER_RULES</span>).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each kept name gets a one-line comment at its definition: “Atlas wire name for a workstream”. <strong>The keep list is AC-11's allowlist</strong>, so it cannot grow silently.</p>
+
+<h3>Technical design</h3>
+<ul>
+  <li><strong>Group of a workstream:</strong> <span class="mono">Workstream.Group</span> (today <span class="mono">Project.Workstream</span>). Atlas values already get <span class="mono">GroupKey(team)</span>. Local workstreams use their local group. One with none joins an ungrouped bucket <span class="mono">""</span>.</li>
+  <li><strong>Rule pass (step 2):</strong> <span class="mono">Attribute</span> returns <span class="mono">Result{Groups map[string]GroupResult}</span>. Each group lists every workstream id that matched, with its method. The per-group refusal is deleted; no tie-break exists.</li>
+  <li><strong>Semantic pass (step 2):</strong> today's rule, run per group. <span class="mono">cut_G = max(null_sim, top_G − MARGIN)</span>; assign every id at or above it when <span class="mono">top_G &gt; null_sim</span>. The verifier halo is around <span class="mono">cut_G</span>.</li>
+  <li><strong>Totals (step 3):</strong> one Go helper, <span class="mono">workstreams.Rollup</span>, over the ledger's rule cells. Group = distinct blocks; workstream = its blocks in full. <span class="mono">GET /v1/workstreams</span> returns both for the current week, beside <span class="mono">coverage</span>.</li>
+  <li><strong>Sidecar input:</strong> each posted workstream carries <span class="mono">group</span>. Missing <span class="mono">group</span> falls back to <span class="mono">team</span>, verbatim. The posted list's hash changes once, so workstream documents re-embed once. Message vectors do not.</li>
+  <li><strong>Sidecar output:</strong> same shape. Sorted by confidence, fixing the order bug at <span class="mono">attrib.go:392</span>. The ledger keeps every id, not just index 0.</li>
+  <li><strong>Wire to Atlas:</strong> same keys. Every assigned id. A new <span class="mono">model_versions.decision</span> marks the rule.</li>
+  <li><strong>Ledger:</strong> the Go side maps each returned id to its group from the list it posted. An id missing from that list is recorded under <span class="mono">""</span>.</li>
+  <li><strong>Invariants respected:</strong> no text, span or offset crosses (the reflection allowlist is unchanged). Old sidecar gives the old pooled answer, no worse than today. Attribution stays off by default.</li>
+</ul>
+
+<h3>What Atlas receives — one block, two groups</h3>
+<p>Org: <span class="mono">Products</span> {Atlas Platform, Signal Client} and <span class="mono">Features</span> {Billing, Attribution}. Scores are illustrative, not measured.</p>
+<div class="wrap">
+<table>
+<thead><tr><th>Id</th><th>Group</th><th>Score</th><th>Today (pooled)</th><th>After (per group)</th></tr></thead>
+<tbody>
+  <tr><td class="mono">products:atlas_platform</td><td>Products</td><td class="mono">0.62</td><td>assigned (top)</td><td>assigned (Products cut 0.54)</td></tr>
+  <tr><td class="mono">features:billing</td><td>Features</td><td class="mono">0.51</td><td>cut: below 0.62 − 0.08</td><td><strong>assigned (Features cut 0.45)</strong></td></tr>
+  <tr><td class="mono">products:signal_client</td><td>Products</td><td class="mono">0.47</td><td>cut</td><td>below Products cut 0.54</td></tr>
+  <tr><td class="mono">features:attribution</td><td>Features</td><td class="mono">0.40</td><td>cut</td><td>below Features cut 0.45</td></tr>
+  <tr><td class="mono">__none__ (null)</td><td>—</td><td class="mono">0.45</td><td>gate</td><td>gate, per group</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="gherkin"><span class="cov">// POST /v1/signal/blocks — the attribution part of one block row, AFTER</span>
+{
+  "correlation": {"scheme": "block", "id": "7f3c…@2026-09-23T09:40:00Z"},
+  "projects": [
+    {"id": "products:atlas_platform", "confidence": 0.62, "source": "embedding"},
+    {"id": "features:billing",        "confidence": 0.51, "source": "embedding"}
+  ],
+  "projects_status": "attributed",
+  "attribution": {
+    "encoder_state": "warm", "verifier": "opted_out", "centred": true,
+    "model_versions": {"encoder": "qwen3-embedding-0.6b",
+                       "scoring": "block-mean-centred-perstream-v1",
+                       <span class="kw">"decision": "per-group-margin-v1"</span>}
+  },
+  "project_matches": [ <span class="cov">// unchanged: every rule match, all groups</span>
+    {"id": "features:billing",        "origin": "atlas", "repos": ["ncx-ai/keld-atlas"]},
+    {"id": "products:atlas_platform", "origin": "atlas", "repos": ["ncx-ai/keld-atlas"]}
+  ]
+}
+<span class="cov">// Atlas stores, unchanged code path (one value per group, its own rule):</span>
+"dimensions": { "products": {"value": "Atlas Platform", "status": "attributed", …},
+                "features": {"value": "Billing",        "status": "attributed", …} }
+<span class="cov">// Today the same block stores only "products". Billing never sees it.</span></pre>
+
+<h3>What the local ledger holds — the page's view</h3>
+<pre class="gherkin"><span class="cov">// GET /v1/ledger — attributed cell, TODAY (both claim ncx-ai/keld-atlas)</span>
+"attributed": {"status": "failed", "reason": "conflict",
+               "conflict": ["features:billing", "products:atlas_platform"]}
+
+<span class="cov">// AFTER — same config, now valid</span>
+"attributed": {"status": "ok", "at": "…", "workstreams": [
+  {"workstream_id": "products:atlas_platform", "group": "products", "method": "repo"},
+  {"workstream_id": "features:billing",        "group": "features", "method": "repo"}]}
+
+<span class="cov">// AFTER — two Products values match too. Both kept; no conflict.</span>
+"attributed": {"status": "ok", "at": "…", "workstreams": [
+  {"workstream_id": "products:atlas_platform", "group": "products", "method": "repo"},
+  {"workstream_id": "products:signal_client",  "group": "products", "method": "repo"},
+  {"workstream_id": "features:billing",        "group": "features", "method": "repo"}]}
+
+<span class="cov">// vector cell, AFTER</span>
+"vector": {"status": "ok", "workstreams": [
+  {"workstream_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
+  {"workstream_id": "features:billing",        "group": "features", "confidence": 0.51}]}</pre>
+<ul>
+  <li>Cell <span class="mono">status</span> is <span class="mono">ok</span> when the list is non-empty. Otherwise <span class="mono">failed</span>, reason <span class="mono">no_rule_matched</span>. A pre-change <span class="mono">conflict</span> row still reads back as it was.</li>
+  <li>A pre-change row has only <span class="mono">project_id</span>. It reads back as a one-entry list; <span class="mono">group</span> is <span class="mono">""</span> if the workstream is gone.</li>
+</ul>
+
+<h3>System diagram</h3>
+<figure>
+<svg viewBox="0 0 880 410" role="img" aria-label="Three lanes: Atlas, the daemon, and the sidecar. Atlas is unchanged. Its settings poll sends a flat projects list whose team field is the group name. In the daemon, that list becomes Workstream records, renamed from Project, whose group key is already derived from the team field. The rule pass, workstreams.Attribute, is changed to run once per group and writes a per-group attributed cell to the ledger. The attribution job is changed: it posts the list to the sidecar with a group field on each project, calls POST /attribute, records a per-group vector cell, and republishes the block row. The publish step is unchanged in shape and sends every assigned id to Atlas.s block ingest, which keeps one value per group. The rule pass, the ledger and the page also gain a per-group and per-workstream total, where a group counts each block once. In the sidecar, the project store is changed to hold the group, and the scoring decision is changed to cut per group against the null document; the centring offsets are unchanged. The local page, changed, reads the ledger and renders one line per group.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+  </defs>
+  <line x1="12" y1="104" x2="868" y2="104" class="lane"/>
+  <line x1="12" y1="300" x2="868" y2="300" class="lane"/>
+  <text x="20" y="16" class="lanelbl">ATLAS — NO CHANGE</text>
+  <text x="20" y="120" class="lanelbl">DAEMON (GO)</text>
+  <text x="20" y="316" class="lanelbl">SIDECAR (PYTHON)</text>
+
+  <rect x="20" y="28" width="180" height="52" rx="4" class="b-plain"/>
+  <text x="110" y="50" text-anchor="middle" class="txt">GET enrichment-settings</text>
+  <text x="110" y="68" text-anchor="middle" class="small">flat projects[] · team = group</text>
+  <rect x="680" y="28" width="180" height="52" rx="4" class="b-plain"/>
+  <text x="770" y="50" text-anchor="middle" class="txt">POST /v1/signal/blocks</text>
+  <text x="770" y="68" text-anchor="middle" class="small">keeps max id per group</text>
+
+  <rect x="262" y="36" width="16" height="12" rx="2" class="b-plain"/><text x="284" y="46" class="small">unchanged</text>
+  <rect x="362" y="36" width="16" height="12" rx="2" class="b-enc"/><text x="384" y="46" class="small">changed</text>
+  <rect x="452" y="36" width="16" height="12" rx="2" class="b-new"/><text x="474" y="46" class="small">new (none here)</text>
+
+  <rect x="20" y="130" width="180" height="56" rx="4" class="b-plain"/>
+  <text x="110" y="153" text-anchor="middle" class="txt">RemoteWorkstream → Workstream</text>
+  <text x="110" y="171" text-anchor="middle" class="small">.Group = GroupKey(team)</text>
+  <rect x="240" y="130" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="330" y="153" text-anchor="middle" class="txt">workstreams.Attribute</text>
+  <text x="330" y="171" text-anchor="middle" class="small">rules run per group</text>
+  <rect x="460" y="130" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="550" y="153" text-anchor="middle" class="txt">ledger.db</text>
+  <text x="550" y="171" text-anchor="middle" class="small">+ groups, vector_groups</text>
+  <rect x="680" y="130" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="770" y="153" text-anchor="middle" class="txt">Signal page</text>
+  <text x="770" y="171" text-anchor="middle" class="small">one line per group</text>
+  <rect x="240" y="214" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="330" y="237" text-anchor="middle" class="txt">attrib job</text>
+  <text x="330" y="255" text-anchor="middle" class="small">posts group · records per group</text>
+  <rect x="460" y="214" width="180" height="56" rx="4" class="b-plain"/>
+  <text x="550" y="237" text-anchor="middle" class="txt">publish.BlockEnrichment</text>
+  <text x="550" y="255" text-anchor="middle" class="small">same keys · every assigned id</text>
+
+  <rect x="240" y="330" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="330" y="353" text-anchor="middle" class="txt">POST /projects (name kept)</text>
+  <text x="330" y="371" text-anchor="middle" class="small">stores group per doc</text>
+  <rect x="460" y="330" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="550" y="353" text-anchor="middle" class="txt">score_block decision</text>
+  <text x="550" y="371" text-anchor="middle" class="small">top per group vs null</text>
+  <rect x="680" y="330" width="180" height="56" rx="4" class="b-plain"/>
+  <text x="770" y="353" text-anchor="middle" class="txt">Offsets (centring)</text>
+  <text x="770" y="371" text-anchor="middle" class="small">keyed by doc text</text>
+
+  <path d="M110 80V130" class="arr" marker-end="url(#ah)"/>
+  <text x="118" y="110" class="small">poll</text>
+  <path d="M200 158H240" class="arr" marker-end="url(#ah)"/>
+  <path d="M420 158H460" class="arr" marker-end="url(#ah)"/>
+  <text x="440" y="150" text-anchor="middle" class="small">cell</text>
+  <path d="M640 158H680" class="arr" marker-end="url(#ah)"/>
+  <text x="660" y="150" text-anchor="middle" class="small">read</text>
+  <path d="M110 186V242H240" class="arr" marker-end="url(#ah)"/>
+  <text x="118" y="232" class="small">same list</text>
+  <path d="M400 214V200H510V186" class="arr" marker-end="url(#ah)"/>
+  <text x="455" y="196" text-anchor="middle" class="small">vector cell</text>
+  <path d="M420 242H460" class="arr" marker-end="url(#ah)"/>
+  <path d="M640 242H660V54H680" class="arr" marker-end="url(#ah)"/>
+  <text x="652" y="98" text-anchor="end" class="small">block row</text>
+  <path d="M290 270V330" class="arr" marker-end="url(#ah)"/>
+  <text x="282" y="304" text-anchor="end" class="small">+group</text>
+  <path d="M390 270V296H550V330" class="arr" marker-start="url(#ah)" marker-end="url(#ah)"/>
+  <text x="470" y="290" text-anchor="middle" class="small">POST /attribute</text>
+  <path d="M640 358H680" class="arr" marker-end="url(#ah)"/>
+</svg>
+<figcaption><strong>Atlas's wire needs nothing new.</strong> Every changed box is on the device, and the Atlas-bound row keeps its keys. Atlas keeps collapsing to one per group; that is the stated divergence. The fix is where the decision is cut, not what is sent. Boxes show post-rename names.</figcaption>
+</figure>
+
+<h2 id="s3">3 · Alternatives considered</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>Keep the pooled sidecar. Go keeps the best id per group afterwards.</td><td>The pooled cut already dropped the other group's winner. A post-filter cannot recover it (AC-4).</td></tr>
+  <tr><td class="mono">B</td><td>Call <span class="mono">/attribute</span> once per group.</td><td>N calls, N concept passes and N job states per block. Same scores, so one call with a per-group cut gives the same answer.</td></tr>
+  <tr><td class="mono">C</td><td>Atlas sends groups as nested lists.</td><td>Needs an Atlas wire change. The flat list already carries the group in <span class="mono">team</span>.</td></tr>
+  <tr><td class="mono">D</td><td>Atlas adds its immutable group <span class="mono">key</span> to each project.</td><td>Deferred, not rejected. Switching key source would orphan today's <span class="mono">workstreams_off</span> entries, which hold the name-derived key.</td></tr>
+  <tr><td class="mono">E</td><td>Put <span class="mono">group</span> on each wire entry to Atlas.</td><td>Atlas resolves groups by id lookup. A device key in another format would be a second, disagreeing answer.</td></tr>
+  <tr><td class="mono">F</td><td>Do nothing.</td><td>The page tells people a valid setup is broken. Semantic attribution hides work from all groups but one.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Closest call:</strong> D. Atlas's own key is sturdier than a name. It loses only because group names are unique per org and a name-derived key already runs the page.</p>
+
+<h2 id="s4">4 · Behaviour &amp; test specification</h2>
+
+<h3>User flow — one block, one group at a time</h3>
+<figure>
+<svg viewBox="0 0 880 600" role="img" aria-label="A block closes. For each group its candidate workstreams fall into, Signal asks whether a repo or ticket rule matches inside that group. Exactly one match assigns that workstream with method repo or ticket. Two or more matches inside the same group are all assigned; overlap is allowed. No match moves to the semantic pass: if the encoder weights are absent, the job is held and retried later. If the pass runs and the group's top score beats the null document, every workstream within MARGIN of that top is assigned; if not, the group is honestly unattributed. Every assigned id goes into one block row; Signal totals it per group and per workstream, and Atlas keeps one value per group.">
+  <defs>
+    <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+    <marker id="f-ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+    <marker id="f-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+  </defs>
+  <rect x="320" y="16" width="240" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="43" text-anchor="middle" class="txt">Block closes</text>
+  <path d="M440 60V92" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="320" y="92" width="240" height="48" rx="4" class="b-enc"/>
+  <text x="440" y="112" text-anchor="middle" class="txt">For each group G</text>
+  <text x="440" y="129" text-anchor="middle" class="small">candidates bucketed by group key</text>
+  <path d="M440 140V172" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="320" y="172" width="240" height="48" rx="4" class="b-plain"/>
+  <text x="440" y="200" text-anchor="middle" class="txt">Repo / ticket rule matches in G?</text>
+
+  <path d="M320 196H200" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="260" y="188" text-anchor="middle" class="small">exactly 1</text>
+  <rect x="20" y="172" width="180" height="48" rx="4" class="b-good"/>
+  <text x="110" y="192" text-anchor="middle" class="txt">Assign it</text>
+  <text x="110" y="209" text-anchor="middle" class="small">method repo / ticket</text>
+
+  <path d="M560 196H680" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="620" y="188" text-anchor="middle" class="small">2+ in G</text>
+  <rect x="680" y="172" width="180" height="48" rx="4" class="b-good"/>
+  <text x="770" y="192" text-anchor="middle" class="txt">Assign every match</text>
+  <text x="770" y="209" text-anchor="middle" class="small">overlap allowed in G</text>
+  <path d="M860 196H872V520H560" class="arr-good" marker-end="url(#f-ah-good)"/>
+  
+
+  <path d="M440 220V256" class="arr" marker-end="url(#f-ah)"/>
+  <text x="450" y="242" class="small">none</text>
+  <rect x="320" y="256" width="240" height="48" rx="4" class="b-plain"/>
+  <text x="440" y="284" text-anchor="middle" class="txt">Semantic pass on, weights present?</text>
+  <path d="M560 280H680" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="620" y="272" text-anchor="middle" class="small">weights absent</text>
+  <rect x="680" y="256" width="180" height="48" rx="4" class="b-bad"/>
+  <text x="770" y="276" text-anchor="middle" class="txt">Hold job, retry later</text>
+  <text x="770" y="293" text-anchor="middle" class="small">degraded, as today</text>
+
+  <path d="M440 304V340" class="arr" marker-end="url(#f-ah)"/>
+  <text x="450" y="326" class="small">yes</text>
+  <rect x="320" y="340" width="240" height="48" rx="4" class="b-enc"/>
+  <text x="440" y="360" text-anchor="middle" class="txt">top_G &gt; null score?</text>
+  <text x="440" y="377" text-anchor="middle" class="small">only G's workstreams compete</text>
+  <path d="M560 364H680" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="620" y="356" text-anchor="middle" class="small">no</text>
+  <rect x="680" y="340" width="180" height="48" rx="4" class="b-bad"/>
+  <text x="770" y="360" text-anchor="middle" class="txt">G unattributed</text>
+  <text x="770" y="377" text-anchor="middle" class="small">honest blank, not a guess</text>
+
+  <path d="M440 388V424" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="450" y="410" class="small">yes</text>
+  <rect x="320" y="424" width="240" height="48" rx="4" class="b-good"/>
+  <text x="440" y="444" text-anchor="middle" class="txt">Assign all ≥ top_G − MARGIN</text>
+  <text x="440" y="461" text-anchor="middle" class="small">today's rule, per group</text>
+
+  <path d="M110 220V520H320" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <path d="M440 472V500" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="320" y="500" width="240" height="40" rx="4" class="b-plain"/>
+  <text x="440" y="525" text-anchor="middle" class="txt">Block row: every assigned id</text>
+  <path d="M440 540V556" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="320" y="556" width="240" height="36" rx="4" class="b-good"/>
+  <text x="440" y="579" text-anchor="middle" class="txt">Signal totals · Atlas keeps one/group</text>
+</svg>
+<figcaption><strong>Every group gets its own race, and a race can have several winners.</strong> A blank in one group never touches another. Rules still come first; the semantic pass fills only groups the rules left empty.</figcaption>
+</figure>
+
+<h3>Behavioural specs</h3>
+<pre class="gherkin"><span class="kw">Feature:</span> A block belongs to every workstream that matches it, in any group
+
+  <span class="cov"># Covers: AC-1, AC-8</span>
+  <span class="kw">Scenario:</span> Same repo claimed in two different groups
+    <span class="kw">Given</span> "Atlas Platform" in group Products claims repo ncx-ai/keld-atlas
+    <span class="kw">And</span>   "Billing" in group Features claims repo ncx-ai/keld-atlas
+    <span class="kw">When</span>  a block in ncx-ai/keld-atlas closes
+    <span class="kw">Then</span>  the ledger shows Products → Atlas Platform and Features → Billing
+    <span class="kw">And</span>   the page shows no "conflict · pick one"
+
+  <span class="cov"># Covers: AC-2, AC-8</span>
+  <span class="kw">Scenario:</span> Two workstreams in one group match the same block
+    <span class="kw">Given</span> "Atlas Platform" and "Signal Client" in Products both claim ncx-ai/keld-atlas
+    <span class="kw">When</span>  a block in ncx-ai/keld-atlas closes
+    <span class="kw">Then</span>  the block is in both, and no conflict is recorded
+
+  <span class="cov"># Covers: AC-9</span>
+  <span class="kw">Scenario:</span> A group counts a shared block once
+    <span class="kw">Given</span> block X ($5) is in Atlas Platform and Signal Client, block Y ($5) in Atlas Platform only
+    <span class="kw">When</span>  the Workstreams pane loads this week
+    <span class="kw">Then</span>  Products shows $10, Atlas Platform $10, Signal Client $5
+    <span class="kw">And</span>   the pane says workstream totals can overlap
+
+  <span class="cov"># Covers: AC-3, AC-4, AC-6</span>
+  <span class="kw">Scenario:</span> One group's strong match does not hide another group
+    <span class="kw">Given</span> semantic attribution is on and the encoder is warm
+    <span class="kw">And</span>   scores are Atlas Platform 0.62, Billing 0.51, null 0.45
+    <span class="kw">When</span>  the block is attributed
+    <span class="kw">Then</span>  projects[] holds exactly those two ids, highest first
+    <span class="kw">And</span>   model_versions.decision is "per-group-margin-v1"
+
+  <span class="cov"># Covers: AC-3</span>
+  <span class="kw">Scenario:</span> A group with nothing better than the null
+    <span class="kw">Given</span> Features' top value scores 0.41 and the null scores 0.45
+    <span class="kw">When</span>  the block is attributed
+    <span class="kw">Then</span>  no Features id is sent and Features stays unattributed
+
+  <span class="cov"># Covers: AC-5</span>
+  <span class="kw">Scenario:</span> A single-group org sees no change in Atlas
+    <span class="kw">Given</span> every project shares one group
+    <span class="kw">When</span>  the eval fixtures are decided both ways
+    <span class="kw">Then</span>  Atlas's max-per-group collapse yields the same value for every block
+
+  <span class="cov"># Covers: AC-7</span>
+  <span class="kw">Scenario:</span> A ledger row written before the upgrade
+    <span class="kw">Given</span> a row with project_id products:atlas_platform and no groups column value
+    <span class="kw">When</span>  GET /v1/ledger reads it
+    <span class="kw">Then</span>  the cell reads workstreams [{workstream_id: products:atlas_platform, group: products}]
+
+  <span class="cov"># Covers: AC-12</span>
+  <span class="kw">Scenario:</span> Upgrading a machine configured before the rename
+    <span class="kw">Given</span> ~/.keld holds projects.json, agent-config workstreams_off ["marketing"], KELD_PROJECTS_FILE set
+    <span class="kw">When</span>  the new daemon starts
+    <span class="kw">Then</span>  workstreams.json exists with the same groups and workstreams
+    <span class="kw">And</span>   group "marketing" is still off, and the file from KELD_PROJECTS_FILE is still read
+    <span class="kw">And</span>   projects.json.pre-rename is left beside it
+
+  <span class="cov"># Covers: AC-11</span>
+  <span class="kw">Scenario:</span> Someone reintroduces the old word
+    <span class="kw">Given</span> a new Go identifier named projectFor
+    <span class="kw">When</span>  CI runs scripts/check_vocabulary.sh
+    <span class="kw">Then</span>  it fails and names the file and line</pre>
+
+<h3>Decision table — one group G</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Rule matches in G</th><th>Semantic</th><th>top_G vs null</th><th>Expected for G</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>1</td><td>any</td><td>—</td><td>that id, method repo/ticket</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
+  <tr><td class="mono">2</td><td>2+</td><td>any</td><td>—</td><td>all of them · no conflict</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">3</td><td>0</td><td>off</td><td>—</td><td>no_rule_matched</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
+  <tr><td class="mono">4</td><td>0</td><td>warm</td><td>above</td><td>every id ≥ cut_G, source embedding</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">5</td><td>0</td><td>warm</td><td>at or below</td><td>nothing sent for G</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">6</td><td>0</td><td>weights absent</td><td>—</td><td>degraded, job held (unchanged)</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">7</td><td>0</td><td>warm</td><td>two ids within MARGIN of top</td><td>both assigned</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">9</td><td>Atlas's conjunctive <span class="mono">rules</span> field. Not on Atlas main today (<span class="mono">wire_projects</span> sends id/title/description/team/keywords). On Atlas's open branch it is additive and ignored by today's Signal. Whether Signal matches by those rules is a later, Signal-only choice; a proposal exists on Signal PR #41.</td><td>no</td><td>nothing now</td></tr>
+  <tr><td class="mono">11</td><td>Signal PR #41 is open and says “multi-workstream attribution needs no Signal change”. This discovery supersedes that. Ignored for now.</td><td>no</td><td>close later, or rebase onto PR A</td></tr>
+  <tr><td class="mono">10</td><td>Should the semantic cell ever feed totals? Today it is a second opinion only.</td><td>no</td><td>data from machines running both passes</td></tr>
+  <tr><td class="mono">8</td><td>0</td><td>old sidecar</td><td>—</td><td>pooled answer as today; no decision key</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5">5 · Integration, dependencies &amp; security surface</h2>
+
+<h3>System contacts</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>System</th><th>Direction</th><th>Change</th></tr></thead>
+<tbody>
+  <tr><td class="mono">GET /v1/enrichment-settings · projects</td><td>read</td><td>None. <span class="mono">team</span> is the group name; list order is group order.</td></tr>
+  <tr><td class="mono">POST /v1/signal/blocks · projects[]</td><td>write</td><td>Same keys. Every assigned id, sorted by confidence.</td></tr>
+  <tr><td class="mono">attribution.model_versions.decision</td><td>write</td><td>New key in an open map. Atlas stores it in <span class="mono">raw</span>, reads nothing.</td></tr>
+  <tr><td class="mono">project_matches</td><td>write</td><td>None. Already every match across groups.</td></tr>
+  <tr><td class="mono">sidecar POST /projects</td><td>internal</td><td>Each project gains <span class="mono">group</span>.</td></tr>
+  <tr><td class="mono">sidecar POST /attribute</td><td>internal</td><td>Same shape. Per-group MARGIN cut. Sorted.</td></tr>
+  <tr><td class="mono">~/.keld/state/ledger.db</td><td>both</td><td>Two additive TEXT columns, JSON.</td></tr>
+  <tr><td class="mono">GET /v1/ledger (local page)</td><td>read</td><td><span class="mono">attributed</span> / <span class="mono">vector</span> cells gain a <span class="mono">workstreams</span> list. <span class="mono">docs/v3/contracts.md</span> updated.</td></tr>
+  <tr><td class="mono">GET /v1/workstreams · totals</td><td>read</td><td>New: per-group and per-workstream totals for the week.</td></tr>
+  <tr><td class="mono">/v1/projects/* → /v1/workstreams/* · /v1/workstreams/{key}/off → /v1/groups/{key}/off</td><td>both</td><td>Renamed. The page ships inside the daemon binary, so there is no skew.</td></tr>
+  <tr><td class="mono">state/projects.json → state/workstreams.json</td><td>both</td><td>Migrated on first start; old file kept as a backup.</td></tr>
+  <tr><td class="mono">agent-config groups_off · KELD_WORKSTREAMS_FILE</td><td>read</td><td>New names. Old names still read.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Data privacy</h3>
+<ul>
+  <li><strong>New PII:</strong> None. A group key is a normalised name the org authored.</li>
+  <li><strong>Cross-boundary data:</strong> fewer ids than today, plus one version string. No text, span or offset.</li>
+  <li><strong>Auth surface:</strong> None. No new route.</li>
+</ul>
+
+<h2 id="s6">6 · Success metrics</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline today</th><th>Target</th><th>Where read</th></tr></thead>
+<tbody>
+  <tr><td>Blocks left unattributed by a <span class="mono">conflict</span></td><td class="mono">unknown for the org · 0 of 1,204 here</td><td class="mono">0, structurally</td><td>ledger.db query on an affected machine</td></tr>
+  <tr><td>Workstreams per block, multi-group org</td><td class="mono">unknown</td><td class="mono">reported, no target</td><td>Atlas <span class="mono">Block.dimensions</span></td></tr>
+  <tr><td>Semantic ids per block</td><td class="mono">4.9 (comment, unverified)</td><td class="mono">reported; no target until labelled data</td><td>AC-10 eval output</td></tr>
+  <tr><td>Semantic accuracy, labelled blocks</td><td class="mono">92% of 61</td><td class="mono">≥ current eval floor</td><td>AC-10 eval output</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s7">7 · Risks, observability &amp; rollback</h2>
+
+<h3>Risk evaluation</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Class</th><th>Mitigation</th></tr></thead>
+<tbody>
+  <tr><td>More ids per block: each group now applies MARGIN to its own top</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>AC-10 measures it. Semantic pass stays off by default. Calibration is gap #1.</td></tr>
+  <tr><td>Two group names normalise to one key, e.g. “Q3 Plan” and “q3 plan”</td><td><span class="pill p-l">L</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">Low</span></td><td>They share one race. Named in gap #2; Atlas's key would fix it.</td></tr>
+  <tr><td>Page reads a pre-change row wrong</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>AC-7 pins the legacy read.</td></tr>
+  <tr><td>Signal and Atlas show different workstream totals for shared blocks</td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Accepted. Stated on this page.</td></tr>
+  <tr><td>Someone sums workstream totals and double counts</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Only the group row is labelled a total; the overlap line is shown (AC-9).</td></tr>
+  <tr><td>Rename step hides a behaviour change</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">Med</span></td><td>Step 1 is rename-only; no test assertion may change except names.</td></tr>
+  <tr><td>Migration misses a stored name and a machine loses its setup</td><td><span class="pill p-m">M</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-h">High</span></td><td>AC-12 uses a copy of a real ~/.keld; the old file is never deleted.</td></tr>
+  <tr><td>Old sidecar with new daemon</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>It ignores <span class="mono">group</span> and answers pooled, as today. No decision key marks it.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Signal: <span class="mono">conflict</span> retired; every match inside a group is assigned</td><td>yes, revert</td><td>blocks matching 2+ workstreams, forward only</td><td>the page labels overlap</td></tr>
+  <tr><td>Semantic decision: pooled MARGIN → per-group top vs null</td><td>yes, code revert</td><td>machines with attribution on</td><td><span class="mono">model_versions.decision</span> marks every new row</td></tr>
+  <tr><td>Wire <span class="mono">projects[]</span>: cut per group, sorted</td><td>yes</td><td>Atlas <span class="mono">raw</span> readers</td><td>Atlas collapses per group anyway; single-group output unchanged (AC-5)</td></tr>
+  <tr><td>Ledger: two added columns</td><td>no — columns stay</td><td>local ledger.db</td><td>additive, defaults <span class="mono">''</span></td></tr>
+  <tr><td>Local <span class="mono">/v1/ledger</span> cell shape: <span class="mono">project_id</span> becomes a <span class="mono">workstreams</span> list</td><td>yes</td><td>the Signal page only</td><td>page ships in the same change</td></tr>
+  <tr><td>~780 Go identifier uses in 104 Go files, plus 74 Python and UI files (grep, 2026-09-23)</td><td>yes, revert</td><td>every open branch touching these files</td><td>step 1 lands alone, first; rebase note in the PR</td></tr>
+  <tr><td>Local routes renamed; <span class="mono">/v1/workstreams</span> changes meaning</td><td>yes</td><td>scripts or bookmarks calling the old routes</td><td>page is embedded; grep scripts/ for callers</td></tr>
+  <tr><td><span class="mono">projects.json</span> migrated to <span class="mono">workstreams.json</span></td><td>yes — backup kept</td><td>every machine, once</td><td>AC-12 on a real pre-rename fixture</td></tr>
+  <tr><td>Config key and env var renamed</td><td>yes</td><td>operator runbooks, MDM payloads</td><td>old names read indefinitely</td></tr>
+  <tr><td>Workstream post hash changes once</td><td>n/a</td><td>one re-embed of project docs</td><td>message vectors and offsets untouched</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Observability</h3>
+<ul>
+  <li><strong>Reused signals:</strong> the ledger cells, <span class="mono">model_versions</span>, and <span class="mono">attribution.job_quarantined</span>.</li>
+  <li><strong>New signals:</strong> None.</li>
+</ul>
+
+<h3>Rollback plan</h3>
+<ul>
+  <li><strong>Flag:</strong> none added. <span class="mono">KELD_ATTRIBUTION</span> already gates the semantic half.</li>
+  <li><strong>Steps:</strong> revert the commits. Rows written meanwhile keep their per-group ids; Atlas reads them the same way.</li>
+</ul>
+
+<h2 id="s8">8 · Open gaps &amp; technical debt</h2>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Unknown or debt</th><th>Blocks?</th><th>Needs</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Is “beats the null” enough per group, or does each group need a margin above it?</td><td>no</td><td>labelled multi-group blocks · the correction flywheel</td></tr>
+  <tr><td class="mono">2</td><td>Group identity comes from the name. A rename resets the key; normalised collisions merge races.</td><td>no</td><td>Atlas sends its immutable group <span class="mono">key</span> (option D) · later ticket, both repos</td></tr>
+  <tr><td class="mono">3</td><td>The error you saw was the Signal page's “pick one” copy. The overlap model removes the conflict that produced it.</td><td>no</td><td>nothing</td></tr>
+  <tr><td class="mono">4</td><td>Atlas web allows one group per workstream today (<span class="mono">MAX_GROUPS = 1</span>, create-workstream-drawer.tsx:16). Different workstreams can still share a matcher across groups.</td><td>no</td><td>nothing · Signal handles both</td></tr>
+  <tr><td class="mono">5</td><td>Stale comments name deleted constants: THRESHOLD in <span class="mono">enrich/attribution.go:31</span> and <span class="mono">attrib/attrib.go:789</span>.</td><td>no</td><td>fix while touching those files</td></tr>
+  <tr><td class="mono">6</td><td>Atlas contract golden is stale: schema 22, <span class="mono">source:"metadata"</span> (scripts/testdata/golden_block_with_projects.json).</td><td>no</td><td>regenerate in this change</td></tr>
+  <tr><td class="mono">7</td><td>Atlas's own wire still says <span class="mono">projects</span> for workstreams. Signal keeps that name on the wire.</td><td>no</td><td>nothing</td></tr>
+  <tr><td class="mono">8</td><td>When can Signal stop reading <span class="mono">projects.json</span>, <span class="mono">workstreams_off</span> and <span class="mono">KELD_PROJECTS_FILE</span>?</td><td>no</td><td>fleet version data · not before v4</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s9">9 · Review log</h2>
+<p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to
+match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
+<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+
+<section class="qa">
+<h2 id="objections">Objections</h2>
+<dl>
+  <dt>Atlas already puts the block in both groups. Why touch Signal?</dt>
+  <dd>True for repo and workspace rules: Atlas re-runs them per group itself. But the Signal page still says “pick one” for a valid setup. And the semantic pass cuts across groups before Atlas ever sees the ids.</dd>
+  <dt>Workstream totals add up to more than the group. Isn't that confusing?</dt>
+  <dd>It can be, so only the group row is called a total and the overlap is shown as its own line. The alternative is a precedence rule people must learn and maintain. Overlap is the honest answer when two workstreams both describe the work.</dd>
+  <dt>Why let Signal diverge from Atlas?</dt>
+  <dd>Signal has to stay light: no ordering, no tie-breaks, no conflict UI. It sends what it decided, and Atlas is free to read that however it attributes.</dd>
+  <dt>Won't blocks now collect many labels?</dt>
+  <dd>More than today, yes: each group applies MARGIN to its own top. Nothing bounds it but MARGIN and the null gate. AC-10 measures it, and the pass stays off by default until it does.</dd>
+  <dt>Why not send the group with each id?</dt>
+  <dd>It would help a human reading raw rows. But Atlas resolves groups by id, and our key is name-derived. Two keys in two formats would eventually disagree.</dd>
+  <dt>Why no schema bump?</dt>
+  <dd>No key or vocabulary changes; the list gets shorter. <span class="mono">model_versions</span> is an open map built for exactly this marker. A reader can tell old rows from new by <span class="mono">decision</span>.</dd>
+  <dt>What about blocks already in Atlas?</dt>
+  <dd>They keep their pooled answer. Jobs are deleted once published, so there is nothing to replay. Atlas already treats groups as forward-only.</dd>
+  <dt>Why rename in the same piece of work? It makes the diff huge.</dt>
+  <dd>It does: about 780 Go identifier uses in 104 files, plus 74 Python and UI files. But it lands as its own first commit with no behaviour change, so review stays two small questions. Doing the logic first would mean writing new code in the old words.</dd>
+  <dt>Why not rename the wire keys too?</dt>
+  <dd>Atlas reads them, and one sits behind a sidecar that updates on its own schedule. Renaming them is an Atlas-first change. Keeping them costs one comment per name.</dd>
+  <dt>Single-group orgs pay for this?</dt>
+  <dd>No. One group means one race, which is today's race exactly. AC-5 checks the sidecar's answer is unchanged.</dd>
+</dl>
+</section>
+
+</main>
