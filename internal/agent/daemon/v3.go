@@ -205,6 +205,7 @@ func (b ledgerBlocks) SinceWeekStart() ([]projects.BlockSummary, error) {
 			Dims:    dimsOfRecord(r),
 			Minutes: r.Minutes,
 			Tokens:  r.Tokens,
+			USD:     r.EstimateUSD,
 		})
 	}
 	return out, nil

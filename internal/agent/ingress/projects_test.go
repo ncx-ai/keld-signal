@@ -26,7 +26,7 @@ func attributedDim(v string) enrich.Labeled {
 func newTestStore(t *testing.T) *projects.Store {
 	t.Helper()
 	t.Setenv("KELD_HOME", t.TempDir())
-	return projects.NewStore(filepath.Join(t.TempDir(), "projects.json"))
+	return projects.NewStore(filepath.Join(t.TempDir(), projects.FileName))
 }
 
 func doRequest(t *testing.T, srv *httptest.Server, method, path, secret string, body any) *http.Response {
