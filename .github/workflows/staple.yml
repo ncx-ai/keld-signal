@@ -40,10 +40,14 @@ jobs:
   staple:
     name: staple pending notarization tickets
     runs-on: macos-14
+    outputs:
+      tag: ${{ steps.staple.outputs.tag }}
+      restapled: ${{ steps.staple.outputs.restapled }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Staple pending macOS installers
+        id: staple
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +64,7 @@ jobs:
           [ -n "$TAG" ] || TAG=$(gh release view --json tagName -q .tagName)
           [ -n "$TAG" ] || { echo "no published release to staple"; exit 0; }
           echo "target release: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
           # `--key` wants a PATH; the secret holds the key CONTENTS (same as build-pkg.sh).
@@ -107,6 +112,7 @@ jobs:
               Accepted)
                 xcrun stapler staple "$pkg"
                 gh release upload "$TAG" "$pkg" --clobber
+                echo "restapled=true" >> "$GITHUB_OUTPUT"
                 echo "✓ $name stapled and re-uploaded"
                 ;;
               Invalid | Rejected)
@@ -123,3 +129,14 @@ jobs:
             esac
           done
           exit $rc
+
+  # The re-uploaded pkg replaces the one dl.keld.co serves too. always(): a sweep that staples one
+  # pkg and fails another still exits 1, and the one it did staple must not be left behind.
+  publish:
+    needs: staple
+    if: always() && needs.staple.outputs.restapled == 'true'
+    uses: ./.github/workflows/publish-releases.yml
+    with:
+      tag: ${{ needs.staple.outputs.tag }}
+    permissions:
+      contents: read

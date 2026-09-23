@@ -1,0 +1,38 @@
+name: publish-scripts
+
+# Keeps scripts/install.{sh,ps1} on https://dl.keld.co in step with main — atlas serves them from
+# there (ncx-ai/infrastructure, pulumi/cloudflare/releases.py). Its own workflow, never a job in
+# publish-releases.yml: that one runs under tag refs, and the served scripts must come from main.
+#
+# The R2 key is in the `releases` environment, which admits main and v* tags only.
+on:
+  push:
+    branches: [main]
+    paths: ["scripts/install.sh", "scripts/install.ps1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    # A dispatch from any other branch would publish that branch's scripts to every installer.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: releases
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      R2_ENDPOINT: https://f0e85372ea223629d5b301d07fe5b71d.r2.cloudflarestorage.com
+      BUCKET: keld-signal-releases
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload install scripts
+        run: |
+          aws s3 cp scripts/install.sh "s3://${BUCKET}/scripts/install.sh" --endpoint-url "$R2_ENDPOINT" \
+            --content-type text/x-shellscript --cache-control no-cache
+          aws s3 cp scripts/install.ps1 "s3://${BUCKET}/scripts/install.ps1" --endpoint-url "$R2_ENDPOINT" \
+            --content-type text/plain --cache-control no-cache
