@@ -814,46 +814,46 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 
 // PROJECT ATTRIBUTION — which declared project a closed block belongs to,
 // decided on-device by the sidecar's own embedding/verifier matcher against
-// the org's declared settings.RemoteProject list (never by sending message
+// the org's declared settings.RemoteWorkstream list (never by sending message
 // text). See enrich/attribution.go for the wire shapes these two methods
 // exchange.
 
-// projectsReq is the whole of POST /projects: the org's declared project
-// list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
+// workstreamsReq is the whole of POST /projects: the org's declared project
+// list, unchanged from settings.RemoteWorkstream. Descriptions flow DOWN to the
 // device for the sidecar to embed; nothing here is derived from a prompt.
-type projectsReq struct {
-	Projects []settings.RemoteProject `json:"projects"`
+type workstreamsReq struct {
+	Workstreams []settings.RemoteWorkstream `json:"projects"`
 }
 
-// projectsResp is decoded but its fields are not read further than error
+// workstreamsResp is decoded but its fields are not read further than error
 // reporting: Count/Hash are the sidecar's own bookkeeping (how many projects
 // it now holds, and a fingerprint of the set), useful for a log line, not for
 // a caller decision.
-type projectsResp struct {
+type workstreamsResp struct {
 	Count int    `json:"count"`
 	Hash  string `json:"hash"`
 }
 
-// postProjectsCallTimeout bounds ONE /projects call the same way
+// postWorkstreamsCallTimeout bounds ONE /projects call the same way
 // attributeCallTimeout bounds one /attribute call — see that var's comment.
 // The daemon's caller (startup, and the settings poll loop) has no per-call
 // deadline of its own, so without a bound here an unreachable sidecar would
 // retry forever and could wedge the settings poll goroutine. A var, not a
 // const, so a test can shrink it.
-var postProjectsCallTimeout = 30 * time.Second
+var postWorkstreamsCallTimeout = 30 * time.Second
 
-// PostProjects tells the sidecar which projects are currently declared, so
+// PostWorkstreams tells the sidecar which projects are currently declared, so
 // /attribute has something to match a block against. The daemon calls this
 // once at startup (after resolving KELD_PROJECTS_FILE / the remote settings
 // key) and again whenever the resolved list changes on a later settings poll
 // — never per block, since the declared set does not change per block.
-func (c *Client) PostProjects(projects []settings.RemoteProject) error {
+func (c *Client) PostWorkstreams(workstreams []settings.RemoteWorkstream) error {
 	cp := *c
-	ctx, cancel := context.WithTimeout(c.ctx, postProjectsCallTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, postWorkstreamsCallTimeout)
 	defer cancel()
 	cp.ctx = ctx
-	var r projectsResp
-	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
+	var r workstreamsResp
+	if !cp.post("/projects", workstreamsReq{Workstreams: workstreams}, &r) {
 		return fmt.Errorf("sidecar: POST /projects failed")
 	}
 	return nil
@@ -874,14 +874,14 @@ type attributeReq struct {
 // AttributeResult is the Go-side view of POST /attribute's response.
 //
 // Status is one of the closed vocabulary in enrich/attribution.go
-// (ProjectsAttributed, ProjectsPending, ProjectsSkippedDisabled,
-// ProjectsSkippedNoProjects, ProjectsDegradedWeights). Projects/Attribution
+// (WorkstreamsAttributed, WorkstreamsPending, WorkstreamsSkippedDisabled,
+// WorkstreamsSkippedNone, WorkstreamsDegradedWeights). Projects/Attribution
 // are populated only when Status is a terminal answer that named something —
 // an empty Projects with a terminal Status is a real "no project matched",
 // not an absence.
 type AttributeResult struct {
-	Status   string                      `json:"status"`
-	Projects []enrich.ProjectAttribution `json:"projects"`
+	Status      string                         `json:"status"`
+	Workstreams []enrich.WorkstreamAttribution `json:"projects"`
 	// Concepts is what the block was ABOUT — phrases lifted from its own words
 	// and ranked by the same encoder the attribution ran on (sidecar
 	// `analysis/concepts.py`). It rides THIS response rather than the block

@@ -40,7 +40,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 		CacheCreationTokens: 86736, RequestTokens: 41000, Requests: 12,
 		Model: "claude-opus-4-8", EstimateUSD: 1.84,
 	}, ok)
-	s.Attribute(k1, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, ok)
+	s.Attribute(k1, Attributed{WorkstreamID: "p_keld_signal", Method: MethodRepo}, ReasonNone, ok)
 	s.Sent(k1, ok)
 	s.Received(k1, 200, ok)
 
@@ -66,7 +66,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	kAttack := BlockKey{Session: attack, Start: 999000}
 	s.Cut(kAttack, 999060, "idle", "budget", attack, ok)
 	s.Measure(kAttack, Measured{Model: attack, Requests: 1}, ok)
-	s.Attribute(kAttack, Attributed{ProjectID: attack}, ReasonNone, ok)
+	s.Attribute(kAttack, Attributed{WorkstreamID: attack}, ReasonNone, ok)
 
 	// Block 4 (adversarial, VALID session): the same attack string in
 	// source/model/project_id only. The block DOES get written (its session
@@ -75,7 +75,7 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	k4 := BlockKey{Session: "s-attacked-fields", Start: 999500}
 	s.Cut(k4, 999560, "idle", "budget", attack, ok)
 	s.Measure(k4, Measured{Model: attack, Requests: 1}, ok)
-	s.Attribute(k4, Attributed{ProjectID: attack}, ReasonNone, ok)
+	s.Attribute(k4, Attributed{WorkstreamID: attack}, ReasonNone, ok)
 
 	snap, err := s.Read(time.Time{}, 100)
 	if err != nil {
@@ -243,7 +243,7 @@ func walkNoFreeText(t *testing.T, key string, v any) {
 				t.Errorf("field %q does not match the model identifier shape: %q", key, vv)
 			}
 		case "project_id", "conflict":
-			if vv != "" && !projectIDShape.MatchString(vv) {
+			if vv != "" && !workstreamIDShape.MatchString(vv) {
 				t.Errorf("field %q does not match the project id shape: %q", key, vv)
 			}
 		case "detail":

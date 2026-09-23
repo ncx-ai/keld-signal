@@ -161,7 +161,7 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// dimensions, so it opens no channel that was not already open. What it
 		// deliberately does NOT carry is a local project's title or its id (the
 		// id is derived from the title, so sending it would send the title in a
-		// thin disguise), and TestT14ProjectMatchesCarryNoLocalIdentity pins that.
+		// thin disguise), and TestT14WorkstreamMatchesCarryNoLocalIdentity pins that.
 		"project_matches": true,
 		"prior":           true,
 		"pipeline_status": true, "extractor_versions": true, "schema_version": true, "ts": true,

@@ -194,7 +194,7 @@ var (
 	// simply never caught up. It stays a SHAPE check rather than becoming a
 	// pass-through, because the ledger is deliberately strict about anything
 	// that could carry text out of a transcript — see the comment above.
-	projectIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	workstreamIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 )
 
 // validSources is closed rather than shape-matched: every real source is a
@@ -256,8 +256,8 @@ func validModelID(s string) string {
 	return ""
 }
 
-func validProjectID(s string) string {
-	if s != "" && projectIDShape.MatchString(s) {
+func validWorkstreamID(s string) string {
+	if s != "" && workstreamIDShape.MatchString(s) {
 		return s
 	}
 	return ""
@@ -653,16 +653,16 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	// own project list. A silent clamp is exactly why the missing colon above
 	// went unnoticed for days while the page said "no project" — the write
 	// succeeded, the row looked ordinary, and nothing anywhere disagreed.
-	rawProject := a.ProjectID
-	a.ProjectID = validProjectID(a.ProjectID)
-	if rawProject != "" && a.ProjectID == "" {
+	rawWorkstream := a.WorkstreamID
+	a.WorkstreamID = validWorkstreamID(a.WorkstreamID)
+	if rawWorkstream != "" && a.WorkstreamID == "" {
 		s.logFailure("Attribute", fmt.Errorf(
-			"project id refused by shape (%d chars); the attribution was computed and could not be stored", len(rawProject)))
+			"project id refused by shape (%d chars); the attribution was computed and could not be stored", len(rawWorkstream)))
 	}
 	a.Method = validMethod(a.Method)
 	var conflict []string
 	for _, c := range a.Conflict {
-		valid := validProjectID(c)
+		valid := validWorkstreamID(c)
 		if valid == "" {
 			// Same reasoning one level down: a conflict a person cannot act on
 			// because its ids were dropped is the defect this file already
@@ -684,7 +684,7 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	// Six rows on a real machine were in this state. Refusing the write turns
 	// the next occurrence into a visible failure instead of a quiet "no
 	// project", and it is why this is an invariant rather than a comment.
-	if status == StatusOK && a.ProjectID == "" {
+	if status == StatusOK && a.WorkstreamID == "" {
 		s.logFailure("Attribute", fmt.Errorf(
 			"refusing to record an attribution with no project id and no reason; the id was lost before storage"))
 		return
@@ -699,7 +699,7 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 		case status == StatusOK:
 			if _, err := txn.Exec(
 				`UPDATE blocks SET project_id=?, method=?, conflict='' WHERE session=? AND start=?`,
-				a.ProjectID, string(a.Method), k.Session, k.Start,
+				a.WorkstreamID, string(a.Method), k.Session, k.Start,
 			); err != nil {
 				return err
 			}
@@ -758,11 +758,11 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 	// Reported, not silently clamped — Attribute's own reasoning one method up:
 	// this id was computed from the daemon's project list microseconds earlier,
 	// so a shape failure is a wiring defect, not junk from a transcript.
-	rawProject := a.ProjectID
-	a.ProjectID = validProjectID(a.ProjectID)
-	if rawProject != "" && a.ProjectID == "" {
+	rawWorkstream := a.WorkstreamID
+	a.WorkstreamID = validWorkstreamID(a.WorkstreamID)
+	if rawWorkstream != "" && a.WorkstreamID == "" {
 		s.logFailure("Vector", fmt.Errorf(
-			"vector project id refused by shape (%d chars); the second opinion was computed and could not be stored", len(rawProject)))
+			"vector project id refused by shape (%d chars); the second opinion was computed and could not be stored", len(rawWorkstream)))
 	}
 	// ⚠️ **A SECOND OPINION THAT NAMED NOTHING IS NOT A SECOND OPINION**, and
 	// the same invariant Attribute enforces applies here for the same reason: a
@@ -770,7 +770,7 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 	// naming none, which is worse than the honest absence. The sidecar answers
 	// `attributed` only with at least one project, so reaching this means the
 	// id was lost between deciding and storing.
-	if status == StatusOK && a.ProjectID == "" {
+	if status == StatusOK && a.WorkstreamID == "" {
 		s.logFailure("Vector", fmt.Errorf(
 			"refusing to record a vector attribution with no project id; the id was lost before storage"))
 		return
@@ -799,7 +799,7 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 		if status == StatusOK {
 			if _, err := txn.Exec(
 				`UPDATE blocks SET vector_project_id=?, vector_confidence=? WHERE session=? AND start=?`,
-				a.ProjectID, conf, k.Session, k.Start,
+				a.WorkstreamID, conf, k.Session, k.Start,
 			); err != nil {
 				return err
 			}
@@ -998,10 +998,10 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 
 			attrStatus, attrAt, attrReason, attrOkAt sql.NullString
 			attrHTTP                                 sql.NullInt64
-			projectID, method, conflict              string
+			workstreamID, method, conflict           string
 
 			vecStatus, vecAt, vecReason, vecOkAt sql.NullString
-			vecProjectID                         string
+			vecWorkstreamID                      string
 			vecConfidence                        float64
 
 			sentStatus, sentAt, sentReason, sentOkAt sql.NullString
@@ -1016,8 +1016,8 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 			&measStatus, &measAt, &measReason, &measHTTP, &measOkAt,
 			&inputT, &outputT, &cacheReadT, &cacheCreateT, &requestT, &requests, &model, &estimateUSD,
 			&attrStatus, &attrAt, &attrReason, &attrHTTP, &attrOkAt,
-			&projectID, &method, &conflict,
-			&vecStatus, &vecAt, &vecReason, &vecOkAt, &vecProjectID, &vecConfidence,
+			&workstreamID, &method, &conflict,
+			&vecStatus, &vecAt, &vecReason, &vecOkAt, &vecWorkstreamID, &vecConfidence,
 			&sentStatus, &sentAt, &sentReason, &sentHTTP, &sentOkAt,
 			&recvStatus, &recvAt, &recvReason, &recvHTTP, &recvOkAt,
 		); err != nil {
@@ -1053,7 +1053,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		if cell := buildCell(attrStatus, attrAt, attrReason, attrHTTP, attrOkAt); cell != nil {
 			switch {
 			case attrStatus.String == string(StatusOK):
-				cell["project_id"] = projectID
+				cell["project_id"] = workstreamID
 				cell["method"] = method
 			case attrReason.String == string(ReasonConflict) && conflict != "":
 				cell["conflict"] = strings.Split(conflict, ",")
@@ -1071,8 +1071,8 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		// confidence. Never-asked and asked-and-failed are different facts and
 		// this is where that distinction is actually made.
 		if cell := buildCell(vecStatus, vecAt, vecReason, sql.NullInt64{}, vecOkAt); cell != nil {
-			if vecProjectID != "" {
-				cell["project_id"] = vecProjectID
+			if vecWorkstreamID != "" {
+				cell["project_id"] = vecWorkstreamID
 				cell["confidence"] = vecConfidence
 			}
 			// ⚠️ **NO `agrees` FLAG, AND THE ABSENCE IS DELIBERATE TWICE

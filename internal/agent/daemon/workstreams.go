@@ -1,213 +1,293 @@
 package daemon
 
 import (
-	"time"
+	"encoding/json"
+	"log"
+	"os"
+	"sync"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
-	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
-	"github.com/ncx-ai/keld-signal/internal/agent/features"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
-// windowAnalyzer is the OPTIONAL capability a backend advertises when it can
-// characterise the window of work around a prompt (the sidecar's /analyze:
-// deterministic, no inference, coordinates in — never text). It is declared as
-// an interface rather than a *sidecar.Client assertion so tests can wire a fake
-// without a live sidecar, mirroring how enrich treats ContextModel/MultiLabelModel.
-type windowAnalyzer interface {
-	AnalyzeLabeled(path, promptID string, spanMinutes int,
-		resolved enrich.ResolvedFacts) (enrich.WindowAnalysis, bool)
-}
-
-// piiDetector is the same kind of optional capability for the sidecar's /pii:
-// presidio patterns, no GLiNER2, off the inference single-flight. The
-// sensitivity facet detects with it.
+// workstreamsResolution is resolveWorkstreams's answer: the resolved list PLUS
+// whether the resolution itself is TRUSTWORTHY.
 //
-// Declared with the REGION-TAKING form. Which country tiers of checksum
-// recognizers run is org policy (settings.Settings.PIIRegions), and it rides
-// each request rather than the sidecar's startup environment, so a capability
-// that could not carry it would silently pin every deployment to the sidecar's
-// own default.
-type piiDetector interface {
-	DetectPIIIn(text string, regions []string) (enrich.PIIResult, bool)
+// ⚠️ ROUND 3 FIX (Finding 1): a bare []RemoteWorkstream collapses two different
+// facts into one nil — "the file/remote key genuinely declares zero
+// projects" and "I could not tell, because KELD_PROJECTS_FILE could not be
+// read" — and only the first of those may ever reach a PostWorkstreams call.
+// Before this type existed, a TRANSIENT failure to read the env file at poll
+// time (a momentary permission glitch, the file mid-rewrite, a flaky mount —
+// anything that clears on the next poll) resolved to nil exactly like an
+// honest "nothing declared", and posting that nil over a sidecar that
+// already held a real list produced the identical permanent-mis-attribution
+// outcome NB1 fixed on the startup side: the sidecar ends up with no
+// projects, every /attribute answers skipped:no_projects, and the
+// attributor's own (correct) switch treats that as TERMINAL — publish and
+// delete. A read error must instead leave whatever the daemon already
+// believes in place.
+type workstreamsResolution struct {
+	list []settings.RemoteWorkstream
+	// ok is false ONLY when the source that would have answered
+	// authoritatively (KELD_PROJECTS_FILE, when the env var is set) could not
+	// be read. It is true for every other case, including "nothing is
+	// declared anywhere" — that is an honest, actionable "empty" the daemon
+	// may safely act on (though see the empty-skip guard in
+	// postWorkstreamsIfKnownNonEmpty for why even a trustworthy empty is never
+	// itself POSTed).
+	ok bool
 }
 
-// windowTickerCap is the capability behind the tick (the sidecar's /tick): "which
-// slices of this transcript has no prompt's look-back reached, and what were
-// they". Same shape as the two above — a service route, no inference, works with
-// GLiNER2 absent — so it is resolved the same way and travels in serviceFacets.
-type windowTickerCap interface {
-	TickCharacterised(path, source, sessionID string, promptIDs []string, cursor *float64,
-		now time.Time, spanMinutes float64, maxWindows int,
-		resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool)
-}
-
-// blockDigesterCap is the capability behind THE V2 BLOCK PATH (the sidecar's
-// POST /blocks): "which CLOSED blocks of work does this transcript have, and
-// what was each one". Same shape as the three around it — a service route, no
-// inference, works with GLiNER2 absent — so it is resolved the same way and
-// travels in serviceFacets.
+// resolveWorkstreams is the daemon's project-definition precedence:
+// KELD_PROJECTS_FILE wins if set (the mock path for tests/smoke, reproducible
+// regardless of org state), else the remote settings doc's `projects` key,
+// else none. remote may be nil (startup, before the first settings poll
+// lands) — that is exactly "not known yet", the same reading a nil
+// Remote.Projects gets once polling has started.
 //
-// It is declared here, beside windowTickerCap, and is emphatically not built on
-// it: the tick patches the holes a prompt-anchored window leaves, and a block
-// path has no holes to patch. The two are wired independently so v2 can be
-// promoted, or deleted, without unpicking v1.
-type blockDigesterCap interface {
-	BlocksCharacterised(path, source, sessionID string,
-		since *float64, now time.Time, maxBlocks int,
-		resolved enrich.ResolvedFacts) enrich.BlocksAnswer
-}
-
-// attributionClient is the capability behind THE PROJECT ATTRIBUTION PATH's
-// sidecar calls (POST /attribute, POST /projects). Declared here in the exact
-// shape attrib.AttributeClient wants and *sidecar.Client provides, so
-// facetsFor resolves it the same way it resolves the three service routes
-// above — a structural check against the client, not a type assertion on the
-// Model (which is nil under ml_backend "deterministic").
-type attributionClient interface {
-	Attribute(path, sessionID string, start, end float64, dims map[string]string) (sidecar.AttributeResult, bool)
-}
-
-// projectsPoster is the capability behind POST /projects — telling the
-// sidecar which projects are currently declared. Separate from
-// attributionClient because it is called by the daemon directly (at startup
-// and on a settings-poll change), never by the attribution loop itself.
-type projectsPoster interface {
-	PostProjects(projects []settings.RemoteProject) error
-}
-
-// transcriptIngester is the capability behind the watcher's ingest signal (the
-// sidecar's /ingest): "this transcript advanced, bring the reference series up to
-// date". Coordinates only, no inference, and no answer anyone waits for — see
-// sidecar.Client.SignalIngest on why it is one attempt and never a retry.
-//
-// It belongs with the other two rather than on the Model for the same reason
-// they do: it is a service route, it must work with GLiNER2 absent, and it is the
-// producer side of the very store /analyze reads.
-type transcriptIngester interface {
-	SignalIngest(path string, resolved enrich.ResolvedFacts) bool
-}
-
-// serviceFacets are the enrichment capabilities that belong to the analysis
-// SERVICE rather than to the Model. Both are non-inference routes on the same
-// sidecar, both must work with GLiNER2 absent entirely, and both are therefore
-// wired in ml_backend "deterministic" as well as "auto" — where the Model is
-// nil and rederiving them from it would silently drop them.
-//
-// They travel as one value so the next non-model route does not add another
-// parameter to Worker, process and wireEnrichment. A zero value is the honest
-// "this run has no analysis service": the workstreams pass then never
-// registers, and sensitivity reports itself degraded (see
-// enrich.WithPIIScanner).
-type serviceFacets struct {
-	Analyze enrich.DimensionAnalyzer
-	ScanPII enrich.PIIScanner
-	// SignalIngest is not consumed by a job at all — it is handed to the
-	// transcript watcher (see ingestSignalHook), which is what makes /analyze's
-	// answer cheap. It travels here because it is the same service, resolved from
-	// the same client, in both ml_backend modes that have one.
-	SignalIngest func(path string, resolved enrich.ResolvedFacts) bool
-	// Tick is not consumed by a job either — it is driven by the daemon's own
-	// timer (see tick.go), which is what lets it characterise a burst of
-	// autonomous work AFTER the machine has gone quiet. Nil when the service
-	// cannot provide it, which switches the ticker off rather than degrading it.
-	Tick windowTicker
-	// Blocks is THE V2 PATH's producer, and like Tick it is consumed by no job:
-	// it is driven by the block emitter's own timer off the watcher's advance
-	// signal (see blocks.go). Nil when the service cannot provide it, which
-	// switches the emitter off rather than degrading it.
-	Blocks blocks.Digester
-	// Features is THE SIGNAL-EMBEDDINGS PATH's producer, and like Tick and
-	// Blocks it is consumed by no job: it is driven by the feature emitter's own
-	// timer off the watcher's advance signal (see features.go).
-	//
-	// ⚠️ IT IS SET BY deterministicBackend ALONE, never by facetsFor, and that
-	// asymmetry is the scope decision rather than an oversight. facetsFor runs
-	// in both ml_backend modes that have a service; this path is scoped to
-	// "deterministic", where it must be ABSENT under "auto" — never registered,
-	// so it appears in neither facets_skipped nor extractor_versions. See
-	// featureSourceFor.
-	Features features.Source
-	// Attribution is THE PROJECT ATTRIBUTION PATH's client capability (POST
-	// /attribute), consumed by no job either: it is driven by the attributor's
-	// own timer off the block emitter's OnPublished hook (see daemon/attrib.go).
-	// Nil when the service cannot provide it, which switches the attribution
-	// loop off rather than degrading it — the same rule Blocks/Tick follow.
-	Attribution attrib.AttributeClient
-	// PostProjects tells the sidecar which projects are currently declared
-	// (POST /projects). Consumed by the daemon directly at startup and on a
-	// settings-poll change, never per job or per block.
-	PostProjects func(projects []settings.RemoteProject) error
-	// AwaitSidecarStop blocks (bounded) until the supervisor has finished
-	// stopping the sidecar and reaping its process group. It is consumed by no
-	// job at all — Run calls it once, after serve() returns, so the daemon does
-	// not exit out from under its own kill path. Nil whenever there is no
-	// supervised sidecar this run (no binary, no port, a test double), which is
-	// exactly when there is nothing to wait for.
-	AwaitSidecarStop func()
-	// OnSidecarRespawn registers a callback the supervisor fires each time a
-	// RESTARTED sidecar becomes healthy. Nil whenever there is no supervised
-	// sidecar this run (no binary, no port, a test double).
-	//
-	// ⚠️ IT EXISTS FOR STATE THE DAEMON PUSHES DOWN ONCE. A restart wipes the
-	// sidecar parent's module state, and the daemon's own record of having
-	// pushed survives it — so a pusher gated on "has anything changed?" never
-	// speaks again. The concrete case is PostProjects: after a respawn every
-	// /attribute answered `skipped:no_projects` until the DAEMON restarted.
-	// Anything else pushed down out-of-band (rather than riding each request,
-	// the way PIIRegions does) belongs on this hook too.
-	OnSidecarRespawn func(func())
-}
-
-// facetsFor returns the service facets of the client it is handed, leaving any
-// the client cannot provide nil — a test/eval double, or the nil Model left
-// behind when no analysis service could be started this run (no sidecar binary,
-// or its port could not be allocated).
-//
-// It is deliberately NOT "the Model's facets": ml_backend "deterministic" runs
-// the analysis service with no Model at all, and derives these from the service
-// client here just as "auto" derives them from the sidecar Model. That is why
-// wireEnrichment returns them as their own value and threads them to process,
-// rather than letting process rederive them from the Model (which would be nil,
-// and would silently drop every workstream and every PII finding).
-//
-// The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
-// *sidecar.Client copies, so the capabilities survive them and the requests are
-// bound to the job context like every other sidecar call.
-// `regions` is resolved PER CALL, not captured once. wireEnrichment runs at
-// startup and the first settings poll lands after it, so binding the region list
-// at wiring time would ignore the org until the daemon restarted — the one thing
-// the local-then-remote shaping exists to avoid. A nil provider (tests, the eval
-// harness) sends no opinion and lets the sidecar apply its own default.
-func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
-	var f serviceFacets
-	if a, ok := m.(windowAnalyzer); ok {
-		f.Analyze = a.AnalyzeLabeled
-	}
-	if p, ok := m.(piiDetector); ok {
-		f.ScanPII = func(text string) (enrich.PIIResult, bool) {
-			if regions == nil {
-				return p.DetectPIIIn(text, nil)
-			}
-			return p.DetectPIIIn(text, regions())
+// A KELD_PROJECTS_FILE that fails to load returns ok=false — see
+// workstreamsResolution's doc comment for why that must NOT collapse into the
+// same answer as "the file says there are no projects".
+func resolveWorkstreams(remote *settings.Remote) workstreamsResolution {
+	if p := os.Getenv(settings.EnvWorkstreamsFile); p != "" {
+		list, err := settings.LoadWorkstreamsFile(p)
+		if err != nil {
+			log.Printf("keld-agent: %s=%s could not be read: %v — leaving the previously known project list in place",
+				settings.EnvWorkstreamsFile, p, err)
+			return workstreamsResolution{ok: false}
 		}
+		return workstreamsResolution{list: list, ok: true}
 	}
-	if in, ok := m.(transcriptIngester); ok {
-		f.SignalIngest = in.SignalIngest
+	if remote != nil && remote.Workstreams != nil {
+		return workstreamsResolution{list: *remote.Workstreams, ok: true}
 	}
-	if t, ok := m.(windowTickerCap); ok {
-		f.Tick = t
+	return workstreamsResolution{ok: true} // genuinely nothing declared anywhere — a trustworthy empty
+}
+
+// workstreamsChanged reports whether two resolved project lists differ, so the
+// daemon calls PostWorkstreams only when something actually changed rather than
+// on every settings poll (default every 5 minutes).
+func workstreamsChanged(a, b []settings.RemoteWorkstream) bool {
+	ab, _ := json.Marshal(a)
+	bb, _ := json.Marshal(b)
+	return string(ab) != string(bb)
+}
+
+// workstreamsState is a mutex-guarded box for the last project list this daemon
+// successfully told the sidecar about.
+//
+// ⚠️ C4 FIX: it exists BECAUSE the initial POST moved off the synchronous
+// startup path onto its own goroutine (see Run — a cold-starting sidecar is
+// not listening yet, and a synchronous call there stalled the whole daemon
+// behind postProjectsCallTimeout). That startup goroutine and onRemote's own
+// goroutine (the settings poll) can therefore both attempt to update this
+// value. The daemon used to rely on a bare `var lastWorkstreams` plus "the
+// startup write happens-before `go pollSettings` starts" — correct for
+// exactly one writer, and it stopped being exactly one writer the moment the
+// startup POST became asynchronous. A mutex is simpler to get right here than
+// re-deriving a second happens-before argument for a second goroutine, and it
+// is cheap: this is updated at most once per settings poll (default 5m) plus
+// once at startup.
+type workstreamsState struct {
+	mu    sync.Mutex
+	value []settings.RemoteWorkstream
+	// declared is the last TRUSTWORTHY NON-EMPTY resolution this daemon saw,
+	// whether or not the POST that followed it succeeded — i.e. what the
+	// daemon BELIEVES is declared, as opposed to `value`, what it believes it
+	// successfully told the sidecar.
+	//
+	// ⚠️ THE TWO ARE DIFFERENT AND CONFLATING THEM IS C4. `value` answers "do
+	// I need to send anything?"; `declared` answers "should the sidecar have
+	// projects at all?". The second question is the one the attributor asks
+	// when /attribute comes back `skipped:no_projects`, and it has to be
+	// answerable BEFORE the first POST has landed — otherwise the startup race
+	// (I8) reads a not-yet-posted list as "this machine genuinely declares
+	// nothing" and every block drained in that window is published attributed
+	// to nothing and deleted.
+	declared []settings.RemoteWorkstream
+}
+
+// changed reports whether next differs from the currently held value.
+func (p *workstreamsState) changed(next []settings.RemoteWorkstream) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return workstreamsChanged(p.value, next)
+}
+
+// observe records a trustworthy, non-empty resolution as what the daemon
+// believes is declared — independent of whether the sidecar has been told yet.
+// A resolution that is untrustworthy (a KELD_PROJECTS_FILE read error) or
+// empty leaves the previous belief alone, for exactly the reasons
+// workstreamsResolution and postWorkstreamsIfKnownNonEmpty already give.
+func (p *workstreamsState) observe(r workstreamsResolution) {
+	if !r.ok || len(r.list) == 0 {
+		return
 	}
-	if b, ok := m.(blockDigesterCap); ok {
-		f.Blocks = b
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.declared = r.list
+}
+
+// knownNonEmpty reports whether the daemon believes projects are declared on
+// this machine. This is the predicate that makes `skipped:no_projects`
+// non-terminal: if the daemon holds a list, an answer of "no projects" is a
+// statement about the SIDECAR's state, not about the org's.
+func (p *workstreamsState) knownNonEmpty() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.declared) > 0
+}
+
+// forget clears the record of what the sidecar has been told — never what the
+// daemon believes is declared. Called when the sidecar is known to have
+// restarted: `attribution._projects` is module state in the sidecar PARENT, so
+// a respawn takes the list with it, and without this the daemon's
+// `!state.changed(next)` guard concludes there is nothing to say and the
+// sidecar answers `skipped:no_projects` forever.
+func (p *workstreamsState) forget() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.value = nil
+}
+
+// declaredList returns a copy of what the daemon believes is declared.
+func (p *workstreamsState) declaredList() []settings.RemoteWorkstream {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.declared) == 0 {
+		return nil
 	}
-	if at, ok := m.(attributionClient); ok {
-		f.Attribution = at
+	out := make([]settings.RemoteWorkstream, len(p.declared))
+	copy(out, p.declared)
+	return out
+}
+
+// set records v as the last list successfully POSTed. Called ONLY after
+// svc.PostWorkstreams itself succeeded, so a failed post leaves the held value
+// stale on purpose — a later poll (or the failed call itself, retried) will
+// see it as still "changed" and try again, rather than a failure being
+// silently remembered as success.
+func (p *workstreamsState) set(v []settings.RemoteWorkstream) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.value = v
+}
+
+// postWorkstreamsIfKnownNonEmpty is the ONE gate both maybePostWorkstreamsAtStartup
+// and postWorkstreamsOnChange apply — extracted in round 3 (Finding 1) so the
+// startup half's hardening and the poll half's are structurally the SAME
+// code rather than two hand-kept-in-sync copies. A resolution may only ever
+// reach `post` when it is:
+//
+//  1. TRUSTWORTHY (r.ok). An untrustworthy resolution (a transient
+//     KELD_PROJECTS_FILE read error) must leave state — and so the
+//     sidecar — exactly as it was; see workstreamsResolution's doc comment.
+//  2. NON-EMPTY. An empty resolution is never itself posted, from EITHER
+//     call site — the sidecar's own never-been-told-anything state already
+//     reads as "no projects" (skipped:no_projects either way), so skipping
+//     costs nothing when there is genuinely nothing to say, and it
+//     structurally cannot be the write that clobbers a real list, because it
+//     is never sent. (This means an operator cannot use an explicit `[]` in
+//     KELD_PROJECTS_FILE to CLEAR a previously-declared list via this path —
+//     an accepted, deliberate limitation of the simplest fix for the
+//     permanent-mis-attribution failure mode; see the NB1/round-2 report.)
+//  3. CHANGED. Re-checked immediately before posting, so a resolution that a
+//     concurrent update already made redundant is skipped rather than
+//     re-sent.
+func postWorkstreamsIfKnownNonEmpty(post func([]settings.RemoteWorkstream) error, state *workstreamsState, r workstreamsResolution, failLogFmt string) {
+	if !r.ok {
+		return // Finding 1: never let a read error clobber a known-good list
 	}
-	if pp, ok := m.(projectsPoster); ok {
-		f.PostProjects = pp.PostProjects
+	if len(r.list) == 0 {
+		return // NB1 guard: never let an empty resolution race a real list
 	}
-	return f
+	// Record the BELIEF before the changed-check can short-circuit: whether
+	// the sidecar has to be told is a different question from whether this
+	// machine declares projects at all, and only the second one makes
+	// `skipped:no_projects` non-terminal. See workstreamsState.declared.
+	state.observe(r)
+	if !state.changed(r.list) {
+		return // a concurrent update already landed
+	}
+	if err := post(r.list); err != nil {
+		log.Printf(failLogFmt, err)
+		return
+	}
+	state.set(r.list)
+}
+
+// maybePostWorkstreamsAtStartup is the startup half of the C4 async-POST fix,
+// closing the race that fix itself reopened (NB1, round 2) via
+// postWorkstreamsIfKnownNonEmpty's three guards above.
+//
+// ⚠️ THE RACE: pollSettings runs its first poll (and so onRemote's own
+// PostWorkstreams call) essentially immediately, concurrently with THIS
+// goroutine — both retrying against the same cold, just-spawned sidecar with
+// independent backoff. Before the guards existed, the startup call posted
+// resolveWorkstreams(nil) unconditionally, which is an EMPTY list on any
+// machine without KELD_PROJECTS_FILE (today, that is every machine — Atlas
+// does not serve `projects` yet). If the startup call's older,
+// longer-backing-off attempt happened to land AFTER onRemote's had already
+// told the sidecar about a real list, the sidecar would end up holding NO
+// projects — every subsequent /attribute answers skipped:no_projects, which
+// the attributor's switch treats as TERMINAL: publish and delete. Those
+// blocks are permanently attributed to nothing, and by the time the next
+// poll (5 minutes later) could correct it, the blocks are already gone from
+// the store.
+func maybePostWorkstreamsAtStartup(post func([]settings.RemoteWorkstream) error, state *workstreamsState, r workstreamsResolution) {
+	postWorkstreamsIfKnownNonEmpty(post, state, r, "keld-agent: initial /projects post failed: %v")
+}
+
+// postWorkstreamsOnChange is onRemote's half of the same gate
+// maybePostWorkstreamsAtStartup implements for the startup half: resolve r's
+// project list and post it only if postWorkstreamsIfKnownNonEmpty's three
+// guards all pass.
+//
+// ⚠️ ROUND 3 (Finding 1): before this shared gate existed, this half had NO
+// empty-list guard of its own — round 2 hardened only the startup path, and
+// this poll path posted resolveWorkstreams's result unconditionally, byte-
+// identical to the pre-NB1 inline code. That reopened the SAME
+// permanent-mis-attribution failure mode through a different door: a
+// transient KELD_PROJECTS_FILE read error at POLL time (not just at
+// startup) resolved to nil exactly like an honest "nothing declared", and
+// nothing stopped that nil from being posted over a sidecar that already
+// held a real list. workstreamsResolution.ok is what closes that specific hole
+// (a read error is no longer indistinguishable from a real empty), and the
+// shared empty-skip guard closes the rest, exactly as it does for the
+// startup half.
+func postWorkstreamsOnChange(post func([]settings.RemoteWorkstream) error, state *workstreamsState, r *settings.Remote) {
+	postWorkstreamsIfKnownNonEmpty(post, state, resolveWorkstreams(r), "keld-agent: /projects update failed: %v")
+}
+
+// repostWorkstreamsAfterRespawn re-tells a freshly-restarted sidecar the project
+// list, unconditionally with respect to `changed`.
+//
+// ⚠️ C4, THE HALF THE DAEMON OWNS. `attribution._projects` is module state in
+// the sidecar PARENT process, and the supervisor restarts that process on
+// crash — so a respawned sidecar holds NO projects while the daemon's
+// workstreamsState still records that it was told. Both PostWorkstreams call sites
+// route through postWorkstreamsIfKnownNonEmpty, which returns early when
+// `!state.changed(next)`, so nothing would ever say it again: every
+// /attribute answers `skipped:no_projects`, and (before the attributor's own
+// half of this fix) that was TERMINAL — publish and delete. Every block after
+// the crash was permanently attributed to nothing until the DAEMON itself
+// restarted.
+//
+// forget() first, then the ordinary gate, rather than a second POST path: the
+// gate's other two refusals (trustworthy, non-empty) still apply and stay in
+// one place; only the "we already said this" memory is what a respawn
+// invalidates, and it is invalidated by clearing it rather than by adding a
+// force flag every future caller could pass by mistake.
+func repostWorkstreamsAfterRespawn(post func([]settings.RemoteWorkstream) error, state *workstreamsState) {
+	if post == nil {
+		return // no /projects channel this run (no sidecar, or a test double)
+	}
+	list := state.declaredList()
+	if len(list) == 0 {
+		return // nothing was ever declared: a respawned sidecar holding nothing is correct
+	}
+	state.forget()
+	log.Printf("keld-agent: sidecar restarted — re-posting %d project definition(s) it lost with the process", len(list))
+	postWorkstreamsIfKnownNonEmpty(post, state, workstreamsResolution{list: list, ok: true},
+		"keld-agent: /projects re-post after a sidecar restart failed: %v")
 }

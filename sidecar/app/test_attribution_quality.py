@@ -30,7 +30,7 @@ inputs: `texts` is its user-role message contents (matching production's
 `_span_texts`, which is USER-stream only), `dims` is its `metadata` dict verbatim.
 
 ⚠️ **Field-name seam**: the experiment's project schema calls its ticket-prefix
-field `jira_key`; this codebase's is `ticket_key` (`settings.RemoteProject`,
+field `jira_key`; this codebase's is `ticket_key` (`settings.RemoteWorkstream`,
 `attribution.metadata_boost`). Renamed on load below, values unchanged — everything
 else (`id`/`title`/`team`/`description`/`repos`/`keywords`) matches as-is.
 

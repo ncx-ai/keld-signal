@@ -61,8 +61,8 @@ func seedDeterministicAnswer(t *testing.T, v *v3) ledger.BlockKey {
 	at := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
 	v.ledger.Cut(k, testStart+1200, "idle", "budget", "claude_code", at)
 	v.ledger.Attribute(k, ledger.Attributed{
-		ProjectID: "p_keld_signal",
-		Method:    ledger.MethodRepo,
+		WorkstreamID: "p_keld_signal",
+		Method:       ledger.MethodRepo,
 	}, ledger.ReasonNone, at)
 	return k
 }
@@ -79,7 +79,7 @@ func seedDeterministicAnswer(t *testing.T, v *v3) ledger.BlockKey {
 // perfectly, all of them caused by an encoder that could not get memory (55
 // "encoder silent for 60s, child killed" lines in the same window). A pass
 // that ships OFF by default deleted the answer of the pass that ships on.
-func TestQuarantinedVectorJobLeavesTheDeterministicProjectIntact(t *testing.T) {
+func TestQuarantinedVectorJobLeavesTheDeterministicWorkstreamIntact(t *testing.T) {
 	v := newTestV3(t)
 	seedDeterministicAnswer(t, v)
 
@@ -121,7 +121,7 @@ func TestVectorAgreeingWithTheRuleLeavesBothAnswersReadable(t *testing.T) {
 
 	v.vectorLedger().recordOutcome(attrib.Outcome{
 		SessionID: testSession, Start: float64(testStart),
-		Status: enrich.ProjectsAttributed, ProjectID: "p_keld_signal", Confidence: 0.88,
+		Status: enrich.WorkstreamsAttributed, WorkstreamID: "p_keld_signal", Confidence: 0.88,
 	})
 
 	cells := storedCells(t, v)
@@ -146,7 +146,7 @@ func TestVectorDisagreeingWithTheRuleStoresBothAndResolvesNeither(t *testing.T) 
 
 	v.vectorLedger().recordOutcome(attrib.Outcome{
 		SessionID: testSession, Start: float64(testStart),
-		Status: enrich.ProjectsAttributed, ProjectID: "p_something_else", Confidence: 0.55,
+		Status: enrich.WorkstreamsAttributed, WorkstreamID: "p_something_else", Confidence: 0.55,
 	})
 
 	cells := storedCells(t, v)
@@ -171,17 +171,17 @@ func TestEachVectorOutcomeStatesWhatTheEncoderActuallyDid(t *testing.T) {
 		wantStatus ledger.Status
 		wantReason ledger.Reason
 	}{
-		{"attributed", enrich.ProjectsAttributed, ledger.StatusOK, ledger.ReasonNone},
-		{"warming", enrich.ProjectsPending, ledger.StatusPending, ledger.ReasonNone},
-		{"weights still downloading", enrich.ProjectsDegradedWeights, ledger.StatusPending, ledger.ReasonWeightsUnavailable},
-		{"nothing declared to match", enrich.ProjectsSkippedNoProjects, ledger.StatusNA, ledger.ReasonNone},
+		{"attributed", enrich.WorkstreamsAttributed, ledger.StatusOK, ledger.ReasonNone},
+		{"warming", enrich.WorkstreamsPending, ledger.StatusPending, ledger.ReasonNone},
+		{"weights still downloading", enrich.WorkstreamsDegradedWeights, ledger.StatusPending, ledger.ReasonWeightsUnavailable},
+		{"nothing declared to match", enrich.WorkstreamsSkippedNone, ledger.StatusNA, ledger.ReasonNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newTestV3(t)
 			seedDeterministicAnswer(t, v)
 			v.vectorLedger().recordOutcome(attrib.Outcome{
 				SessionID: testSession, Start: float64(testStart),
-				Status: tc.status, ProjectID: "p_keld_signal", Confidence: 0.7,
+				Status: tc.status, WorkstreamID: "p_keld_signal", Confidence: 0.7,
 			})
 			cell := storedCells(t, v)["vector"]
 			if cell == nil {
@@ -209,7 +209,7 @@ func TestEachVectorOutcomeStatesWhatTheEncoderActuallyDid(t *testing.T) {
 // evidence failure the whole ledger exists to prevent.
 func TestNothingIsRecordedWhenTheVectorPassWasNeverActuallyAsked(t *testing.T) {
 	for _, status := range []string{
-		enrich.ProjectsSkippedDisabled,
+		enrich.WorkstreamsSkippedDisabled,
 		"attributed:probably", // a status from a sidecar this side does not know
 		"",
 	} {
@@ -291,9 +291,9 @@ func TestTogglingTheVectorPassOnThenOffLeavesTheDeterministicAnswerUnchanged(t *
 	// answer that disagrees, and finally a quarantine.
 	vl := v.vectorLedger()
 	for _, o := range []attrib.Outcome{
-		{Status: enrich.ProjectsPending},
-		{Status: enrich.ProjectsDegradedWeights},
-		{Status: enrich.ProjectsAttributed, ProjectID: "p_other", Confidence: 0.5},
+		{Status: enrich.WorkstreamsPending},
+		{Status: enrich.WorkstreamsDegradedWeights},
+		{Status: enrich.WorkstreamsAttributed, WorkstreamID: "p_other", Confidence: 0.5},
 	} {
 		o.SessionID, o.Start = testSession, float64(testStart)
 		vl.recordOutcome(o)
@@ -305,7 +305,7 @@ func TestTogglingTheVectorPassOnThenOffLeavesTheDeterministicAnswerUnchanged(t *
 	setAttribOutcomeHandler(nil)
 	noteAttributionQuarantine(testSession, float64(testStart))
 	noteAttributionOutcome(attrib.Outcome{
-		SessionID: testSession, Start: float64(testStart), Status: enrich.ProjectsAttributed, ProjectID: "p_nope",
+		SessionID: testSession, Start: float64(testStart), Status: enrich.WorkstreamsAttributed, WorkstreamID: "p_nope",
 	})
 
 	cells := storedCells(t, v)

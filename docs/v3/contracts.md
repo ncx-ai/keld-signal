@@ -253,7 +253,7 @@ and link to where the org-wide edit is actually made.
 Suggestion ids are **stable**: `sha1(kind + ":" + value)[:12]`, so a description written
 against a suggestion survives, and a split repo comes back with the id it had.
 
-Attribution order (deterministic pass, `internal/agent/projects`):
+Attribution order (deterministic pass, `internal/agent/workstreams`):
 1. block `repo` dim ∈ some non-hidden project's `repos` whose workstream is not off → that
    project, method `repo`. Two matches → `conflict`, NOT the first.
 2. else block branch carries a ticket key matching a project's `ticket_key` → method `ticket`.

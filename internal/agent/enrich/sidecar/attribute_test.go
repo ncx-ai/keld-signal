@@ -12,9 +12,9 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
-// TestPostProjectsSendsTheDeclaredList pins the /projects wire shape: a single
-// "projects" key holding the JSON of settings.RemoteProject as-is.
-func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
+// TestPostWorkstreamsSendsTheDeclaredList pins the /projects wire shape: a single
+// "projects" key holding the JSON of settings.RemoteWorkstream as-is.
+func TestPostWorkstreamsSendsTheDeclaredList(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/projects" {
@@ -25,9 +25,9 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	projects := []settings.RemoteProject{{ID: "proj_pay", Title: "Payments", Description: "billing"}}
-	if err := New(srv.URL, 5*time.Second).PostProjects(projects); err != nil {
-		t.Fatalf("PostProjects failed: %v", err)
+	workstreams := []settings.RemoteWorkstream{{ID: "proj_pay", Title: "Payments", Description: "billing"}}
+	if err := New(srv.URL, 5*time.Second).PostWorkstreams(workstreams); err != nil {
+		t.Fatalf("PostWorkstreams failed: %v", err)
 	}
 	ps, ok := got["projects"].([]any)
 	if !ok || len(ps) != 1 {
@@ -39,13 +39,13 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 	}
 }
 
-func TestPostProjectsFailsOnTransportError(t *testing.T) {
-	old := postProjectsCallTimeout
-	postProjectsCallTimeout = 300 * time.Millisecond
-	defer func() { postProjectsCallTimeout = old }()
+func TestPostWorkstreamsFailsOnTransportError(t *testing.T) {
+	old := postWorkstreamsCallTimeout
+	postWorkstreamsCallTimeout = 300 * time.Millisecond
+	defer func() { postWorkstreamsCallTimeout = old }()
 
 	c := New("http://127.0.0.1:1", 200*time.Millisecond) // nothing listening
-	if err := c.PostProjects(nil); err == nil {
+	if err := c.PostWorkstreams(nil); err == nil {
 		t.Fatal("want an error against an unreachable sidecar")
 	}
 }
@@ -82,7 +82,7 @@ func TestAttributeSendsCoordinatesAndDims(t *testing.T) {
 	if dims["branch"] != "main" {
 		t.Errorf("dims not sent: %v", got)
 	}
-	if res.Status != "attributed" || len(res.Projects) != 1 || res.Projects[0].ID != "proj_pay" {
+	if res.Status != "attributed" || len(res.Workstreams) != 1 || res.Workstreams[0].ID != "proj_pay" {
 		t.Fatalf("result = %+v", res)
 	}
 	if res.Attribution == nil || res.Attribution.EncoderState != "warm" {
@@ -145,7 +145,7 @@ func TestAttributeSurvivesAResponseSlowerThanTheSharedClientTimeout(t *testing.T
 	if !ok {
 		t.Fatal("a slow-but-legitimate attribute call must not fail just because it outran the shared client's 5s timeout")
 	}
-	if res.Status != "attributed" || len(res.Projects) != 1 {
+	if res.Status != "attributed" || len(res.Workstreams) != 1 {
 		t.Fatalf("result = %+v", res)
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {

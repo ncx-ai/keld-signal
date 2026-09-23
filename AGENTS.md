@@ -1845,7 +1845,7 @@ distinction between a pass that was skipped and one that was never wired.
 `sidecar/app/analysis/attribution.py`, `sidecar/app/verifier.py`) — which declared
 project a closed BLOCK belongs to, decided on device.** OFF by default
 (`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org declares
-projects (`settings.RemoteProject`: id/title/description/team/repos/keywords/ticket key)
+projects (`settings.RemoteWorkstream`: id/title/description/team/repos/keywords/ticket key)
 via `KELD_PROJECTS_FILE` or the settings poll's `projects` key; the daemon pushes them
 down with `POST /projects` and the block emitter's `OnPublished` hook schedules a durable
 job per published block. `POST /attribute` takes COORDINATES and the block's own

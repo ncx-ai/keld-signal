@@ -357,7 +357,7 @@ export function findConflicts(projects, offWorkstreams) {
 }
 
 /** What a project card shows as "the rules": GET /v1/projects' own `rules`
- *  field (internal/agent/ingress/projects.go's projectView — declared repos
+ *  field (internal/agent/ingress/workstreams.go's workstreamView — declared repos
  *  always, a repo-shaped keyword only once it has actually matched an
  *  observed block), never the raw `repos ∪ keywords` the store holds. Reading
  *  raw keywords would show an unmatched candidate like "design/ux" as if it
@@ -385,7 +385,7 @@ export function localOnlyConfirmationText() {
 
 /** Every project a suggestion's "Same as" picker may offer — every project
  *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
- *  internal/agent/ingress/projects.go's handleGetProjects already merges the
+ *  internal/agent/ingress/workstreams.go's handleGetWorkstreams already merges the
  *  local document with the org's pooled workstream values into one list, so
  *  "same as" is never limited to local projects. A hidden project is left
  *  out — placing a suggestion on one a person chose to hide would silently
@@ -1844,7 +1844,7 @@ if (typeof document !== "undefined") {
             // ours to fold away: its identity lives in Atlas, and removing the
             // local overlay entry would drop the rules this machine added while
             // leaving the org's value untouched — a deletion that looks like a
-            // move. The daemon refuses it too (projects.MapProjectTo); this is
+            // move. The daemon refuses it too (workstreams.MapWorkstreamTo); this is
             // the half that keeps a person from being offered it.
             // ⚠️ An EMPTY CELL, never `null`, for an org project. The row is a
             // three-column grid; skipping the child entirely lets the pill fall
@@ -1939,7 +1939,7 @@ if (typeof document !== "undefined") {
 
   /** mapProjectSelect folds a LOCAL project into another one — normally one of
    *  the org's. The rules move with it and the local entry goes; see
-   *  projects.MapProjectTo for why keeping it beside its target would make
+   *  workstreams.MapWorkstreamTo for why keeping it beside its target would make
    *  every one of its blocks a conflict.
    *
    *  It offers every project except this one, so a person cannot map a project

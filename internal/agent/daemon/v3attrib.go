@@ -159,17 +159,17 @@ func (l vectorLedger) recordQuarantine(sessionID string, start float64) {
 // invent a cell state out of a string this side does not understand.
 func (l vectorLedger) recordOutcome(o attrib.Outcome) {
 	switch o.Status {
-	case enrich.ProjectsAttributed:
+	case enrich.WorkstreamsAttributed:
 		l.write(o.SessionID, o.Start,
-			ledger.VectorAttributed{ProjectID: o.ProjectID, Confidence: o.Confidence},
+			ledger.VectorAttributed{WorkstreamID: o.WorkstreamID, Confidence: o.Confidence},
 			ledger.StatusOK, ledger.ReasonNone)
-	case enrich.ProjectsPending:
+	case enrich.WorkstreamsPending:
 		l.write(o.SessionID, o.Start, ledger.VectorAttributed{},
 			ledger.StatusPending, ledger.ReasonNone)
-	case enrich.ProjectsDegradedWeights:
+	case enrich.WorkstreamsDegradedWeights:
 		l.write(o.SessionID, o.Start, ledger.VectorAttributed{},
 			ledger.StatusPending, ledger.ReasonWeightsUnavailable)
-	case enrich.ProjectsSkippedNoProjects:
+	case enrich.WorkstreamsSkippedNone:
 		l.write(o.SessionID, o.Start, ledger.VectorAttributed{},
 			ledger.StatusNA, ledger.ReasonNone)
 	}

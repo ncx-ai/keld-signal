@@ -13,8 +13,8 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
-	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
+	"github.com/ncx-ai/keld-signal/internal/agent/workstreams"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -27,9 +27,9 @@ func liveFixture(t *testing.T) *v3 {
 	t.Helper()
 	t.Setenv("KELD_HOME", t.TempDir())
 	l := ledger.New()
-	p := projects.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
+	p := workstreams.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
 	p.Blocks = ledgerBlocks{l}
-	return &v3{ledger: l, projects: p, atlasOn: true}
+	return &v3{ledger: l, workstreams: p, atlasOn: true}
 }
 
 // cutBlock records one closed block through the SAME hook the emitter calls,
@@ -41,7 +41,7 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	end := start.Add(20 * time.Minute)
 	ws := map[string]enrich.Labeled{}
 	if repo != "" {
-		ws[projects.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.DimensionAttributed}
+		ws[workstreams.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.DimensionAttributed}
 	}
 	row := publish.BlockEnrichment{
 		SessionID: session,
@@ -55,12 +55,12 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	return ledger.BlockKey{Session: session, Start: start.Unix()}
 }
 
-func declareProject(t *testing.T, v *v3, id, title, repo, group string) {
+func declareWorkstream(t *testing.T, v *v3, id, title, repo, group string) {
 	t.Helper()
-	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
-		d.Projects = append(d.Projects, projects.Project{
+	if _, err := v.workstreams.Update(func(d workstreams.Document) (workstreams.Document, error) {
+		d.Workstreams = append(d.Workstreams, workstreams.Workstream{
 			ID: id, Title: title, Repos: []string{repo},
-			Group: group, Origin: projects.OriginUser,
+			Group: group, Origin: workstreams.OriginUser,
 		})
 		return d, nil
 	}); err != nil {
@@ -68,9 +68,9 @@ func declareProject(t *testing.T, v *v3, id, title, repo, group string) {
 	}
 }
 
-// rowProjects is what the Today rows say: block key -> project id, plus the
+// rowWorkstreams is what the Today rows say: block key -> project id, plus the
 // per-row cell so a test can tell absent (unknown) from present-and-empty.
-func rowProjects(t *testing.T, r ledger.Reader) (map[ledger.BlockKey]string, map[ledger.BlockKey]map[string]any) {
+func rowWorkstreams(t *testing.T, r ledger.Reader) (map[ledger.BlockKey]string, map[ledger.BlockKey]map[string]any) {
 	t.Helper()
 	h := mountRoutes(t, ledgerRoute(r, func() serviceWire { return serviceWire{State: string(serviceOK)} }))
 	rr := httptest.NewRecorder()
@@ -99,9 +99,9 @@ func rowProjects(t *testing.T, r ledger.Reader) (map[ledger.BlockKey]string, map
 }
 
 // paneCoverage is what the Projects pane says, read off its own route.
-func paneCoverage(t *testing.T, s *projects.Store) (attributed, total int) {
+func paneCoverage(t *testing.T, s *workstreams.Store) (attributed, total int) {
 	t.Helper()
-	h := mountRoutes(t, ingress.ProjectsRoute(s))
+	h := mountRoutes(t, ingress.WorkstreamsRoute(s))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authed(http.MethodGet, "/v1/projects"))
 	if rr.Code != http.StatusOK {
@@ -119,9 +119,9 @@ func paneCoverage(t *testing.T, s *projects.Store) (attributed, total int) {
 	return body.Coverage.Attributed, body.Coverage.Total
 }
 
-// paneProjects is the pane's PER-BLOCK answer, computed through the same entry
+// paneWorkstreams is the pane's PER-BLOCK answer, computed through the same entry
 // point GET /v1/projects uses for its coverage figure and its suggestions.
-func paneProjects(t *testing.T, s *projects.Store) map[ledger.BlockKey]string {
+func paneWorkstreams(t *testing.T, s *workstreams.Store) map[ledger.BlockKey]string {
 	t.Helper()
 	pass, err := ingress.NewAttribution(s)
 	if err != nil {
@@ -133,14 +133,14 @@ func paneProjects(t *testing.T, s *projects.Store) map[ledger.BlockKey]string {
 	}
 	out := map[ledger.BlockKey]string{}
 	for _, b := range blocks {
-		out[ledger.BlockKey{Session: b.SessionID, Start: b.Start}] = pass.Of(b.Dims).ProjectID
+		out[ledger.BlockKey{Session: b.SessionID, Start: b.Start}] = pass.Of(b.Dims).WorkstreamID
 	}
 	return out
 }
 
 // --- the anchor ------------------------------------------------------------
 
-// TestTodayRowsAndProjectsPaneAgreeOnEveryBlock is the criterion this whole
+// TestTodayRowsAndWorkstreamsPaneAgreeOnEveryBlock is the criterion this whole
 // change exists for.
 //
 // ⚠️ **IT IS BUILT IN THE SHAPE OF THE REAL INCIDENT**: the blocks are cut
@@ -151,7 +151,7 @@ func paneProjects(t *testing.T, s *projects.Store) map[ledger.BlockKey]string {
 // every block that a later rule covers (measured on the machine: 97 of 105
 // attributed on the pane, 8 on the rows). The companion test below asserts
 // that this test would still catch it.
-func TestTodayRowsAndProjectsPaneAgreeOnEveryBlock(t *testing.T) {
+func TestTodayRowsAndWorkstreamsPaneAgreeOnEveryBlock(t *testing.T) {
 	v := liveFixture(t)
 
 	// A corpus of blocks, cut before anything is declared.
@@ -162,10 +162,10 @@ func TestTodayRowsAndProjectsPaneAgreeOnEveryBlock(t *testing.T) {
 		}
 		cutBlock(t, v, fmt.Sprintf("sess-anchor-%d", i), 10*(i+1), repo)
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
-	rows, _ := rowProjects(t, v.ledgerReader())
-	pane := paneProjects(t, v.projects)
+	rows, _ := rowWorkstreams(t, v.ledgerReader())
+	pane := paneWorkstreams(t, v.workstreams)
 
 	if len(rows) != len(pane) || len(rows) != 12 {
 		t.Fatalf("rows=%d pane=%d, want 12 each", len(rows), len(pane))
@@ -183,7 +183,7 @@ func TestTodayRowsAndProjectsPaneAgreeOnEveryBlock(t *testing.T) {
 
 	// And the two routes' own headline figures agree, which is the form a
 	// person actually sees the disagreement in.
-	attributed, total := paneCoverage(t, v.projects)
+	attributed, total := paneCoverage(t, v.workstreams)
 	rowAttributed := 0
 	for _, id := range rows {
 		if id != "" {
@@ -212,10 +212,10 @@ func TestTheAnchorHasTeethAgainstTheFrozenCell(t *testing.T) {
 		}
 		cutBlock(t, v, fmt.Sprintf("sess-teeth-%d", i), 10*(i+1), repo)
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
-	frozen, _ := rowProjects(t, v.ledger) // the pre-change reader
-	pane := paneProjects(t, v.projects)
+	frozen, _ := rowWorkstreams(t, v.ledger) // the pre-change reader
+	pane := paneWorkstreams(t, v.workstreams)
 
 	disagreements := 0
 	for k, want := range pane {
@@ -232,20 +232,20 @@ func TestTheAnchorHasTeethAgainstTheFrozenCell(t *testing.T) {
 
 // --- acceptance criteria ---------------------------------------------------
 
-// TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared — AC1. No
+// TestBlockCutBeforeItsWorkstreamExistedAttributesOnceItIsDeclared — AC1. No
 // restart, no sweep, no rewrite: the next read is the next answer.
-func TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared(t *testing.T) {
+func TestBlockCutBeforeItsWorkstreamExistedAttributesOnceItIsDeclared(t *testing.T) {
 	v := liveFixture(t)
 	k := cutBlock(t, v, "sess-ac1", 30, "github.com/ncx-ai/keld-signal")
 
-	before, _ := rowProjects(t, v.ledgerReader())
+	before, _ := rowWorkstreams(t, v.ledgerReader())
 	if before[k] != "" {
 		t.Fatalf("with nothing declared the block must name no project, got %q", before[k])
 	}
 
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
-	after, cells := rowProjects(t, v.ledgerReader())
+	after, cells := rowWorkstreams(t, v.ledgerReader())
 	if after[k] != "p_signal" {
 		t.Fatalf("after declaring the project the block must attribute to it, got %q", after[k])
 	}
@@ -259,20 +259,20 @@ func TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared(t *testing.T)
 // a confident answer nobody can trace back to anything.
 func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac2", 30, "github.com/ncx-ai/keld-signal")
 
-	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
+	if rows, _ := rowWorkstreams(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
 
-	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
-		return projects.RemoveRules(d, "p_signal", []projects.Rule{{Kind: projects.RuleKindRepo, Value: "github.com/ncx-ai/keld-signal"}})
+	if _, err := v.workstreams.Update(func(d workstreams.Document) (workstreams.Document, error) {
+		return workstreams.RemoveRules(d, "p_signal", []workstreams.Rule{{Kind: workstreams.RuleKindRepo, Value: "github.com/ncx-ai/keld-signal"}})
 	}); err != nil {
 		t.Fatalf("remove rule: %v", err)
 	}
 
-	rows, cells := rowProjects(t, v.ledgerReader())
+	rows, cells := rowWorkstreams(t, v.ledgerReader())
 	if rows[k] != "" {
 		t.Fatalf("with the rule gone the block must name no project, got the stale %q", rows[k])
 	}
@@ -281,68 +281,68 @@ func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T)
 	}
 }
 
-// TestGroupSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
+// TestGroupSwitchedOffHidesItsWorkstreamsFromTheRows — AC2's sibling: the
 // exclusion a person sets on the page applies to what the page then shows
 // them, without a restart.
-func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
+func TestGroupSwitchedOffHidesItsWorkstreamsFromTheRows(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac2b", 30, "github.com/ncx-ai/keld-signal")
 
-	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
+	if rows, _ := rowWorkstreams(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
-	if err := projects.SetGroupOff("eng", true); err != nil {
+	if err := workstreams.SetGroupOff("eng", true); err != nil {
 		t.Fatalf("workstream off: %v", err)
 	}
 
-	rows, _ := rowProjects(t, v.ledgerReader())
+	rows, _ := rowWorkstreams(t, v.ledgerReader())
 	if rows[k] != "" {
 		t.Fatalf("a project in a switched-off workstream must not name a block, got %q", rows[k])
 	}
 	// And the pane says the same thing, which is the whole point.
-	if attributed, total := paneCoverage(t, v.projects); attributed != 0 || total != 1 {
+	if attributed, total := paneCoverage(t, v.workstreams); attributed != 0 || total != 1 {
 		t.Fatalf("pane coverage = %d of %d, want 0 of 1", attributed, total)
 	}
 }
 
-// TestUnreadableProjectsDocumentYieldsUnknownNotNoProject — the NEGATIVE this
+// TestUnreadableWorkstreamsDocumentYieldsUnknownNotNoWorkstream — the NEGATIVE this
 // codebase's standing rule demands: a check that could not run must not
 // publish a confident negative. The cell must be ABSENT, which the page
 // renders as "—" (unknown), and must not be present-and-empty, which it
 // renders as "no project".
-func TestUnreadableProjectsDocumentYieldsUnknownNotNoProject(t *testing.T) {
+func TestUnreadableWorkstreamsDocumentYieldsUnknownNotNoWorkstream(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac3", 30, "github.com/ncx-ai/keld-signal")
 
-	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
+	if rows, _ := rowWorkstreams(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
 
 	// Corrupt the document. Not deleted — a MISSING file is a legitimately
 	// empty document ("nobody has declared a project"), which is a different
 	// answer and must keep reading as one.
-	if err := os.WriteFile(v.projects.Path(), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(v.workstreams.Path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("corrupt doc: %v", err)
 	}
 
-	_, cells := rowProjects(t, v.ledgerReader())
+	_, cells := rowWorkstreams(t, v.ledgerReader())
 	if cell, present := cells[k]; present {
 		t.Fatalf("an unreadable projects document must leave the attributed cell ABSENT (unknown); got %#v", cell)
 	}
 }
 
-// TestMissingProjectsDocumentIsNoProjectNotUnknown is the other half of the
+// TestMissingWorkstreamsDocumentIsNoWorkstreamNotUnknown is the other half of the
 // pair above, and the reason the negative is about UNREADABLE rather than
 // about ABSENT: a machine where nobody has declared anything has a real
 // answer, and it is "no project".
-func TestMissingProjectsDocumentIsNoProjectNotUnknown(t *testing.T) {
+func TestMissingWorkstreamsDocumentIsNoWorkstreamNotUnknown(t *testing.T) {
 	v := liveFixture(t)
 	k := cutBlock(t, v, "sess-ac3b", 30, "github.com/ncx-ai/keld-signal")
 
-	rows, cells := rowProjects(t, v.ledgerReader())
-	if _, err := os.Stat(v.projects.Path()); !os.IsNotExist(err) {
+	rows, cells := rowWorkstreams(t, v.ledgerReader())
+	if _, err := os.Stat(v.workstreams.Path()); !os.IsNotExist(err) {
 		t.Fatalf("precondition: projects.json should not exist, stat err = %v", err)
 	}
 	if _, present := cells[k]; !present {
@@ -357,10 +357,10 @@ func TestMissingProjectsDocumentIsNoProjectNotUnknown(t *testing.T) {
 // not a fault.
 func TestBlockWithNoRepoDimIsUnattributedAndErrorFree(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac6", 30, "")
 
-	rows, cells := rowProjects(t, v.ledgerReader())
+	rows, cells := rowWorkstreams(t, v.ledgerReader())
 	if rows[k] != "" {
 		t.Fatalf("a block with no repo dim must attribute to nothing, got %q", rows[k])
 	}
@@ -375,7 +375,7 @@ func TestBlockWithNoRepoDimIsUnattributedAndErrorFree(t *testing.T) {
 func TestRecomputationRewritesNothingStored(t *testing.T) {
 	v := liveFixture(t)
 	k := cutBlock(t, v, "sess-ac5", 30, "github.com/ncx-ai/keld-signal")
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
 	stored, err := v.ledger.Read(time.Time{}, 100)
 	if err != nil {
@@ -385,7 +385,7 @@ func TestRecomputationRewritesNothingStored(t *testing.T) {
 
 	// Serve the page several times.
 	for i := 0; i < 3; i++ {
-		if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
+		if rows, _ := rowWorkstreams(t, v.ledgerReader()); rows[k] != "p_signal" {
 			t.Fatalf("pass %d: row = %q, want p_signal", i, rows[k])
 		}
 	}
@@ -414,7 +414,7 @@ func TestRecomputationIsOneBoundedPassPerRequest(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		cutBlock(t, v, fmt.Sprintf("sess-cost-%d", i), i+1, "github.com/ncx-ai/keld-signal")
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
 	calls := 0
 	var gotSince time.Time
@@ -426,7 +426,7 @@ func TestRecomputationIsOneBoundedPassPerRequest(t *testing.T) {
 			gotSince, gotLimit = since, limit
 			return v.ledger.BlocksSince(since, limit)
 		},
-		store: v.projects,
+		store: v.workstreams,
 		now:   time.Now,
 	}
 	snap, err := r.Read(time.Unix(1234, 0), 77)
@@ -446,19 +446,19 @@ func TestRecomputationIsOneBoundedPassPerRequest(t *testing.T) {
 	}
 }
 
-// TestDimsQueryFailureIsUnknownNotNoProject — the sibling negative: the rules
+// TestDimsQueryFailureIsUnknownNotNoWorkstream — the sibling negative: the rules
 // were readable but the evidence to match them against was not.
-func TestDimsQueryFailureIsUnknownNotNoProject(t *testing.T) {
+func TestDimsQueryFailureIsUnknownNotNoWorkstream(t *testing.T) {
 	v := liveFixture(t)
 	cutBlock(t, v, "sess-dimsfail", 30, "github.com/ncx-ai/keld-signal")
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareWorkstream(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 
 	r := liveAttribution{
 		inner: v.ledger,
 		dims: func(time.Time, int) ([]ledger.BlockRecord, error) {
 			return nil, fmt.Errorf("ledger unavailable")
 		},
-		store: v.projects,
+		store: v.workstreams,
 		now:   time.Now,
 	}
 	snap, err := r.Read(time.Time{}, 100)

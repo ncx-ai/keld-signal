@@ -1,12 +1,12 @@
 package enrich
 
 // PROJECT ATTRIBUTION — which declared project a closed block belongs to,
-// decided on-device by comparing the block against `settings.RemoteProject`
+// decided on-device by comparing the block against `settings.RemoteWorkstream`
 // entries (Task 1) and never by reading message text into the wire.
 //
-// ProjectAttribution and AttributionMeta are the WIRE SHAPE these decisions
+// WorkstreamAttribution and AttributionMeta are the WIRE SHAPE these decisions
 // travel in — they are what a later attribution loop hands to
-// publish.WithProjects, and what a Python sidecar's matcher returns. Every
+// publish.WithWorkstreams, and what a Python sidecar's matcher returns. Every
 // field here is an id, a confidence, an integer timing or a closed enum: the
 // same discipline Dynamic and Prior already enforce one level up, because a
 // project name is exactly the kind of string `named_terms` has already shown
@@ -14,8 +14,8 @@ package enrich
 // offset may ever be added to either struct — see
 // publish.TestAttributionShapeHoldsNoText, the reflection tripwire that fails
 // the moment a new field appears here undeclared.
-type ProjectAttribution struct {
-	// ID is the matched project's declared identity (settings.RemoteProject.ID),
+type WorkstreamAttribution struct {
+	// ID is the matched project's declared identity (settings.RemoteWorkstream.ID),
 	// never its free-text description.
 	ID string `json:"id"`
 	// Confidence is the matcher's own score for this id, in [0,1].
@@ -40,7 +40,7 @@ type ProjectAttribution struct {
 // AttributionMeta is the attribution PASS's own report on itself — timings,
 // counts and closed enums describing how the decision was reached, mirroring
 // the discipline Effort and Dynamic already apply to their own passes: the
-// facet's answer travels in ProjectAttribution, and everything about HOW that
+// facet's answer travels in WorkstreamAttribution, and everything about HOW that
 // answer was produced travels here, kept structurally incapable of holding a
 // project's name, a branch, or any text derived from the block itself.
 type AttributionMeta struct {
@@ -110,25 +110,25 @@ type AttributionMeta struct {
 // block row's own kind rather than leaving a reader to infer it from an
 // absence.
 const (
-	// ProjectsAttributed means the pass ran and named a project for this
-	// block — Projects holds at least one ProjectAttribution.
-	ProjectsAttributed = "attributed"
-	// ProjectsPending means the pass has not finished for this block yet (e.g.
+	// WorkstreamsAttributed means the pass ran and named a project for this
+	// block — Projects holds at least one WorkstreamAttribution.
+	WorkstreamsAttributed = "attributed"
+	// WorkstreamsPending means the pass has not finished for this block yet (e.g.
 	// awaiting a background embedding or verifier step); a later republish via
 	// WithProjects is expected to supersede this row.
-	ProjectsPending = "pending"
-	// ProjectsSkippedDisabled means attribution is switched off on this
+	WorkstreamsPending = "pending"
+	// WorkstreamsSkippedDisabled means attribution is switched off on this
 	// machine — the block was never a candidate, not a candidate that failed.
-	ProjectsSkippedDisabled = "skipped:disabled"
-	// ProjectsSkippedNoProjects means attribution ran with no declared
-	// projects to match against (settings.RemoteProject is empty), so there
+	WorkstreamsSkippedDisabled = "skipped:disabled"
+	// WorkstreamsSkippedNone means attribution ran with no declared
+	// projects to match against (settings.RemoteWorkstream is empty), so there
 	// was structurally nothing to attribute to.
-	ProjectsSkippedNoProjects = "skipped:no_projects"
-	// ProjectsDegradedWeights means the pass ran with its embedding weights
+	WorkstreamsSkippedNone = "skipped:no_projects"
+	// WorkstreamsDegradedWeights means the pass ran with its embedding weights
 	// unavailable — the same "degraded" idiom Effort/Sensitivity use for a
 	// pass that produced an answer from less evidence than usual, rather than
 	// no answer at all.
-	ProjectsDegradedWeights = "degraded:weights_unavailable"
+	WorkstreamsDegradedWeights = "degraded:weights_unavailable"
 )
 
 // Concept is one phrase describing what a block was ABOUT, lifted from the

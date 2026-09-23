@@ -116,9 +116,9 @@ type Dims struct {
 // workstream dimensions. It is written by exactly one caller
 // (daemon.attributeAndRecord) and read as the machine's answer.
 type Attributed struct {
-	ProjectID string
-	Method    Method
-	Conflict  []string // project ids when Reason == ReasonConflict
+	WorkstreamID string
+	Method       Method
+	Conflict     []string // project ids when Reason == ReasonConflict
 }
 
 // VectorAttributed is the VECTORISED pass's answer for the same block: a
@@ -132,8 +132,8 @@ type Attributed struct {
 // renders one of them as "the" project is making a decision this package has
 // refused to make for it.
 type VectorAttributed struct {
-	// ProjectID is the id the vector pass named. Set only alongside StatusOK.
-	ProjectID string
+	// WorkstreamID is the id the vector pass named. Set only alongside StatusOK.
+	WorkstreamID string
 	// Confidence is that pass's own score for the id, in [0,1]. It is stored
 	// because a second opinion at 0.42 and one at 0.91 are different second
 	// opinions, and nothing else on the row would say which this was.

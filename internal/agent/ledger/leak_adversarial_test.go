@@ -27,7 +27,7 @@ func TestIdentifierFieldsCannotSmuggleTextOrPaths(t *testing.T) {
 	k := BlockKey{Session: secret, Start: 1788543000}
 	s.Cut(k, 1788544200, "idle", "budget", secret, now)
 	s.Measure(k, Measured{Model: secret, Requests: 1}, now)
-	s.Attribute(k, Attributed{ProjectID: secret, Method: MethodRepo}, ReasonNone, now)
+	s.Attribute(k, Attributed{WorkstreamID: secret, Method: MethodRepo}, ReasonNone, now)
 
 	snap, err := s.Read(time.Time{}, 100)
 	if err != nil {

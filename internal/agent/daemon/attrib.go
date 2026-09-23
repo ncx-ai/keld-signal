@@ -72,7 +72,7 @@ func attribStoreDir() string { return filepath.Join(paths.SpoolDir(), "attrib") 
 func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.AttributeClient,
 	ingestEndpoint string, token func() string, actor string,
 	emitter *clientevents.Emitter, attribConfigured bool,
-	projectsKnown func() bool, repostProjects func()) func(rows []publish.BlockEnrichment, path string) {
+	workstreamsKnown func() bool, repostWorkstreams func()) func(rows []publish.BlockEnrichment, path string) {
 	if !attrib.Enabled(attribConfigured) || dig == nil || cl == nil || token == nil {
 		return nil
 	}
@@ -85,7 +85,7 @@ func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.Attribu
 	a := attrib.New(st, cl, pub,
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, dig).
-		WithProjects(projectsKnown, repostProjects).
+		WithWorkstreams(workstreamsKnown, repostWorkstreams).
 		WithEmitter(emitter).
 		// THE DELIVERY LEDGER's two seams for this pass (v3attrib.go), both
 		// package-level accessors rather than parameters so every existing

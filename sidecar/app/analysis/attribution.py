@@ -742,7 +742,7 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
         inside = overrides[pid] if pid in overrides else pid in assigned
         if inside:
             # ⚠️ TWO SOURCES, NOT THREE. "metadata" is GONE from the published
-            # vocabulary (see enrich.ProjectAttribution.Source): the boost is
+            # vocabulary (see enrich.WorkstreamAttribution.Source): the boost is
             # still part of every confidence, but AC-4 as amended means nothing
             # is ever assigned without the encoder, so no answer can carry it.
             # A value no producer can emit is worse than an absent one.

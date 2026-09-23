@@ -1042,12 +1042,12 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
-	// lastProjects is the last project list this daemon successfully POSTed
-	// to the sidecar. Mutex-guarded (projectsState), NOT owned by a single
-	// goroutine like rejects/custom are — see projectsState's doc comment for
+	// lastWorkstreams is the last project list this daemon successfully POSTed
+	// to the sidecar. Mutex-guarded (workstreamsState), NOT owned by a single
+	// goroutine like rejects/custom are — see workstreamsState's doc comment for
 	// why: the initial POST runs on its own goroutine (C4), so both it and
 	// onRemote's poll goroutine can touch this value.
-	lastProjects := &projectsState{}
+	lastWorkstreams := &workstreamsState{}
 	updateEvents.replay(emitter)
 	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
 		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
@@ -1084,27 +1084,27 @@ func Run(ctx context.Context) error {
 		}
 
 		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
-		// list (resolveProjects), and the sidecar is only re-told when the
+		// list (resolveWorkstreams), and the sidecar is only re-told when the
 		// resolved list actually changed — an org editing unrelated settings
 		// must not re-POST the same projects on every 5-minute poll.
 		//
 		// ⚠️ C4: gated on attrib.Enabled(set.Attribution), NOT merely on
-		// svc.PostProjects != nil. svc.PostProjects is set whenever a sidecar
+		// svc.PostWorkstreams != nil. svc.PostWorkstreams is set whenever a sidecar
 		// client exists AT ALL (ml_backend "auto" or "deterministic"), so
 		// gating on it alone POSTed the org's project list even on a machine
 		// with KELD_ATTRIBUTION=0 — attribution being "off" must mean
 		// nothing about it happens, not merely that the daemon's own loop
 		// doesn't run.
 		//
-		// postProjectsOnChange is the poll half of the NB1 fix (round 2):
-		// see maybePostProjectsAtStartup's doc comment (projects.go) for the
+		// postWorkstreamsOnChange is the poll half of the NB1 fix (round 2):
+		// see maybePostWorkstreamsAtStartup's doc comment (projects.go) for the
 		// startup-vs-poll race this and its sibling close together.
-		if attribOn && svc.PostProjects != nil {
-			postProjectsOnChange(svc.PostProjects, lastProjects, r)
+		if attribOn && svc.PostWorkstreams != nil {
+			postWorkstreamsOnChange(svc.PostWorkstreams, lastWorkstreams, r)
 		}
 	}
 	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
-	// (KELD_PROJECTS_FILE wins over the remote key — see resolveProjects) and
+	// (KELD_PROJECTS_FILE wins over the remote key — see resolveWorkstreams) and
 	// tell the sidecar before anything can ask it to attribute a block; later
 	// changes are picked up by onRemote (above) on the settings poll. Gated
 	// the same way onRemote's own call is — see the C4 note above.
@@ -1116,26 +1116,26 @@ func Run(ctx context.Context) error {
 	// retried connection-refused for up to postProjectsCallTimeout (30s) on
 	// essentially every cold start — BEFORE go pollSettings, the enrichment
 	// Worker, and the /enrich listener, so the whole daemon's startup stalled
-	// behind it. resolveProjects itself is cheap (env/remote lookup, no I/O
+	// behind it. resolveWorkstreams itself is cheap (env/remote lookup, no I/O
 	// beyond an optional local file read) and stays inline; only the actual
-	// HTTP call is deferred, inside maybePostProjectsAtStartup.
+	// HTTP call is deferred, inside maybePostWorkstreamsAtStartup.
 	//
 	// ⚠️ NB1 (round 2): making this call asynchronous REOPENED a race with
 	// onRemote's own poll-driven call above — pollSettings fires its first
 	// poll essentially immediately, so both goroutines can retry against the
-	// same cold sidecar concurrently, and lastProjects being mutex-guarded
-	// (projectsState) only prevents a DATA race, not an ORDERING one: whichever
+	// same cold sidecar concurrently, and lastWorkstreams being mutex-guarded
+	// (workstreamsState) only prevents a DATA race, not an ORDERING one: whichever
 	// POST physically lands last at the sidecar wins, independent of which
-	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostProjectsAtStartup
+	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostWorkstreamsAtStartup
 	// (projects.go) is what actually closes that: it never posts an EMPTY
 	// resolved list (which — before Atlas serves `projects` — is what every
 	// machine without KELD_PROJECTS_FILE resolves to, so it can never be the
-	// stale write that clobbers a real one) and re-checks lastProjects.changed
+	// stale write that clobbers a real one) and re-checks lastWorkstreams.changed
 	// immediately before posting a non-empty one, so a POST that raced a
 	// concurrent update becomes a no-op instead of overwriting it.
-	if attribOn && svc.PostProjects != nil {
-		p := resolveProjects(nil)
-		postProjects := svc.PostProjects
+	if attribOn && svc.PostWorkstreams != nil {
+		p := resolveWorkstreams(nil)
+		postWorkstreams := svc.PostWorkstreams
 		// ⚠️ OBSERVED SYNCHRONOUSLY, POSTED ASYNCHRONOUSLY (I8). The attributor's
 		// first drainOnce runs the moment its goroutine starts, concurrently with
 		// the POST above, so the sidecar can legitimately answer
@@ -1147,14 +1147,14 @@ func Run(ctx context.Context) error {
 		// `projectsKnownNonEmpty` true for the whole of that window, so the
 		// attributor holds the job instead. The ordering is now enforced rather
 		// than incidental.
-		lastProjects.observe(p)
-		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
+		lastWorkstreams.observe(p)
+		go maybePostWorkstreamsAtStartup(postWorkstreams, lastWorkstreams, p)
 		// C4: a crash-restarted sidecar comes back with attribution._projects
-		// empty (module state in the parent process it lost), while lastProjects
+		// empty (module state in the parent process it lost), while lastWorkstreams
 		// still records it as told — so the change-gated POST would never speak
 		// again. Re-post on every respawn.
 		if svc.OnSidecarRespawn != nil {
-			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
+			svc.OnSidecarRespawn(func() { repostWorkstreamsAfterRespawn(postWorkstreams, lastWorkstreams) })
 		}
 	}
 	// The integrations catalogue poll. Started unconditionally and outside the
@@ -1197,8 +1197,8 @@ func Run(ctx context.Context) error {
 		// it in cost nothing on a machine that never turned attribution on.
 		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
 			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution,
-			lastProjects.knownNonEmpty,
-			func() { repostProjectsAfterRespawn(svc.PostProjects, lastProjects) })
+			lastWorkstreams.knownNonEmpty,
+			func() { repostWorkstreamsAfterRespawn(svc.PostWorkstreams, lastWorkstreams) })
 		// A scheduled attribution job is "something wants an embedding (and,
 		// for a borderline pair, the verifier)" — the same demand-signal shape
 		// the signal-embeddings path uses its own advance hook for. Both
@@ -1221,7 +1221,7 @@ func Run(ctx context.Context) error {
 		// restart, which is the same live-re-check shape enc's own `gate`
 		// argument uses for the org's `features` toggle.
 		onBlockPublished = demandModelsForAttribution(onBlockPublished,
-			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
+			lastWorkstreams.knownNonEmpty, enc.demand, verifierEnc.demand)
 		// THE DELIVERY LEDGER hangs off the same hook, CHAINED rather than
 		// replacing: attribution's model-demand wrapper and the ledger both want
 		// to know a block published, and neither is the other's precondition.

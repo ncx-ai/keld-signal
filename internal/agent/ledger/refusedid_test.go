@@ -21,7 +21,7 @@ import (
 // Once, not per block: this ledger's `failOnce` exists because a per-row line
 // on a machine with 105 blocks is a flood, which is the shape operators filter
 // out — the same reasoning the block emitter's `routeGone` latch uses.
-func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
+func TestARefusedWorkstreamIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	setHome(t)
 	s := New()
 
@@ -29,7 +29,7 @@ func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	// A shape the validator refuses, standing in for whatever the next
 	// unanticipated id looks like.
-	s.Attribute(k, Attributed{ProjectID: "keld/projects:x", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, Attributed{WorkstreamID: "keld/projects:x", Method: MethodRepo}, ReasonNone, time.Now())
 
 	b, err := os.ReadFile(paths.DebugLogPath())
 	if err != nil {
@@ -57,7 +57,7 @@ func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 // every duplicated rule into an un-attributed block. It is the exact shape a
 // careless "make conflicts more thorough" change would break, and there is a
 // real project on this developer's machine listing its repo twice.
-func TestOneProjectNamingARepoTwiceIsNotAConflict(t *testing.T) {
+func TestOneWorkstreamNamingARepoTwiceIsNotAConflict(t *testing.T) {
 	setHome(t)
 	s := New()
 
@@ -67,7 +67,7 @@ func TestOneProjectNamingARepoTwiceIsNotAConflict(t *testing.T) {
 	// no conflict list. The duplicate-rule case must reach the store looking
 	// exactly like this, never as a two-entry conflict naming the same project
 	// twice.
-	s.Attribute(k, Attributed{ProjectID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, Attributed{WorkstreamID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
 
 	cell := attributedCell(t, s, k)
 	if cell["project_id"] != atlasID {

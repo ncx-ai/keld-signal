@@ -377,7 +377,7 @@ package enrich
 // `-v21`.
 //
 // v22: block rows may carry projects/projects_status/attribution — see
-// ProjectAttribution and AttributionMeta. All three are omitempty, so this
+// WorkstreamAttribution and AttributionMeta. All three are omitempty, so this
 // bump is not a vocabulary change for the eval to re-score: a machine with
 // attribution off still publishes byte-identical to v21.
 const SchemaVersion = 23

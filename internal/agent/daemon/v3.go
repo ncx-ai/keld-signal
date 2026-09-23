@@ -8,9 +8,9 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
-	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/ui"
+	"github.com/ncx-ai/keld-signal/internal/agent/workstreams"
 	"github.com/ncx-ai/keld-signal/internal/atlas"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -26,8 +26,8 @@ import (
 // nothing here returns an error to Run: the collector is the product, and the
 // window onto it is not allowed to take it down.
 type v3 struct {
-	ledger   *ledger.Store
-	projects *projects.Store
+	ledger      *ledger.Store
+	workstreams *workstreams.Store
 	// remote is the last org settings seen on the poll. An atomic pointer
 	// rather than a mutex because it is written from the single poll goroutine
 	// and read from every HTTP request; and a POINTER rather than a value so
@@ -50,30 +50,30 @@ type v3 struct {
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	l := ledger.New()
-	p := projects.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
+	p := workstreams.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
 
 	// The projects document needs two things this package owns: the blocks
 	// this machine has closed, and the org's vocabulary. Both are injected as
-	// functions so internal/agent/projects depends on neither the ledger nor
+	// functions so internal/agent/workstreams depends on neither the ledger nor
 	// the Atlas connector — it is a pure decision layer and must stay one.
 	p.Blocks = ledgerBlocks{l}
-	v := &v3{ledger: l, projects: p, atlasOn: cl.Enabled(), atlas: cl}
-	p.RemoteProjects = func() []settings.RemoteProject {
+	v := &v3{ledger: l, workstreams: p, atlasOn: cl.Enabled(), atlas: cl}
+	p.RemoteWorkstreams = func() []settings.RemoteWorkstream {
 		r := v.remote.Load()
-		if r == nil || r.Projects == nil {
+		if r == nil || r.Workstreams == nil {
 			return nil
 		}
-		return *r.Projects
+		return *r.Workstreams
 	}
 	// The block row's `project_matches` list needs the org's values too, and it is
 	// stamped from a hook the emitter already holds — see projectmatches.go for why
 	// this cannot be a parameter.
-	setRemoteProjects(p.RemoteProjects)
+	setRemoteWorkstreams(p.RemoteWorkstreams)
 	if !cl.Enabled() {
 		// With Atlas off there is no org vocabulary at all, and saying so is
 		// better than an empty list that reads as "your org has declared
 		// nothing". The projects store already treats nil as unknown.
-		p.RemoteProjects = nil
+		p.RemoteWorkstreams = nil
 	}
 	return v
 }
@@ -95,7 +95,7 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 // which the two could coexist does not exist.
 //
 // The rule itself is one line: an Atlas project's rules take precedence. See
-// projects.Reconcile for why that single rule produces both outcomes — deletion
+// workstreams.Reconcile for why that single rule produces both outcomes — deletion
 // when nothing is left, and a trimmed remainder when something is.
 func (v *v3) observeRemote(r *settings.Remote) {
 	if v == nil || r == nil {
@@ -106,28 +106,28 @@ func (v *v3) observeRemote(r *settings.Remote) {
 	v.reconcileWithRemote()
 }
 
-// reconcileWithRemote applies projects.Reconcile against the org's current
+// reconcileWithRemote applies workstreams.Reconcile against the org's current
 // definitions.
 //
 // Errors are logged and dropped rather than retried: the next poll is five
 // minutes away and carries the same definitions, so a failed write costs one
 // interval. What it must never do is leave the document half-applied, and it
-// cannot — projects.Store.Update runs the whole transformation under one lock
+// cannot — workstreams.Store.Update runs the whole transformation under one lock
 // or none of it.
 func (v *v3) reconcileWithRemote() {
-	if v.projects == nil || v.projects.RemoteProjects == nil {
+	if v.workstreams == nil || v.workstreams.RemoteWorkstreams == nil {
 		return
 	}
-	remote := projects.FromRemoteProjects(v.projects.RemoteProjects())
+	remote := workstreams.FromRemoteWorkstreams(v.workstreams.RemoteWorkstreams())
 	if len(remote) == 0 {
 		return
 	}
-	var removed []projects.Removed
-	var trimmed []projects.Trimmed
-	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
+	var removed []workstreams.Removed
+	var trimmed []workstreams.Trimmed
+	if _, err := v.workstreams.Update(func(d workstreams.Document) (workstreams.Document, error) {
 		// Read fresh, not captured: the exclusion list is a local setting a
 		// person can change between polls.
-		next, rm, tr := projects.Reconcile(d, remote, projects.GroupOffFunc(settings.Load()))
+		next, rm, tr := workstreams.Reconcile(d, remote, workstreams.GroupOffFunc(settings.Load()))
 		removed, trimmed = rm, tr
 		return next, nil
 	}); err != nil {
@@ -163,7 +163,7 @@ func (v *v3) routes() []ingress.Route {
 		// so an unconfigured machine (the onboarding handler mounts these too)
 		// answers 409 not_applicable rather than pretending to restart nothing.
 		serviceRestartRoute(func() error { return currentServiceHealth.Load().RestartSidecar() }, nil),
-		ingress.ProjectsRoute(v.projects),
+		ingress.WorkstreamsRoute(v.workstreams),
 		// The Integrations pane's two routes. nil seams ⇒ the live readers:
 		// integrations.Snapshot off disk, and integrations.ApplyEntry through
 		// the same adapters and the same write path `keld signal setup` uses.
@@ -191,14 +191,14 @@ func (v *v3) routes() []ingress.Route {
 // been installed, which is the wrong direction for a page people open daily.
 type ledgerBlocks struct{ l *ledger.Store }
 
-func (b ledgerBlocks) SinceWeekStart() ([]projects.BlockSummary, error) {
+func (b ledgerBlocks) SinceWeekStart() ([]workstreams.BlockSummary, error) {
 	recs, err := b.l.BlocksSince(time.Now().AddDate(0, 0, -7), 5000)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]projects.BlockSummary, 0, len(recs))
+	out := make([]workstreams.BlockSummary, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, projects.BlockSummary{
+		out = append(out, workstreams.BlockSummary{
 			SessionID: r.Session,
 			Start:     r.Start,
 			// dimsOfRecord, not a second copy of the same conversion: the

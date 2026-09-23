@@ -26,7 +26,7 @@ type Remote struct {
 	// auto-update target. A nil block means NO UPDATES; see release.go for why
 	// that is the strictest reading of the omitted-key rule in this file.
 	Release *Release `json:"agent_release"`
-	// Projects is the org's project-definition list for on-device block
+	// Workstreams is the org's project-definition list for on-device block
 	// attribution. A pointer so an absent key ("Atlas does not serve this
 	// yet") is distinct from an explicit empty list.
 	//
@@ -42,7 +42,7 @@ type Remote struct {
 	//     an admin types `repository: acme/web` and this field receives
 	//     `acme/web`. A deterministic repo rule must therefore match by SHAPE,
 	//     never by a prefix that does not survive the wire.
-	// See internal/atlas.FromRemoteProjects, which regroups them, and
+	// See internal/atlas.FromRemoteWorkstreams, which regroups them, and
 	// docs/v3/contracts.md for what is still missing (a write path).
-	Projects *[]RemoteProject `json:"projects"`
+	Workstreams *[]RemoteWorkstream `json:"projects"`
 }
