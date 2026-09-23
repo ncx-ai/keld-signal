@@ -28,15 +28,24 @@ func Snapshot(d Deps, opts Options) Response {
 		d.Lanes = LoadLanes()
 	}
 
+	// Read ONCE for the whole snapshot, like the manifest above: it is one small
+	// file and every entry asks the same question of it.
+	repairs := LoadRepairs()
+
 	now := d.Now().UTC()
 	facts := make(map[string]Facts, len(Catalogue))
 	for _, e := range Catalogue {
+		var repair *Repair
+		if r, ok := repairs[e.ID]; ok {
+			repair = &r
+		}
 		facts[e.ID] = Facts{
 			Configured:  Configured(e, d.Manifest),
 			Wiring:      ReadWiring(e, d),
 			Lanes:       ReadLanes(e, d),
 			ToolVersion: ToolVersion(e, d),
 			BackupPath:  BackupPath(e, d.Manifest),
+			Repair:      repair,
 		}
 	}
 	return Respond(now, Compute(now, Catalogue, facts, opts), opts.AutoSetup)

@@ -73,7 +73,7 @@ func liveIntegrationsSnapshot() integrations.Response {
 	set := settings.Load()
 	return integrations.Snapshot(
 		integrations.Deps{Lanes: currentIntegrationLanes()},
-		integrations.Options{AutoSetup: set.AutoSetupEnabled()},
+		integrations.Options{AutoSetup: set.AutoSetupEnabled(), ToolOTLP: set.ToolOTLPEnabled()},
 	)
 }
 

@@ -68,6 +68,7 @@ func (f *fakeAtlasClient) Settings(context.Context) (settings.Remote, error) {
 	return settings.Remote{}, nil
 }
 func (f *fakeAtlasClient) LastResponse() (int, time.Time) { return 0, time.Time{} }
+func (f *fakeAtlasClient) Note(int)                       {}
 
 var _ atlas.Client = (*fakeAtlasClient)(nil)
 

@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -256,12 +258,34 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 	}
 }
 
+// ErrNotPaired is what every Send answers while this machine has no pairing:
+// `~/.keld/hook.json` carries no endpoint yet, so there is no Atlas to post to.
+//
+// ⚠️ **IT IS AN ERROR ON PURPOSE, AND THAT IS THE OPPOSITE OF localOnlySender.**
+// "Send to Atlas is off" is a person saying don't, and discarding is the honest
+// answer to it (see daemon/localonly.go). "Not paired yet" is a person who has
+// not finished signing in, and the work is owed to them the moment they do — so
+// every caller must HOLD: the block emitter keeps its cursor, the attribution
+// job stays in its store, the enrichment worker re-spools the pointer. Reporting
+// success here would advance each of those past rows Atlas never received.
+var ErrNotPaired = errors.New("this machine is not paired with Atlas yet (no endpoint in ~/.keld/hook.json)")
+
 // Publisher POSTs enrichments to Atlas.
 type Publisher struct {
 	Endpoint string
-	Token    func() string
-	Actor    string
-	HTTP     *http.Client
+	// EndpointFn, when non-nil, resolves the destination PER SEND and takes
+	// precedence over Endpoint.
+	//
+	// It is the endpoint given the treatment Token already had, for the same
+	// reason: the daemon now starts every collector before the machine is
+	// paired, so the address is not known at construction and capturing it
+	// would rebuild the very gate that left an unpaired machine collecting
+	// nothing. Install it at construction (NewDeferred); the VALUE behind it
+	// changes later, under the pairing's own lock.
+	EndpointFn func() string
+	Token      func() string
+	Actor      string
+	HTTP       *http.Client
 }
 
 // New returns a Publisher targeting the enrichments endpoint. token is called
@@ -271,15 +295,38 @@ func New(endpoint string, token func() string, actor string) *Publisher {
 	return &Publisher{Endpoint: endpoint, Token: token, Actor: actor, HTTP: &http.Client{Timeout: 10 * time.Second}}
 }
 
+// NewDeferred returns a Publisher whose destination is resolved on every send.
+// endpoint returning "" means "not paired yet" and every Send answers
+// ErrNotPaired without touching the network.
+func NewDeferred(endpoint func() string, token func() string, actor string) *Publisher {
+	return &Publisher{EndpointFn: endpoint, Token: token, Actor: actor, HTTP: &http.Client{Timeout: 10 * time.Second}}
+}
+
+// url resolves this send's destination, or ErrNotPaired when there is none.
+func (p *Publisher) url() (string, error) {
+	if p.EndpointFn != nil {
+		u := strings.TrimSpace(p.EndpointFn())
+		if u == "" {
+			return "", ErrNotPaired
+		}
+		return u, nil
+	}
+	return p.Endpoint, nil
+}
+
 // Send POSTs one enrichment; returns an error on transport failure or status >= 400.
 func (p *Publisher) Send(e Enrichment) error {
 	body, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
+	url, err := p.url()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

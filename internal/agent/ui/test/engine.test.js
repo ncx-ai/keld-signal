@@ -1,0 +1,153 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { engineNotice, REASON_TEXT, ENGINE_DONE_LINGER_MS } from "../app.js";
+
+// A healthy machine gets NOTHING. The whole direction of travel here — wizard
+// pane, then card with a button, then this — has been removing decisions
+// nobody had the information to make.
+test("a current engine says nothing at all", () => {
+  assert.equal(engineNotice({ needed: true, installed: true, outdated: false, status: "idle" }), null);
+});
+
+// ml_backend "off" is a choice. Nothing here may undo it.
+test("a machine that needs no engine says nothing", () => {
+  assert.equal(engineNotice({ needed: false, installed: false, outdated: true, status: "idle" }), null);
+});
+
+// ⚠️ NO BUTTON ON THE ORDINARY PATH. The daemon starts its own fetch
+// (engineManager.autoStart) because a mismatched engine is version SKEW, not a
+// preference — the failure this project paid three silent weeks for. Offering
+// "Update" would be asking permission for work already running.
+test("an outdated engine reports, it does not ask", () => {
+  const n = engineNotice({ needed: true, installed: true, outdated: true, version: "v3.0.4", status: "idle" });
+  assert.equal(n.action, "", "an outdated engine must not render a button");
+  assert.match(n.title, /Updating/);
+});
+
+test("a missing engine reports installing, also with no button", () => {
+  const n = engineNotice({ needed: true, installed: false, outdated: false, status: "idle" });
+  assert.equal(n.action, "");
+  assert.match(n.title, /Installing/);
+});
+
+// "Updating" and "Installing" are different facts to the reader: one machine is
+// catching up with itself, the other is getting the thing for the first time.
+test("the verb distinguishes a first install from an update", () => {
+  const install = engineNotice({ needed: true, installed: false, status: "running", received: 1, total: 10 });
+  const update = engineNotice({ needed: true, installed: true, outdated: true, status: "running", received: 1, total: 10 });
+  assert.match(install.title, /Installing/);
+  assert.match(update.title, /Updating/);
+});
+
+test("a download in flight shows its percentage", () => {
+  const n = engineNotice({ needed: true, installed: true, outdated: true, status: "running", received: 50, total: 100 });
+  assert.equal(n.kind, "running");
+  assert.equal(n.percent, 50);
+  assert.equal(n.detail, "50%");
+  assert.equal(n.action, "");
+});
+
+// ⚠️ NEVER AN INVENTED NUMBER. A bar sitting at 0% while bytes arrive is the
+// progress indicator lying — which is how the installer pane read while its
+// download had already finished.
+test("an indeterminate download shows no percentage", () => {
+  const n = engineNotice({ needed: true, installed: false, status: "running", received: 0, total: 0 });
+  assert.equal(n.percent, null);
+  assert.equal(n.detail, "Starting…");
+});
+
+// The version is the whole point of having watched it happen; a bar that just
+// vanishes leaves somebody wondering whether it worked.
+test("a finished update names the version it landed on", () => {
+  const n = engineNotice({ needed: true, installed: true, outdated: false, status: "done", version: "v3.0.5-rc.5" });
+  assert.equal(n.kind, "done");
+  assert.match(n.detail, /v3\.0\.5-rc\.5/);
+  assert.equal(n.action, "");
+});
+
+// A failure is the ONE place a human choice exists again: retry now, or leave
+// it to the next daemon start. Both are said.
+test("a failure keeps the reason and says Signal retries anyway", () => {
+  const n = engineNotice({
+    needed: true, installed: true, outdated: true, status: "failed",
+    error: "retry: gave up after 5 attempt(s): http status 504",
+  });
+  assert.equal(n.kind, "failed");
+  assert.equal(n.action, "Try again");
+  assert.match(n.detail, /504/);
+  assert.match(n.detail, /try again when it next starts/);
+});
+
+test("a failure with no reason still says so honestly", () => {
+  const n = engineNotice({ needed: true, installed: false, status: "failed", error: "" });
+  assert.match(n.detail, /No reason was reported/);
+});
+
+test("no answer yet is not an absent engine", () => {
+  assert.equal(engineNotice(null), null);
+  assert.equal(engineNotice(undefined), null);
+});
+
+// ⚠️ THE PILL AND THE BAR MUST NOT CONTRADICT EACH OTHER. The strip's own copy
+// told people to "reinstall to update it" — an instruction for work the daemon
+// is already doing, printed directly above a bar showing it happen.
+test("the health pill no longer tells anyone to reinstall by hand", () => {
+  assert.doesNotMatch(REASON_TEXT.sidecar_outdated, /reinstall/i);
+  assert.match(REASON_TEXT.sidecar_outdated, /updating itself/i);
+});
+
+// ⚠️ A PROGRESS BAR FROM A DAEMON WE CANNOT REACH IS A NUMBER ABOUT NOTHING.
+// loadEngine keeps the last known state on a failed fetch, deliberately — an
+// unreachable daemon is not an absent engine. But on 2026-09-22 a daemon took
+// itself down mid-install and the page sat on "Updating… 100%" indefinitely: an
+// install that had SUCCEEDED, rendered as a hang. The offline banner owns that
+// message; the bar must not talk over it.
+//
+// engineNotice itself is pure and has no view of connectivity, so this is the
+// renderer's rule — asserted here against the same shape the renderer checks.
+test("a stale running state is not a fact once the page is offline", () => {
+  const stale = { needed: true, installed: true, outdated: true, status: "running", received: 100, total: 100 };
+  // The notice still describes it — that is the pure function's job —
+  const n = engineNotice(stale);
+  assert.equal(n.percent, 100);
+  // — and renderEngineCard suppresses it while state.offline, which the
+  // offline banner covers instead. Pinned in app.js at the `state.offline`
+  // guard; this test names the contract so removing that guard has a stated
+  // cost rather than a silent one.
+  assert.equal(n.kind, "running");
+});
+
+// ⚠️ THE RECEIPT IS NOT A STATE. The daemon keeps `status: "done"` until it next
+// restarts — correct for /v1/engine, whose readers want to know what happened —
+// but on the page that pinned a green bar to the bottom of the screen for the
+// rest of the day, announcing work that finished hours ago.
+test("the updated line clears itself after five seconds", () => {
+  const done = { needed: true, installed: true, outdated: false, status: "done", version: "v3.0.5-rc.5" };
+  const at = 1_000_000;
+
+  // Long enough to read one short sentence and see which version landed.
+  assert.notEqual(engineNotice(done, { doneSince: at, now: at }), null);
+  assert.notEqual(engineNotice(done, { doneSince: at, now: at + 4_999 }), null);
+  // Then gone — a receipt that never clears is furniture.
+  assert.equal(engineNotice(done, { doneSince: at, now: at + ENGINE_DONE_LINGER_MS }), null);
+  assert.equal(engineNotice(done, { doneSince: at, now: at + 60_000 }), null);
+});
+
+// A caller with no clock (every pure test of the copy above) must still see the
+// message: a missing timestamp cannot silently suppress it.
+test("no clock means the line stays, rather than vanishing", () => {
+  const done = { needed: true, installed: true, outdated: false, status: "done", version: "v3.0.5-rc.5" };
+  assert.notEqual(engineNotice(done), null);
+  assert.notEqual(engineNotice(done, { doneSince: 0, now: 9_999_999 }), null);
+});
+
+// ⚠️ ONLY THE RECEIPT EXPIRES. A download still running, and a failure still
+// needing a decision, are states rather than receipts — they must survive any
+// amount of time on screen.
+test("a running download and a failure never time out", () => {
+  const at = 1_000_000, late = { doneSince: at, now: at + 600_000 };
+  const running = engineNotice({ needed: true, installed: true, outdated: true, status: "running", received: 1, total: 2 }, late);
+  const failed = engineNotice({ needed: true, installed: false, status: "failed", error: "http status 504" }, late);
+  assert.equal(running.kind, "running");
+  assert.equal(failed.kind, "failed");
+});

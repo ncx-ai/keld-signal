@@ -54,7 +54,7 @@ func TestAStaleLiveSessionWinsOverANewerAdoptedOne(t *testing.T) {
 		},
 	}.withDefaults()
 
-	start, adopted := restartFacts(d, Entry{ID: "claude_code"}, configMtime)
+	start, adopted, _ := restartFacts(d, Entry{ID: "claude_code"}, configMtime)
 	if adopted {
 		t.Fatal("reported adopted while a live session is still on the old config")
 	}
@@ -87,7 +87,7 @@ func TestAQuietStaleSessionDoesNotHoldTheRowOpen(t *testing.T) {
 		},
 	}.withDefaults()
 
-	if _, adopted := restartFacts(d, Entry{ID: "claude_code"}, configMtime); !adopted {
+	if _, adopted, _ := restartFacts(d, Entry{ID: "claude_code"}, configMtime); !adopted {
 		t.Error("a transcript quiet for three hours held the restart notice open")
 	}
 }

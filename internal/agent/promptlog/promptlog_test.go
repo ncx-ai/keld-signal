@@ -101,7 +101,7 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 	if strings.Contains(lb, "secret response body") {
 		t.Fatalf("response text leaked: %s", lb)
 	}
-	for _, want := range []string{"api_request", "assistant_response", "claude-opus-4-8", "req_123", "input_tokens", "output_tokens", "response_length", "service_tier", "cache_creation_1h_tokens"} {
+	for _, want := range []string{"api_request", "claude-opus-4-8", "req_123", "input_tokens", "output_tokens", "service_tier", "cache_creation_1h_tokens"} {
 		if !strings.Contains(lb, want) {
 			t.Fatalf("logs body missing %q: %s", want, lb)
 		}
@@ -126,12 +126,24 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 // exactly the CLI's captured attribute key set MINUS the documented omissions
 // (prompt/response text = privacy; the rest = not reconstructable host-side). Any
 // structural drift from the CLI schema fails here.
+//
+// ⚠️ **`assistant_response` IS NO LONGER MIRRORED, AND THAT IS A DELIBERATE
+// REMOVAL RATHER THAN AN OVERSIGHT.** It carried exactly one field of its own,
+// `response_length`, which is a MEASUREMENT OF RESPONSE TEXT and is priced by
+// nothing. It also could not be told apart from `api_request` under the natural
+// dedup key: Claude Code stamps both records with the SAME `request_id` and
+// distinguishes them only by `event.sequence`, a process-local counter no
+// transcript reproduces. And Claude Code writes one assistant LINE per content
+// block (measured: 13,755 lines over 7,683 requests on the 40 largest real
+// transcripts here), so a per-request `response_length` is not even computable
+// without buffering a whole request. Dropping it removes a text-derived number
+// from the wire and leaves one record per request. Re-adding it needs a key that
+// is not the request id.
 func TestFidelityMirrorsCLISchema(t *testing.T) {
 	// Oracle: captured from a real `claude` OTLP export (2026-07-21).
 	oracle := map[string][]string{
-		"user_prompt":        {"event.name", "event.sequence", "event.timestamp", "message.uuid", "organization.id", "prompt", "prompt.id", "prompt_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
-		"api_request":        {"cache_creation_tokens", "cache_read_tokens", "client_request_id", "cost_usd", "cost_usd_micros", "duration_ms", "effort", "event.name", "event.sequence", "event.timestamp", "input_tokens", "model", "organization.id", "output_tokens", "prompt.id", "query_source", "request_id", "session.id", "speed", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
-		"assistant_response": {"event.name", "event.sequence", "event.timestamp", "message.uuid", "model", "organization.id", "prompt.id", "query_source", "request_id", "response", "response_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
+		"user_prompt": {"event.name", "event.sequence", "event.timestamp", "message.uuid", "organization.id", "prompt", "prompt.id", "prompt_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
+		"api_request": {"cache_creation_tokens", "cache_read_tokens", "client_request_id", "cost_usd", "cost_usd_micros", "duration_ms", "effort", "event.name", "event.sequence", "event.timestamp", "input_tokens", "model", "organization.id", "output_tokens", "prompt.id", "query_source", "request_id", "session.id", "speed", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
 	}
 	// Documented omissions: privacy (text) + not reconstructable host-side +
 	// cost (dropped deliberately — no first-hand cost in the transcript; Atlas
@@ -141,6 +153,16 @@ func TestFidelityMirrorsCLISchema(t *testing.T) {
 		"terminal.type": true, "user.id": true, "user.account_id": true, // no host-side source
 		"duration_ms": true, "query_source": true, "speed": true, // runtime-only
 		"cost_usd": true, "cost_usd_micros": true, // derived cost dropped; Atlas computes from tokens
+	}
+	// Per-EVENT omissions. ⚠️ `event.sequence` is dropped from `api_request` only
+	// — the PRICED record — because Atlas keys a Claude-Code row on
+	// `session.id:event.sequence` and falls back to `request_id`, and a
+	// process-local counter cannot dedup a re-read while the tool's own
+	// `requestId` can. `user_prompt` keeps it: it carries no priced field and
+	// Claude Code sends no request id on it, so there is no natural key to use
+	// instead and a duplicate costs a prompt count rather than money.
+	omitFrom := map[string]map[string]bool{
+		"api_request": {"event.sequence": true},
 	}
 	// Intentional extensions beyond the CLI schema: exact token detail Atlas needs
 	// to compute cost accurately (service tier + 1h/5m cache-write split).
@@ -160,7 +182,7 @@ func TestFidelityMirrorsCLISchema(t *testing.T) {
 	for event, keys := range oracle {
 		want := map[string]bool{}
 		for _, k := range keys {
-			if !omit[k] {
+			if !omit[k] && !omitFrom[event][k] {
 				want[k] = true
 			}
 		}
@@ -261,21 +283,66 @@ func TestSourcesFromEnv(t *testing.T) {
 	}
 }
 
-func TestCodexNotHostEmitted(t *testing.T) {
+// ⚠️ THESE TWO USED TO ASSERT THAT CODEX AND GEMINI "MUST NOT BE HOST-SIDE
+// EMITTED; THEIR NATIVE OTEL IS USED", AND THE MECHANISM NOW EXISTS FOR BOTH.
+// What they pin is narrower and still load-bearing: the ENV DEFAULT does not
+// turn them on. Widening the mirror to three tools and deciding which tools it
+// mirrors are separate changes — the policy is the per-tool `tool_otlp` setting,
+// applied through SetSources at the one call site in daemon.go (WS3). A default
+// flipped here would start mirroring on every machine the moment this binary
+// shipped, beside tools still posting their own OTLP, and Atlas would count the
+// same request twice for as long as both ran.
+func TestCodexNotEnabledByTheEnvDefault(t *testing.T) {
 	t.Setenv("KELD_WATCH_TELEMETRY", "")
 	t.Setenv("KELD_WATCH_TELEMETRY_SOURCES", "")
 	if SourcesFromEnv()["codex"] {
-		t.Error("codex must not be host-side emitted; its native OTEL is used")
+		t.Error("codex must not be in the default source set; WS3's tool_otlp switch turns it on")
 	}
 }
 
-func TestGeminiNotHostEmitted(t *testing.T) {
+func TestGeminiNotEnabledByTheEnvDefault(t *testing.T) {
 	t.Setenv("KELD_WATCH_TELEMETRY", "")
 	t.Setenv("KELD_WATCH_TELEMETRY_SOURCES", "")
 	if SourcesFromEnv()["gemini"] {
-		t.Error("gemini must not be host-side emitted; its native OTEL is used")
+		t.Error("gemini must not be in the default source set; WS3's tool_otlp switch turns it on")
 	}
 }
+
+// TestSetSourcesIsTheSwitch covers the seam WS3 wires: the set is replaceable at
+// runtime, replacement is whole (never merged — a stale source left behind is a
+// tool being mirrored after its own OTLP was turned back on), and a source that
+// is off emits nothing at all.
+func TestSetSourcesIsTheSwitch(t *testing.T) {
+	c, srv := newCapSink()
+	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+
+	tel.Observe("claude_code", "/tmp/s.jsonl", []byte(claudeAssistantLine))
+	if n := len(c.bodies("/v1/logs")); n != 0 {
+		t.Fatalf("claude_code is not in the set; expected 0 POSTs, got %d", n)
+	}
+
+	tel.SetSources(map[string]bool{"claude_code": true})
+	tel.Observe("claude_code", "/tmp/s.jsonl", []byte(claudeAssistantLine))
+	if n := len(c.bodies("/v1/logs")); n != 1 {
+		t.Fatalf("after SetSources expected 1 POST, got %d", n)
+	}
+	// cowork must be GONE, not merged.
+	tel.Observe("cowork", "/tmp/c.jsonl", []byte(claudeAssistantLine))
+	if n := len(c.bodies("/v1/logs")); n != 1 {
+		t.Fatalf("SetSources must REPLACE the set, not merge into it; got %d POSTs", n)
+	}
+
+	tel.SetSources(nil)
+	tel.Observe("claude_code", "/tmp/s2.jsonl", []byte(claudeAssistantLine))
+	if n := len(c.bodies("/v1/logs")); n != 1 {
+		t.Fatalf("an empty set must mirror nothing; got %d POSTs", n)
+	}
+}
+
+const claudeAssistantLine = `{"type":"assistant","requestId":"R9","uuid":"A9","sessionId":"S9","version":"2.1.274",` +
+	`"timestamp":"2026-09-18T10:00:05.000Z","message":{"role":"assistant","model":"claude-opus-5","id":"msg_9",` +
+	`"content":[],"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}}`
 
 // sanity: buildLogsPayload helper removed; ensure JSON round-trips for a hand rec.
 func TestLogRecordJSON(t *testing.T) {

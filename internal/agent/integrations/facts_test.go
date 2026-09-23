@@ -75,8 +75,8 @@ func TestReadWiringSeesTheProxyAddressInTheConfig(t *testing.T) {
 	if !w.PointsAtProxy {
 		t.Fatal("PointsAtProxy = false for a config naming the proxy address")
 	}
-	if w.ConfigMtime.IsZero() {
-		t.Fatal("ConfigMtime is zero for a config file that exists")
+	if w.ConfiguredAt.IsZero() {
+		t.Fatal("ConfiguredAt is zero for a config file that exists")
 	}
 	w = ReadWiring(e, Deps{ProxyAddr: "127.0.0.1:19999"})
 	if w.PointsAtProxy {

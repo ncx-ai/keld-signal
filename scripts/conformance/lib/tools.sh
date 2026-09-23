@@ -455,6 +455,24 @@ tool_await_pid() {
 # not to police latency.
 PROMPT_BUDGET=${KELD_CONFORM_PROMPT_BUDGET:-300}
 
+# tool_prompt_continues <label> — does this prompt CONTINUE the tool's most
+# recent session rather than start a new one?
+#
+# ⚠️ **ONE PREDICATE, BECAUSE TWO TOOLS ASK IT AND A THIRD CALLER NEEDED IT.**
+# Chain A's `close-block` has to continue (a block closes only when a LATER
+# block exists IN THE SAME session); chain C's `resume-*` steps have to continue
+# for a different reason — a RESUMED session is the case where the transcript's
+# start instant never moves, which is what made a machine read
+# `restart_required` forever. The two branches below both consulted the same
+# literal, so a second continuation label meant editing both and hoping; now
+# there is one place to add one.
+tool_prompt_continues() {
+  case "$1" in
+    close-block|resume-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # tool_prompt <tool> <label> — one headless prompt.
 #
 # The prompt is OURS ("reply with one word"), which is what makes the resulting
@@ -473,7 +491,7 @@ tool_prompt() {
       # "0 block batch(es)". A block closes when a LATER block exists IN THE
       # SAME session, so the closer has to continue the one it is closing.
       local cont=""
-      [ "$label" = "close-block" ] && cont="--continue"
+      tool_prompt_continues "$label" && cont="--continue"
       say "prompt [$label]: claude -p${cont:+ $cont}"
       # shellcheck disable=SC2086  # cont is one optional flag
       ( cd "$WORK" && "$bin" -p $cont "reply with one word" \
@@ -517,7 +535,7 @@ tool_prompt() {
       # ⚠️ Same rule as Claude Code: a fresh `codex exec` is a new session and a
       # new rollout, so the closing turn RESUMES the most recent one instead.
       local cont=""
-      [ "$label" = "close-block" ] && cont="resume --last"
+      tool_prompt_continues "$label" && cont="resume --last"
       say "prompt [$label]: codex exec${cont:+ (resume --last)}"
       # ⚠️ NOT `env -i`. The hook keld registers is `keld __hook --source codex`,
       # and it resolves the daemon's address through KELD_HOME — which an empty

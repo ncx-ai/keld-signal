@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -24,6 +25,24 @@ type ToolManifest struct {
 	ConfigPath string         `json:"config_path"`
 	Managed    map[string]any `json:"managed"`
 	BackupPath *string        `json:"backup_path"`
+	// ConfiguredAt is when KELD last wrote this tool's config, and it is the
+	// only record of that instant anywhere on the machine.
+	//
+	// ⚠️ THE TOOL'S OWN CONFIG MTIME IS NOT THAT INSTANT, and reading it as one
+	// made a tool nobody had touched ask for a restart. Measured on the
+	// maintainer's machine 2026-09-18: Codex writes `hooks.state` trust entries
+	// into its own config.toml at session start (observed 20:56) and Claude Code
+	// rewrote settings.json on its own (observed 21:21). Both moved the mtime
+	// the integrations rule was treating as "when Signal configured this tool",
+	// so the row flipped to `restart_required` off the tool's own housekeeping.
+	//
+	// Written by every path that applies an adapter — `keld signal setup` and
+	// the daemon's integrations detector, which share `integrations.ApplyEntry`.
+	// A POINTER, and nil on every manifest written before this field existed:
+	// those machines fall back to the manifest file's mtime and then to the
+	// tool config's, in that order (see integrations.ReadWiring). A zero time
+	// would be indistinguishable from "keld wrote this at the epoch".
+	ConfiguredAt *time.Time `json:"configured_at"`
 }
 
 // Manifest is Keld's own state file (~/.keld/manifest.json).

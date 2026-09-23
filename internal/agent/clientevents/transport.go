@@ -39,8 +39,15 @@ import (
 // laptop that has been offline for a week from filling a disk with vectors.
 type Transport struct {
 	endpoint string
-	token    func() string
-	spoolDir string
+	// endpointFn, when non-nil, resolves the destination PER POST and takes
+	// precedence over endpoint. It exists because the daemon now runs its
+	// collectors BEFORE the machine is paired — the telemetry proxy has to be
+	// listening on 14318 from the first second or every already-configured tool
+	// posts into a closed port — so the address is genuinely unknown at
+	// construction. See NewPendingTransport.
+	endpointFn func() string
+	token      func() string
+	spoolDir   string
 
 	policy retry.Policy
 	// post is the real POST, returning the RESPONSE BODY as well as the status so
@@ -126,6 +133,43 @@ func NewTransport(endpoint string, token func() string, spoolDir string) *Transp
 	return t
 }
 
+// ErrNotPaired is what a pending Transport answers while endpointFn resolves to
+// "": this machine has not been paired with Atlas yet.
+//
+// ⚠️ **"NOT PAIRED" AND "SEND TO ATLAS IS OFF" LOOK IDENTICAL AND MUST NOT
+// BEHAVE THE SAME WAY.** Both present as no endpoint, and the paragraph above
+// explains why the second DISCARDS: a machine nobody is collecting from has
+// nowhere for its batches to go, and spooling them grows a queue that can never
+// drain. The first is the opposite — somebody is halfway through signing in, and
+// the batch is owed to them the moment they finish — so it SPOOLS, against the
+// same bounded, drop-oldest spool every other outage uses. The two are kept
+// apart by which constructor was called, not by inspecting a string.
+var ErrNotPaired = errors.New("this machine is not paired with Atlas yet (no endpoint in ~/.keld/hook.json)")
+
+// NewPendingTransport builds a Transport whose destination is resolved on every
+// send. While endpoint resolves to "" the batch is SPOOLED and ErrNotPaired is
+// returned; a drain is a no-op rather than a delete, so nothing is thrown away
+// for want of a pairing that has not arrived yet.
+func NewPendingTransport(endpoint func() string, token func() string, spoolDir string) *Transport {
+	t := NewTransport("pending", token, spoolDir)
+	t.endpointFn = endpoint
+	return t
+}
+
+// pending reports that this Transport has a resolver and it currently answers
+// "" — i.e. the machine is not paired.
+func (t *Transport) pending() bool {
+	return t.endpointFn != nil && strings.TrimSpace(t.endpointFn()) == ""
+}
+
+// url is the destination of this POST.
+func (t *Transport) url() string {
+	if t.endpointFn != nil {
+		return strings.TrimSpace(t.endpointFn())
+	}
+	return t.endpoint
+}
+
 // notAtlasResponse reports whether a 2xx body is something other than Atlas's.
 //
 // ⚠️ A CAPTIVE PORTAL RETURNS 200 WITH AN HTML LOGIN PAGE. Hotel and airport
@@ -147,7 +191,7 @@ func notAtlasResponse(body []byte) bool {
 // doPost is the real HTTP POST, returning the response body so the caller can
 // judge delivery by content rather than by status alone.
 func (t *Transport) doPost(ctx context.Context, body []byte) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url(), bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -181,6 +225,16 @@ func (t *Transport) doPost(ctx context.Context, body []byte) (int, []byte, error
 func (t *Transport) Deliver(ctx context.Context, body []byte) error {
 	if len(body) == 0 {
 		return nil
+	}
+	// NOT PAIRED YET: spool without dialling. There is no address to try, so a
+	// POST attempt could only fail in a way that has to be classified back into
+	// "hold it" — and going through the retry policy first would spend a full
+	// backoff per batch on a machine where nothing is wrong.
+	if t.pending() {
+		if spoolErr := t.spool(body); spoolErr != nil {
+			return fmt.Errorf("%w (spool failed: %v)", ErrNotPaired, spoolErr)
+		}
+		return ErrNotPaired
 	}
 	err := t.postWithRetry(ctx, body)
 	if err == nil {
@@ -261,6 +315,13 @@ func (t *Transport) enforceSpoolCap() error {
 // the sweep in a tight loop). On a permanent failure the poison file is removed
 // and the sweep continues. A missing/unreadable spool dir is a no-op.
 func (t *Transport) DrainSpool(ctx context.Context) error {
+	// NOT PAIRED YET: there is nowhere to drain to, and the drain's own
+	// permanent-failure branch DELETES a poison file — so running it unpaired
+	// would classify "no address" as a bad payload and destroy the backlog the
+	// pairing is about to make deliverable.
+	if t.pending() {
+		return ErrNotPaired
+	}
 	files, err := filepath.Glob(filepath.Join(t.spoolDir, "*.json"))
 	if err != nil || len(files) == 0 {
 		return nil

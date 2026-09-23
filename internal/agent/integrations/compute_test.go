@@ -29,9 +29,15 @@ func entry(t *testing.T, id string) Entry {
 }
 
 // one runs Compute over a single entry and returns its row.
+//
+// ⚠️ **WITH `ToolOTLP` ON, BECAUSE THIS IS THE DECISION TABLE AND THE TABLE HAS
+// AN otel ROW.** The lane is opt-in as of the Developer switch, so on a default
+// machine it is not expected and rows 5 and 6 are not reachable at all — which
+// is a fact about the switch, pinned in toolotlp_test.go, not about the rule.
+// Asking for the lane here keeps every row of §4 exercised as written.
 func one(t *testing.T, e Entry, f Facts) Integration {
 	t.Helper()
-	rows := Compute(now, []Entry{e}, map[string]Facts{e.ID: f}, Options{Window: 24 * time.Hour})
+	rows := Compute(now, []Entry{e}, map[string]Facts{e.ID: f}, Options{Window: 24 * time.Hour, ToolOTLP: true})
 	if len(rows) != 1 {
 		t.Fatalf("Compute returned %d rows, want 1", len(rows))
 	}
@@ -47,7 +53,7 @@ func configured() Facts {
 			ConfigPresent:        true,
 			ConfigMatchesAdapter: true,
 			PointsAtProxy:        true,
-			ConfigMtime:          now.Add(-48 * time.Hour),
+			ConfiguredAt:         now.Add(-48 * time.Hour),
 			NewestSessionStart:   now.Add(-2 * time.Hour),
 		},
 	}
@@ -78,7 +84,7 @@ func TestComputeDecisionTable(t *testing.T) {
 			row: "3 · newest session older than the config", id: "claude_code",
 			facts: func() Facts {
 				f := configured()
-				f.Wiring.NewestSessionStart = f.Wiring.ConfigMtime.Add(-time.Hour)
+				f.Wiring.NewestSessionStart = f.Wiring.ConfiguredAt.Add(-time.Hour)
 				// Lanes are live; the restart notice still wins.
 				f.Lanes = LaneFacts{LastHookPointer: ago(time.Minute), LastTelemetryForward: ago(time.Minute)}
 				return f
@@ -240,7 +246,7 @@ func TestIdleIsNeverBroken(t *testing.T) {
 // not a fault — even when the lanes would otherwise say broken.
 func TestRestartRequiredBeatsBroken(t *testing.T) {
 	f := configured()
-	f.Wiring.NewestSessionStart = f.Wiring.ConfigMtime.Add(-time.Hour)
+	f.Wiring.NewestSessionStart = f.Wiring.ConfiguredAt.Add(-time.Hour)
 	f.Lanes = LaneFacts{LastTelemetryForward: ago(time.Minute)} // row 5's shape
 	got := one(t, entry(t, "claude_code"), f)
 	if got.State != RestartRequired {
@@ -298,7 +304,7 @@ func TestUnexpectedLaneCannotBreak(t *testing.T) {
 	f := Facts{
 		Configured: true,
 		Wiring: WiringFacts{
-			ConfigPresent: true, ConfigMtime: now.Add(-48 * time.Hour),
+			ConfigPresent: true, ConfiguredAt: now.Add(-48 * time.Hour),
 			NewestSessionStart: now.Add(-time.Hour),
 		},
 		Lanes: LaneFacts{LastWatcherPointer: ago(time.Hour)},
@@ -406,7 +412,7 @@ func TestAnEntryWithNoAdapterIsNeverNotConfigured(t *testing.T) {
 	f := Facts{
 		Configured: false,
 		Wiring: WiringFacts{
-			ConfigPresent: true, ConfigMtime: now.Add(-48 * time.Hour),
+			ConfigPresent: true, ConfiguredAt: now.Add(-48 * time.Hour),
 			NewestSessionStart: now.Add(-time.Hour),
 		},
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/teleproxy"
 	"github.com/ncx-ai/keld-signal/internal/config"
 )
@@ -21,6 +22,12 @@ func telemetryFixture(t *testing.T, hookAge time.Duration, armed bool) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	// ⚠️ The lane is asked for explicitly. Since the tool's own OTLP export went
+	// behind a Developer switch (off by default), a machine that never asked for
+	// it is not "configured for telemetry" at all and this finding cannot fire —
+	// which is the point, and is pinned in toolotlp_doctor_test.go. Every case
+	// below is about a machine that DID ask.
+	t.Setenv(settings.ToolOTLPEnv, "1")
 
 	hook := filepath.Join(home, "hook.json")
 	if err := os.WriteFile(hook, []byte(`{"endpoint":"http://x","ingest_token":"t"}`), 0o600); err != nil {

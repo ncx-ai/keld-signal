@@ -73,13 +73,19 @@ const files = {
     surfaces: [s("hook"), s("otel")],
   }),
 
-  // Row 3: configured, but the newest session predates the config.
+  // Row 3: configured, but a live session predates the config.
+  //
+  // ⚠️ `stale_session_id` NAMES THE WINDOW. Two Claude Code windows open is the
+  // machine this row was measured on (2026-09-18) and "restart this tool" does
+  // not tell a person which one; the server decides over every live session, so
+  // it knows, and the row prints the first eight characters — the same prefix
+  // `keld signal doctor` prints for the same session.
   restart_required: claude("restart_required", [
     s("hook", { wired: true, waiting_on: "restart", instruction: I.restart }),
     s("otel", { wired: true, waiting_on: "restart", instruction: I.restart }),
     s("watcher", { wired: true, last_seen: SEEN }),
     s("reader", { wired: true, last_seen: SEEN }),
-  ]),
+  ], { stale_session_id: "8f21c0de-4b17-4c2a-9a55-0f3e7d1b2c44" }),
 
   // Row 3b: Codex's hook trust. Two waiting lanes with two different
   // sentences, which is why the pane renders every distinct instruction
@@ -114,6 +120,32 @@ const files = {
     s("watcher", { wired: true, last_seen: SEEN }),
     s("reader", { wired: true, last_seen: SEEN }),
   ], { broken_lane: "hook" }),
+
+  // ⚠️ THE MACHINE THE STALE-SESSION ID EXISTS FOR: two Claude Code windows
+  // open, one restarted since the config and one not. The wire carries the
+  // VERDICT rather than the session list — that resolution happens daemon-side,
+  // over every live session — so what a fixture can show is the id the daemon
+  // named, beside a second tool that is fine. A person reading this row must be
+  // able to tell which window to restart; "restart this tool" cannot.
+  "two-live-sessions": {
+    integrations: [
+      claude("restart_required", [
+        s("hook", { wired: true, waiting_on: "restart", instruction: I.restart }),
+        s("otel", { wired: true, waiting_on: "restart", instruction: I.restart }),
+        s("watcher", { wired: true, last_seen: SEEN }),
+        s("reader", { wired: true, last_seen: SEEN }),
+      ], { stale_session_id: "8f21c0de-4b17-4c2a-9a55-0f3e7d1b2c44" }).integrations[0],
+      codex("working", [
+        s("hook", { wired: true, last_seen: SEEN }),
+        s("otel", { wired: true, last_seen: SEEN }),
+        s("watcher", { wired: true, expected: false }),
+        s("reader", { wired: false, expected: false, waiting_on: "reader", instruction: I.reader }),
+      ]).integrations[0],
+    ],
+    vocabulary: VOCAB,
+    auto_setup: true,
+    computed_at: "2026-09-15T09:13:00Z",
+  },
 
   // Row 9: a catalogue row. Storage class and nothing else.
   unsupported: wrap({

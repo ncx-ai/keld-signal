@@ -20,6 +20,7 @@ New keys, all local, all optional, defined in `internal/agent/settings/settings.
 | `dev_blocks` | `""` \| `prompt` \| `bin` \| `minute` | `""` | `KELD_DEV_BLOCKS` | developer granularity; **refused unless `send_to_atlas` is false** |
 | `show_breaks` | bool | false | — | page preference |
 | `workstreams_off` | [string] | [] | — | workstream keys excluded from attribution locally |
+| `tool_otlp` | bool | **false** | `KELD_TOOL_OTLP` (both directions) | whether keld writes the TOOL'S OWN OTLP export into its config. Off: no OTEL block is written and one an earlier keld left is removed. A Developer row while the lane's removal is evaluated — Signal reads the same usage off the transcript, and this is the only lane needing a credential inside a file the tool reads once at startup. No remote override. |
 
 Existing keys this build reads: `attribution` (vector attribution toggle, already sets
 `KELD_TEXTEMBED=1` for the sidecar), `blocks`.
@@ -144,6 +145,12 @@ keys an env var currently pins. PUT takes any subset of the four keys above plus
 {"error":"turn_off_send_to_atlas_first"}`), writes the file, and answers
 `{"restart_required": true|false}`. `send_to_atlas`, `dev_blocks` and `attribution`
 require a restart; the daemon restarts itself when the caller passes `?restart=1`.
+
+`tool_otlp` is accepted too and deliberately does NOT require one, against the rule
+below: the integrations detector reads it live per tick and puts the tool's config in
+step within a minute. What then has to restart is the TOOL, and that instruction is the
+Integrations pane's own `restart_required` row, which arrives on its own. Raising
+Signal's restart bar here would ask for a restart that fixes nothing.
 
 ⚠️ **`attribution` was missing from that list until 2026-09-05, and this document is
 where the defect lived.** The daemon resolves the gate exactly once, at `daemon.go`'s

@@ -114,12 +114,24 @@ async function freePort(): Promise<number> {
   });
 }
 
-type Shell = { url: string; serve: (body: unknown) => void; close: () => Promise<void> };
+type Shell = {
+  url: string;
+  serve: (body: unknown) => void;
+  /** What GET /v1/settings answers with, and what a PUT merges into. The
+   *  Developer box is rendered from this, so a spec that drives the switch
+   *  reads its own writes exactly as the page does. */
+  settings: Record<string, unknown>;
+  close: () => Promise<void>;
+};
 
 async function startShell(): Promise<Shell> {
   // What the pane under test is handed. Mutable so one page can be re-polled
   // with a different answer (the poll is what a real state change arrives on).
   let integrations: unknown = { integrations: [], vocabulary: { states: [], waiting_on: [] }, auto_setup: true };
+  // The page's Settings pane state. `readonly: []` because no env var pins
+  // anything here; `tool_otlp` is absent, which is what a daemon that has never
+  // been told otherwise answers — and the row must render OFF from that.
+  const settings: Record<string, unknown> = { readonly: [] };
 
   const json = (res: http.ServerResponse, body: unknown, status = 200) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -139,8 +151,33 @@ async function startShell(): Promise<Shell> {
     // The rest of the page's boot. Minimal but valid: an empty ledger and empty
     // settings are what a machine that has done no work yet answers, and the
     // integrations pane must not depend on any of it.
-    if (p === "/v1/ledger") return json(res, { generated_at: "2026-09-15T09:13:00Z", blocks: [], health: [] });
-    if (p === "/v1/settings") return json(res, {});
+    // A daemon health row with a detail is what draws the version in the
+    // sidebar — which is the control developer mode is reached through, so
+    // without it the seven taps have nothing to land on.
+    if (p === "/v1/ledger")
+      return json(res, {
+        generated_at: "2026-09-15T09:13:00Z",
+        blocks: [],
+        health: [{ key: "daemon", status: "ok", detail: "3.0.0" }],
+      });
+    if (p === "/v1/settings") {
+      if (req.method === "PUT") {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          try {
+            Object.assign(settings, JSON.parse(body || "{}"));
+          } catch {
+            /* a malformed body is the test's bug, and an empty merge shows it */
+          }
+          // No daemon restart for tool_otlp: the detector reads it live and the
+          // restart that IS needed belongs to the tool. See ingress/settings.go.
+          json(res, { restart_required: false });
+        });
+        return;
+      }
+      return json(res, settings);
+    }
     if (p === "/v1/projects") return json(res, { projects: [] });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
@@ -162,6 +199,7 @@ async function startShell(): Promise<Shell> {
     serve: (body) => {
       integrations = body;
     },
+    settings,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
@@ -194,6 +232,19 @@ test.beforeAll(async () => {
 
 async function openPane(page: Page, shell: Shell, size: { width: number; height: number }): Promise<void> {
   await page.setViewportSize({ width: size.width, height: size.height });
+  // The Integrations pane is behind the Developer box (DEV_ONLY_PANES in
+  // app.js) while its state machine settles, and paneFromHash refuses a hidden
+  // pane — so a bookmark cannot reach one either. Seed the same per-browser
+  // preference the seven taps write, before the first script runs.
+  await page.addInitScript(() => {
+    try {
+      const key = "keld_signal_local_prefs";
+      const prev = JSON.parse(localStorage.getItem(key) || "{}");
+      localStorage.setItem(key, JSON.stringify({ ...prev, devMode: true }));
+    } catch {
+      /* storage blocked: the assertions below fail on the pane, not here */
+    }
+  });
   await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
   // ⚠️ **THE NONCE IS LOAD-BEARING.** A `goto` to a URL that differs only in
   // its hash is a SAME-DOCUMENT navigation: the page is not re-fetched, so a
@@ -286,6 +337,42 @@ for (const size of WIDTHS) {
       await expect(checks(page, "claude_code").nth(0)).toHaveAttribute("data-ok", "false");
       await expect(checks(page, "claude_code").nth(2)).toContainText("transcripts readable");
       await expect(checks(page, "claude_code").nth(2)).toHaveAttribute("data-ok", "true");
+      // The window to restart, named beside the sentence telling you to.
+      await expect(row(page, "claude_code").locator(".intg-stale")).toHaveText("session 8f21c0de");
+    });
+
+    /**
+     * ⚠️ **"RESTART THIS TOOL" IS NOT AN INSTRUCTION WHEN TWO WINDOWS ARE
+     * OPEN.** Measured on the maintainer's machine 2026-09-18: two live Claude
+     * Code sessions, one restarted since the config and one carried over, and
+     * the row could only say "restart". The daemon resolves the verdict over
+     * every live session, so it already knows which one is stale; the row now
+     * prints the first eight characters of that id — the same prefix
+     * `keld signal doctor` prints for the same session, so a person reading one
+     * recognises the other.
+     *
+     * The wire carries the VERDICT, not the session list, so what a fixture can
+     * show is the id the daemon named. The second row is a healthy tool, which
+     * is what makes "only the stale row says it" checkable in one render.
+     */
+    test("two live sessions: the row names the window to restart, and a healthy row names none", async ({ page, shell }) => {
+      shell.serve(fixture("two-live-sessions"));
+      await openPane(page, shell, size);
+      const stale = row(page, "claude_code").locator(".intg-stale");
+      await expect(stale).toHaveCount(1);
+      await expect(stale).toHaveText("session 8f21c0de");
+      // Never the whole id: it is an identifier to recognise, not to read out.
+      await expect(row(page, "claude_code")).not.toContainText("8f21c0de-4b17");
+      // And the tool that is fine says nothing about sessions at all.
+      await expect(row(page, "codex").locator(".intg-stale")).toHaveCount(0);
+    });
+
+    test("a healthy machine names no session anywhere", async ({ page, shell }) => {
+      for (const name of ["working", "idle", "not_configured"]) {
+        shell.serve(fixture(name));
+        await openPane(page, shell, size);
+        await expect(page.locator(".intg-stale")).toHaveCount(0);
+      }
     });
 
     test("approval_required: the AC-9 sentence verbatim, beside the reader sentence", async ({ page, shell }) => {
@@ -432,5 +519,232 @@ test.describe("no state logic in JavaScript", () => {
     // No switch over states, and no map keyed by them.
     expect(/switch\s*\(\s*[\w.]*[Ss]tate/.test(section)).toBe(false);
     expect(section).toContain("vocabulary");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Developer switch that turns the tool's own OTLP export off
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ **THE LANE IS OFF BY DEFAULT AND SCHEDULED FOR REMOVAL.** Signal reads a
+ * tool's usage from the tool's own transcript; the OTLP export adds nothing
+ * Atlas prices, and it is the one lane that needs a credential inside a file the
+ * tool reads once at startup. It stays reachable behind the Developer box so
+ * someone can prove to themselves that nothing needed arrives only here.
+ *
+ * The copy is asserted VERBATIM rather than by substring: it carries a
+ * deprecation notice and a restart instruction, and a reworded half is exactly
+ * the kind of change that would go unnoticed.
+ */
+const TOOL_OTLP_TITLE = "Extended telemetry from the tool (OTLP)";
+const TOOL_OTLP_BODY =
+  "Off. Signal reads usage from the tool's own transcript; this lane is scheduled for removal " +
+  "once we have confirmed nothing we need arrives only here. Turning it on writes into the " +
+  "tool's configuration, and the tool must be restarted once to pick it up.";
+const TOOL_OTLP_RESTART = "Restart the tool once to pick this up.";
+
+/** The Settings pane, opened the way a person opens it. */
+async function openSettings(page: Page, shell: Shell): Promise<void> {
+  await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
+  await page.goto(`${shell.url}/?secret=irrelevant&n=${nonce++}#/settings`);
+  await expect(page.getByText("Loading…")).toBeHidden();
+  // The Environment tile's own label: unique, and drawn from nothing the
+  // Developer box depends on, so it settles the pane without vouching for it.
+  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
+}
+
+/** Developer mode, the way a person reaches it: seven taps on the version in the
+ *  sidebar, inside the tap window. ⚠️ The taps TOGGLE — call once per test. */
+async function enterDeveloperMode(page: Page): Promise<void> {
+  const version = page.locator("#navVersion");
+  await expect(version).toBeVisible();
+  for (let i = 0; i < 7; i++) await version.click();
+  await expect(page.getByText("Developer", { exact: true })).toBeVisible();
+}
+
+/** The row's switch. The input is visually hidden, so state is read off it and
+ *  clicks go to the label — the idiom `support/fixtures.ts` already uses. */
+function otlpSwitch(page: Page) {
+  const row = page.locator(".settings-row").filter({ has: page.getByText(TOOL_OTLP_TITLE, { exact: true }) });
+  return { control: row.locator("label.switch").first(), input: row.locator("input[type=checkbox]").first() };
+}
+
+test.describe("Developer · extended tool telemetry (OTLP)", () => {
+  test("the row is not reachable until developer mode is on", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    // The Atlas box is drawn; the developer rows under it are not.
+    await expect(page.getByText("Atlas", { exact: true })).toBeVisible();
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Developer", { exact: true })).toHaveCount(0);
+
+    await enterDeveloperMode(page);
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toBeVisible();
+  });
+
+  test("its title and body are the deprecation notice, verbatim, and it reads off", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    await enterDeveloperMode(page);
+
+    await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(1);
+    await expect(page.getByText(TOOL_OTLP_BODY, { exact: true })).toHaveCount(1);
+    // A daemon that has never been told otherwise sends no `tool_otlp` at all,
+    // and the row must read that as OFF rather than as "unknown".
+    await expect(otlpSwitch(page).input).not.toBeChecked();
+    // Nothing tells anyone to restart anything while the lane is off.
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(0);
+  });
+
+  test("turning it on shows the restart instruction, once", async ({ page, shell }) => {
+    await openSettings(page, shell);
+    await enterDeveloperMode(page);
+
+    const { control, input } = otlpSwitch(page);
+    await control.click();
+    await expect(input).toBeChecked();
+
+    // Once. Two copies of one instruction reads as two things to do.
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(1);
+    // And it is what the daemon was told, not just what the page drew.
+    await expect.poll(() => shell.settings.tool_otlp).toBe(true);
+    // Signal's own restart bar stays down: the restart belongs to the tool.
+    await expect(page.getByText("Signal restarts to apply this.")).toHaveCount(0);
+
+    // Off again takes the instruction away.
+    await control.click();
+    await expect(input).not.toBeChecked();
+    await expect(page.getByText(TOOL_OTLP_RESTART, { exact: true })).toHaveCount(0);
+    await expect.poll(() => shell.settings.tool_otlp).toBe(false);
+  });
+
+  /**
+   * ⚠️ **NO FIXTURE MAY RENDER `broken · otel` WHILE THE SWITCH IS OFF**, and
+   * this is checked over EVERY fixture rather than over one: with the lane not
+   * expected, `Compute` cannot produce that pair at all (pinned Go-side in
+   * `integrations/toolotlp_test.go`), so a fixture that showed it would be
+   * teaching the pane a state the server can no longer send.
+   */
+  test("no fixture renders a broken otel lane", async ({ page, shell }) => {
+    const files = fs.readdirSync(FIXTURES).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const body = JSON.parse(fs.readFileSync(path.join(FIXTURES, file), "utf8")) as {
+        integrations?: Array<{ id: string; state: string; broken_lane?: string }>;
+      };
+      for (const row of body.integrations || []) {
+        expect(
+          row.state === "broken" && row.broken_lane === "otel",
+          `${file}: ${row.id} is broken · otel, which the server cannot produce with tool_otlp off`
+        ).toBe(false);
+      }
+      shell.serve(body);
+      await openPane(page, shell, WIDTHS[0]);
+      // Rendered, too: the pane names the silent lane in the checklist, so a
+      // fixture sneaking it in another way would still show here.
+      await expect(page.locator('.intg-check[data-kind="otel"]').filter({ hasText: "nothing arrived" })).toHaveCount(0);
+    }
+  });
+});
+
+/**
+ * ⚠️ TWO THINGS NO SPEC HERE HAD SEEN: THE PANE UNDER A DARK SYSTEM THEME, AND
+ * THE PANE DRIVEN FROM THE KEYBOARD. The state matrix above proves every state
+ * renders its own name at two widths — with a mouse, in light. The deployment
+ * review scored UX at 65 for exactly these two gaps.
+ *
+ * Dark: app.css declares `color-scheme: only light` on :root and defines no dark
+ * tokens, so the CONTRACT under a dark OS theme is "unchanged" — the light
+ * surface, the ink, readable — not "inverted". A page that leaked the UA's dark
+ * defaults (transparent body over a black canvas, grey form controls) would
+ * pass every other spec here and be unreadable on half the machines it ships to.
+ * So the assertion is that the body paints the light `--bg` and the row's ink is
+ * the light `--ink`, under `colorScheme: "dark"` emulation.
+ *
+ * Keyboard: the one thing a person DOES on this pane is press Set up. It must be
+ * reachable by Tab alone, be a real button with its name as its accessible name,
+ * and fire on Enter — asserted by the result the page renders from the shell's
+ * setup reply, so the check is the outcome and not the focus ring.
+ */
+test.describe("Integrations pane · dark system theme", () => {
+  test.use({ colorScheme: "dark" });
+
+  test("under a dark OS theme the pane keeps its light surface and ink (color-scheme: only light)", async ({
+    page,
+    shell,
+  }) => {
+    shell.serve(fixture("not_configured"));
+    await openPane(page, shell, WIDTHS[0]);
+    await expect(row(page, "codex")).toBeVisible();
+
+    const paint = await page.evaluate(() => {
+      const cs = (el: Element) => getComputedStyle(el);
+      const rowEl = document.querySelector(".intg-row") as Element;
+      return {
+        scheme: cs(document.documentElement).colorScheme,
+        body: cs(document.body).backgroundColor,
+        ink: cs(rowEl).color,
+        matchesDark: matchMedia("(prefers-color-scheme: dark)").matches,
+      };
+    });
+    expect(paint.matchesDark, "the test must actually be running under a dark theme").toBe(true);
+    // Engines serialise the computed value in their own token order ("light
+    // only" on both Chromium and WebKit) — compare the token set, not the string.
+    expect(paint.scheme.split(/\s+/).sort()).toEqual(["light", "only"]);
+    // --bg #FEFCF6 and --ink #0E1A12, as app.css declares them. A body that
+    // came back transparent (rgba(0, 0, 0, 0)) is the UA canvas showing through.
+    expect(paint.body).toBe("rgb(254, 252, 246)");
+    expect(paint.ink).toBe("rgb(14, 26, 18)");
+  });
+});
+
+test.describe("Integrations pane · keyboard", () => {
+  test("Set up is reachable by Tab, is a named button, and fires on Enter", async ({ page, shell, browserName }) => {
+    shell.serve(fixture("not_configured"));
+    await openPane(page, shell, WIDTHS[0]);
+    const setUp = row(page, "codex").getByRole("button", { name: "Set up" });
+    await expect(setUp).toBeVisible();
+
+    // Tab from the document until the Set up button holds focus. Bounded: a
+    // pane that needs more than 40 stops to reach its one action has a
+    // different problem, and an unbounded loop would hide it as a timeout.
+    // ⚠️ WebKit on macOS follows Safari's "Press Tab to highlight each item"
+    // default, which is OFF: plain Tab skips buttons and Option+Tab is the
+    // keystroke that visits them. That is the platform's convention, not a
+    // property of this page — a native Mac user tabbing through Safari presses
+    // the same thing — so the test presses what the platform's keyboard user
+    // presses.
+    const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
+    await page.locator("body").focus();
+    let reached = false;
+    for (let i = 0; i < 40 && !reached; i++) {
+      await page.keyboard.press(tab);
+      reached = await setUp.evaluate((el) => el === document.activeElement);
+    }
+    expect(reached, "Set up was not reachable by Tab within 40 stops").toBe(true);
+
+    await page.keyboard.press("Enter");
+    // The shell answers every setup POST with a backup path; the page renders
+    // it. That sentence appearing is the click having happened — from the
+    // keyboard, with no pointer involved.
+    await expect(row(page, "codex").locator(".intg-result")).toContainText("Previous config saved to", {
+      timeout: 10_000,
+    });
+  });
+
+  test("every state pill and every action carries a readable name", async ({ page, shell }) => {
+    shell.serve(fixture("catalogue"));
+    await openPane(page, shell, WIDTHS[1]);
+    const buttons = page.locator(".intg-row button");
+    const n = await buttons.count();
+    for (let i = 0; i < n; i++) {
+      const name = ((await buttons.nth(i).textContent()) || "").trim();
+      expect(name, `button #${i} in the pane has no text — a screen reader announces it as "button"`).not.toBe("");
+    }
+    const pills = page.locator(".intg-state");
+    const m = await pills.count();
+    expect(m).toBeGreaterThan(0);
+    for (let i = 0; i < m; i++) {
+      expect(((await pills.nth(i).textContent()) || "").trim()).not.toBe("");
+    }
   });
 });

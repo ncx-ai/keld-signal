@@ -175,6 +175,31 @@ type Settings struct {
 	// Off is the other position of the toggle, not a different design.
 	AutoSetupIntegrations *bool `json:"auto_setup_integrations,omitempty"`
 
+	// ToolOTLP decides whether keld writes the TOOL'S OWN OTLP EXPORT into its
+	// configuration — Claude Code's OTEL_* env block, Codex's [otel] table,
+	// Gemini's telemetry block. Local, default OFF, read live (the detector and
+	// `keld signal setup` both resolve it per run, so no restart is needed).
+	//
+	// ⚠️ **OFF BY DEFAULT BECAUSE THE LANE EARNS NOTHING AND COSTS THE MOST.**
+	// Signal reads a tool's usage from the tool's own transcript; the OTLP
+	// export adds nothing Atlas prices. It is also the one lane that requires a
+	// credential to live inside a tool's config file, which is what made it the
+	// lane that keeps breaking — a tool reads that config once, at startup, so
+	// a rotation, a moved endpoint or a keld upgrade leaves a stale copy inside
+	// a process nothing on the machine can inspect. It stays in the product,
+	// behind this switch, so the claim "nothing we need arrives only here" can
+	// be checked rather than assumed before the lane is removed.
+	//
+	// NO REMOTE OVERRIDE, deliberately, and for the reason `Attribution` and
+	// `DevBlocks` have none: this is a DEVELOPER control for the duration of a
+	// deprecation someone is evaluating on their own machine. An org-wide
+	// switch would make the evidence a fleet-level decision instead of a
+	// person's, and re-enabling the lane everywhere is the one thing a server
+	// key here could do by accident.
+	//
+	// KELD_TOOL_OTLP wins in BOTH directions, like every other toggle here.
+	ToolOTLP bool `json:"tool_otlp,omitempty"`
+
 	// TelemetryPort is the loopback port AI tools POST OTLP to.
 	//
 	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is
@@ -297,6 +322,18 @@ func Load() Settings {
 	_ = json.Unmarshal(data, &s) // invalid JSON -> keep zero-value defaults
 	return s
 }
+
+// ToolOTLPEnv overrides the file on one machine, in both directions.
+const ToolOTLPEnv = "KELD_TOOL_OTLP"
+
+// ToolOTLPEnabled resolves env > agent-config.json > OFF. See ToolOTLP for why
+// off is the default and why there is no remote override.
+//
+// It is resolved PER CALL rather than latched at startup: `keld signal setup`,
+// the daemon's integrations detector and the page's Settings pane all read it,
+// and a person who has just flipped it expects the next detector poll to act on
+// it rather than the next restart.
+func (s Settings) ToolOTLPEnabled() bool { return featuresEnvBool(ToolOTLPEnv, s.ToolOTLP) }
 
 // AutoSetupIntegrationsEnv overrides the file on one machine.
 const AutoSetupIntegrationsEnv = "KELD_AUTO_SETUP_INTEGRATIONS"

@@ -52,6 +52,7 @@ type settingsView struct {
 	ShowBreaks     bool     `json:"show_breaks"`
 	WorkstreamsOff []string `json:"workstreams_off"`
 	Attribution    bool     `json:"attribution"`
+	ToolOTLP       bool     `json:"tool_otlp"`
 	Readonly       []string `json:"readonly"`
 	DevGenerate    bool     `json:"dev_generate"`
 	DevRepos       []string `json:"dev_repos"`
@@ -76,6 +77,7 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		ShowBreaks:     set.ShowBreaks,
 		WorkstreamsOff: off,
 		Attribution:    attrib.Enabled(set.Attribution),
+		ToolOTLP:       set.ToolOTLPEnabled(),
 		Readonly:       readonlySettingsKeys(),
 	})
 }
@@ -97,6 +99,9 @@ func readonlySettingsKeys() []string {
 	}
 	if attributionEnvPins() {
 		out = append(out, "attribution")
+	}
+	if toolOTLPEnvPins() {
+		out = append(out, "tool_otlp")
 	}
 	return out
 }
@@ -129,6 +134,17 @@ func attributionEnvPins() bool {
 	return false
 }
 
+// toolOTLPEnvPins mirrors Settings.ToolOTLPEnabled's switch exactly (lower-cased,
+// with "yes"/"no" as well as the usual six) — it resolves through the same
+// featuresEnvBool the feature toggles use.
+func toolOTLPEnvPins() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(settings.ToolOTLPEnv))) {
+	case "1", "true", "on", "yes", "0", "false", "off", "no":
+		return true
+	}
+	return false
+}
+
 // settingsPatch is PUT /v1/settings' body: any subset of the four v3-owned
 // keys plus attribution (docs/v3/contracts.md). Pointer fields so an absent
 // key is distinguishable from an explicit zero value — decodeJSONBody feeds
@@ -139,6 +155,7 @@ type settingsPatch struct {
 	ShowBreaks     *bool     `json:"show_breaks"`
 	WorkstreamsOff *[]string `json:"workstreams_off"`
 	Attribution    *bool     `json:"attribution"`
+	ToolOTLP       *bool     `json:"tool_otlp"`
 	DevGenerate    *bool     `json:"dev_generate"`
 	DevRepos       *[]string `json:"dev_repos"`
 }
@@ -180,6 +197,7 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 		ShowBreaks:     patch.ShowBreaks,
 		WorkstreamsOff: patch.WorkstreamsOff,
 		Attribution:    patch.Attribution,
+		ToolOTLP:       patch.ToolOTLP,
 		DevGenerate:    patch.DevGenerate,
 		DevRepos:       patch.DevRepos,
 	})
@@ -209,6 +227,15 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 	// rule is "a key nothing re-reads while the daemon runs", not "a key in the
 	// developer box" — adding them by symmetry would make the page demand a
 	// restart it does not need.
+	//
+	// tool_otlp is absent for the same reason and it is worth stating, because
+	// the change it causes DOES need a restart — of the TOOL, not of Signal.
+	// The detector reads the switch live per tick (Detector.ToolOTLP) and puts
+	// the tool's config in step within a minute; what then has to restart is the
+	// tool, which reads its telemetry config once at startup. That instruction
+	// is the Integrations pane's `restart_required` row, which arrives on its
+	// own. Reporting restart_required here would raise Signal's own restart bar
+	// for a restart Signal does not need and would not fix anything.
 	restartRequired := patch.SendToAtlas != nil || patch.DevBlocks != nil || patch.Attribution != nil
 	if restartRequired && restart != nil && r.URL.Query().Get("restart") == "1" {
 		go func() {

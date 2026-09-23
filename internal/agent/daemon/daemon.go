@@ -90,6 +90,14 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, svc serviceFace
 		if !ok {
 			return
 		}
+		// NOT PAIRED YET: hold the job in the durable spool rather than enrich
+		// it into a profile with nowhere to go. See enrichHold — this is the
+		// one collector whose output has no local store, so the pointer is the
+		// thing that has to survive. No attempt is consumed: nothing failed.
+		if enrichHeld() {
+			holdJob(j.Key(), pointerFromJob(j))
+			continue
+		}
 		if !ready() {
 			ww := warmWait()
 			warmedInTime := false
@@ -714,6 +722,11 @@ func Run(ctx context.Context) error {
 	updateEvents := &bufferedEvents{}
 	confirmPendingUpdate(updateEvents.emit)
 
+	// This marker describes THIS run, so it is reset here rather than only ever
+	// set: one process can host a second Run (the test suite does), and a value
+	// left behind by a previous daemon would answer for the new one.
+	sendersStarted.Store(false)
+
 	// ⚠️ **THE LISTENER IS BOUND BEFORE awaitConfig, AND THAT ORDER IS THE
 	// WHOLE POINT.** Everything below used to sit after the wait, so an
 	// unconfigured machine published no `agent.json`, served no page, and gave
@@ -768,17 +781,31 @@ func Run(ctx context.Context) error {
 	lb := newLoopbackServer(ln, onboardingHandler(set, secret))
 	lb.Serve(ctx)
 
-	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(),
-		awaitConfigNote(paths.HookConfigPath()))
-	if err != nil {
-		return nil // context cancelled while idling: a clean shutdown, not a failure
-	}
+	// ⚠️ **NOTHING BELOW WAITS FOR THE PAIRING ANY MORE.** `awaitConfig` used to
+	// sit HERE, and everything after it — the telemetry proxy, the transcript
+	// watcher, the block emitter, the enrichment worker — waited behind it. So a
+	// machine between install and login collected nothing: the tools `keld
+	// signal setup` had already configured posted into a closed port, no
+	// transcript was tailed, no block was cut. The gate dates from a design that
+	// no longer exists (the hook used to POST straight to Atlas, and without a
+	// token there was genuinely nothing to do); every lane now has a local store
+	// or a bounded spool. See pairing.go.
+	//
+	// The wait is now startSenders' alone, on its own goroutine, and it starts
+	// the delivery half the instant the pairing lands — which is exactly what
+	// awaitConfig already supported, so no restart is needed.
+	pr := newPairing()
 
-	// settings.Load again: a machine that paired through the page may have
-	// written send_to_atlas or dev_blocks in the same session, and everything
-	// below resolves off `set`. Re-reading costs one small file and removes a
-	// whole class of "the toggle only took effect next boot".
-	set = settings.Load()
+	// settings.Load is deliberately NOT repeated here. It used to be, with the
+	// note "a machine that paired through the page may have written
+	// send_to_atlas or dev_blocks in the same session, and everything below
+	// resolves off `set`". Everything below is now constructed BEFORE the
+	// pairing, so a second read at this point could only make the collectors
+	// and the senders disagree about one machine — worse than staleness. The
+	// page's own settings route restarts the daemon when a toggle is written
+	// (ingress.SettingsRoute's restart function), which is what makes a change
+	// take effect without a manual restart.
+	//
 	// attribOn is resolved once, here, and reused everywhere this run needs
 	// it (project-list posting below, the attributor's own construction, and
 	// the shared text encoder's existence/spawn-env gate) — attrib.Enabled has
@@ -836,19 +863,23 @@ func Run(ctx context.Context) error {
 	// all read it through tok.Get rather than capturing a static string, so a
 	// later self-heal re-auth (a future task) can rotate it in one place via
 	// tok.Set and have every consumer observe the new value immediately.
-	tok := creds.NewToken(cfg.IngestToken)
+	// ⚠️ It starts EMPTY. The collectors below are built before the pairing,
+	// and every one of them reads the token through tok.Get per request — the
+	// mechanism that already existed for a self-heal rotation is exactly what
+	// makes a first credential arriving mid-run work too.
+	tok := creds.NewToken("")
 
 	// ra is the self-heal reauther: publish (process) and settings poll
 	// trigger ra.refresh on a 401/403 so a rotated/revoked ingest token is
 	// re-fetched (via the still-valid CLI token) with no daemon restart. Its
-	// startupEndpoint is cfg.Endpoint so a successful refresh can warn if
+	// startupEndpoint is the paired endpoint so a successful refresh can warn if
 	// Onboarding now reports a *different* endpoint — refresh only swaps the
-	// token, not the endpoint, so that case still needs a restart to adopt.
+	// token, not the endpoint, so that case still needs a restart to adopt. It
+	// is set by startSenders, which is the first moment there is one.
 	ra := newReauther(tok, emitter)
-	ra.startupEndpoint = cfg.Endpoint
 
 	q := queue.New(queueCap())
-	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
+	pub := publish.NewDeferred(deriveEndpoint(pr.ingest, enrichEndpoint), tok.Get, actor)
 
 	// THE ATLAS BOUNDARY. Exactly one connector is constructed, here, from the
 	// send_to_atlas setting: the live one, or atlas.Off, which holds no
@@ -866,9 +897,9 @@ func Run(ctx context.Context) error {
 	// people watch worked.
 	//
 	// Same derivation as the emitter's, from the one ingest endpoint.
-	blockPub := publish.New(signalBlocksEndpoint(cfg.Endpoint), tok.Get, actor)
+	blockPub := publish.NewDeferred(deriveEndpoint(pr.ingest, signalBlocksEndpoint), tok.Get, actor)
 	atlasCl := atlasClient(set, blockPub,
-		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second))
+		settings.NewDeferredClient(deriveEndpoint(pr.ingest, settingsEndpoint), tok.Get, 10*time.Second))
 	// ⚠️ **AND EVERY PATH THAT PREDATES THE BOUNDARY IS ROUTED THROUGH IT HERE.**
 	// atlas.Off makes the new connector incapable of reaching the network, but
 	// the enrichment worker, the tick, the settings poll and the reporter each
@@ -892,9 +923,11 @@ func Run(ctx context.Context) error {
 	// re-onboards. A bind failure is fatal to the proxy but not to the daemon:
 	// enrichment and publishing are unaffected, and the operator is told which
 	// port and which override.
-	if tp, tpErr := startTelemetryProxy(ctx, emitter, cfg.Endpoint, tok.Get, func() {
-		go func() { _ = ra.refresh(context.WithoutCancel(ctx)) }()
-	}); tpErr != nil {
+	if tp, tpErr := startTelemetryProxy(ctx, emitter,
+		deriveEndpoint(pr.ingest, logsEndpoint), deriveEndpoint(pr.ingest, metricsEndpoint),
+		tok.Get, func() {
+			go func() { _ = ra.refresh(context.WithoutCancel(ctx)) }()
+		}); tpErr != nil {
 		log.Printf("keld-agent: telemetry proxy NOT running: %v", tpErr)
 		emitter.EmitExempt("telemetry.proxy_unavailable", clientevents.SevWarn,
 			map[string]any{"error": tpErr.Error()})
@@ -960,13 +993,18 @@ func Run(ctx context.Context) error {
 	startHealth(ctx, sig, func() time.Time {
 		t, _ := TelemetryLastForward()
 		return t
-	}, set.AtlasEnabled())
+	}, set.AtlasEnabled(), pr.paired)
 	// B2 — Send to Atlas (docs/v3/contracts.md): drain any blocks this ledger
 	// captured while a previous run had Atlas off (or a publish attempt failed
 	// and was never retried). A no-op the instant it finds nothing to send —
 	// see republish.go for why the payload has to be captured verbatim rather
 	// than rebuilt from the ledger's own delivery-cell schema.
 	startRepublisher(ctx, sig.ledger, atlasCl)
+
+	// The analysis engine keeps ITSELF in step with this daemon: an engine that
+	// does not match is skew, not a preference, so nothing asks first. Once per
+	// run, in the background — see engineManager.autoStart.
+	go currentEngineManager().autoStart()
 
 	v3Routes := append(sig.routes(),
 		// SettingsRoute's restart function is service.Restart() — the SAME
@@ -1007,20 +1045,6 @@ func Run(ctx context.Context) error {
 			flushInterval = d
 		}
 	}
-	// ⚠️ The reporter is the THIRD path that predates the Atlas boundary, and it
-	// was still dialling after the worker, the tick and the settings poll were
-	// routed through it — found by an end-to-end run, not by a unit test. Same
-	// remedy, same reason: it is handed an endpoint it cannot reach rather than
-	// a flag it might forget to consult. Operational events about a machine
-	// nobody is collecting from have nowhere to go, and spooling them would
-	// grow a queue that can never drain.
-	clientEventsEndpoint := signalClientEventsEndpoint(cfg.Endpoint)
-	if !set.AtlasEnabled() {
-		clientEventsEndpoint = ""
-	}
-	reporter := clientevents.NewReporter(clientEventsEndpoint, tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
-	go reporter.Run(ctx, flushInterval)
-
 	sampleInterval := 10 * time.Second
 	if v := os.Getenv("KELD_CLIENTEVENTS_SAMPLE"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
@@ -1165,9 +1189,6 @@ func Run(ctx context.Context) error {
 	// during the onboarding wait start publishing. The detector itself has been
 	// running since before awaitConfig — see startIntegrationsDetector.
 	setIntegrationSink(emitter)
-	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
-		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
-	})
 	if enrichmentEnabled {
 		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
 		// the composition of on-demand provisioning with the model load, and
@@ -1196,7 +1217,7 @@ func Run(ctx context.Context) error {
 		// the gate is off, so startBlockEmitter's own nil-check makes wiring
 		// it in cost nothing on a machine that never turned attribution on.
 		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
-			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution,
+			pr.ingest, tok.Get, actor, emitter, set.Attribution,
 			lastProjects.knownNonEmpty,
 			func() { repostProjectsAfterRespawn(svc.PostProjects, lastProjects) })
 		// A scheduled attribution job is "something wants an embedding (and,
@@ -1229,6 +1250,12 @@ func Run(ctx context.Context) error {
 		// job, and its own writes are fire-and-forget — the window onto the
 		// collector must never be able to stop the collector.
 		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordDelivered)
+		// ⚠️ AND THE SAME DELIVERY IS THE HEALTH STRIP'S ONLY EVIDENCE THAT
+		// ATLAS IS REACHABLE. The emitter publishes through its own publisher,
+		// never through the atlas connector, so without this the connector's
+		// LastResponse stays zero on a machine delivering every sweep — and a
+		// zero reading is what makes the `atlas` row decline to write at all.
+		onBlockPublished = chainOnPublished(onBlockPublished, sig.noteAtlasDelivered)
 		// B2 — Send to Atlas: with Atlas off, sig.recordCut is the ONLY record
 		// of a block that will ever exist — the emitter's own Sender is
 		// localOnlySender here (see daemon/blocks.go), which discards and
@@ -1247,7 +1274,7 @@ func Run(ctx context.Context) error {
 		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
-		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, pr.ingest, tok.Get, actor, emitter, set.Blocks,
 			set.AtlasEnabled(), onBlockPublished, onCut, sig.recordPublishFailed, sig.recordCutPending,
 			sig.recordCutResolved))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
@@ -1257,8 +1284,26 @@ func Run(ctx context.Context) error {
 		// under "auto". Both toggles default OFF and both are read live, so
 		// the goroutines start and take nothing until something switches them
 		// on — which is what lets an org enable it without a restart.
-		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
+		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, pr.ingest, tok.Get,
 			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter, enc))
+		// ⚠️ **THE ONE COLLECTOR WITH NO LOCAL STORE FOR ITS OUTPUT.** A block
+		// is cut into the ledger and re-offered by a held cursor; a telemetry
+		// batch lands in the proxy's spool; an enrichment has neither, so
+		// running the pipeline while unpaired would compute a profile and throw
+		// it away. The POINTER is the durable form, so the worker holds each job
+		// back in the enrich spool until there is somewhere to publish it — no
+		// retry budget consumed, because nothing failed.
+		//
+		// Gated on Atlas being ON as well as on the pairing: a local-only
+		// machine publishes through localOnlySender, which discards and reports
+		// success, so it must keep enriching and would otherwise wait forever
+		// for a pairing it has deliberately chosen not to have.
+		setEnrichHold(func() bool { return set.AtlasEnabled() && !pr.paired() })
+		// Cleared on the way out for the same reason every other package-level
+		// seam here is scoped to one run: this process may host a second Run
+		// (the test suite does), and a hold left behind by a finished daemon
+		// would silently stop the next one enriching anything.
+		defer setEnrichHold(nil)
 		go Worker(ctx, q, model, svc, sender, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
@@ -1318,10 +1363,34 @@ func Run(ctx context.Context) error {
 		// footprint the CLI's native OTEL provides. Claude Code is excluded by
 		// default (it emits its own OTEL host-side). The watcher's observe hook
 		// feeds every new transcript line to the telemetry; offer handles enrichment.
-		tel := promptlog.New(logsEndpoint(cfg.Endpoint), metricsEndpoint(cfg.Endpoint), tok.Get, promptlog.SourcesFromEnv())
+		// ⚠️ WHICH SOURCES ARE MIRRORED IS THE COMPLEMENT OF THE `tool_otlp`
+		// SWITCH, and this is the call site promptlog's own comment promises.
+		// While it was missing, a machine on the shipped defaults had the
+		// switch off (so no tool wrote an OTEL block) AND the mirror defaulting
+		// to {cowork} (so no tool was mirrored): Claude Code and Codex emitted
+		// no usage at all, and the pane still read `working` because the otel
+		// lane is not expected while the switch is off. Resolved ONCE here, from
+		// the same settings read everything else in this function uses, so the
+		// two halves cannot disagree about one machine.
+		tel := promptlog.NewPending(deriveEndpoint(pr.ingest, logsEndpoint),
+			deriveEndpoint(pr.ingest, metricsEndpoint), tok.Get,
+			promptlog.SourcesFor(set.ToolOTLPEnabled()))
+		// A record the mirror could not deliver is LOST — it has no spool (see
+		// promptlog.OnDrop and docs/durability.md). Counted here as one client
+		// event per reason per run rather than per record: unpaired for an
+		// hour is one fact, not three hundred, and the count rides `fields`.
+		tel.OnDrop(mirrorDropReporter(emitter, tel.Dropped))
 		offer := watchOffer(q)
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
-		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its
+		// usage mirror cannot ride the per-line observe hook — same telemetry,
+		// other seam. (WS3 owns which sources are mirrored, via tel.SetSources.)
+		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv()).
+			WithDocumentObserver(tel.ObserveFile).
+			// The lane record's real seam: a first sighting offers no pointer,
+			// so without this a session that lived entirely between two polls
+			// read `broken · watcher` while capturing perfectly.
+			WithPromptObserver(watchPrompt())
 		// Third use of the same detection: the watcher already knows when a
 		// transcript grew, so it tells the sidecar, which brings its
 		// reference-series store up to date from its own byte offset. That is
@@ -1351,7 +1420,41 @@ func Run(ctx context.Context) error {
 		go txw.Run(ctx)
 	}
 
-	// The server has been accepting since before awaitConfig; this is the one
+	// ⚠️ **THE DELIVERY HALF, AND THE ONLY THING IN THIS PROCESS THAT WAITS FOR
+	// A PAIRING.** Everything above is already collecting. This goroutine holds
+	// the whole of awaitConfig's original reasoning — an unconfigured agent
+	// IDLES rather than failing, because the service is routinely registered
+	// before onboarding runs — and starts the senders the instant hook.json
+	// carries an endpoint and a token, with no restart. What changed is only
+	// what is waiting: the collectors used to be behind this, and a machine
+	// between install and login therefore collected nothing at all.
+	//
+	// One line when collection starts unpaired, one when the pairing lands.
+	// Never per poll — awaitConfig's own onWait announces the wait exactly once
+	// and that idiom is what keeps an idling daemon's log readable.
+	go func() {
+		// Send to Atlas OFF never waits: there is nothing an endpoint would be
+		// used for, and waiting would leave the client-event ring undrained on a
+		// machine that is behaving exactly as asked. pollSettingsIfOnline inside
+		// startSenders is what says so out loud.
+		if !set.AtlasEnabled() {
+			startSenders(ctx, nil, pr, tok, ra, set, live, emitter, installID, flushInterval, pollInterval, onRemote)
+			return
+		}
+		if !alreadyPaired() {
+			log.Printf("keld-agent: COLLECTING but NOT PAIRED — telemetry, transcripts, blocks and enrichment " +
+				"pointers are being captured and held locally; nothing is published until this machine is " +
+				"paired with Atlas (the app's Settings pane, or `keld login` + `keld signal setup`)")
+		}
+		cfg, cerr := awaitConfig(ctx, hook.LoadConfig, configPollInterval(),
+			awaitConfigNote(paths.HookConfigPath()))
+		if cerr != nil {
+			return // context cancelled while idling: a clean shutdown, not a failure
+		}
+		startSenders(ctx, cfg, pr, tok, ra, set, live, emitter, installID, flushInterval, pollInterval, onRemote)
+	}()
+
+	// The server has been accepting since before the pairing; this is the one
 	// handler swap in a daemon's life. Stop-time work is registered now rather
 	// than captured at construction, because neither the queue nor the emitter
 	// existed when the listener was bound.
@@ -1387,6 +1490,14 @@ func Run(ctx context.Context) error {
 // every sweep tick): a row is deleted only once its offer to q succeeds, and
 // a full queue leaves the row in place for the next call to retry.
 func drainEnrichSpool(q *queue.Queue, emitter *clientevents.Emitter) {
+	// NOT PAIRED YET: the worker would put every drained row straight back (see
+	// enrichHold), so draining here is a pure churn loop — one delete and one
+	// insert per row per sweep, forever, against the durable store that is
+	// holding the work. The rows are safe where they are; the first sweep after
+	// the pairing lands picks them all up.
+	if enrichHeld() {
+		return
+	}
 	if _, err := spool.Drain(func(p spool.Pointer) error {
 		// TakenOn, not "accepted": a DUPLICATE row must be deleted too. The
 		// prompt is already queued or already published, so keeping the file

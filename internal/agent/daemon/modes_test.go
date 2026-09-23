@@ -147,7 +147,7 @@ func TestT37_AtlasOffLedgerHealthAndSentCells(t *testing.T) {
 		t.Fatal("test setup: Atlas must resolve OFF")
 	}
 	sig := newV3(set, atlasCl)
-	startHealth(context.Background(), sig, nil, set.AtlasEnabled())
+	startHealth(context.Background(), sig, nil, set.AtlasEnabled(), nil)
 
 	// A block cut and (locally-discarded) "published" exactly as the real
 	// daemon wiring records it: recordCut records the cut/measured/attributed

@@ -43,14 +43,18 @@ const (
 type Reason string
 
 const (
-	ReasonNone               Reason = ""
-	ReasonAtlasRejected      Reason = "atlas_rejected"      // 401/403 — the credential
-	ReasonAtlasRefused       Reason = "atlas_refused"       // other 4xx — this payload
-	ReasonAtlasUnavailable   Reason = "atlas_unavailable"   // net error / 5xx
-	ReasonCaptivePortal      Reason = "captive_portal"      // 200 with a non-JSON body
-	ReasonAtlasOff           Reason = "atlas_off"           // Send to Atlas is off
-	ReasonSidecarOutdated    Reason = "sidecar_outdated"    // /blocks 404 — route unsupported
-	ReasonSidecarDown        Reason = "sidecar_down"        // no health answer
+	ReasonNone             Reason = ""
+	ReasonAtlasRejected    Reason = "atlas_rejected"    // 401/403 — the credential
+	ReasonAtlasRefused     Reason = "atlas_refused"     // other 4xx — this payload
+	ReasonAtlasUnavailable Reason = "atlas_unavailable" // net error / 5xx
+	ReasonCaptivePortal    Reason = "captive_portal"    // 200 with a non-JSON body
+	ReasonAtlasOff         Reason = "atlas_off"         // Send to Atlas is off
+	ReasonSidecarOutdated  Reason = "sidecar_outdated"  // /blocks 404 — route unsupported
+	ReasonSidecarDown      Reason = "sidecar_down"      // no health answer
+	// ReasonSidecarStarting — not answering YET, and nothing has been done about
+	// it: start-up, or a missed check or two the service-health ladder itself
+	// calls noise. Distinct from sidecar_down, which the ladder has ACTED on.
+	ReasonSidecarStarting    Reason = "sidecar_starting"
 	ReasonSidecarBehind      Reason = "sidecar_behind"      // store watermark behind the ask
 	ReasonAttributeFailed    Reason = "attribute_failed"    // attribution job quarantined
 	ReasonNoRuleMatched      Reason = "no_rule_matched"     // deterministic pass found nothing
@@ -58,6 +62,7 @@ const (
 	ReasonNoTokens           Reason = "no_tokens"           // store had no requests in the span
 	ReasonSpooled            Reason = "spooled"             // sent could not happen now; durable copy kept
 	ReasonWeightsUnavailable Reason = "weights_unavailable" // vector pass wanted, encoder absent
+	ReasonNotPaired          Reason = "not_paired"          // collecting, but no Atlas pairing yet
 )
 
 // Method is how a project was named.

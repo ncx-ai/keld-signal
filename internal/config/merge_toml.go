@@ -23,6 +23,30 @@ func HasKeldBlock(text string) bool {
 	return strings.Contains(text, KeldTOMLStart)
 }
 
+// KeldBlockBody returns the text BETWEEN the keld markers, or "" when there is
+// no block. The inverse of StripKeldBlock, and it exists so a question about
+// what keld wrote is never answered by searching the whole file: a Codex user
+// may keep an [otel] table of their own, and a plain Contains over config.toml
+// cannot tell it from ours.
+func KeldBlockBody(text string) string {
+	if !strings.Contains(text, KeldTOMLStart) {
+		return ""
+	}
+	var out []string
+	inside := false
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.TrimSpace(line) == KeldTOMLStart:
+			inside = true
+		case inside && strings.TrimSpace(line) == KeldTOMLEnd:
+			inside = false
+		case inside:
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 // StripKeldBlock removes the keld managed block (including its markers) from
 // text. Lines outside the markers are preserved unchanged. Mirrors Python's
 // strip_keld_block: uses splitlines semantics (Split on "\n"), rstrips trailing

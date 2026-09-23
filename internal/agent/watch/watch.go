@@ -3,6 +3,7 @@ package watch
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -23,6 +24,16 @@ import (
 type Watcher struct {
 	offer   func(spool.Pointer)
 	observe func(source, transcriptPath string, line []byte)
+	// observeDoc is observe's sibling for a DOCUMENT source. ⚠️ A Gemini session
+	// is one JSON file rewritten whole on every turn, so there are no appended
+	// lines for the per-line hook to see and a telemetry mirror for it could not
+	// exist on `observe` alone. It is handed coordinates only — a source and a
+	// path — exactly like the ingest signal.
+	observeDoc func(source, transcriptPath string)
+	// notePrompt (may be nil) is told, with COORDINATES ONLY, that the watcher
+	// extracted one genuine user prompt. ⚠️ It is the lane record's seam, and it
+	// fires on EXTRACTION rather than on the offer — see WithPromptObserver.
+	notePrompt func(source, transcriptPath string)
 	// advanced reports whether the signal was TAKEN ON. A refused one must not be
 	// dropped — see drainFirstSight.
 	advanced func(source, transcriptPath string) bool
@@ -121,6 +132,40 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
 	w.signalFirstSight = on
 	return w
+}
+
+// WithDocumentObserver installs the whole-file telemetry hook for document
+// sources. It fires once per poll for a transcript this watcher is actively
+// reading, and never for one it has classed as history — the same rule
+// scanDocument applies to prompts, because mirroring an old session's usage
+// would publish spend that was never reported.
+func (w *Watcher) WithDocumentObserver(fn func(source, transcriptPath string)) *Watcher {
+	w.observeDoc = fn
+	return w
+}
+
+// WithPromptObserver installs the lane record's seam: coordinates only, once
+// per genuine user prompt this watcher EXTRACTED from a transcript.
+//
+// ⚠️ ON EXTRACTION, NOT ON THE OFFER, AND THE DIFFERENCE IS A FALSE `broken`.
+// A first sighting under forward-only offers nothing — the cursor jumps to EOF
+// — so a session created and finished entirely between two polls recorded no
+// watcher lane at all, while the very same branch was replaying that file to
+// the usage mirror. Every `codex exec` and every `claude -p` has that shape,
+// and so does any session whose first prompt lands inside the 5s poll gap.
+// Silence on an expected lane is one half of `broken`, so the pane blamed a
+// watcher that had just read the prompt it was accused of missing. "Did the
+// watcher see this prompt" is answered yes by one it then chose not to enrich.
+func (w *Watcher) WithPromptObserver(fn func(source, transcriptPath string)) *Watcher {
+	w.notePrompt = fn
+	return w
+}
+
+// notePromptSeen reports one extracted prompt, if anyone is listening.
+func (w *Watcher) notePromptSeen(source, path string) {
+	if w.notePrompt != nil {
+		w.notePrompt(source, path)
+	}
 }
 
 func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string) bool) *Watcher {
@@ -233,6 +278,56 @@ func (w *Watcher) scanFile(source, path string) bool {
 		// cursor at EOF (unless backfill is on).
 		if !w.backfill {
 			if st, err := os.Stat(path); err == nil {
+				// ⚠️ A THIRD CONSUMER OF THIS SIGHTING EXISTS NOW, AND IT WAS
+				// LOSING WHOLE SESSIONS. The comment below enumerates two paths
+				// because two was all there were; the usage MIRROR
+				// (promptlog, via w.observe) is the third, and it only ever
+				// sees lines handed to it live. A session written entirely
+				// between two polls -- which is every `codex exec` and every
+				// `claude -p` -- was therefore never mirrored at all.
+				//
+				// Measured: conformance chain A for codex published its
+				// enrichments and its blocks and forwarded ZERO usage, while
+				// the rollout on disk carried two `token_count` records. Fed
+				// that same file directly, the mirror emitted both.
+				//
+				// So a first sighting replays the file to the mirror, and to
+				// the mirror ONLY -- the prompt path stays forward-only,
+				// because offering every historical prompt is the herd this
+				// branch exists to prevent (measured elsewhere: 2 enrichments
+				// against 2,152).
+				//
+				// Bounded by each LINE'S OWN instant, not the file's. A file
+				// mtime is fresh for a session that has been open for days, so
+				// a daemon restart would re-mirror its whole history and
+				// double-count spend -- the one failure this codebase calls
+				// worse than missing spend. Lines written before this watcher
+				// started were either already mirrored or belong to the tool's
+				// own lane; either way they are not ours to send again.
+				//
+				// ⚠️ THE LANE RECORD IS THE FOURTH CONSUMER, and it was missing
+				// for the same reason the mirror was: this branch offers no
+				// pointer, and the offer was the only place a watcher lane fact
+				// was written. So the pane read `broken · watcher` about a
+				// session this very loop had just read. The freshness bound is
+				// the line's own instant, exactly as for the mirror — a lane
+				// vouched for by a prompt written before this watcher started
+				// would be reporting on somebody else's history.
+				if (w.observe != nil || w.notePrompt != nil) && w.startedBefore(path) {
+					ex := w.extractorFor(source)
+					fresh := func(line []byte) {
+						if !lineWrittenAfter(line, w.started) {
+							return
+						}
+						if w.observe != nil {
+							w.observe(source, path, line)
+						}
+						if _, ok := ex.extract(path, line); ok {
+							w.notePromptSeen(source, path)
+						}
+					}
+					scanFrom(path, 0, ex, fresh)
+				}
 				w.cursors.Set(path, st.Size())
 				// ⚠️ THE TWO PATHS WANT DIFFERENT THINGS FROM THIS SIGHTING.
 				// The PROMPT path must stay forward-only: offering every
@@ -269,6 +364,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 	}
 	recs, consumed := scanFrom(path, off, w.extractorFor(source), observe)
 	for _, rec := range recs {
+		w.notePromptSeen(source, path)
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: rec.PromptID, SessionID: rec.SessionID},
@@ -361,6 +457,14 @@ func (w *Watcher) scanDocument(source, path string) bool {
 		}
 		done = 0
 	}
+	// Past the history branch, so this transcript is one being written now.
+	// Fired every poll rather than only when the PROMPT cursor moves: a session
+	// can gain model turns (and therefore cost) after its last human prompt, and
+	// a mirror keyed on new prompts would never see them. The mirror keeps its
+	// own cursor, so a poll that finds nothing new costs one parse and no POST.
+	if w.observeDoc != nil {
+		w.observeDoc(source, path)
+	}
 	if int64(len(s.Prompts)) < done {
 		// Fewer prompts than we have offered: a new session reusing the path, or
 		// a truncation. Re-read from the start rather than stall forever.
@@ -374,6 +478,7 @@ func (w *Watcher) scanDocument(source, path string) bool {
 			int64(len(s.Prompts))-done, filepath.Base(path), done, len(s.Prompts))
 	}
 	for _, p := range s.Prompts[done:] {
+		w.notePromptSeen(source, path)
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: spool.OriginWatch, Version: w.version},
 			Correlation: spool.Correlation{Scheme: "prompt_id", ID: s.CorrID(p.Ordinal), SessionID: s.ID},
@@ -406,6 +511,30 @@ func fileModTime(path string) time.Time {
 		return time.Time{}
 	}
 	return st.ModTime()
+}
+
+// lineWrittenAfter reports whether a transcript line's OWN top-level timestamp
+// is after t. Undatable lines answer false: mirroring a line we cannot place in
+// time risks re-sending usage, and missing one costs a record — the safe
+// direction when the choice is between duplicated and absent spend.
+//
+// ⚠️ The timestamp must be the TOP-LEVEL one. Nested timestamps exist on
+// records that carry no turn of their own; `capture.scan` documents measuring
+// 1,135 lines in 73,449 where a bare first-match regex took a nested one.
+// Decoding is affordable here because this runs once per file, on its first
+// sighting, and never on the steady-state path.
+func lineWrittenAfter(line []byte, t time.Time) bool {
+	var rec struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &rec) != nil || rec.Timestamp == "" {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+	if err != nil {
+		return false
+	}
+	return at.After(t)
 }
 
 // startedBefore reports whether path was written after this watcher started —

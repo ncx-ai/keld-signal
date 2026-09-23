@@ -22,11 +22,10 @@ import (
 // telemetry flows and whose hook never fires still reads broken within the hour,
 // because that telemetry lands after the config.
 func TestActivityBeforeTheConfigIsNotEvidenceAboutIt(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-2 * time.Second) // the detector just wrote it
+	f.Wiring.ConfiguredAt = now.Add(-2 * time.Second) // the detector just wrote it
 	f.Wiring.NewestSessionStart = now.Add(-1 * time.Second)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	// Telemetry from BEFORE setup. The hook has never fired, having existed for
@@ -48,11 +47,10 @@ func TestActivityBeforeTheConfigIsNotEvidenceAboutIt(t *testing.T) {
 // once activity lands AFTER the config, a silent expected lane still breaks the
 // tool, and it does so inside the window rather than a day later.
 func TestActivityAfterTheConfigStillBreaksASilentLane(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = now.Add(-2 * time.Hour)
+	f.Wiring.ConfiguredAt = now.Add(-2 * time.Hour)
 	f.Wiring.NewestSessionStart = now.Add(-90 * time.Minute)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	f.Lanes = LaneFacts{LastTelemetryForward: at(-30 * time.Minute)} // after the config
@@ -69,11 +67,10 @@ func TestActivityAfterTheConfigStillBreaksASilentLane(t *testing.T) {
 // A machine whose config mtime cannot be read (zero) falls back to the plain
 // window. Unknown must not become a grace period that silences broken forever.
 func TestAnUnknownConfigMtimeDoesNotSuppressBroken(t *testing.T) {
-	now := time.Now()
 	at := func(d time.Duration) *time.Time { u := now.Add(d); return &u }
 
 	f := configured()
-	f.Wiring.ConfigMtime = time.Time{} // unreadable
+	f.Wiring.ConfiguredAt = time.Time{} // unreadable
 	f.Wiring.NewestSessionStart = now.Add(-90 * time.Minute)
 	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
 	f.Lanes = LaneFacts{LastTelemetryForward: at(-30 * time.Minute)}

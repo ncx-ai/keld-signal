@@ -23,6 +23,32 @@ export class SignalApp {
     await expect(this.page.getByText("Loading…")).toBeHidden();
   }
 
+  /** Open a pane that lives behind the Developer box (DEV_ONLY_PANES in
+   *  app.js — Integrations, while its state machine settles).
+   *
+   *  ⚠️ SEEDED, NOT TAPPED. enterDeveloperMode() clicks the version seven
+   *  times, which needs a pane already rendered and TOGGLES — so it cannot be
+   *  used to reach a pane that is hidden until it runs. This writes the same
+   *  per-browser preference the taps write, before the first script runs, so
+   *  the very first navigation already sees developer mode on. Deliberately a
+   *  DIFFERENT call from open(): if the pane ever stops being dev-only, these
+   *  specs keep passing and the visibility test is what says so, rather than
+   *  open() quietly papering over the change for everyone.
+   */
+  async openDev(pane: Pane): Promise<void> {
+    await this.page.addInitScript(() => {
+      try {
+        const key = "keld_signal_local_prefs";
+        const prev = JSON.parse(localStorage.getItem(key) || "{}");
+        localStorage.setItem(key, JSON.stringify({ ...prev, devMode: true }));
+      } catch {
+        // A context with storage blocked still renders; the spec that needs
+        // the pane will fail on the pane, not here.
+      }
+    });
+    await this.open(pane);
+  }
+
   /** The switch labelled `label` (the page renders `<span>label <label
    *  class=switch><input type=checkbox>…</label></span>`). Returns the
    *  clickable label and the checkbox it drives; the input itself is visually

@@ -81,8 +81,13 @@ func TestDetectorConfiguresAToolThatAppearsAfterTheDaemonStarted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "127.0.0.1:14318") {
-		t.Fatalf("the adapter did not write keld's telemetry block:\n%s", body)
+	// The HOOK, not the OTEL block: the tool's own OTLP export is behind the
+	// Developer switch and off by default, so a default detector writes the
+	// hook and nothing else. Which block each position writes is asserted in
+	// toolotlp_detector_test.go; what this test is about is that the adapter
+	// ran at all.
+	if !strings.Contains(string(body), "__hook --source codex") {
+		t.Fatalf("the adapter did not write keld's hook block:\n%s", body)
 	}
 
 	// A backup of the pristine config exists.

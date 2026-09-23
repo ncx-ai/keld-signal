@@ -1,4 +1,4 @@
-package cli
+package sidecarinstall
 
 import (
 	"archive/tar"
@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/ncx-ai/keld-signal/internal/version"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,7 +78,7 @@ func TestInstallSidecarStageOnlyLeavesExistingInstallUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := installSidecar(installSidecarOpts{
+	res, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
 	})
 	if err != nil {
@@ -100,13 +101,13 @@ func TestInstallSidecarCommitReplacesInstalledTree(t *testing.T) {
 	defer srv.Close()
 	dest := t.TempDir()
 
-	staged, err := installSidecar(installSidecarOpts{
+	staged, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
-	res, err := commitStagedSidecar(staged.StagedPath, dest)
+	res, err := Commit(staged.StagedPath, dest)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestInstallSidecarChecksumMismatchInstallsNothing(t *testing.T) {
 	defer srv.Close()
 	dest := t.TempDir()
 
-	if _, err := installSidecar(installSidecarOpts{
+	if _, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
 	}); err == nil {
 		t.Fatal("checksum mismatch must be fatal")
@@ -170,7 +171,7 @@ func TestInstallSidecarMissingPublishedHashStillInstalls(t *testing.T) {
 	defer srv.Close()
 
 	dest := t.TempDir()
-	res, err := installSidecar(installSidecarOpts{BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest})
+	res, err := Install(Opts{BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest})
 	if err != nil {
 		t.Fatalf("a missing published hash must not be fatal for the installer: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestInstallSidecarMissingPublishedHashWarnsViaCallback(t *testing.T) {
 
 	var warnings []string
 	dest := t.TempDir()
-	_, err := installSidecar(installSidecarOpts{
+	_, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest,
 		Warn: func(msg string) { warnings = append(warnings, msg) },
 	})
@@ -251,14 +252,14 @@ func TestCommitStagedSidecarRefusesATreeWithNoBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	staged, err := installSidecar(installSidecarOpts{
+	staged, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
 
-	if _, err := commitStagedSidecar(staged.StagedPath, dest); err == nil {
+	if _, err := Commit(staged.StagedPath, dest); err == nil {
 		t.Fatal("commit must refuse a staged tree with no sidecar binary")
 	}
 
@@ -275,7 +276,7 @@ func TestCommitStagedSidecarRefusesATreeWithNoBinary(t *testing.T) {
 // silently dropped. The indeterminate branch must never be throttled.
 func TestSidecarProgressThrottleForwardsEveryIndeterminateCall(t *testing.T) {
 	var calls []int64
-	throttle := newSidecarProgressThrottle(func(received, total int64) {
+	throttle := NewProgressThrottle(func(received, total int64) {
 		calls = append(calls, received)
 	})
 	throttle(10, -1)
@@ -291,7 +292,7 @@ func TestSidecarProgressThrottleForwardsEveryIndeterminateCall(t *testing.T) {
 // one, and a new percentage always gets through.
 func TestSidecarProgressThrottleDedupesByPercent(t *testing.T) {
 	var calls []int64
-	throttle := newSidecarProgressThrottle(func(received, total int64) {
+	throttle := NewProgressThrottle(func(received, total int64) {
 		calls = append(calls, received)
 	})
 	throttle(0, 1000)   // 0%
@@ -309,7 +310,7 @@ func TestSidecarProgressThrottleDedupesByPercent(t *testing.T) {
 // TestInstallSidecarProgressReportsIndeterminateTotal drives the real
 // installSidecar path — not just the throttle unit — against a server that
 // sends no Content-Length, and confirms the raw Progress callback set on
-// installSidecarOpts (there was no test at all setting it before this) fires
+// Opts (there was no test at all setting it before this) fires
 // at least once and reports total == -1, matching Fetcher.Progress's contract.
 func TestInstallSidecarProgressReportsIndeterminateTotal(t *testing.T) {
 	tarball := fakeSidecarTarball(t, "9.9.9")
@@ -330,7 +331,7 @@ func TestInstallSidecarProgressReportsIndeterminateTotal(t *testing.T) {
 	dest := t.TempDir()
 	var calls int
 	sawIndeterminate := false
-	_, err := installSidecar(installSidecarOpts{
+	_, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
 		Progress: func(received, total int64) {
 			calls++
@@ -362,7 +363,7 @@ func TestInstallSidecarProgressReportsIndeterminateTotal(t *testing.T) {
 // Tests that care about the restart override this var themselves and restore it
 // with t.Cleanup.
 func TestMain(m *testing.M) {
-	restartServiceAfterSwap = func() error { return nil }
+	RestartAfterSwap = func() error { return nil }
 	os.Exit(m.Run())
 }
 
@@ -404,14 +405,14 @@ func stageFakeSidecar(t *testing.T, version string) string {
 // the two must not be separable by adding a third call site.
 func TestCommitRestartsTheServiceSoTheRunningSidecarIsTheOneOnDisk(t *testing.T) {
 	restarts := 0
-	orig := restartServiceAfterSwap
-	restartServiceAfterSwap = func() error { restarts++; return nil }
-	t.Cleanup(func() { restartServiceAfterSwap = orig })
+	orig := RestartAfterSwap
+	RestartAfterSwap = func() error { restarts++; return nil }
+	t.Cleanup(func() { RestartAfterSwap = orig })
 
 	staged := stageFakeSidecar(t, "v9.9.9")
 	dest := t.TempDir()
 
-	res, err := commitStagedSidecar(staged, dest)
+	res, err := Commit(staged, dest)
 	if err != nil {
 		t.Fatalf("commitStagedSidecar: %v", err)
 	}
@@ -430,14 +431,14 @@ func TestCommitRestartsTheServiceSoTheRunningSidecarIsTheOneOnDisk(t *testing.T)
 // verified ~190MB download over a recoverable condition — and on the background
 // path there is nobody watching the exit code at all.
 func TestCommitSurvivesARestartFailure(t *testing.T) {
-	orig := restartServiceAfterSwap
-	restartServiceAfterSwap = func() error { return errors.New("launchctl: no such service") }
-	t.Cleanup(func() { restartServiceAfterSwap = orig })
+	orig := RestartAfterSwap
+	RestartAfterSwap = func() error { return errors.New("launchctl: no such service") }
+	t.Cleanup(func() { RestartAfterSwap = orig })
 
 	staged := stageFakeSidecar(t, "v9.9.9")
 	dest := t.TempDir()
 
-	res, err := commitStagedSidecar(staged, dest)
+	res, err := Commit(staged, dest)
 	if err != nil {
 		t.Fatalf("a restart failure must not fail the commit: %v", err)
 	}
@@ -458,17 +459,17 @@ func TestCommitSurvivesARestartFailure(t *testing.T) {
 // minutes before postinstall commits.
 func TestStageOnlyDoesNotRestartTheService(t *testing.T) {
 	restarts := 0
-	orig := restartServiceAfterSwap
-	restartServiceAfterSwap = func() error { restarts++; return nil }
-	t.Cleanup(func() { restartServiceAfterSwap = orig })
+	orig := RestartAfterSwap
+	RestartAfterSwap = func() error { restarts++; return nil }
+	t.Cleanup(func() { RestartAfterSwap = orig })
 
 	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
 	defer srv.Close()
 
-	if _, err := installSidecar(installSidecarOpts{
+	if _, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), StageOnly: true,
 	}); err != nil {
-		t.Fatalf("installSidecar(stage-only): %v", err)
+		t.Fatalf("Install(stage-only): %v", err)
 	}
 	if restarts != 0 {
 		t.Errorf("staging restarted the service %d times; nothing was installed yet", restarts)
@@ -496,7 +497,7 @@ func TestCleanupJobRemovesThePlistAfterASuccessfulInstall(t *testing.T) {
 	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
 	defer srv.Close()
 
-	if _, err := installSidecar(installSidecarOpts{
+	if _, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
 	}); err != nil {
 		t.Fatalf("installSidecar: %v", err)
@@ -522,12 +523,62 @@ func TestCleanupJobSurvivesAFailedInstall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := installSidecar(installSidecarOpts{
+	if _, err := Install(Opts{
 		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
 	}); err == nil {
 		t.Fatal("expected the install to fail")
 	}
 	if _, err := os.Stat(plist); err != nil {
 		t.Error("a failed fetch deleted its own retry job, leaving nothing to try again")
+	}
+}
+
+// ⚠️ "LATEST" IS NOT "MINE", AND THE DIFFERENCE DOWNGRADED A REAL MACHINE TWICE
+// IN ONE DAY. `releases/latest` excludes pre-releases by definition, so on any
+// -rc.N machine an unpinned fetch answers the last STABLE release. First
+// occurrence: a 3.0.5-rc.4 daemon installed v3.0.4. Second: the daemon route
+// had been pinned, the CLI had not, and a bare `keld signal install-sidecar`
+// put v3.0.4 over an engine the daemon had just correctly updated to rc.6.
+//
+// The rule lives HERE, at the shared function, so no caller can be the one that
+// forgot — which is exactly how the second occurrence happened.
+func TestDefaultTagIsThisBinarysOwnRelease(t *testing.T) {
+	prev := version.CLI
+	t.Cleanup(func() { version.CLI = prev })
+
+	for _, tc := range []struct{ cli, want string }{
+		{"3.0.5-rc.6", "v3.0.5-rc.6"},
+		// Exactly one leading v, whichever way the stamp carries it: the
+		// installer pane's own "vv3.0.0-rc.5" 404 was this in the other
+		// direction.
+		{"v3.0.5-rc.6", "v3.0.5-rc.6"},
+		{"3.0.4", "v3.0.4"},
+		// A source build names no release, so there is nothing to pin to and
+		// the caller falls through to LatestTag. Nothing-to-pin-to is not a
+		// missing pin.
+		{"dev", ""},
+		{"", ""},
+	} {
+		version.CLI = tc.cli
+		if got := DefaultTag(); got != tc.want {
+			t.Errorf("version.CLI %q -> DefaultTag() %q, want %q", tc.cli, got, tc.want)
+		}
+	}
+}
+
+// An explicit --tag still wins: that is what it is for.
+func TestAnExplicitTagBeatsTheDefault(t *testing.T) {
+	prev := version.CLI
+	version.CLI = "3.0.5-rc.6"
+	t.Cleanup(func() { version.CLI = prev })
+
+	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
+	dest := t.TempDir()
+	res, err := Install(Opts{BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if res.StagedPath == "" {
+		t.Fatal("nothing staged")
 	}
 }

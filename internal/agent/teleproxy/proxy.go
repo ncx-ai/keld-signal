@@ -22,6 +22,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -88,8 +89,20 @@ type Proxy struct {
 	// answer it: on a machine running Claude Code and Codex, Claude Code's
 	// forwards vouch for Codex's silence.
 	sources *sourceRecord
+	// previous is the secret a deliberate rotation replaced, honoured for a
+	// bounded window so tools configured just before it are not stranded. Nil
+	// when nothing was rotated. See grace.go.
+	previous atomic.Pointer[retired]
 	// dropped counts trace exports accepted and thrown away. See Handler.
 	dropped atomic.Int64
+
+	// forwarding answers whether the tool's OWN OTLP lane is on. nil means
+	// always (every existing caller and test); false means accept-and-discard.
+	// See Forwarding.
+	forwarding      atomic.Pointer[func() bool]
+	discardedOff    atomic.Int64
+	discardAnnounce sync.Map // source -> struct{}: one log line per source per run
+	onDiscard       atomic.Pointer[func(source string)]
 
 	wg sync.WaitGroup
 }
@@ -102,10 +115,31 @@ type Proxy struct {
 // Logs and metrics get separate spool subdirectories: a poison metrics batch
 // must not be able to block logs behind it.
 func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+// NewPending is New for a daemon that is LISTENING BEFORE IT IS PAIRED.
+//
+// ⚠️ **THE PROXY HAS TO BE UP FROM THE FIRST SECOND, WHICH IS EARLIER THAN THE
+// ADDRESS IS KNOWN.** `keld signal setup` writes this port into every AI tool's
+// config, and a tool reads that config once at startup — so a daemon that binds
+// only after `hook.json` arrives leaves every already-configured tool posting
+// into a closed port for as long as nobody has finished signing in. The
+// endpoints are therefore resolved PER FORWARD, the same treatment `token`
+// already has, and while they answer "" a batch is spooled rather than lost.
+func NewPending(logsEndpoint, metricsEndpoint func() string, token func() string, secret, spoolDir string) *Proxy {
+	return newProxy(secret, spoolDir,
+		clientevents.NewPendingTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		clientevents.NewPendingTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")))
+}
+
+func newProxy(secret, spoolDir string, logs, metric *clientevents.Transport) *Proxy {
 	p := &Proxy{
 		secret:    secret,
-		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
-		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
+		logs:      logs,
+		metric:    metric,
 		statePath: StatePath(),
 		// ⚠️ LOAD, don't start empty. The record is what tells doctor which
 		// running tools have never reached Atlas; a daemon restart that dropped
@@ -261,6 +295,55 @@ func (p *Proxy) Handler() http.Handler {
 	return mux
 }
 
+// Forwarding installs the switch the proxy consults PER REQUEST before it
+// forwards anything: the daemon hands it settings.Load().ToolOTLPEnabled.
+//
+// ⚠️ WITHOUT THIS, TURNING THE SWITCH OFF DOUBLE-COUNTED EVERY RUNNING TOOL
+// UNTIL A HUMAN RESTARTED IT. A tool reads its telemetry config ONCE at
+// startup, so one that was configured before the switch went off keeps posting
+// OTLP to this proxy from memory for the rest of its session. Meanwhile the
+// transcript mirror is on for exactly that tool (promptlog.SourcesFor is the
+// COMPLEMENT of the switch), and Atlas keys a mirrored row and a tool-sent row
+// differently (`session.id:event.sequence` vs `request_id`), so both landed
+// and both were priced. The PR that shipped the switch said the complement
+// rule "enforces" that the two lanes never both run for one tool — true of
+// what keld WRITES, false of what a running tool still SENDS.
+//
+// So the rule is read where the bytes arrive: forward iff the switch is on.
+// When it is off every tool source is mirrored, so anything reaching this port
+// is a duplicate by construction and is accepted (202 — the tool must not
+// retry) and DISCARDED, counted in DiscardedSwitchOff and announced once per
+// source per run. Nothing is lost that the mirror does not have: the mirror
+// reads from its cursor, and the only lines it never sees are those written
+// while the daemon was down, which reached no proxy either.
+func (p *Proxy) Forwarding(fn func() bool) {
+	if fn == nil {
+		p.forwarding.Store(nil)
+		return
+	}
+	p.forwarding.Store(&fn)
+}
+
+// OnDiscard is told, once per source per daemon run, that a tool is still
+// posting OTLP this proxy is discarding because the switch is off — the fact
+// the daemon turns into a client event.
+func (p *Proxy) OnDiscard(fn func(source string)) {
+	if fn == nil {
+		p.onDiscard.Store(nil)
+		return
+	}
+	p.onDiscard.Store(&fn)
+}
+
+// DiscardedSwitchOff is how many authenticated exports were accepted and
+// thrown away because the tool's OTLP lane is switched off.
+func (p *Proxy) DiscardedSwitchOff() int64 { return p.discardedOff.Load() }
+
+func (p *Proxy) forwardsNow() bool {
+	fn := p.forwarding.Load()
+	return fn == nil || (*fn)()
+}
+
 // discard authenticates a signal this daemon does not forward, answers 200, and
 // counts it. See Handler for why /v1/traces is here rather than absent.
 func (p *Proxy) discard() http.HandlerFunc {
@@ -339,6 +422,23 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		ids := SessionIDs(body)
 		src := SourceOf(body)
 
+		if !p.forwardsNow() {
+			// Accepted so the tool does not retry; never forwarded, never
+			// recorded as a forward (the pane's otel lane must not read
+			// "arrived" off bytes that went nowhere). See Forwarding.
+			p.discardedOff.Add(1)
+			if _, seen := p.discardAnnounce.LoadOrStore(src, struct{}{}); !seen {
+				log.Printf("keld-agent: telemetry proxy: %s is still posting its own OTLP while the tool_otlp "+
+					"switch is off — discarding it, because the transcript mirror already carries this usage "+
+					"and forwarding both would count it twice. It stops when the tool is next restarted.", src)
+				if fn := p.onDiscard.Load(); fn != nil {
+					(*fn)(src)
+				}
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
@@ -374,12 +474,16 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 // everything: ConstantTimeCompare("", "") is 1, so without the guard an
 // unconfigured proxy would authenticate any local caller — fail-open on the one
 // route that injects billable usage into the org.
+//
+// ⚠️ THE GRACE WINDOW APPLIES TO ALL THREE SHAPES, not to this package's own
+// header. A rotation honoured for Claude Code and Codex but not for Gemini is a
+// rotation that breaks one of a person's tools for reasons they cannot see; the
+// credential's LOCATION has nothing to do with which secret is valid.
 func (p *Proxy) authorized(r *http.Request) bool {
 	if p.secret == "" {
 		return false
 	}
-	want := []byte(p.secret)
-	for _, got := range []string{
+	presented := []string{
 		r.Header.Get("x-keld-telemetry-secret"),
 		r.Header.Get("x-keld-ingest-token"),
 		// The PATH form is what Gemini can actually deliver; see Handler.
@@ -389,8 +493,26 @@ func (p *Proxy) authorized(r *http.Request) bool {
 		// across an upgrade, and locking it out would be a second outage on top
 		// of the one it already has.
 		r.URL.Query().Get("token"),
-	} {
-		if got != "" && subtle.ConstantTimeCompare([]byte(got), want) == 1 {
+	}
+	if matchesAny(presented, p.secret) {
+		return true
+	}
+	// previousSecret answers "" once the window has closed, and "" can never
+	// match here — the empty-value guard below is what makes that safe.
+	return matchesAny(presented, p.previousSecret())
+}
+
+// matchesAny reports whether any presented credential equals want. An empty
+// want, or an empty presented value, never matches: ConstantTimeCompare("", "")
+// is 1, so without the guard an unconfigured proxy would authenticate any local
+// caller — fail-open on the one route that injects billable usage into the org.
+func matchesAny(presented []string, want string) bool {
+	if want == "" {
+		return false
+	}
+	w := []byte(want)
+	for _, got := range presented {
+		if got != "" && subtle.ConstantTimeCompare([]byte(got), w) == 1 {
 			return true
 		}
 	}
