@@ -19,7 +19,7 @@ New keys, all local, all optional, defined in `internal/agent/settings/settings.
 | `send_to_atlas` | bool | true (absent = on) | `KELD_ATLAS=0/1` | the connector is constructed or not |
 | `dev_blocks` | `""` \| `prompt` \| `bin` \| `minute` | `""` | `KELD_DEV_BLOCKS` | developer granularity; **refused unless `send_to_atlas` is false** |
 | `show_breaks` | bool | false | — | page preference |
-| `workstreams_off` | [string] | [] | — | workstream keys excluded from attribution locally |
+| `groups_off` | [string] | [] | — | group keys whose workstreams are excluded from attribution locally. The pre-rename key `workstreams_off` is still read; a write drops it |
 
 Existing keys this build reads: `attribution` (vector attribution toggle, already sets
 `KELD_TEXTEMBED=1` for the sidecar), `blocks`.
@@ -160,18 +160,25 @@ one.
 `{"host": "https://atlas-dev.keld.co", "restart_required": true}`. Malformed → 400, no
 file touched. Refused with 409 while `send_to_atlas` is false.
 
-## Projects (`~/.keld/state/projects.json`) and `/v1/workstreams`
+## Workstreams (`~/.keld/state/workstreams.json`) and `/v1/workstreams`
 
-The file is the **`KELD_PROJECTS_FILE` shape attribution already reads**, extended with
-fields the daemon ignores when it reads it as a project list:
+⚠️ **Renamed 2026-09-23 to Atlas's words.** A GROUP holds WORKSTREAMS (what this file
+called a workstream and a project). The document moved from `projects.json` (version 1:
+`workstreams` = groups, `projects` = workstreams, each naming its group under `workstream`)
+to `workstreams.json` (version 2, below). The daemon migrates once at startup and keeps the
+old file as `projects.json.pre-rename`; until then `Load` reads it read-only.
+
+Each item of `workstreams` is the **`KELD_WORKSTREAMS_FILE` shape attribution already reads**
+(`KELD_PROJECTS_FILE` is still honoured), extended with fields the daemon ignores when it
+reads it as a workstream list:
 
 ```json
 {
-  "version": 1,
-  "workstreams": [
+  "version": 2,
+  "groups": [
     {"key": "development", "name": "Development", "question": "Which project is this work for?", "template_id": "project", "origin": "atlas|local", "off": false}
   ],
-  "projects": [
+  "workstreams": [
     {
       "id": "p_sdk_work",
       "title": "SDK work",
@@ -180,7 +187,7 @@ fields the daemon ignores when it reads it as a project list:
       "repos": ["github.com/ncx-ai/sdk-testbench", "github.com/ncx-ai/atlas-telemetry-typescript", "github.com/ncx-ai/atlas-telemetry-python"],
       "keywords": [],
       "ticket_key": "",
-      "workstream": "development",
+      "group": "development",
       "origin": "suggested|user|atlas",
       "hidden": false,
       "atlas_value_id": null
@@ -200,7 +207,7 @@ Read against `keld-atlas` on this machine, not assumed:
    `{id, title, description, team, keywords}`. So "the org's workstream values are the
    attribution vocabulary" is true **now**.
    - `team` carries the **workstream's name** when a value has no owning team — that is how
-     the daemon can group values by bucket and honour `workstreams_off` without a new field.
+     the daemon can group values by bucket and honour `groups_off` without a new field.
    - `keywords` are the value's authored **tags with their prefix STRIPPED**: an admin types
      `repository: acme/web` in the Atlas editor and the daemon receives `acme/web`. So a
      deterministic repo rule must recognise a repository **by shape**
@@ -217,7 +224,7 @@ Read against `keld-atlas` on this machine, not assumed:
    with `dependencies=[Depends(require_admin)]` behind a **user session** — not the daemon's
    ingest token. There is no `/v1/signal/*` route that accepts a project or a tag from a
    machine. Therefore, for this build:
-   - "same as" and "new project" are **LOCAL edits** to `projects.json`. They re-attribute
+   - "same as" and "new project" are **LOCAL edits** to `workstreams.json`. They re-attribute
      this machine's blocks immediately and completely.
    - The page states plainly that the change is local, and offers the Atlas workstream editor
      link for the org-wide edit. It must not imply the org has been taught anything.
@@ -239,12 +246,12 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/workstreams` | — | `{workstreams, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
-| `POST /v1/workstreams/bundle` | `{"title","workstream","suggestions":[ids]}` | one project with those rules; re-attributes |
+| `GET /v1/workstreams` | — | `{groups, workstreams, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `POST /v1/workstreams/bundle` | `{"title","group","suggestions":[ids]}` | `{"workstream": …}` — one workstream with those rules; re-attributes |
 | `POST /v1/workstreams/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/workstreams/{id}/hide` | `{"hidden":true}` | local only |
 | `POST /v1/workstreams/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
-| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `workstreams_off` |
+| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `groups_off` |
 
 Every one of these edits is local to this machine. The response carries
 `{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so

@@ -160,7 +160,7 @@ around the threshold. There is exactly one attribution path — no model, no
 attribution, however strong the metadata evidence — and nothing about it changes
 the privacy invariant: only project ids and confidences ever publish, never a
 project's description or a span of message text. `KELD_ATTRIBUTION` gates the
-whole thing; `KELD_PROJECTS_FILE` (or an org's remote settings) declares the
+whole thing; `KELD_WORKSTREAMS_FILE` (or an org's remote settings) declares the
 project list. See [`docs/attribution-smoke.md`](docs/attribution-smoke.md) for a
 step-by-step runbook against a local Atlas, and
 `sidecar/app/test_attribution_quality.py` for the opt-in quality eval (micro-F1
@@ -503,7 +503,7 @@ Served today: `include_entity_text`, `client_telemetry`, `enrichment_schema`
   `block-mean-centred`, is what was measured and ships.
   `KELD_ATTRIBUTION_VERIFIER=1` (default **off**, since 2026-09-03) opts a
   machine INTO the local Gemma verifier step and its ~3 GB download — off, the
-  answer's meta says `verifier: opted_out` and the embedding decision stands; `KELD_PROJECTS_FILE` declares the
+  answer's meta says `verifier: opted_out` and the embedding decision stands; `KELD_WORKSTREAMS_FILE` declares the
   project list (wins over an org's remote settings); `KELD_VERIFIER_GGUF` points
   at the verifier's GGUF weights.
 - `KELD_TICK` (off) — characterises work no prompt's look-back reaches. Ships

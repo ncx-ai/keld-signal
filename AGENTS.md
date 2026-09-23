@@ -34,6 +34,25 @@ one already here.
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
+## Vocabulary — Signal says what Atlas says (since 2026-09-23)
+
+A **group** (Atlas `WorkstreamGroup`, e.g. "Products") holds **workstreams** (e.g. "Atlas
+Platform"). The repo/branch/model/… facets `/analyze` counts are **dimensions**. Until
+2026-09-23 Signal called a group a "workstream", a workstream a "project", and the dimensions
+"workstreams" — three meanings for one word. Code, local routes (`/v1/workstreams`,
+`/v1/groups/{key}/off`), stored names (`state/workstreams.json`, `groups_off`,
+`KELD_WORKSTREAMS_FILE`) and the page now use the new words.
+`scripts/check_vocabulary.sh` fails CI on any retired name
+(`scripts/vocabulary-denylist.txt`).
+
+**Kept on purpose — the keep list:** Atlas wire keys `projects` (settings and block row),
+`projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
+`POST /projects` and its `projects` body key (version skew); the status value
+`skipped:no_projects`; the dimension named `project` (workspace basename); and anything about
+Claude Code's `~/.claude/projects` directories or a `.keld.toml` project. The old stored
+names are still READ: `projects.json` (migrated once, kept as `projects.json.pre-rename`),
+`workstreams_off`, `KELD_PROJECTS_FILE`.
+
 ## Architecture
 
 ```mermaid
@@ -1846,7 +1865,7 @@ distinction between a pass that was skipped and one that was never wired.
 project a closed BLOCK belongs to, decided on device.** OFF by default
 (`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org declares
 projects (`settings.RemoteWorkstream`: id/title/description/team/repos/keywords/ticket key)
-via `KELD_PROJECTS_FILE` or the settings poll's `projects` key; the daemon pushes them
+via `KELD_WORKSTREAMS_FILE` (the pre-rename `KELD_PROJECTS_FILE` is still read) or the settings poll's `projects` key; the daemon pushes them
 down with `POST /projects` and the block emitter's `OnPublished` hook schedules a durable
 job per published block. `POST /attribute` takes COORDINATES and the block's own
 already-computed dims and answers with project IDS, confidences, closed enums and integer
@@ -1916,7 +1935,7 @@ timings — no text, no span, no offset, in either direction.
 - **The two model downloads are gated on a KNOWN NON-EMPTY project list.** 4.2 GB fetched
   for an org that has declared nothing buys nothing — every `/attribute` answers
   `skipped:no_projects` without loading a model — and Atlas does not serve `projects` yet,
-  so that is currently every machine without `KELD_PROJECTS_FILE`. The gate is read live per
+  so that is currently every machine without `KELD_WORKSTREAMS_FILE`. The gate is read live per
   published block, so a list arriving on a later poll starts the fetch with no restart.
 - **⚠️ `skipped:no_projects` is NON-TERMINAL while the daemon holds a list, and the daemon
   re-posts after a sidecar respawn.** `attribution._projects` is module state in the sidecar
@@ -2244,6 +2263,9 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    workstreams/     groups and workstreams: the local document (workstreams.json),
+                     the rule pass (Attribute), suggestions, the page's edits
+    attrib/          the semantic attribution job (POST /attribute) per closed block
     update/          auto-update: Atlas pins a release; fetch, verify, swap by
                      displacement, restart, confirm — or restore .prev and
                      never retry that version until the pin moves
@@ -2288,7 +2310,7 @@ sidecar/
       textembed.py     per-message text vectors, in their own encoder child
       window.py        rollup / attribution / dominant; MIN_EVIDENCE
       levels.py        level vocabulary + 0.1s timestamp quantization
-      workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
+      dimensions.py    ALLOCATION + INVENTORY payload (the published shape)
       transcript.py    JSONL line seams (turns_in / tool_use_in)
       workspace.py     whole-file workspace + remote resolution
       reconcile.py     prose paths against declared paths (re-scoped per window)

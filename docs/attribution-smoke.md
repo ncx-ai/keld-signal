@@ -56,7 +56,7 @@ variables only take effect run-in-foreground:
 ```bash
 cd ../keld-signal
 KELD_ATTRIBUTION=1 \
-KELD_PROJECTS_FILE="$PWD/scripts/testdata/smoke_projects.json" \
+KELD_WORKSTREAMS_FILE="$PWD/scripts/testdata/smoke_projects.json" \
 KELD_VERIFIER_GGUF=/Users/gabrielionescu/projects/keld/embedding-experiment/models/gemma-4-E2B-it-Q4_K_M.gguf \
 KELD_BLOCKS=1 \
 go run ./cmd/keld-agent run
@@ -65,7 +65,7 @@ go run ./cmd/keld-agent run
 - **`KELD_ATTRIBUTION=1`** — the attribution gate (`attrib.EnvEnabled`). Off by
   default; without it the daemon never schedules block-to-project matching at all,
   and every block publishes with no `projects`/`projects_status` field.
-- **`KELD_PROJECTS_FILE`** — `scripts/testdata/smoke_projects.json`, a 4-project
+- **`KELD_WORKSTREAMS_FILE`** — `scripts/testdata/smoke_projects.json`, a 4-project
   fixture that matches repos this developer actually works in, including
   `keld-signal` itself — so a real coding session in *this* repo has something to
   attribute to. Wins over the org's remote project list, so the smoke test is
@@ -150,7 +150,7 @@ workstreams/dynamics/prior facets.
 | *(field absent entirely)* | Attribution never ran for this block — most likely `KELD_ATTRIBUTION` wasn't set (or was `0`) on the daemon that produced it, or the daemon predates this feature. | Confirm the env var on the `keld-agent run` process from step 2; check the daemon's startup log for the attribution gate being reported on. |
 | `pending` | The encoder couldn't answer *promptly* for this block — a cold child, or a backlog. This is transient and expected on a block's first publish. `projects` is empty and `attribution` is `null` (nothing was measured, not a zeroed timing). | Wait for the next sweep (the daemon retries; there's no second queue — see `attribution.pending()`'s docstring). If it never clears, check the sidecar log for the encoder child failing to spawn repeatedly. |
 | `skipped:disabled` | The text encoder itself is switched off on this machine (`KELD_TEXTEMBED` unset/0). No sweep will ever answer while this is true. | Confirm `KELD_TEXTEMBED=1` is set wherever the sidecar was spawned (it's implied by attribution being on; if this shows up, something overrode it). |
-| `skipped:no_projects` | Nothing was declared to match against — `KELD_PROJECTS_FILE` didn't resolve, or resolved to an empty list. | Check `KELD_PROJECTS_FILE` points at `scripts/testdata/smoke_projects.json` and that the daemon logged a successful `POST /projects` to the sidecar at startup. |
+| `skipped:no_projects` | Nothing was declared to match against — `KELD_WORKSTREAMS_FILE` didn't resolve, or resolved to an empty list. | Check `KELD_WORKSTREAMS_FILE` points at `scripts/testdata/smoke_projects.json` and that the daemon logged a successful `POST /projects` to the sidecar at startup. |
 | `degraded:weights_unavailable` | The encoder ran with **no model** — weights aren't provisioned yet (first-run download in progress, or it failed). Per AC-4, nothing is attributed here however strong the exact-match (repo/ticket/keyword) evidence is; there is exactly one attribution path, and this isn't it yet. | Check the sidecar's `/metrics` or log for the Qwen3 encoder child's spawn status; confirm `~/.keld/models/qwen3-embedding-0.6b` (or `KELD_TEXTEMBED_DIR`) actually has weights. The daemon's durable job re-attributes the block automatically once weights arrive — no manual re-trigger needed. |
 | `attributed` with `projects: []` | The pipeline ran fully and genuinely found no match — a real answer ("none of these projects"), not a failure. | If you expected a hit, check the session's branch/cwd against `proj_signal`'s `repos: ["keld-signal"]`, and that your prompts contained the kind of language the encoder would score against the project's `description`/`keywords`. |
 | `attributed` with `projects: [...]` | Success — the case this runbook is trying to produce. | Check `attribution.model_versions` and `pairs_verified` in the row's `raw->'attribution'` to see whether the verifier was actually consulted (`pairs_verified > 0`) or the threshold alone decided it. |
