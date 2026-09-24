@@ -20,8 +20,8 @@
   "tools": {
     "claude_code": {
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.280",
-      "tested_on": "2026-09-23",
+      "version": "2.1.281",
+      "tested_on": "2026-09-24",
       "proven_by": "conformance.yml, chain A on ubuntu-latest"
     },
     "codex": {
