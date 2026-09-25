@@ -141,6 +141,72 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <dt>Semantic pass default</dt><dd class="mono">OFF · a developer toggle (KELD_ATTRIBUTION) · limits who a wrong decision can affect</dd>
 </dl>
 
+<section id="rev4" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r4" style="margin-top:18px">Revision 4 · Only projects, no groups <span class="chip chip-draft" style="vertical-align:middle;margin-left:8px">Draft — awaiting sign-off · 2026-09-25</span></h2>
+<p class="lede">Proposed 2026-09-25: Signal drops the container. There are only <strong>projects</strong>, in one flat list. Groups came from mirroring Atlas; Revision 2 stopped that, so a group now only carried a heading, group totals and the "counts for my work" switch. A block still lands in every project that matches it.</p>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Revisions 1–3</th><th>Revision 4</th></tr></thead>
+<tbody>
+  <tr><td>Projects page</td><td>projects under group headings; a group switcher; a "Groups on" tile; "counts for my work" per group</td><td><strong>one flat list of projects</strong>; none of the four</td></tr>
+  <tr><td>Totals</td><td>per group (a block once) and per project (in full)</td><td><strong>per project only</strong>, in full. The "attributed N of M blocks" line still counts a shared block once.</td></tr>
+  <tr><td>Rule pass</td><td>every matching project, in any group</td><td><strong>unchanged</strong>: every matching project</td></tr>
+  <tr><td>Model-based pass (off by default)</td><td>one competition per group</td><td><strong>one pooled competition</strong> — the decision before per-group, byte for byte. The sidecar already does this when no <span class="mono">group</span> is posted.</td></tr>
+  <tr><td>Local API</td><td><span class="mono">GET /v1/projects</span> has <span class="mono">groups</span>; <span class="mono">PUT /v1/groups/{key}/off</span></td><td>no <span class="mono">groups</span> key; the route is removed</td></tr>
+  <tr><td>Ledger cells</td><td><span class="mono">{project_id, group, method}</span></td><td><span class="mono">{project_id, method}</span>; old rows still read</td></tr>
+  <tr><td>Saved file</td><td>3.0.6's shape, with the person's groups</td><td>still 3.0.6's shape. Every project is written under <strong>one internal group</strong>, because 3.0.6 only renders a project under a group — without it a rolled-back machine would show nothing.</td></tr>
+  <tr><td>Wire to Atlas</td><td><span class="mono">projects</span>, <span class="mono">project_matches</span>, dimensions</td><td><strong>unchanged</strong></td></tr>
+  <tr><td>PR #47 (rename)</td><td>—</td><td><strong>unchanged</strong>: <span class="mono">Group</span> remains as the internal storage type only</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Decision proposed: what happens to a switched-off group</h3>
+<ul>
+  <li>A project whose group was switched off becomes a <strong>hidden project</strong> on first load. It keeps attributing nothing, exactly as before, and the person can unhide it on the page. 3.0.6 honours <span class="mono">hidden</span> too.</li>
+  <li><span class="mono">workstreams_off</span> is left in agent-config.json, so a rollback to 3.0.6 still sees those groups as off.</li>
+  <li>The alternative — drop the switch and let those projects count again — changes numbers people chose to exclude, silently.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
+<tbody>
+  <tr id="r4-ac-1"><td class="mono">R4-AC-1</td><td>The Projects page shows one flat list: no group heading, switcher, "Groups on" tile or "counts for my work" toggle.</td><td>the page</td><td class="mono">node --test · ui/e2e</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-2"><td class="mono">R4-AC-2</td><td><span class="mono">GET /v1/projects</span> returns <span class="mono">{projects, suggestions, coverage, totals}</span> with <span class="mono">totals = {projects: [...]}</span> and no <span class="mono">groups</span>; <span class="mono">PUT /v1/groups/{key}/off</span> answers 404.</td><td>local API</td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHasNoGroups</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-3"><td class="mono">R4-AC-3</td><td>A block matching two projects lands in both; each counts it in full; coverage counts it once.</td><td>catalog, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestASharedBlockCountsInEveryProjectAndOnceInCoverage</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-4"><td class="mono">R4-AC-4</td><td>A project whose group was switched off is hidden after upgrade and attributes nothing; <span class="mono">workstreams_off</span> is left as it was.</td><td><span class="mono">projects.json</span>, agent-config.json</td><td class="mono">go test ./internal/agent/daemon/ -run TestAnOffGroupsProjectsBecomeHidden</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-5"><td class="mono">R4-AC-5</td><td>A home written by 3.0.6 is read in place, and after an edit the file still renders every visible project in 3.0.6 (each under a group the file declares).</td><td><span class="mono">projects.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestA306HomeIsReadAndWrittenInPlace</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-6"><td class="mono">R4-AC-6</td><td>The model-based pass posts no <span class="mono">group</span> and decides as one pooled competition; its answers equal the pre-per-group rule.</td><td>sidecar <span class="mono">POST /projects</span>, <span class="mono">/attribute</span></td><td class="mono">sidecar test_attribution_scoring.py · go test ./internal/agent/enrich/sidecar/</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-7"><td class="mono">R4-AC-7</td><td>The wire to Atlas is byte-identical: the golden block row is unchanged.</td><td><span class="mono">POST /v1/signal/blocks</span></td><td class="mono">go test ./internal/agent/publish/ -run TestGoldenBlockIsTheCurrentWire</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r4-ac-8"><td class="mono">R4-AC-8</td><td>Every earlier criterion that does not name a group still passes; the group ones are marked retired below.</td><td>all suites</td><td class="mono">go test ./... · node --test · sidecar · Playwright · the real-daemon check</td><td><span class="pill p-unver">OPEN</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Retired by this revision</h3>
+<ul>
+  <li>Revision 1: the per-group model decision (AC-3, AC-4), group totals and the switcher (the group half of AC-8), the per-group eval arm (AC-10).</li>
+  <li>Revision 3: R3-AC-5 (groups keep their Revision 1 name) — groups leave the product; the storage type keeps the name.</li>
+</ul>
+
+<h3>Destructive change ledger (Revision 4)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Group headings, group totals and the switch leave the page</td><td>yes, revert</td><td>every machine; the groups stay in the file</td><td>R4-AC-1, R4-AC-5</td></tr>
+  <tr><td>Projects in a switched-off group are marked hidden</td><td>yes — per project, on the page</td><td>machines that switched a group off</td><td>R4-AC-4; the off-list is kept</td></tr>
+  <tr><td><span class="mono">PUT /v1/groups/{key}/off</span> removed</td><td>yes</td><td>the page only (embedded)</td><td>R4-AC-2</td></tr>
+  <tr><td>Model-based pass back to pooled</td><td>yes</td><td>machines with the pass on (developer-only)</td><td>R4-AC-6</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
 <section id="rev3" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
 <h2 id="r3" style="margin-top:18px">Revision 3 · A project is a project again <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Done · 6/6 · 2026-09-25</span></h2>
 <p class="lede">Decided 2026-09-25: Signal's own buckets are called <strong>projects</strong> again. Revision 2 stopped Signal matching Atlas's workstreams, so sharing the word would make people ask "which workstreams?". The other two renames stay. Every earlier criterion keeps holding under the new names.</p>
