@@ -240,6 +240,7 @@ def main():
                 pred[i] = v if v in ("plan", "embed") else (v + ".general" if v not in ("code.write", "code.edit") else v)
             reason[i] = "ok"
         res = score(nm + "/" + a.wording, gold, pred, reason)
+        res["predictions"] = {str(k): v for k, v in pred.items()}
         code_idx = [i for i in gold if gold[i] in ("code.write", "code.edit")]
         ans = [i for i in code_idx if pred.get(i)]
         res["code_n"] = len(code_idx)

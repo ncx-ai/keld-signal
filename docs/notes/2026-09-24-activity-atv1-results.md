@@ -118,3 +118,57 @@ boundary broke another.
 - **(2026-09-24) Nothing clears the 0.70 `code.*` bar.** `rich` reaches 0.600. Whether
   further wording work closes it is untested, and there is a live risk of tuning descriptions
   against this 100-window sample until they fit it.
+
+## Addendum, same day — the two arms the first writeup left open
+
+### Arm G: file types, the deterministic signal arm D should have used
+
+Arm D read the `action` level (`edit`, `read`) which says what TOUCHED a file and never which
+KIND. Attempt four's frame excludes the ext/lang levels by construction (*"`reconcile` is
+deliberately not run"*), so this signal was absent from every arm above. Re-cut the same 100
+windows, read file paths from `tool_use` inputs, mapped through the sidecar's own `EXT_LANG`.
+Extensions seen: `.tsx` 420, `.py` 376, `.go` 341, `.md` 153.
+
+| code-file share | precision | recall | accuracy |
+|---|---|---|---|
+| >= 0.01 | 0.562 | **1.000** | 0.624 |
+| >= 0.50 | 0.580 | 0.976 | 0.647 |
+| >= 0.75 | 0.673 | 0.854 | **0.729** |
+
+Constant 0.482, so **+0.247 — nearly 7x arm D's +0.036. File types are a far better
+deterministic signal than action names, and that correction came from the repo owner.**
+
+⚠️ **But the asymmetry is the whole finding. Recall 1.000, precision 0.562.** Every code
+window touches code files, so a NEGATIVE verdict is never wrong; but 32 of 73 windows touching
+`.go`/`.py`/`.tsx` are NOT code work, because **reviewing code, researching code and planning
+code changes all touch code files too**. The extension names the SUBJECT MATTER, not the
+ACTIVITY. It can rule the code family OUT with certainty and cannot rule it IN.
+
+⚠️ **And the negative gate is INERT on this corpus — measured, fires 0 times.** Every window
+the model called `code.*` did touch code files; all 6 cross-family errors are code-file-rich
+windows that are really `review`/`research`. The gate needs non-code work to exist before it
+can fire, and this corpus has none. **It is expected to matter on a mixed fleet and provably
+does nothing on an all-engineering one.** Do not implement it on the strength of this corpus;
+do not discard it either.
+
+### Arm F at matched wording — Bar 3 resolves, and the first context number
+
+`F/rich`: accuracy 0.430, lift +0.060, `code.*` **0.822**.
+
+⚠️ **That 0.822 is the only arm to clear Bar 2 and it is an ARTIFACT.** It is reached by
+calling nearly everything `code.edit` (`review`->`code.edit` x16, `research`->`code.edit` x13,
+`plan`->`code.edit` x4), which inflates code recall while tanking overall accuracy to below
+arm D. **A `code.*` figure earned by over-predicting code means nothing**; Bar 2 must never be
+read without the overall-accuracy column beside it.
+
+**Bar 3 RESOLVES.** At matched `rich` wording P beats F by **0.230**, which exceeds the 0.160
+wording spread. The claim withheld in the first writeup — *factoring the axes beats scoring all
+68 at once* — is now made. At `gloss` the gap was 0.160, exactly the spread, and it was right
+to withhold it.
+
+**FIRST MEASURED CONTEXT NUMBER, and it is a warning.** `F/rich` assigned
+**`review.legal` to 11 of 100 windows** — up from 5 at `gloss` — on a corpus containing **zero
+legal work**. A ~11% false-domain rate that RISES as descriptions get richer. This is the
+strongest evidence yet that the context axis over-fires when offered, and it argues for gating
+context on verb rather than scoring all 68 ids together. ⚠️ It is a false-POSITIVE rate only;
+it says nothing about whether real contexts would be found, which remains Study 4.
