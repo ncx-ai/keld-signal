@@ -68,13 +68,13 @@ const LEDGER = {
 };
 
 const ws = (id: string, title: string, group: string, repo: string) => ({
-  id, title, group, repos: [repo], rules: [repo], origin: "atlas", atlas_value_id: id,
+  id, title, group, repos: [repo], rules: [repo], origin: "user",
 });
 
 const CATALOG = {
   groups: [
-    { key: "products", name: "Products", origin: "atlas" },
-    { key: "features", name: "Features", origin: "atlas" },
+    { key: "products", name: "Products", origin: "local" },
+    { key: "features", name: "Features", origin: "local" },
   ],
   projects: [
     ws("products:atlas", "Atlas Platform", "products", "github.com/ncx-ai/keld-atlas"),
@@ -179,8 +179,13 @@ test.describe("Groups: a block in several projects", () => {
     await expect(products.locator(".shared-note")).toHaveText(
       "1 block is in more than one project here, so the projects add up to more than the group."
     );
-    await expect(products.locator(".project-row", { hasText: "Atlas Platform" })).toContainText("$10.00 est.");
-    await expect(products.locator(".project-row", { hasText: "Signal Client" })).toContainText("$5.00 est.");
+    // Matched on the row's TITLE: every row now carries a Map-to picker whose
+    // <option>s name the other projects, so a row-wide text match would find
+    // "Atlas Platform" in Signal Client's row too.
+    const row = (title: string) =>
+      products.locator(".project-row", { has: page.locator(".row-title", { hasText: title }) });
+    await expect(row("Atlas Platform")).toContainText("$10.00 est.");
+    await expect(row("Signal Client")).toContainText("$5.00 est.");
 
     const features = page.locator(".group-card", { hasText: "Features" });
     await expect(features.locator(".group-total")).toHaveText(/^1 block · .+ · \$5\.00 est\.$/);
