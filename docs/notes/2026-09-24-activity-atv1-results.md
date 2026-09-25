@@ -473,3 +473,45 @@ it.** Gold is `general` on the revision windows only because `text.transform` ha
 context. The work genuinely is customer-facing, so a `marketing` or `financial` prediction
 there is not cleanly wrong. The vocabulary gap, not the model, makes the comparison
 meaningless.
+
+## 2026-09-25 — free-form extraction + embedding into the atv1 space
+
+Motivation: label WORDING is worth 0.378 on `code.*` and the whole 0/7 -> 3/7 on John's set, so
+a closed label set makes the answer a function of OUR prose. This asks GLiNER2 to extract what
+the work is in the TEXT'S own words (no atv1 vocabulary in the prompt), then maps the spans
+into the atv1 space with Qwen3-Embedding-0.6B against the 68 descriptions plus a NULL doc —
+`/attribute`'s measured discipline. `scripts/activity_atv1_freeform.py`.
+
+| John's 7 | closed labels (three-source) | free-form + embedding |
+|---|---|---|
+| primary | **0.429** | 0.000 |
+| in-set | **0.429** | 0.143 |
+| **recall** | 0.548 | **0.714** |
+
+**Best recall measured anywhere; worst top-1.** The right labels are IN the ranked list and the
+ranking cannot find them.
+
+⚠️ **THE NULL DOC IS INERT: 515 of 515 spans beat it.** `/attribute`'s rule — a candidate
+attributes only by BEATING "nothing" in the same ranking, measured at 92% on 61 blocks — **does
+not transfer to short spans.** A two-word noun (`"slides"`) is closer to SOME atv1 description
+than to "no particular activity" every time, so nothing is ever rejected and every extracted
+noun casts a vote. **A guard that never fires is not a guard**; do not carry the NULL_DOC
+pattern to short-span matching without re-measuring whether it rejects anything.
+
+⚠️ **A design choice loaded this.** Both `activity` AND `artifact` were extracted, so most
+spans are nouns (`whiteboard`, `pptx skill`, `system map`) that cannot rank a verb well. A
+verb-phrase-only extraction is UNTESTED and is the obvious next variant.
+
+### What the composition evidence now says
+
+**Propose broadly, rank narrowly.** Three sources have now been measured on the same gold:
+
+| source | effect on recall | effect on top-1 |
+|---|---|---|
+| modality from file evidence | 0.476 -> 0.548 | none |
+| free-form + embedding | -> **0.714** | destroys it (0.000) |
+| closed-label prose pass | — | **the only thing that ranks** (0.429 John / 0.700 eng) |
+
+So free-form belongs as a CANDIDATE GENERATOR feeding the closed-label ranker, not as a
+replacement for it — the same "propose, never gate" shape that made modality work. ⚠️ Untested
+as a combination; n=7 throughout.
