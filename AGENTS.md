@@ -46,8 +46,8 @@ multi-group discovery) once Signal stopped matching Atlas's workstreams, so the 
 name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
 (`scripts/vocabulary-denylist.txt`).
 
-**Signal labels on its own (since 2026-09-25).** The rule pass, the Workstreams pane, its totals
-and `project_matches` see only the workstreams defined in Signal (`workstreams.Candidates`, the
+**Signal labels on its own (since 2026-09-25).** The rule pass, the Projects pane, its totals
+and `project_matches` see only the projects defined in Signal (`projects.Candidates`, the
 local document). The org's workstreams still arrive on the settings poll and are held, unread on
 those paths, and a poll no longer trims local rules an Atlas workstream covers. The model-based
 attribution pass still scores against the org's list (decided the same day; its answers are
