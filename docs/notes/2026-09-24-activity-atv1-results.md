@@ -33,7 +33,10 @@ Last updated 2026-09-24. 100 blind hand labels; majority constant `code.edit` = 
 | **F** | prose -> all 68 ids at once | gloss | 0.480 | +0.110 | 0.667 | 1.00 |
 | **F** | prose -> all 68 ids at once | rich | 0.430 | +0.060 | 0.822 (artifact) | 1.00 |
 | **A** | prose + raw act counts as hint | rich | 0.640 | +0.270 | 0.511 | 1.00 |
-| **T** | prose + 68 ids + **Atlas team stated** | rich | _running_ | | | |
+| **T** | prose + 68 ids + **Atlas team stated** | rich | 0.400 | +0.030 | 0.822 (artifact) | 1.00 |
+
+**Arm T cuts FALSE-DOMAIN attribution 11 -> 4 (-64%)** — see its section below; its
+accuracy column is contaminated by F's over-prediction and is not the number to read.
 
 **Winner: P/rich — 0.660, +0.290, full coverage.** For calibration, shipped Keld facets
 measured `activity_type` 0.670, `domain` 0.683, `task_type` 0.733.
@@ -207,3 +210,39 @@ legal work**. A ~11% false-domain rate that RISES as descriptions get richer. Th
 strongest evidence yet that the context axis over-fires when offered, and it argues for gating
 context on verb rather than scoring all 68 ids together. ⚠️ It is a false-POSITIVE rate only;
 it says nothing about whether real contexts would be found, which remains Study 4.
+
+
+### Arm T: Atlas team membership stated as a prior (2026-09-24)
+
+Proposed by the repo owner. Precedent is in this study's own window #25, where stating team
+membership as a fact fixed `work_function` on all three windows after it had *"failed in every
+previous formulation"*. Prompt prefix: `"The person doing this work is on the Engineering team. "`
+Base arm is F (flat 68), because it is the ONLY arm that scores contexts at all.
+
+| | accuracy | lift | false-domain attributions |
+|---|---|---|---|
+| F/rich | 0.430 | +0.060 | **11** (`review.general` -> `review.legal`) |
+| T/rich | 0.400 | +0.030 | **4** |
+
+**The prior does the job it was aimed at: a 64% cut in hallucinated domains from one sentence
+of Atlas metadata.** That is the context axis's precision problem, and it is the failure most
+likely to embarrass a published facet — attributing someone's engineering work to `legal`.
+
+⚠️ **But it TRADES an error rather than removing one.** `review`->`code.edit` went 16 -> 22 and
+`research`->`code.edit` 13 -> 16: stating "Engineering team" makes the model answer *engineering
+thing* more often, which suppresses false `legal` and amplifies over-prediction of the team's
+own default. Net accuracy -0.030 — noise at n=100, but directionally negative.
+
+⚠️ **This measures the FALSE-POSITIVE half only, and that is the half this corpus can see.**
+Whether stating "Marketing team" helps FIND marketing work is unmeasurable here and is exactly
+where the benefit would be. Same shape as arm G's negative gate: the mechanism is sound, the
+corpus cannot adjudicate it.
+
+⚠️ **The base arm is the study's WORST (F, 0.430).** The false-domain finding is about the
+context axis and stands on its own, but the accuracy number is contaminated by F's
+over-prediction of `code.edit` and must not be compared against P/rich's 0.660. **The
+production shape to test is P (factored) plus a team prior on the CONTEXT pass only** — which
+P does not currently have, and which is the natural next experiment.
+
+**Open (2026-09-24):** team-as-prior on a factored context pass, measured on a corpus
+containing more than one team. Until then this is promising and unadjudicated.
