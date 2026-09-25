@@ -246,3 +246,41 @@ P does not currently have, and which is the natural next experiment.
 
 **Open (2026-09-24):** team-as-prior on a factored context pass, measured on a corpus
 containing more than one team. Until then this is promising and unadjudicated.
+
+## GLiNER2.5 (released 2026-09-24) — inventory and comparison
+
+Six variants shipped the day this study ran. **There is no `large` in the 2.5 line**; the
+large-backbone slot is filled by a classification-specialised fine-tune.
+
+| model | weights | backbone | tagged for |
+|---|---|---|---|
+| `gliner2.5-small-v1` | **0.30 GB** | deberta-v3-xsmall | NER + classification |
+| `gliner2.5-base-v1` | **0.77 GB** | deberta-v3-base | NER + classification |
+| `gliner2.5-multi-v1` | 1.15 GB | mdeberta-v3-base | multilingual |
+| `GLiNER2.5-Decide` | 1.95 GB | deberta-v3-large | **classification / intent / sentiment** |
+| `GLiNER2.5-Decide-1B` | — | — | classification |
+| `gliner2-large-v1` (**current**) | 1.95 GB | deberta-v3-large | NER + classification |
+
+**`GLiNER2.5-Decide` is a fine-tune of the exact model Keld ships** (`base_model:
+fastino/gliner2-large-v1`) specialised for label-set classification — which is what every
+facet in this repo does. Its own card claims **60.2%** on `fast-decisions` against **49.0%**
+for the general-purpose large.
+
+⚠️ **It needs `gliner2` 2.0.0.** Version 1.3.2 (the sidecar's) cannot load it: the 2.5 configs
+carry `"attn_implementation": "sdpa"`, which DebertaV2 does not support, and 1.3.2 raises
+rather than falling back. 2.0.0 warns and falls back to `eager`. Installed to a THROWAWAY
+target dir on `PYTHONPATH` for this benchmark, per the `piibench` convention — **the sidecar's
+own dependency was not touched.** Adopting 2.5 in production is a dependency upgrade with its
+own blast radius (the sidecar's `/classify`, `/extract`, `/entities` all ride this library).
+
+⚠️ **Library version is confounded with model.** All three arms below are therefore re-run
+under 2.0.0, INCLUDING the current model, so the comparison isolates the weights.
+
+| model | lib | accuracy | lift | `code.*` |
+|---|---|---|---|---|
+| `gliner2-large-v1` (baseline, re-run) | 2.0.0 | _running_ | | |
+| `GLiNER2.5-Decide` | 2.0.0 | _running_ | | |
+| `gliner2.5-base-v1` | 2.0.0 | _running_ | | |
+
+Reference: `gliner2-large-v1` under lib 1.3.2 scored **0.660 / +0.290 / code.\* 0.600**
+(arm P, rich wording).

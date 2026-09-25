@@ -175,6 +175,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arms", default="D1,D2")
     ap.add_argument("--wording", default="gloss")
+    ap.add_argument("--model", default="fastino/gliner2-large-v1")
     ap.add_argument("--json-out")
     a = ap.parse_args()
 
@@ -206,7 +207,8 @@ def main():
         if nm not in a.arms:
             continue
         from gliner2 import GLiNER2
-        ex = GLiNER2.from_pretrained("fastino/gliner2-large-v1")
+        ex = GLiNER2.from_pretrained(a.model)
+        print(f"  [model {a.model}]")
         STY = STYLES[a.wording]
         verb_labels = [f"{v}: {STY[v]}".rstrip(": ") for v in STY]
         fam_labels = [f"{f}: {FAM_GLOSS[f]}" for f in FAM_GLOSS]
@@ -244,7 +246,7 @@ def main():
                 v = out2["verb"]["label"].split(":")[0]
                 pred[i] = v if v in ("plan", "embed") else (v + ".general" if v not in ("code.write", "code.edit") else v)
             reason[i] = "ok"
-        res = score(nm + "/" + a.wording, gold, pred, reason)
+        res = score(nm + "/" + a.wording + "/" + a.model.split("/")[-1], gold, pred, reason)
         res["predictions"] = {str(k): v for k, v in pred.items()}
         code_idx = [i for i in gold if gold[i] in ("code.write", "code.edit")]
         ans = [i for i in code_idx if pred.get(i)]
