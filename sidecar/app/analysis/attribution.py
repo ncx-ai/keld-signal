@@ -502,54 +502,23 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
         boost = metadata_boost(p, dims, texts)
         scores[p["id"]] = round(sims[p["id"]] + boost, 4)
     borderline, assigned = [], []
+    # ⚠️ ONE POOLED COMPETITION over every project, and a posted `group` key is
+    # IGNORED. From 2026-09-23 to 2026-09-25 this ran once per group (a block could
+    # land in one project per group), stamped `model_versions.decision`, and sorted
+    # the published list by confidence. All three were removed when Signal dropped
+    # groups (Revision 4, R4-AC-6): with no groups there is no second competition
+    # to protect, and the pooled rule is the one every measured number here was
+    # taken under. A 09-23 daemon still posts `group`; nothing reads it, so its
+    # answers — and the row — are byte-identical to the pre-09-23 decision.
     if encoder_used and scores:
-        borderline, assigned = _decide(scores, null_sim, {p["id"]: group_of(p) for p in projects})
-    return scores, borderline, assigned, encoder_used, tvecs, centring
-
-
-# The group a project posted WITHOUT a `group` key belongs to. Every such
-# project shares it, so a list from a daemon that predates groups — none of
-# them carry the key — is ONE pooled competition: exactly the decision this
-# module made before 2026-09-23. Never the `team` field: teams differ between
-# projects that the old decision pooled, so reading them would silently
-# change an older daemon's answers.
-_POOLED = object()
-
-
-def group_of(p):
-    return p["group"] if "group" in p else _POOLED
-
-
-def _decide(scores, null_sim, groups):
-    """(borderline, assigned) — THE decision, per group.
-
-    ⚠️ **EACH GROUP IS ITS OWN COMPETITION (2026-09-23).** A group is one angle
-    on the work (a product, a feature, a customer), and a block legitimately
-    belongs to one project in each angle at once. So the rule that used to
-    run once over every project now runs once per group, unchanged inside
-    it: `cut_G = max(null, top_G - MARGIN)`, every project at or above the
-    cut is assigned when `top_G` beats the null, and `borderline` is every
-    project within VERIFY_HALO of its own group's cut. Run pooled, a strong
-    match in one group pushed the cut above another group's only candidate and
-    that group got nothing — the suppression this removes.
-
-    With ONE group this is the old pooled decision exactly: same ids, same order,
-    same borderline (pinned by `test_single_group_is_todays_decision`). Output
-    order is group first-appearance, then declaration order within a group;
-    `attribute_block` sorts what it publishes by confidence."""
-    by_group = {}
-    for pid, s in scores.items():
-        by_group.setdefault(groups.get(pid, _POOLED), []).append((pid, s))
-    borderline, assigned = [], []
-    for members in by_group.values():
-        top = max(s for _, s in members)
+        top = max(scores.values())
         cut = max(null_sim, top - MARGIN)
-        for pid, s in members:
+        for pid, s in scores.items():
             if abs(s - cut) < VERIFY_HALO:
                 borderline.append(pid)
             if s >= cut and top > null_sim:
                 assigned.append(pid)
-    return borderline, assigned
+    return scores, borderline, assigned, encoder_used, tvecs, centring
 
 
 def apply_verifier(texts, dims, scores, borderline, verifier_obj):
@@ -636,11 +605,7 @@ MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4
                   # user-only/max/uncentred and rows scored whole-block/mean/centred
                   # are not comparable, and nothing else on the row would say so.
                   "scoring": ("user-max-uncentred-v0" if legacy_scoring()
-                              else "block-mean-centred-perstream-v1"),
-                  # The DECISION rule, beside the scoring one: the same scores cut
-                  # pooled and cut per group assign different sets, and rows from
-                  # before 2026-09-23 carry no `decision` key at all.
-                  "decision": "per-group-margin-v1"}
+                              else "block-mean-centred-perstream-v1")}
 
 
 def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0,
@@ -791,11 +756,6 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
             # A value no producer can emit is worse than an absent one.
             final.append({"id": pid, "confidence": scores[pid],
                           "source": "verifier" if pid in overrides else "embedding"})
-
-    # Highest confidence first, then id: the list is a SET of co-assignments,
-    # and a stable, meaningful order beats declaration order, which the Go side
-    # once mistook for a ranking.
-    final.sort(key=lambda p: (-p["confidence"], p["id"]))
 
     if verifier_obj is not None:
         verifier_state = "used" if pairs else "not_needed"
