@@ -821,19 +821,18 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 // projectsReq is the whole of POST /projects: the org's declared project
 // list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
 // device for the sidecar to embed; nothing here is derived from a prompt.
+//
+// ⚠️ **NO `group` KEY, AND THE FIELD IS GONE RATHER THAN EMPTIED (Revision 4,
+// 2026-09-25).** From 2026-09-23 each project was posted with the group it
+// competed in (`settings.GroupKeyOf` of its `team`) and the sidecar cut its
+// decision once per group. Signal has only projects now, so the decision is
+// ONE pooled competition — which the sidecar already makes whenever no
+// `group` is posted (an older daemon's list), byte for byte the decision
+// before per-group attribution. `omitempty` would not have been enough: the
+// value was always set, from `team`. So the posted element is the org's
+// definition and nothing else.
 type projectsReq struct {
-	Projects []postedProject `json:"projects"`
-}
-
-// postedProject is one project as the sidecar receives it: the org's
-// definition unchanged, plus the GROUP it competes in. /attribute decides each
-// group on its own (a block can land in one project per angle on the work),
-// so the sidecar must know which group each project is in. The key is
-// settings.GroupKeyOf the value's `team` — which Atlas fills with the group's
-// name — the same key the rule pass and the page use.
-type postedProject struct {
-	settings.RemoteProject
-	Group string `json:"group"`
+	Projects []settings.RemoteProject `json:"projects"`
 }
 
 // projectsResp is decoded but its fields are not read further than error
@@ -864,10 +863,7 @@ func (c *Client) PostProjects(projects []settings.RemoteProject) error {
 	defer cancel()
 	cp.ctx = ctx
 	var r projectsResp
-	req := projectsReq{Projects: make([]postedProject, 0, len(projects))}
-	for _, w := range projects {
-		req.Projects = append(req.Projects, postedProject{RemoteProject: w, Group: settings.GroupKeyOf(w.Team)})
-	}
+	req := projectsReq{Projects: append([]settings.RemoteProject{}, projects...)}
 	if !cp.post("/projects", req, &r) {
 		return fmt.Errorf("sidecar: POST /projects failed")
 	}
