@@ -34,17 +34,16 @@ one already here.
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
-## Vocabulary — project, group, dimension (2026-09-23, amended 2026-09-25)
+## Vocabulary — project and dimension (2026-09-23, amended 2026-09-25)
 
-A **project** (e.g. "SDKs") is Signal's own bucket, defined in Signal. A **group** (e.g.
-"Products") holds projects. The repo/branch/model/… facets `/analyze` counts are
-**dimensions**. An **Atlas workstream** is Atlas's value; Signal receives the org's list but
-does not match or show it. Until 2026-09-23 Signal called a group a "workstream" and the
-dimensions "workstreams" too — three meanings for one word. The 2026-09-23 rename also
-called the project a "workstream"; that was reversed on 2026-09-25 (Revision 3 of the
-multi-group discovery) once Signal stopped matching Atlas's workstreams, so the two words now
-name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
-(`scripts/vocabulary-denylist.txt`).
+A **project** (e.g. "SDKs") is Signal's only bucket, defined in Signal, in one flat list. The
+repo/branch/model/… facets `/analyze` counts are **dimensions**. An **Atlas workstream** is
+Atlas's value; Signal receives the org's list but does not match or show it. Until 2026-09-23
+"workstream" meant three things here (a set of projects, the dimensions, and Atlas's value).
+The 2026-09-23 rename briefly called the project a "workstream" and the set a "group"; on
+2026-09-25 the project got its name back (Revision 3) and the set left the product (Revision 4).
+`projects.Group` remains only as the stored container 3.0.6 needs. `scripts/check_vocabulary.sh`
+fails CI on any retired name (`scripts/vocabulary-denylist.txt`).
 
 **Signal labels on its own (since 2026-09-25).** The rule pass, the Projects pane, its totals
 and `project_matches` see only the projects defined in Signal (`projects.Candidates`, the
@@ -64,7 +63,11 @@ Claude Code's `~/.claude/projects` directories or a `.keld.toml` project.
 `workstreams_off` in agent-config.json and `KELD_PROJECTS_FILE`. Auto-update can roll a
 machine back to 3.0.6, which reads only those; a renamed file meant the rolled-back daemon
 found nothing, and whatever it saved was ignored after the next upgrade. Translate at
-`projects.Load`/`Save`, never by moving the file.
+`projects.Load`/`Save`, never by moving the file. ⚠️ **3.0.6 renders a project only under a
+group the file declares**, so `Save` writes every project under one (the person's existing
+groups are kept; with none, one internal `projects` group is added) even though the page
+has no groups. `workstreams_off` is never written any more: it is read once, on upgrade, to
+hide the projects of a group that was switched off, and left in place for a rollback.
 
 ## Architecture
 
@@ -1966,27 +1969,23 @@ timings — no text, no span, no offset, in either direction.
   genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
   skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
   invisible to the fleet.
-- ⚠️ **A BLOCK LANDS IN EVERY PROJECT THAT MATCHES IT, AND EACH GROUP IS ITS OWN
-  COMPETITION (2026-09-23).** An org's groups are different angles on the same work (a
-  product, a feature, a customer), so one block can legitimately belong to a project in
-  each — and, inside one group, to several (overlap is the model, not an error). Three
-  consequences, each of them a reversal:
-  - the RULE pass (`projects.Attribute`) no longer refuses: two projects claiming one
-    repo both get the block, and `ReasonConflict` is never produced (the constant survives
-    so an old ledger row reads). There is no precedence and no order to maintain;
-  - the SIDECAR runs the rule below once PER GROUP. Pooled, a strong match in one group
-    pushed the cut above another group's only candidate and that group got nothing. With
-    one group it is the old pooled decision exactly (`test_single_group_is_todays_decision`,
-    and the quality eval asserts it on every fixture). A list posted with no `group` key —
-    an older daemon — is ONE pooled competition, never grouped by `team`, so its answers do
-    not change. The daemon posts `group` = `settings.GroupKeyOf(team)`, the one normaliser
-    `projects.GroupKey` delegates to. Rows carry `model_versions.decision:
-    "per-group-margin-v1"`;
-  - TOTALS (`projects.Rollup`, `GET /v1/projects`' `totals`): a group counts each block
-    once, a project counts each of its blocks in full, so a group's projects add up to
-    more than the group — by design, and the page says so. Atlas is untouched: it still keeps
-    one value per group from what Signal sends, so its per-project numbers can be lower
-    than the page's for a shared block. Signal sends every id it assigned.
+- ⚠️ **A BLOCK LANDS IN EVERY PROJECT THAT MATCHES IT (2026-09-23), AND SIGNAL HAS NO
+  GROUPS (2026-09-25).** One piece of work can legitimately belong to several projects, so
+  overlap is the model, not an error:
+  - the RULE pass (`projects.Attribute`) no longer refuses: two projects claiming one repo
+    both get the block, and `ReasonConflict` is never produced (the constant survives so an
+    old ledger row reads). There is no precedence and no order to maintain;
+  - TOTALS (`projects.Rollup`, `GET /v1/projects`' `totals`) are per project, each counting
+    every block it holds in full, while `coverage` counts a shared block once. Signal sends
+    every id it assigned; Atlas decides what to do with overlap on its own side.
+  ⚠️ **Groups were built and removed in the same week, on purpose.** On 2026-09-23 Signal
+  mirrored Atlas's groups and cut the model-based decision once PER GROUP; Revision 2 then
+  stopped Signal matching Atlas's workstreams, which left a group carrying only a heading,
+  group totals and a "counts for my work" switch, so Revision 4 (2026-09-25) removed them.
+  The sidecar is back to ONE pooled competition — the pre-2026-09-23 decision, byte for
+  byte — and the daemon posts no `group`. A group survives only as the stored container
+  3.0.6 needs (see Vocabulary); a project in a group that had been switched off was made
+  HIDDEN once, on upgrade, so it still counts for nothing.
   Spec: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html`.
 - **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
   An absolute threshold conflated two questions and real-transcript evaluation showed it
@@ -2027,10 +2026,7 @@ timings — no text, no span, no offset, in either direction.
   because centred and uncentred rows differ on ~40% of blocks and nothing else would say so.
   **Rollback is one environment variable:** `KELD_ATTRIBUTION_SCORING=user-max` restores the
   pre-2026-09-03 decision exactly (user turns only, MAX, no centring, no baseline observed)
-  and stamps `scoring: user-max-uncentred-v0`. ⚠️ It restores the SCORING rule, and since 2026-09-23 the decision on top of it is cut per group:
-  for a list posted with no `group` key, or with every project in one group, that is the
-  pre-2026-09-03 decision exactly; for a multi-group list it is that decision run once per group
-  (`model_versions.decision` says which). The baseline file is `{"stats", "seen"}`:
+  and stamps `scoring: user-max-uncentred-v0`. The baseline file is `{"stats", "seen"}`:
   `seen` is the last 2,000 block keys folded in, so a RETRIED job (held on publish failure,
   re-POSTed after a sidecar respawn) enters the running mean once, not once per attempt. A
   baseline that cannot be saved is re-learned after a restart and warned about ONCE per
@@ -2301,7 +2297,7 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
-    projects/        groups and projects: the local document (projects.json),
+    projects/        projects: the local document (projects.json),
                      the rule pass (Attribute), suggestions, the page's edits
     attrib/          the semantic attribution job (POST /attribute) per closed block
     update/          auto-update: Atlas pins a release; fetch, verify, swap by

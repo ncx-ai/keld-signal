@@ -19,7 +19,7 @@ New keys, all local, all optional, defined in `internal/agent/settings/settings.
 | `send_to_atlas` | bool | true (absent = on) | `KELD_ATLAS=0/1` | the connector is constructed or not |
 | `dev_blocks` | `""` \| `prompt` \| `bin` \| `minute` | `""` | `KELD_DEV_BLOCKS` | developer granularity; **refused unless `send_to_atlas` is false** |
 | `show_breaks` | bool | false | — | page preference |
-| `workstreams_off` | [string] | [] | — | group keys whose projects are excluded from attribution locally. 3.0.6's name, kept on purpose so a rollback keeps them off; the local `/v1/settings` route calls it `groups_off` |
+| `workstreams_off` | [string] | [] | — | 3.0.6's list of switched-off groups. Since 2026-09-25 (no groups) it is never written: it is read once on upgrade to HIDE those groups' projects, and left in place so a rollback to 3.0.6 keeps them off |
 
 Existing keys this build reads: `attribution` (vector attribution toggle, already sets
 `KELD_TEXTEMBED=1` for the sidecar), `blocks`.
@@ -46,8 +46,8 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
         "cut":        {"status": "ok", "at": "…"},
         "measured":   {"status": "ok", "at": "…", "tokens": {"input": 2, "output": 277, "cache_read": 26915, "cache_creation": 86736, "request": 41000}, "requests": 12, "model": "claude-opus-4-8", "estimate_usd": 1.84},
         "attributed": {"status": "ok", "at": "…", "projects": [
-          {"project_id": "products:atlas_platform", "group": "products", "method": "repo"},
-          {"project_id": "features:billing",        "group": "features", "method": "ticket"}]},
+          {"project_id": "p_atlas_platform", "method": "repo"},
+          {"project_id": "p_billing",        "method": "ticket"}]},
         "sent":       {"status": "ok", "at": "…"},
         "received":   {"status": "failed", "at": "…", "reason": "atlas_rejected", "http_status": 401}
       }
@@ -84,16 +84,16 @@ SECOND OPINION on the same block and gets its own cell:
 
 ```json
 "vector": {"status": "ok", "at": "…", "projects": [
-  {"project_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
-  {"project_id": "features:billing",        "group": "features", "confidence": 0.51}]}
+  {"project_id": "keld_projects:atlas_platform", "confidence": 0.62},
+  {"project_id": "keld_projects:billing",        "confidence": 0.51}]}
 ```
 
 `status` is `ok` (it named a project), `pending` (warming, or `"reason":
 "weights_unavailable"` while the encoder's weights are still downloading), `n/a` (nothing
 declared to match against) or `failed` (`"reason": "attribute_failed"` — the job was
 retried and given up on). `projects` appears only on `ok` and holds EVERY id the pass
-assigned (it used to keep only the first, which was declaration order, not the top score);
-each id's group is resolved by the daemon from the list it posted to the sidecar.
+assigned (it used to keep only the first, which was declaration order, not the top score).
+A row written between 2026-09-23 and 2026-09-25 may also carry a `group` per id; ignore it.
 
 Three rules, and each was paid for:
 
@@ -171,10 +171,11 @@ file touched. Refused with 409 while `send_to_atlas` is false.
 
 ## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
 
-⚠️ **Words since 2026-09-23 (amended 2026-09-25):** a GROUP holds PROJECTS. This file keeps
-3.0.6's stored names — the groups under `workstreams`, each project's group under
-`workstream` — so a machine auto-updated back to 3.0.6 reads exactly what it wrote. The code
-and the routes say group; `projects.Load`/`Save` translate. The one-time move to
+⚠️ **Since 2026-09-25 Signal has only PROJECTS, in one flat list — no groups on the page or
+in any route.** This file still keeps 3.0.6's stored shape — groups under `workstreams`, each
+project's group under `workstream` — because 3.0.6 renders a project only under a group the
+file declares; `Save` writes every project under one (the person's existing groups, or one
+internal `projects` group), so a machine auto-updated back to 3.0.6 shows everything. The one-time move to
 `workstreams.json` that the 2026-09-23 rename briefly shipped on dev builds is gone.
 
 The file is the **`KELD_PROJECTS_FILE` shape attribution already reads**, extended with
@@ -264,12 +265,11 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/projects` | — | `{groups, projects, suggestions, coverage, totals}`; `totals` = `{groups: [{key, blocks, minutes, tokens, usd, shared_blocks}], projects: [{id, group, blocks, minutes, tokens, usd}]}` over the same blocks as `coverage` — a group counts each block ONCE, a project counts each of its blocks in full, so a group's projects can add up to more than the group; `shared_blocks` is how many of its blocks sit in two or more of its projects where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
-| `POST /v1/projects/bundle` | `{"title","group","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
+| `GET /v1/projects` | — | `{projects, suggestions, coverage, totals}`; `totals` = `{projects: [{id, blocks, minutes, tokens, usd}]}` over the same blocks as `coverage` — a project counts each of its blocks in full, so projects sharing a block can add up to more than `coverage`, which counts it once; where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `POST /v1/projects/bundle` | `{"title","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
 | `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
 | `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
-| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `workstreams_off` (3.0.6's key) |
 
 Every one of these edits is local to this machine. The response carries
 `{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so
