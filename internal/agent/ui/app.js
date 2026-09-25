@@ -2238,7 +2238,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's groups. Off: nothing leaves this machine.")),
+        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks and the projects they matched. Off: nothing leaves this machine.")),
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),
