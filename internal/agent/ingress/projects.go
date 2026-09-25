@@ -40,7 +40,7 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // admin editor is a user-session-gated route this daemon cannot call. So none
 // of these handlers make an outbound call, and this file does not import
 // internal/atlas at all. Every response from bundle/rules/hide/place/
-// project-off carries `{"local_only": true, "atlas_editor_url": …}` so the
+// workstream-off carries `{"local_only": true, "atlas_editor_url": …}` so the
 // page can say plainly that the change has not reached the org.
 func ProjectsRoute(s *projects.Store) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
@@ -107,7 +107,7 @@ func localOnly(v map[string]any) map[string]any {
 }
 
 func atlasEditorURL() string {
-	return strings.TrimRight(paths.APIBase(), "/") + "/projects"
+	return strings.TrimRight(paths.APIBase(), "/") + "/workstreams"
 }
 
 // startOfWeek is Monday 00:00 UTC of t's week — the "current week" coverage
@@ -125,7 +125,7 @@ func startOfWeek(t time.Time) time.Time {
 // groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
 // agent-config.json fresh per request, since a request may arrive right
 // after a PUT /v1/groups/{key}/off changed it. "call it, don't
-// reimplement" — internal/agent/settings/v3.go's ProjectOff.
+// reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
 func groupOffFunc() func(string) bool {
 	return settings.Load().GroupOff
 }
@@ -172,7 +172,7 @@ type Attribution struct {
 	// Candidates is what Attribute may consider: the local document's
 	// projects (see candidatesFor — never the org's list).
 	Candidates []projects.Project
-	// Off is the authoritative project-exclusion predicate, read from
+	// Off is the authoritative workstream-exclusion predicate, read from
 	// agent-config.json at the same instant.
 	Off func(string) bool
 }
@@ -190,7 +190,7 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 	}, nil
 }
 
-// Of is one block's decision, from that block's already-published project
+// Of is one block's decision, from that block's already-published workstream
 // dims. The Vector pass is nil: this is the deterministic lane, and a nil
 // Vector is what makes "unattributed" mean "no rule matched" rather than
 // "the encoder was not asked".
