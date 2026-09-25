@@ -756,6 +756,11 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
             # A value no producer can emit is worse than an absent one.
             final.append({"id": pid, "confidence": scores[pid],
                           "source": "verifier" if pid in overrides else "embedding"})
+    # Highest confidence first, then id. The list is a SET of co-assignments, but
+    # the daemon reads it as ranked (attrib.Outcome: "highest confidence first"),
+    # and declaration order is what it once mistook for a ranking. Kept through
+    # Revision 4: this is not a group feature.
+    final.sort(key=lambda p: (-p["confidence"], p["id"]))
 
     if verifier_obj is not None:
         verifier_state = "used" if pairs else "not_needed"
