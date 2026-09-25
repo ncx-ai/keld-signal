@@ -6,7 +6,7 @@ function block(projectId, method) {
   return {
     key: { session: "s1", start: 1000 },
     end: 1060,
-    cells: projectId === undefined ? {} : { attributed: { status: "ok", project_id: projectId, method: method || "repo" } },
+    cells: projectId === undefined ? {} : { attributed: { status: "ok", projects: [{ project_id: projectId, group: "", method: method || "repo" }] } },
   };
 }
 

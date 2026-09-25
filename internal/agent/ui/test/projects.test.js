@@ -1,56 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findConflicts, reasonText, projectTitle, projectCellInfo } from "../app.js";
-
-function project(id, repos, opts = {}) {
-  return { id, title: id, repos, ticket_key: opts.ticket_key || "", group: opts.group || "development", hidden: !!opts.hidden };
-}
-
-test("two projects claiming the same repo conflict with each other", () => {
-  const a = project("p1", ["github.com/org/repo"]);
-  const b = project("p2", ["github.com/org/repo"]);
-  const c = findConflicts([a, b]);
-  assert.deepEqual(c.p1, ["p2"]);
-  assert.deepEqual(c.p2, ["p1"]);
-});
-
-test("repo comparison is case-insensitive", () => {
-  const a = project("p1", ["Github.com/Org/Repo"]);
-  const b = project("p2", ["github.com/org/repo"]);
-  const c = findConflicts([a, b]);
-  assert.ok(c.p1 && c.p1.includes("p2"));
-});
-
-test("a project with no shared repo or ticket key has no conflicts", () => {
-  const a = project("p1", ["github.com/org/a"]);
-  const b = project("p2", ["github.com/org/b"]);
-  const c = findConflicts([a, b]);
-  assert.equal(c.p1, undefined);
-  assert.equal(c.p2, undefined);
-});
-
-test("a hidden project never conflicts with anything", () => {
-  const a = project("p1", ["github.com/org/repo"], { hidden: true });
-  const b = project("p2", ["github.com/org/repo"]);
-  const c = findConflicts([a, b]);
-  assert.equal(c.p1, undefined);
-  assert.equal(c.p2, undefined);
-});
-
-test("a project in a switched-off group never conflicts with anything", () => {
-  const a = project("p1", ["github.com/org/repo"], { group: "marketing" });
-  const b = project("p2", ["github.com/org/repo"], { group: "development" });
-  const c = findConflicts([a, b], ["marketing"]);
-  assert.equal(c.p1, undefined);
-  assert.equal(c.p2, undefined);
-});
-
-test("shared ticket keys conflict the same way shared repos do", () => {
-  const a = project("p1", [], { ticket_key: "KELD" });
-  const b = project("p2", [], { ticket_key: "keld" }); // case-insensitive
-  const c = findConflicts([a, b]);
-  assert.ok(c.p1.includes("p2") && c.p2.includes("p1"));
-});
+import {
+  ALL_GROUPS, reasonText, projectTitle, projectCellInfo, projectsOf,
+  todayGroupOptions, resolveTodayGroup, totalsIndex, totalLine, sharedBlocksNote,
+} from "../app.js";
 
 test("reasonText renders every closed reason code as a plain, non-empty sentence", () => {
   for (const code of [
@@ -78,7 +31,7 @@ function attributedBlock(projectId, method) {
   return {
     key: { session: "s1", start: 0 },
     end: 60,
-    cells: { attributed: { status: "ok", project_id: projectId, method: method || "" } },
+    cells: { attributed: { status: "ok", projects: [{ project_id: projectId, group: "development", method: method || "" }] } },
   };
 }
 
@@ -117,4 +70,91 @@ test("projectCellInfo: a block that ran attribution but matched no rule is 'none
 test("projectCellInfo: a block whose attribution stage never ran is 'unknown', absent rather than a guess", () => {
   const info = projectCellInfo({ key: { session: "s1", start: 0 }, end: 60, cells: {} }, projectsPayload);
   assert.equal(info.kind, "unknown");
+});
+
+// --- Several projects per block, and the group switcher (2026-09-23) ---
+
+const catalog = {
+  groups: [{ key: "products", name: "Products" }, { key: "features", name: "Features" }],
+  projects: [
+    { id: "products:atlas", title: "Atlas Platform" },
+    { id: "products:signal", title: "Signal Client" },
+    { id: "features:billing", title: "Billing" },
+  ],
+  totals: {
+    groups: [{ key: "products", blocks: 2, minutes: 30, tokens: 150, usd: 10, shared_blocks: 1 }],
+    projects: [{ id: "products:atlas", group: "products", blocks: 2, minutes: 30, tokens: 150, usd: 10 }],
+  },
+};
+
+function multiBlock() {
+  return {
+    key: { session: "s2", start: 0 },
+    end: 1200,
+    cells: {
+      attributed: {
+        status: "ok",
+        projects: [
+          { project_id: "products:atlas", group: "products", method: "repo" },
+          { project_id: "products:signal", group: "products", method: "repo" },
+          { project_id: "features:billing", group: "features", method: "ticket" },
+        ],
+      },
+    },
+  };
+}
+
+test("projectsOf lists every project a block landed in, in order", () => {
+  const got = projectsOf(multiBlock());
+  assert.deepEqual(got.map((w) => w.id), ["products:atlas", "products:signal", "features:billing"]);
+  assert.equal(got[2].group, "features");
+  assert.equal(projectsOf({ key: {}, cells: {} }), null, "no cell is unknown, not empty");
+});
+
+test("with no group chosen, the cell shows every project by title", () => {
+  const info = projectCellInfo(multiBlock(), catalog);
+  assert.equal(info.kind, "attributed");
+  assert.deepEqual(info.items.map((i) => i.text), ["Atlas Platform", "Signal Client", "Billing"]);
+});
+
+test("a group filter shows only that group's projects — both of them when the block holds two", () => {
+  const products = projectCellInfo(multiBlock(), catalog, "products");
+  assert.deepEqual(products.items.map((i) => i.text), ["Atlas Platform", "Signal Client"]);
+  const features = projectCellInfo(multiBlock(), catalog, "features");
+  assert.deepEqual(features.items.map((i) => i.text), ["Billing"]);
+});
+
+test("NEGATIVE: a group the block is not in reads as none, never as another group's answer", () => {
+  assert.equal(projectCellInfo(multiBlock(), catalog, "marketing").kind, "none");
+});
+
+test("the switcher appears only with two or more groups, and offers All first", () => {
+  assert.deepEqual(todayGroupOptions({ groups: [{ key: "one", name: "One" }] }), []);
+  const opts = todayGroupOptions(catalog);
+  assert.deepEqual(opts.map((o) => o.key), [ALL_GROUPS, "products", "features"]);
+  assert.equal(opts[0].label, "All groups");
+});
+
+test("NEGATIVE: a remembered group that no longer exists falls back to All, never to an empty table", () => {
+  assert.equal(resolveTodayGroup("gone", catalog), ALL_GROUPS);
+  assert.equal(resolveTodayGroup("features", catalog), "features");
+});
+
+test("totals read by key and by id, and a total line names blocks, time and est. spend", () => {
+  const t = totalsIndex(catalog);
+  assert.equal(t.groups.get("products").usd, 10);
+  assert.equal(t.projects.get("products:atlas").blocks, 2);
+  assert.match(totalLine(t.groups.get("products")), /^2 blocks · .+ · \$10\.00 est\.$/);
+  assert.equal(totalLine(undefined), "");
+});
+
+test("the shared-blocks note is said only when a block really sits in two projects", () => {
+  assert.match(sharedBlocksNote({ shared_blocks: 1 }), /^1 block is in more than one project here, so the projects add up to more than the group\.$/);
+  assert.match(sharedBlocksNote({ shared_blocks: 3 }), /^3 blocks are in more/);
+  assert.equal(sharedBlocksNote({ shared_blocks: 0 }), "");
+  assert.equal(sharedBlocksNote(undefined), "");
+});
+
+test("NEGATIVE: the page never asks a person to pick one", () => {
+  assert.doesNotMatch(reasonText("conflict"), /pick one/i);
 });
