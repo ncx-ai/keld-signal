@@ -421,6 +421,37 @@ def main():
     result = evaluate_assignments(predictions, conversations)
     cut_only_result = evaluate_assignments(cut_only_predictions, conversations)
 
+    # ---- the per-group decision (2026-09-23) ------------------------------------
+    # Two more arms over the SAME message vectors (the memo makes them free; only the
+    # ten project documents re-embed, because the posted list's hash changes) and the
+    # same centring baseline (keyed by document TEXT, which a group does not change;
+    # the same block keys make these passes retries that fold nothing in again).
+    def rescore(ws_list):
+        attribution.set_projects(ws_list)
+        out = []
+        for conv in conversations:
+            _s, _b, assigned2, _u, _tv, _c = attribution.score_block(
+                _block_texts(conv), conv["metadata"], encoder, offsets,
+                n_user=len(_user_texts(conv)), block_key=conv["id"])
+            out.append(set(assigned2))
+        return out
+
+    # AC-5: every project in ONE group is today's pooled decision, on every fixture.
+    one_group = rescore([dict(p, group="one") for p in projects])
+    assert one_group == cut_only_predictions, (
+        "a single-group list must decide exactly as the pooled rule did: "
+        + str([c["id"] for c, a1, a2 in zip(conversations, one_group, cut_only_predictions) if a1 != a2]))
+    # The fixtures' TEAMS as groups: each team is its own competition, the shape a
+    # multi-group org gets. Gold labels are per project, not per group, so this arm is
+    # REPORTED, not gated — more ids per block is the model working, and precision
+    # against single-owner gold is expected to fall.
+    by_team = rescore([dict(p, group=p.get("team") or "") for p in projects])
+    team_result = evaluate_assignments(by_team, conversations)
+    attribution.set_projects(projects)
+
+    def mean_ids(preds):
+        return sum(len(x) for x in preds) / len(preds) if preds else 0.0
+
     print(f"{'conv_id':<12} {'difficulty':<8} {'gold':<28} {'predicted':<28} match")
     for conv, pred in zip(conversations, predictions):
         gold = set(conv["gold_projects"])
@@ -437,6 +468,11 @@ def main():
           f"failures={len(result['failures'])}/{len(conversations)} "
           f"centred={centred_blocks}/{len(conversations)} "
           f"scoring={attribution.MODEL_VERSIONS['scoring']}")
+    print(f"per-group decision ({attribution.MODEL_VERSIONS['decision']}): one group == pooled on "
+          f"{len(conversations)}/{len(conversations)} fixtures (AC-5); mean ids per block "
+          f"pooled={mean_ids(cut_only_predictions):.2f} grouped-by-team={mean_ids(by_team):.2f}; "
+          f"grouped-by-team precision={team_result['precision']:.3f} recall={team_result['recall']:.3f} "
+          f"f1={team_result['f1']:.3f}")
 
     # ---- Verifier A/B: what did Gemma E2B's minutes actually buy? ----
     # Only when the verifier arm was asked for. With it off (the shipped default), `result`

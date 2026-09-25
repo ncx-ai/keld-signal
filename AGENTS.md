@@ -1958,6 +1958,28 @@ timings — no text, no span, no offset, in either direction.
   genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
   skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
   invisible to the fleet.
+- ⚠️ **A BLOCK LANDS IN EVERY WORKSTREAM THAT MATCHES IT, AND EACH GROUP IS ITS OWN
+  COMPETITION (2026-09-23).** An org's groups are different angles on the same work (a
+  product, a feature, a customer), so one block can legitimately belong to a workstream in
+  each — and, inside one group, to several (overlap is the model, not an error). Three
+  consequences, each of them a reversal:
+  - the RULE pass (`workstreams.Attribute`) no longer refuses: two workstreams claiming one
+    repo both get the block, and `ReasonConflict` is never produced (the constant survives
+    so an old ledger row reads). There is no precedence and no order to maintain;
+  - the SIDECAR runs the rule below once PER GROUP. Pooled, a strong match in one group
+    pushed the cut above another group's only candidate and that group got nothing. With
+    one group it is the old pooled decision exactly (`test_single_group_is_todays_decision`,
+    and the quality eval asserts it on every fixture). A list posted with no `group` key —
+    an older daemon — is ONE pooled competition, never grouped by `team`, so its answers do
+    not change. The daemon posts `group` = `settings.GroupKeyOf(team)`, the one normaliser
+    `workstreams.GroupKey` delegates to. Rows carry `model_versions.decision:
+    "per-group-margin-v1"`;
+  - TOTALS (`workstreams.Rollup`, `GET /v1/workstreams`' `totals`): a group counts each block
+    once, a workstream counts each of its blocks in full, so a group's workstreams add up to
+    more than the group — by design, and the page says so. Atlas is untouched: it still keeps
+    one value per group from what Signal sends, so its per-workstream numbers can be lower
+    than the page's for a shared block. Signal sends every id it assigned.
+  Spec: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html`.
 - **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
   An absolute threshold conflated two questions and real-transcript evaluation showed it
   (2026-09-02, 21 real blocks: every block carries a per-block score offset, so one bar

@@ -45,7 +45,9 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
       "cells": {
         "cut":        {"status": "ok", "at": "…"},
         "measured":   {"status": "ok", "at": "…", "tokens": {"input": 2, "output": 277, "cache_read": 26915, "cache_creation": 86736, "request": 41000}, "requests": 12, "model": "claude-opus-4-8", "estimate_usd": 1.84},
-        "attributed": {"status": "ok", "at": "…", "project_id": "p_keld_signal", "method": "repo"},
+        "attributed": {"status": "ok", "at": "…", "workstreams": [
+          {"workstream_id": "products:atlas_platform", "group": "products", "method": "repo"},
+          {"workstream_id": "features:billing",        "group": "features", "method": "ticket"}]},
         "sent":       {"status": "ok", "at": "…"},
         "received":   {"status": "failed", "at": "…", "reason": "atlas_rejected", "http_status": 401}
       }
@@ -66,10 +68,13 @@ ordering rule above ("marking a stage twice never loses information"):
 - A cell that is currently `failed` but previously reached `ok` also carries `ok_at` (the
   earlier success's timestamp) — so a re-send that broke stays visible instead of looking
   like the stage never worked. Absent whenever the stage has never succeeded.
-- An `attributed` cell with `"reason":"conflict"` carries `conflict: [project_id, …]` — the
-  competing project ids — instead of `project_id`/`method` (which only appear on `"status":
-  "ok"`). This is `Attributed.Conflict` (recorder.go) reaching the wire; no other reason
-  publishes stage-specific detail.
+- ⚠️ **An `attributed` cell names EVERY workstream the block landed in (since 2026-09-23).**
+  `workstreams` is a list of `{workstream_id, group, method}`, in the order the rule pass
+  assigned them, and appears only on `"status": "ok"`. A block lands in every workstream
+  that matches it — in any group and inside one — so there is no conflict to report and
+  `"reason": "conflict"` is no longer produced. A row recorded before that still reads: its
+  single `project_id` comes back as a one-entry list with `group: ""`, and an old conflict
+  row still carries `conflict: [id, …]`.
 
 ### The `vector` cell — the second opinion, added 2026-09-08
 
@@ -78,13 +83,17 @@ against the block's dims. The **vectorised** pass (`attribution`, off by default
 SECOND OPINION on the same block and gets its own cell:
 
 ```json
-"vector": {"status": "ok", "at": "…", "project_id": "p_keld_atlas", "confidence": 0.61}
+"vector": {"status": "ok", "at": "…", "workstreams": [
+  {"workstream_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
+  {"workstream_id": "features:billing",        "group": "features", "confidence": 0.51}]}
 ```
 
 `status` is `ok` (it named a project), `pending` (warming, or `"reason":
 "weights_unavailable"` while the encoder's weights are still downloading), `n/a` (nothing
 declared to match against) or `failed` (`"reason": "attribute_failed"` — the job was
-retried and given up on). `project_id` and `confidence` appear only on `ok`.
+retried and given up on). `workstreams` appears only on `ok` and holds EVERY id the pass
+assigned (it used to keep only the first, which was declaration order, not the top score);
+each id's group is resolved by the daemon from the list it posted to the sidecar.
 
 Three rules, and each was paid for:
 
@@ -245,7 +254,7 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/projects` | — | `{groups, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `GET /v1/projects` | — | `{groups, projects, suggestions, coverage, totals}`; `totals` = `{groups: [{key, blocks, minutes, tokens, usd, shared_blocks}], projects: [{id, group, blocks, minutes, tokens, usd}]}` over the same blocks as `coverage` — a group counts each block ONCE, a project counts each of its blocks in full, so a group's projects can add up to more than the group; `shared_blocks` is how many of its blocks sit in two or more of its projects where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
 | `POST /v1/projects/bundle` | `{"title","group","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
 | `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
