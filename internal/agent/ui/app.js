@@ -409,13 +409,13 @@ export function projectRulesSummary(p) {
  *  two call sites cannot drift into saying it differently, and so neither
  *  can accidentally imply the org learned anything. */
 export function localOnlyConfirmationText() {
-  return "Applied on this machine. To change it for everyone, edit the project in Atlas.";
+  return "Applied on this machine. To change it for everyone, edit the workstream in Atlas.";
 }
 
 /** Every project a suggestion's "Same as" picker may offer — every project
  *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
  *  internal/agent/ingress/projects.go's handleGetProjects already merges the
- *  local document with the org's pooled project values into one list, so
+ *  local document with the org's pooled workstream values into one list, so
  *  "same as" is never limited to local projects. A hidden project is left
  *  out — placing a suggestion on one a person chose to hide would silently
  *  un-hide nothing and just confuse the coverage count. */
@@ -429,7 +429,7 @@ export function sameAsOptions(projects) {
  *  suggestion onto an Atlas-origin project is a LOCAL OVERLAY (this
  *  machine's rule is added locally; the org's project itself is never
  *  written), so it needs its own sentence rather than
- *  localOnlyConfirmationText(): that one's "edit the project in Atlas"
+ *  localOnlyConfirmationText(): that one's "edit the workstream in Atlas"
  *  reads as an invitation to go change the org's copy, which is backwards
  *  for a project this machine did not create. Placing onto a LOCAL project
  *  (or "New project", which only ever creates one) keeps the general
@@ -474,20 +474,20 @@ export const SETTINGS_ENV = {
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
 /** groupsForProjects is what "Your projects" iterates: the org's workstreams, plus
- *  one group for any project whose project is in none of them.
+ *  one group for any project whose workstream is in none of them.
  *
  *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
- *  projects by looping over projects and drawing each one's members, so a
+ *  projects by looping over workstreams and drawing each one's members, so a
  *  project filed under a key that is in no list is never drawn at all. Measured
- *  on a real machine: two projects on disk, `"projects": null` from the API,
+ *  on a real machine: two projects on disk, `"workstreams": null` from the API,
  *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
  *  them saw their suggestion disappear and nothing appear, which is
  *  indistinguishable from the suggestion having been thrown away.
  *
  *  That is the state of EVERY machine with Send to Atlas off, because the
- *  project list is pushed down by Atlas and nothing local seeded it.
+ *  workstream list is pushed down by Atlas and nothing local seeded it.
  *
- *  The daemon now seeds it too (projects.ensureProject), so this is the
+ *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
  *  second of two guards rather than the only one — deliberately, because the
  *  rule worth keeping is "the page never silently drops a project", not "that
  *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
@@ -508,7 +508,7 @@ export function groupsForProjects(groups, projects) {
 }
 
 /** groupDisplayName turns a key into something a person reads. Mirrors the
- *  Go side's function of the same name so a locally-seeded project is
+ *  Go side's function of the same name so a locally-seeded workstream is
  *  labelled identically whether the page or the daemon named it. */
 export function groupDisplayName(key) {
   const out = String(key || "").replace(/[_-]+/g, " ").trim();
@@ -1314,7 +1314,7 @@ if (typeof document !== "undefined") {
     // an input would be lost the moment anything else refreshed.
     naming: null,
     // confirmations: rowKey -> {url}. Set after any /v1/projects (or
-    // /v1/projects) mutation whose response carries local_only — read by
+    // /v1/groups) mutation whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1883,7 +1883,7 @@ if (typeof document !== "undefined") {
           el("span", { class: "name" }, `${w.name}`, totalLine(totals.groups.get(w.key)) ? el("small", { class: "group-total" }, totalLine(totals.groups.get(w.key))) : null),
           // A synthetic group is this machine's own bucket, not one the org
           // declared, so it offers no "counts for my work" switch: that flag is
-          // stored per project key and would appear to reset on reload,
+          // stored per workstream key and would appear to reset on reload,
           // which is a control that lies about what it did.
           w.synthetic
             ? null
@@ -1960,7 +1960,7 @@ if (typeof document !== "undefined") {
     if (!c) return;
     // ⚠️ The sentence depends on whose project was the target. Placing onto an
     // ATLAS project is a local overlay, so it says the org's project is
-    // unchanged; "edit the project in Atlas" would read as an invitation to
+    // unchanged; "edit the workstream in Atlas" would read as an invitation to
     // go change the org's copy, which is backwards. A local project has no org
     // copy to leave alone, so the general advice is the real next step.
     const atlasTarget = c.origin === "atlas";
@@ -1969,7 +1969,7 @@ if (typeof document !== "undefined") {
         "div",
         { class: "local-note" },
         sameAsConfirmationText(c.origin),
-        !atlasTarget && c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the project in Atlas") : null
+        !atlasTarget && c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
       )
     );
   }
