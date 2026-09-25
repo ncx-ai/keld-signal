@@ -28,7 +28,8 @@ Last updated 2026-09-24. 100 blind hand labels; majority constant `code.edit` = 
 | **G** | **file extensions -> code/not-code (binary)** | n/a | **0.729** | **+0.247** | n/a | 0.85 |
 | **P** | prose -> 17 verbs (factored) | bare | 0.500 | +0.130 | 0.222 | 1.00 |
 | **P** | prose -> 17 verbs (factored) | gloss | 0.640 | +0.270 | 0.467 | 1.00 |
-| **P** | prose -> 17 verbs (factored) | **rich** | **0.660** | **+0.290** | 0.600 | 1.00 |
+| **P** | prose -> 17 verbs (factored) | rich | 0.660 | +0.290 | 0.600 | 1.00 |
+| **P** | prose -> 17 verbs (factored) | **docs** | **0.700** | **+0.330** | **0.644** | 1.00 |
 | **H** | prose -> 7 families -> verb | gloss | 0.350 | -0.020 | 0.556 | 1.00 |
 | **F** | prose -> all 68 ids at once | gloss | 0.480 | +0.110 | 0.667 | 1.00 |
 | **F** | prose -> all 68 ids at once | rich | 0.430 | +0.060 | 0.822 (artifact) | 1.00 |
@@ -360,3 +361,55 @@ to implement until either the wording hypothesis is tested or the claim is narro
 John's session creates a customer deck once and revises it five times, so identical work is
 labelable `sales` at creation and only `general` afterwards. That asymmetry is in `atv1`, not
 in the labelling.
+
+
+## 2026-09-25 — RECOVERED: two fixes took the transfer failure to the best result measured
+
+The 0/7 on John's session was substantially SELF-INFLICTED. Two defects, both found by the
+repo owner, and fixing them improved BOTH corpora.
+
+**Defect 1 — malformed sub-windows (violated this repo's own convention).** AGENTS.md:
+*"Never cut text mid-sentence. Any text read as language — a prompt, a generated report, a
+conversation window handed to a model — is bounded at a logical delimiter: a sentence end, a
+line break, a turn boundary, an entry boundary."* What was actually fed:
+- the HUMAN-READABLE views were used as model input, so their `[... N chars omitted]` markers
+  leaked into **16 of 45 sub-windows (36%)**. One began literally `"172 chars omitted] apply
+  all three point 2:"`.
+- the splitter `(?<=[.!?])\s+` treated list enumerators `1.` `2.` `5.` as sentence ends,
+  shredding a numbered technical procedure into fragments.
+- role markers were stripped, running user prompts into assistant prose with no boundary.
+
+Fixed by cutting on TURN boundaries from the transcript directly, splitting a long turn only at
+real sentence ends (`(?<![0-9A-Z])[.!?]+\s+(?=[A-Z"'(\[])`, which ignores enumerators and
+initials), and never emitting a truncation marker. Result: 37 sub-windows, **0 markers**.
+
+**Defect 2 — the word "prose".** `rich` described `text.transform` as *"reformatting PROSE that
+already exists"*. John's work is editing a SLIDE DECK. Across 37 CLEAN calls the model proposed
+a `text.*` verb **zero times**, answering `extract` instead. The `docs` style widens text.* to
+"document, deck, page, report, spec" and narrows `extract` to "pulling structured fields into a
+list or table. NOT discussing or explaining what a document says".
+
+### The numbers
+
+| arm | John's 7 (primary) | John's gold-set recall | Engineering 100 | `code.*` |
+|---|---|---|---|---|
+| malformed + `rich` | 0/7 | 0.190 | 0.660 | 0.600 |
+| logical boundaries + `rich` | 0/7 | 0.310 | 0.660 | 0.600 |
+| **logical boundaries + `docs`** | **3/7 (0.429)** | **0.476** | **0.700** | **0.644** |
+
+**`docs` is a strict improvement on BOTH corpora — it is not a trade.** 0.700 exceeds the
+shipped `activity_type` (0.670) and `domain` (0.683) facets. ⚠️ The change was made on
+PRINCIPLE (a deck, a page and a spec are text artifacts; "prose" wrongly excluded them) and
+then regression-checked on the engineering set, rather than tuned against John's 7 — which
+would have been fitting noise at n=7.
+
+⚠️ **This does not retract the transfer warning, it relocates it.** A headline accuracy is
+still only a claim about the label distribution it was measured on. What changed is that the
+gap was a description defect rather than a model limit — and that was only findable because a
+second, differently-shaped corpus existed.
+
+**Live, untested (2026-09-25):** branch the label set on Atlas team membership
+(engineering vs other) — John's J06 predicted `code.edit` 50% on deck work and a team branch
+would suppress it; and open-ended extraction mapped into the atv1 space by embedding, which
+would remove the label-wording dependency this section is entirely about (measured worth:
+0.378 on `code.*`, and the difference between 0/7 and 3/7 here).

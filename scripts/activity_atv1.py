@@ -145,7 +145,19 @@ RICH = {
     "embed": "turning content into vectors",
     "other": "none of these",
 }
-STYLES = {"bare": BARE, "gloss": GLOSS, "rich": RICH}
+DOCS = dict(RICH)
+# PRINCIPLED widening, not fitted to any sample: a slide deck, a page, a spec and a report are
+# all TEXT ARTIFACTS. `rich` narrowed text.* to the word "prose", which excludes exactly those.
+DOCS["text.create"] = ("writing a new document, deck, page, report, spec or email from scratch. "
+                       "Includes slides and presentations. NOT editing something that exists")
+DOCS["text.transform"] = ("revising a document, slide deck, page, spec or report that already "
+                          "exists: editing slides, rewording, restructuring, correcting, "
+                          "applying feedback to a draft. NOT writing it from scratch and NOT code")
+DOCS["text.summarize"] = ("condensing an existing document, meeting or thread into something "
+                          "shorter. NOT writing new material")
+DOCS["extract"] = ("pulling specific structured fields or values out of content into a list or "
+                   "table. NOT discussing or explaining what a document says")
+STYLES = {"bare": BARE, "gloss": GLOSS, "rich": RICH, "docs": DOCS}
 
 FAM_GLOSS = {
     "language": "producing or rewriting prose",
