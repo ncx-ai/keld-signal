@@ -141,7 +141,7 @@ async function startShell(): Promise<Shell> {
     // integrations pane must not depend on any of it.
     if (p === "/v1/ledger") return json(res, { generated_at: "2026-09-15T09:13:00Z", blocks: [], health: [] });
     if (p === "/v1/settings") return json(res, {});
-    if (p === "/v1/projects") return json(res, { groups: [], projects: [] });
+    if (p === "/v1/projects") return json(res, { projects: [] });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
     const file = p === "/" ? "index.html" : p.slice(1);

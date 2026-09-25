@@ -413,8 +413,7 @@ fieldset:disabled { opacity: .55; }
 }
 .project-row .row-title { min-width: 0; }
 .project-row select { width: 100%; }
-/* The pill column is right-aligned so it ends on the edge the header's switch
-   also sits on. */
+/* The pill column is right-aligned so every pill ends on the card's content edge. */
 .project-row .pill { justify-self: end; }
 .suggestion-row:last-child, .project-row:last-child { border-bottom: none; }
 .row-title { font-family: var(--mono); font-size: 13px; }
@@ -439,37 +438,18 @@ fieldset:disabled { opacity: .55; }
   .suggestion-row > .row-actions { flex-shrink: 1; min-width: 0; max-width: 100%; }
   .suggestion-row > .row-actions select { flex: 1 1 auto; min-width: 0; }
 }
-.group-card {
+/* "Your projects" is ONE card holding every project (Revision 4: no groups). */
+.projects-card {
   background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
-  padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
+  padding: 4px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
 }
-.group-card.off { background: var(--nested); box-shadow: none; }
-/* The switch already lands on the same right edge as the rows' pills (measured:
-   both end at the card's content edge). What it lacked was breathing room — the
-   label text ran straight into it — so this is spacing, not a fix for an
-   overflow that was never there. */
-.group-head {
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 16px; margin-bottom: 2px;
-}
-.group-head > label { display: inline-flex; align-items: center; gap: 8px; }
-.group-head .name { font: 600 13px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-.group-off-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-.group-total { display: block; font: 400 12px var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink-2); margin-top: 2px; }
-/* Why the projects below add up to more than the group: said only when a
-   block really sits in two of them. Quiet — it is a reading aid, not a warning. */
-.shared-note { color: var(--muted); font-size: 11.5px; margin: 2px 0 6px; }
-
-/* The Today group switcher: which angle on the work the project column shows. */
-.group-switch { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-.group-tab {
-  font: 500 12px var(--sans); color: var(--ink-2); background: var(--surface);
-  border: 1px solid var(--rule); border-radius: 999px; padding: 4px 12px; cursor: pointer;
-}
-.group-tab:hover { border-color: var(--rule-strong); }
-.group-tab:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
-.group-tab.on { background: var(--forest); color: var(--on-dark); border-color: var(--forest); }
-/* A block can hold several projects in one group: one pill each, wrapping. */
+.projects-card.hidden-projects { background: var(--nested); box-shadow: none; }
+.projects-empty { color: var(--muted); font-size: 12px; padding: 10px 0; }
+/* A hidden row has no picker and no pill: title, then its one button. */
+.project-row.hidden-project { display: flex; justify-content: space-between; }
+.project-row.hidden-project .row-title { flex: 1 1 auto; overflow-wrap: anywhere; }
+.project-row.hidden-project .btn { flex-shrink: 0; }
+/* A block can land in several projects: one pill each, wrapping. */
 .ws-pills { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; }
 .ws-pill { white-space: nowrap; }
 .local-note { color: var(--sage); font-size: 11.5px; margin: 2px 0 8px; }

@@ -233,14 +233,11 @@ export function projectTitle(projectId, catalog) {
   return match ? match.title : null;
 }
 
-/** ALL_GROUPS is the Today switcher's "no filter" choice. Not a group key a
- *  daemon can produce (group keys are lowercased names), so it never collides. */
-export const ALL_GROUPS = "*";
-
-/** Every project the ledger says a block landed in, as {id, group, method},
- *  in the order the rule pass assigned them — or null when attribution has not
- *  run (the cell is absent). Since 2026-09-23 a block may land in several
- *  projects, in any group and inside one; the cell carries them all. */
+/** Every project the ledger says a block landed in, as {id, method}, in the
+ *  order the rule pass assigned them — or null when attribution has not run
+ *  (the cell is absent). A block may land in several projects; the cell
+ *  carries them all. A row written before Revision 4 may still name a group
+ *  per entry; it is not read. */
 export function projectsOf(block) {
   const attr = attributionOf(block);
   if (!attr) return null;
@@ -249,7 +246,7 @@ export function projectsOf(block) {
   // is what keeps an empty id from rendering as a blank name.
   return list
     .filter((w) => w && w.project_id)
-    .map((w) => ({ id: w.project_id, group: w.group || "", method: w.method || "" }));
+    .map((w) => ({ id: w.project_id, method: w.method || "" }));
 }
 
 /**
@@ -257,19 +254,16 @@ export function projectsOf(block) {
  * never an internal id. Four outcomes, and the renderer must not collapse
  * any two of them into the same look:
  *   - "unknown"    — attribution hasn't run yet (the cell itself is absent)
- *   - "none"       — it ran and nothing matched this block (in this group)
- *   - "attributed" — at least one project matched; `items` holds every one
- *                    in the selected group, each by TITLE, and `text` joins them
+ *   - "none"       — it ran and nothing matched this block
+ *   - "attributed" — at least one project matched; `items` holds every one,
+ *                    each by TITLE, and `text` joins them
  *   - "unresolved" — every id the ledger names is one GET /v1/projects
  *                    doesn't know; `text` falls back to the raw ids, styled
  *                    like "unknown", never like a real attribution.
- * `group` filters to one group's projects; ALL_GROUPS (the default) shows
- * every group's.
  */
-export function projectCellInfo(block, catalog, group = ALL_GROUPS) {
-  const all = projectsOf(block);
-  if (all === null) return { kind: "unknown" };
-  const list = group === ALL_GROUPS ? all : all.filter((w) => w.group === group);
+export function projectCellInfo(block, catalog) {
+  const list = projectsOf(block);
+  if (list === null) return { kind: "unknown" };
   if (!list.length) return { kind: "none" };
   const items = list.map((w) => {
     const title = projectTitle(w.id, catalog);
@@ -290,11 +284,11 @@ export function projectCellInfo(block, catalog, group = ALL_GROUPS) {
 export const RHYTHM_PALETTE = ["var(--green)", "var(--sage)", "var(--indigo)", "var(--amber)"];
 export const RHYTHM_UNATTRIBUTED_COLOR = "var(--rule-strong)";
 
-export function rhythmColorFor(block, catalog, group = ALL_GROUPS) {
-  const info = projectCellInfo(block, catalog, group);
+export function rhythmColorFor(block, catalog) {
+  const info = projectCellInfo(block, catalog);
   if (info.kind !== "attributed") return RHYTHM_UNATTRIBUTED_COLOR;
-  // The FIRST project in the selected group colours the square: a square
-  // is one colour, and the switcher is how a person asks about another angle.
+  // The FIRST project colours the square: a square is one colour, and the
+  // table row beside it names every project the block landed in.
   const first = info.items[0];
   if (first.method === "embedding") return "var(--indigo)";
   let h = 0;
@@ -305,8 +299,8 @@ export function rhythmColorFor(block, catalog, group = ALL_GROUPS) {
 /** The rhythm strip's hover text for one block: its time range and whatever
  *  the Project column itself would show, so a square never explains itself
  *  in words the table doesn't also stand behind. */
-export function rhythmTitleFor(block, catalog, group = ALL_GROUPS) {
-  const info = projectCellInfo(block, catalog, group);
+export function rhythmTitleFor(block, catalog) {
+  const info = projectCellInfo(block, catalog);
   const label = info.kind === "attributed" || info.kind === "unresolved" ? info.text : "no project";
   return `${formatRange(block.key.start, block.end)} · ${label}`;
 }
@@ -345,29 +339,11 @@ export function focusStats(blocks) {
   };
 }
 
-/** The Today switcher's choices: every group the catalog names, plus "All
- *  groups" first. Empty when there are fewer than two groups — a switcher with
- *  one position is noise. */
-export function todayGroupOptions(catalog) {
-  const groups = (catalog && catalog.groups) || [];
-  if (groups.length < 2) return [];
-  return [{ key: ALL_GROUPS, label: "All groups" }].concat(groups.map((g) => ({ key: g.key, label: g.name || g.key })));
-}
-
-/** The remembered switcher choice, if it still names a group; else ALL_GROUPS.
- *  A group that was renamed or removed must not leave the table filtered to
- *  nothing. */
-export function resolveTodayGroup(remembered, catalog) {
-  const opts = todayGroupOptions(catalog);
-  return opts.some((o) => o.key === remembered) ? remembered : ALL_GROUPS;
-}
-
-/** GET /v1/projects' `totals`, indexed: groups by key, projects by id. */
+/** GET /v1/projects' `totals`, indexed: projects by id. */
 export function totalsIndex(catalog) {
   const t = (catalog && catalog.totals) || {};
-  const groups = new Map((t.groups || []).map((g) => [g.key, g]));
   const projects = new Map((t.projects || []).map((w) => [w.id, w]));
-  return { groups, projects };
+  return { projects };
 }
 
 /** One total as a person reads it: blocks · time · est. spend. "" for none. */
@@ -377,12 +353,17 @@ export function totalLine(total) {
   return `${n} block${n === 1 ? "" : "s"} · ${formatMinutes(total.minutes || 0)} · ${formatEstUSD(total.usd || 0)}`;
 }
 
-/** Why a group's projects add up to more than the group — said only when
- *  it is true (some block sits in two or more of its projects). */
-export function sharedBlocksNote(groupTotal) {
-  const n = groupTotal && groupTotal.shared_blocks;
-  if (!n) return "";
-  return `${n} block${n === 1 ? " is" : "s are"} in more than one project here, so the projects add up to more than the group.`;
+/** What "Your projects" lists, in the catalog's order: every visible
+ *  project with its own total line, and apart from them the hidden ones, so
+ *  a person can bring one back. Each project counts a block it shares with
+ *  another in full — only the coverage tile counts a shared block once. */
+export function projectListing(catalog) {
+  const all = (catalog && catalog.projects) || [];
+  const totals = totalsIndex(catalog);
+  return {
+    visible: all.filter((p) => !p.hidden).map((project) => ({ project, total: totalLine(totals.projects.get(project.id)) })),
+    hidden: all.filter((p) => p.hidden),
+  };
 }
 
 /** What a project card shows as "the rules": GET /v1/projects' own `rules`
@@ -462,49 +443,6 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
-/** groupsForProjects is what "Your projects" iterates: the catalog's groups, plus
- *  one group for any project whose workstream is in none of them.
- *
- *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
- *  projects by looping over workstreams and drawing each one's members, so a
- *  project filed under a key that is in no list is never drawn at all. Measured
- *  on a real machine: two projects on disk, `"workstreams": null` from the API,
- *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
- *  them saw their suggestion disappear and nothing appear, which is
- *  indistinguishable from the suggestion having been thrown away.
- *
- *  That is the state of EVERY machine with Send to Atlas off, because the
- *  workstream list is pushed down by Atlas and nothing local seeded it.
- *
- *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
- *  second of two guards rather than the only one — deliberately, because the
- *  rule worth keeping is "the page never silently drops a project", not "that
- *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
- *  caller can decline to offer an org-level control on a bucket the org never
- *  declared.
- */
-export function groupsForProjects(groups, projects) {
-  const out = (groups || []).map((w) => ({ ...w, synthetic: false }));
-  const known = new Set(out.map((w) => w.key));
-  const extra = new Map();
-  for (const p of projects || []) {
-    if (p.hidden) continue;
-    const key = p.group || "development";
-    if (known.has(key) || extra.has(key)) continue;
-    extra.set(key, { key, name: groupDisplayName(key), off: false, synthetic: true });
-  }
-  return out.concat([...extra.values()]);
-}
-
-/** groupDisplayName turns a key into something a person reads. Mirrors the
- *  Go side's function of the same name so a locally-seeded workstream is
- *  labelled identically whether the page or the daemon named it. */
-export function groupDisplayName(key) {
-  const out = String(key || "").replace(/[_-]+/g, " ").trim();
-  if (!out) return String(key || "");
-  return out[0].toUpperCase() + out.slice(1);
-}
-
 export function validProjectTitle(title) {
   return String(title == null ? "" : title).trim();
 }
@@ -1264,9 +1202,6 @@ if (typeof document !== "undefined") {
       // sees, never what the daemon does. Nothing about it is published, and a
       // second machine signed into the same org is unaffected.
       devMode: false,
-      // Which group the Today view shows projects for (ALL_GROUPS or a
-      // group key). Per viewer; a key that no longer exists falls back to all.
-      todayGroup: ALL_GROUPS,
     });
   }
   function saveLocalPrefs(p) {
@@ -1302,8 +1237,8 @@ if (typeof document !== "undefined") {
     // DOM because `route()` re-renders the whole pane, so a value held only in
     // an input would be lost the moment anything else refreshed.
     naming: null,
-    // confirmations: rowKey -> true. Set after any /v1/projects (or
-    // /v1/groups) mutation whose response carries local_only — read by
+    // confirmations: rowKey -> true. Set after any /v1/projects mutation
+    // whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1472,45 +1407,14 @@ if (typeof document !== "undefined") {
       )
     );
 
-    // The group switcher: which angle on the work the project column and
-    // the rhythm strip show. A block may sit in one project per group (and
-    // in several inside one), so "which project" only has an answer per
-    // group. Remembered per viewer; absent with fewer than two groups.
-    const groupOpts = todayGroupOptions(catalog);
-    const group = resolveTodayGroup(state.local.todayGroup, catalog);
-    if (groupOpts.length) {
-      root.appendChild(
-        el(
-          "div",
-          { class: "group-switch", role: "tablist", "aria-label": "Show projects for" },
-          ...groupOpts.map((o) =>
-            el(
-              "button",
-              {
-                class: "group-tab" + (o.key === group ? " on" : ""),
-                role: "tab",
-                "aria-selected": o.key === group ? "true" : "false",
-                onclick: () => {
-                  state.local.todayGroup = o.key;
-                  saveLocalPrefs(state.local);
-                  route();
-                },
-              },
-              o.label
-            )
-          )
-        )
-      );
-    }
-
     if (blocks.length) {
       const squares = [...blocks]
         .sort((a, b) => a.key.start - b.key.start)
         .map((b) =>
           el("span", {
             class: "sq",
-            style: `background:${rhythmColorFor(b, catalog, group)}`,
-            title: rhythmTitleFor(b, catalog, group),
+            style: `background:${rhythmColorFor(b, catalog)}`,
+            title: rhythmTitleFor(b, catalog),
           })
         );
       root.appendChild(
@@ -1546,11 +1450,11 @@ if (typeof document !== "undefined") {
       }
       const b = item.block;
       const measured = measuredOf(b);
-      const info = projectCellInfo(b, catalog, group);
+      const info = projectCellInfo(b, catalog);
 
       let projectCell;
       if (info.kind === "attributed") {
-        // Every project the block holds in this group, one pill each.
+        // Every project the block landed in, one pill each.
         projectCell = el(
           "span",
           { class: "ws-pills" },
@@ -1797,12 +1701,9 @@ if (typeof document !== "undefined") {
       root.appendChild(el("p", { class: "loading" }, "No project data yet."));
       return;
     }
-    const groups = catalog.groups || [];
-    const allProjects = catalog.projects || [];
     const suggestions = catalog.suggestions || [];
     const coverage = catalog.coverage || { attributed: 0, total: 0 };
-    const offKeys = groups.filter((w) => w.off).map((w) => w.key);
-    const totals = totalsIndex(catalog);
+    const { visible, hidden } = projectListing(catalog);
 
     const leftOverBlocks = Math.max(0, (coverage.total || 0) - (coverage.attributed || 0));
     const pct = coverage.total ? Math.round((100 * coverage.attributed) / coverage.total) : 0;
@@ -1813,7 +1714,7 @@ if (typeof document !== "undefined") {
         { class: "tiles three" },
         el("div", { class: "tile" }, el("div", { class: "l" }, "Attributed"), el("div", { class: "v" }, `${pct}%`, el("small", {}, `${coverage.attributed || 0} of ${coverage.total || 0} focus blocks`))),
         el("div", { class: "tile" }, el("div", { class: "l" }, "Left over"), el("div", { class: "v", style: "color:var(--amber-strong)" }, `${leftOverBlocks} blocks`)),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Groups on"), el("div", { class: "v" }, `${groups.length - offKeys.length}`, el("small", {}, `of ${groups.length}`)))
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Projects"), el("div", { class: "v" }, `${visible.length}`, hidden.length ? el("small", {}, `${hidden.length} hidden`) : null))
       )
     );
 
@@ -1839,11 +1740,11 @@ if (typeof document !== "undefined") {
                     value: state.naming.title,
                     oninput: (e) => { state.naming.title = e.target.value; },
                     onkeydown: (e) => {
-                      if (e.key === "Enter") bundleSuggestion(s, groups, state.naming.title);
+                      if (e.key === "Enter") bundleSuggestion(s, state.naming.title);
                       if (e.key === "Escape") cancelNamingProject();
                     },
                   }),
-                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, groups, state.naming.title) }, "Create"),
+                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, state.naming.title) }, "Create"),
                   el("button", { class: "btn btn-quiet", onclick: cancelNamingProject }, "Cancel")
                 )
               : el(
@@ -1860,61 +1761,45 @@ if (typeof document !== "undefined") {
       }
     }
 
+    // ONE flat list (Revision 4). A block lands in every project that matches
+    // it, and each project's total counts it in full; only the Attributed tile
+    // above counts a shared block once.
     root.appendChild(el("div", { class: "section-label" }, "Your projects"));
-    for (const w of groupsForProjects(groups, allProjects)) {
-      const inThis = allProjects.filter((p) => p.group === w.key && !p.hidden);
-      const card = el(
+    const card = el("div", { class: "projects-card" });
+    if (!visible.length) card.appendChild(el("div", { class: "projects-empty" }, "No projects yet."));
+    for (const { project: p, total } of visible) {
+      const row = el(
         "div",
-        { class: "group-card" + (w.off ? " off" : "") },
-        el(
-          "div",
-          { class: "group-head" },
-          el("span", { class: "name" }, `${w.name}`, totalLine(totals.groups.get(w.key)) ? el("small", { class: "group-total" }, totalLine(totals.groups.get(w.key))) : null),
-          // A synthetic group is this machine's own bucket, not one the org
-          // declared, so it offers no "counts for my work" switch: that flag is
-          // stored per workstream key and would appear to reset on reload,
-          // which is a control that lies about what it did.
-          w.synthetic
-            ? null
-            : el("label", {}, "counts for my work ", switchEl({
-                checked: !w.off,
-                onChange: (v) => setGroupOff(w.key, !v),
-              }))
-        )
+        { class: "project-row" },
+        el("div", { class: "row-title" }, p.title, el("small", {}, projectRulesSummary(p) + (total ? ` · ${total}` : ""))),
+        // Map-to is offered on EVERY project: since Revision 2 every project
+        // here is the person's own, and the daemon accepts it as a source.
+        mapProjectSelect(p),
+        // One pill for every row: they all live on this machine.
+        el("span", { class: "pill ok" }, "local")
       );
-      appendConfirmation(card, `group:${w.key}`);
-      const shared = sharedBlocksNote(totals.groups.get(w.key));
-      if (shared && !w.off) card.appendChild(el("div", { class: "shared-note" }, shared));
-      if (w.off) {
-        card.appendChild(el("div", { class: "group-off-note" }, "Your work never lands here. Turn on if you work in this area."));
-      } else if (!inThis.length) {
-        card.appendChild(el("div", { class: "group-off-note" }, "No projects yet."));
-      } else {
-        for (const p of inThis) {
-          const wsTotal = totalLine(totals.projects.get(p.id));
-          const row = el(
+      card.appendChild(row);
+      appendConfirmation(card, `project:${p.id}`);
+    }
+    root.appendChild(card);
+
+    // Hidden projects attribute nothing. They are listed so a person can
+    // bring one back — the only way back on this page.
+    if (hidden.length) {
+      root.appendChild(el("div", { class: "section-label" }, `Hidden · ${hidden.length}`));
+      const hcard = el("div", { class: "projects-card hidden-projects" });
+      for (const p of hidden) {
+        hcard.appendChild(
+          el(
             "div",
-            { class: "project-row" },
-            el(
-              "div",
-              { class: "row-title" },
-              p.title,
-              el("small", {}, projectRulesSummary(p) + (wsTotal ? ` · ${wsTotal}` : ""))
-            ),
-            // Map-to is offered on EVERY project. It used to be hidden on an
-            // Atlas-origin row ("not ours to fold away"); since Revision 2 every
-            // project here is the person's own, including one placed with
-            // "Same as" before it, and the daemon accepts it as a source.
-            mapProjectSelect(p),
-            // One pill for every row: they all live on this machine. It used to
-            // read "✓ in Atlas" on an Atlas-origin row.
-            el("span", { class: "pill ok" }, "local")
-          );
-          card.appendChild(row);
-          appendConfirmation(card, `project:${p.id}`);
-        }
+            { class: "project-row hidden-project" },
+            el("div", { class: "row-title" }, p.title, el("small", {}, projectRulesSummary(p))),
+            el("button", { class: "btn", "aria-label": `Show ${p.title} again`, onclick: () => setProjectHidden(p, false) }, "Show again")
+          )
+        );
+        appendConfirmation(hcard, `project:${p.id}`);
       }
-      root.appendChild(card);
+      root.appendChild(hcard);
     }
   }
 
@@ -2055,7 +1940,7 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function bundleSuggestion(suggestion, groups, title) {
+  async function bundleSuggestion(suggestion, title) {
     // NEGATIVE 1: an empty name creates nothing and leaves the suggestion where
     // it was. Said out loud rather than silently ignored — silence here is the
     // exact defect this replaced.
@@ -2065,9 +1950,8 @@ if (typeof document !== "undefined") {
       route();
       return;
     }
-    const group = (groups[0] && groups[0].key) || "development";
     const res = await sendJSON("/v1/projects/bundle", "POST",
-      { title: name, group, suggestions: [suggestion.id] });
+      { title: name, suggestions: [suggestion.id] });
     if (res.ok && res.body && res.body.project && res.body.project.id) {
       noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
       state.naming = null;
@@ -2080,9 +1964,9 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function setGroupOff(key, off) {
-    const res = await sendJSON(`/v1/groups/${encodeURIComponent(key)}/off`, "PUT", { off });
-    if (res.ok) noteLocalConfirmation(`group:${key}`, res.body);
+  async function setProjectHidden(p, hidden) {
+    const res = await sendJSON(`/v1/projects/${encodeURIComponent(p.id)}/hide`, "POST", { hidden });
+    if (res.ok) noteLocalConfirmation(`project:${p.id}`, res.body);
     await loadAll();
     route();
   }
