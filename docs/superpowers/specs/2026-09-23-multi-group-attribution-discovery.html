@@ -141,6 +141,73 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <dt>Semantic pass default</dt><dd class="mono">OFF · a developer toggle (KELD_ATTRIBUTION) · limits who a wrong decision can affect</dd>
 </dl>
 
+<section id="rev2" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-draft" style="vertical-align:middle;margin-left:8px">Draft — awaiting sign-off · 2026-09-25</span></h2>
+<p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7.</p>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Today (Revision 1)</th><th>Revision 2</th></tr></thead>
+<tbody>
+  <tr><td>Rule pass candidates</td><td>local workstreams + the org's Atlas workstreams (<span class="mono">MergeCandidates</span>, daemon/v3blocks.go:322, workstreammatches.go:59, ingress/workstreams.go:138)</td><td><strong>Signal workstreams only</strong> — every entry in the local <span class="mono">workstreams.json</span></td></tr>
+  <tr><td>Workstreams pane</td><td>shows Atlas workstreams ("✓ in Atlas") and groups derived from them (<span class="mono">withRemoteBuckets</span>)</td><td><strong>hidden</strong>: only Signal workstreams and Signal groups</td></tr>
+  <tr><td>"Same as" picker</td><td>offers Atlas workstreams (creates a local overlay)</td><td>offers Signal workstreams only</td></tr>
+  <tr><td>Importing Atlas workstreams</td><td>the settings poll delivers them; they are shown and matched</td><td><strong>kept</strong>: still received and held in memory, neither shown nor matched. How to use them again is separate work.</td></tr>
+  <tr><td>Reconcile (daemon/v3.go:138)</td><td>deletes or trims a local workstream whose rules an Atlas workstream covers</td><td><strong>stops</strong>. Otherwise hiding Atlas would silently delete people's own rules.</td></tr>
+  <tr><td>Existing "Same as" overlays</td><td>local entries carrying an Atlas id + title + the person's rules</td><td>they are local entries, so they stay: shown and attributed as Signal workstreams, rules intact. No migration.</td></tr>
+  <tr><td>Wire to Atlas</td><td><span class="mono">project_matches</span> lists local and Atlas matches</td><td>lists Signal workstreams only (an id only where the entry carries an Atlas id); dimensions unchanged. Atlas keeps running its own rules.</td></tr>
+  <tr><td>Per-group attribution, overlap, totals, the page</td><td>as built</td><td>unchanged</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="r2-ac-1"><td class="mono">R2-AC-1</td><td>A block matching only an Atlas workstream's rule is unattributed; one matching a Signal workstream lands there as before.</td><td><span class="mono">workstreams.Attribute</span> via the daemon's recorded and live passes</td><td class="mono">go test ./internal/agent/daemon/ -run TestOnlySignalWorkstreamsAttribute</td></tr>
+  <tr id="r2-ac-2"><td class="mono">R2-AC-2</td><td><span class="mono">GET /v1/workstreams</span> returns only Signal workstreams and Signal groups — no Atlas workstream, no group derived from one — and totals and coverage are computed over them.</td><td><span class="mono">GET /v1/workstreams</span></td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHoldsOnlySignalWorkstreams</td></tr>
+  <tr id="r2-ac-3"><td class="mono">R2-AC-3</td><td>The page shows no "in Atlas" row, and "Same as" offers only Signal workstreams.</td><td>Workstreams pane</td><td class="mono">node --test + ui/e2e (fixture with Atlas and Signal workstreams)</td></tr>
+  <tr id="r2-ac-4"><td class="mono">R2-AC-4</td><td>The org's workstreams are still received on the settings poll and held; nothing on the attribution or display path reads them.</td><td>daemon remote state</td><td class="mono">go test ./internal/agent/daemon/ -run TestAtlasWorkstreamsAreHeldNotUsed</td></tr>
+  <tr id="r2-ac-5"><td class="mono">R2-AC-5</td><td>A Signal workstream whose repo an Atlas workstream also declares keeps that rule after a settings poll.</td><td>local <span class="mono">workstreams.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestAPollNoLongerTrimsSignalRules</td></tr>
+  <tr id="r2-ac-6"><td class="mono">R2-AC-6</td><td>An existing "Same as" overlay entry shows and attributes as a Signal workstream with its title and rules.</td><td><span class="mono">GET /v1/workstreams</span>, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestAnOverlayIsASignalWorkstream</td></tr>
+  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Consequences worth knowing</h3>
+<ul>
+  <li><strong>Coverage drops on org machines</strong> the moment this ships: blocks that only an Atlas workstream matched become unattributed on the page (the Today rows recompute live). They reappear as suggestions, which is where a person makes a Signal workstream for them.</li>
+  <li><strong>Atlas's numbers do not move.</strong> Atlas already attributes from its own rules and the block's dimensions; neither changes.</li>
+  <li><strong>Signal's local ids are built from titles</strong> (<span class="mono">p_</span> + slug), which is why they never go on the wire — <span class="mono">project_matches</span> already omits them, and that stays.</li>
+</ul>
+
+<h3>Open question — needs a decision</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Question</th><th>Recommendation</th></tr></thead>
+<tbody>
+  <tr><td class="mono">Q1</td><td>The model-based pass (off by default, developer-only) scores against the <em>Atlas</em> list and publishes Atlas ids in <span class="mono">projects</span>. Does it switch to Signal workstreams in this revision?</td><td><strong>Not in this revision</strong> — leave it on the Atlas list and fold it into the separate "how to use Atlas workstreams again" work. Switching it means its answers are Signal ids, which are title-derived and so could no longer be published; that is a wire decision, not a UI one.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger (Revision 2)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Atlas workstreams leave the rule pass and the page</td><td>yes, revert</td><td>every machine paired with an org that declares workstreams</td><td>they are still received (R2-AC-4); nothing is deleted</td></tr>
+  <tr><td>Reconcile stops</td><td>yes, revert</td><td>local rules are no longer trimmed on a poll</td><td>R2-AC-5; nothing stored is removed by this change</td></tr>
+  <tr><td><span class="mono">project_matches</span> stops naming Atlas-only matches</td><td>yes</td><td>Atlas's matcher suggestions (the only reader)</td><td>Atlas attribution does not read it</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
 <h2 id="s1">1 · Hypothesis &amp; scope</h2>
 
 <h3>Words: Signal adopts Atlas's, as part of this work</h3>
