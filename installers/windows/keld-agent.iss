@@ -529,9 +529,25 @@ begin
   ShowToolSection(False);
   RestartLbl.Visible := False;
   RetryBtn.Visible := False;
-  WebPanel.Visible := False;
+  // ⚠️ **THE PANEL MUST BE VISIBLE BEFORE StartPanel, AND HIDING IT HERE IS WHAT
+  // MADE THE SIGN-IN PAGE RENDER NOTHING.** StartPanel hands WebPanel.Handle to
+  // the helper, which creates the WebView2 controller as a child of it. A
+  // controller created under a HIDDEN parent never starts rendering, and making
+  // the parent visible afterwards does not notify it — so the page loaded, its
+  // JavaScript ran (proved by atlas.keld.co bytes in the WebView2 code cache),
+  // and nothing was ever painted.
+  //
+  // This line and the height-fitting ratchet both arrived in 31cafa0 ("fit
+  // height only, and show a real loading state"), which is exactly when the page
+  // stopped rendering — reported as "this used to work", and it did.
+  //
+  // The loading state survives: the status line says what is happening and the
+  // marquee rides ON TOP of the panel. WebPanel is created after LoadingBar so
+  // it wins z-order by default; BringToFront is what keeps the bar visible.
+  WebPanel.Visible := True;
   SetStatus('Loading the Keld sign-in page…');
   LoadingBar.Visible := True;
+  LoadingBar.BringToFront;
   StartPanel(URL);
 end;
 
