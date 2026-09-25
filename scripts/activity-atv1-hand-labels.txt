@@ -47,3 +47,113 @@
 #     activities. Do not write one to hedge.
 #  6. `other.general` is abstention. Use it when no id fits, never as a tiebreak.
 #
+# AMENDMENT 1, recorded BEFORE any label below was written and before any arm was run:
+# the frame is reduced from 150 windows to 100 — the SAME sample size attempt ONE used, and the
+# first 100 of the same seed-0 ordering, so it is a prefix and not a re-draw. Reason: the binding
+# constraint on this study is corpus COMPOSITION, not sample size. By window 76 the verb
+# distribution was stable across six values and every context was general/none, so the marginal
+# label adds power only to the code.* sub-test, which reaches n=45 at 100. Reducing n lowers power
+# and cannot bias, and no arm result had been seen. Verb-diversity and context measurement move to
+# external corpora, where they are answerable at all.
+#
+# index  activity_type_id  [| secondary]
+001 research.general
+002 review.general
+003 plan
+004 review.general
+005 review.general
+006 review.general
+007 code.edit
+008 code.edit
+009 review.general
+010 review.general
+011 review.general
+012 code.edit
+013 code.edit
+014 code.edit
+015 review.general
+016 code.edit
+017 research.general
+018 code.edit
+019 code.edit | plan
+020 review.general
+021 review.general
+022 research.general
+023 code.edit
+024 code.edit | converse.general
+025 research.general
+026 research.general
+027 code.write
+028 code.write | research.general
+029 research.general
+030 review.general
+031 review.general
+032 research.general
+033 review.general
+034 code.edit | review.general
+035 plan
+036 research.general
+037 code.edit
+038 code.edit
+039 code.edit
+040 plan | research.general
+041 code.write | plan
+042 review.general
+043 plan | converse.general
+044 code.edit
+045 review.general
+046 code.edit
+047 code.edit
+048 review.general
+049 review.general
+050 research.general
+051 code.edit
+052 review.general
+053 code.edit
+054 code.edit
+055 research.general
+056 code.edit
+057 converse.general
+058 converse.general
+059 code.edit
+060 review.general
+061 plan
+062 code.edit
+063 review.general
+064 review.general
+065 code.write
+066 code.edit | plan
+067 code.edit
+068 code.write | research.general
+069 code.edit
+070 research.general
+071 code.edit
+072 review.general
+073 research.general
+074 research.general
+075 research.general
+076 code.edit
+077 code.edit
+078 review.general
+079 review.general
+080 code.edit
+081 code.write
+082 code.write | plan
+083 code.edit
+084 code.edit
+085 code.edit
+086 code.edit
+087 other.general
+088 code.edit
+089 code.write
+090 plan
+091 code.edit
+092 review.general
+093 research.general
+094 research.general
+095 research.general
+096 research.general
+097 code.edit
+098 review.general
+099 review.general
+100 review.general
