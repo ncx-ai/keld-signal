@@ -46,6 +46,14 @@ multi-group discovery) once Signal stopped matching Atlas's workstreams, so the 
 name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
 (`scripts/vocabulary-denylist.txt`).
 
+**Signal labels on its own (since 2026-09-25).** The rule pass, the Workstreams pane, its totals
+and `project_matches` see only the workstreams defined in Signal (`workstreams.Candidates`, the
+local document). The org's workstreams still arrive on the settings poll and are held, unread on
+those paths, and a poll no longer trims local rules an Atlas workstream covers. The model-based
+attribution pass still scores against the org's list (decided the same day; its answers are
+Atlas ids, and Signal's own ids are title-derived so cannot be published). Discovery:
+`docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html` → Revision 2.
+
 **Kept on purpose — the keep list:** Atlas wire keys `projects` (settings and block row),
 `projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
 `POST /projects` and its `projects` body key (version skew); the status value
