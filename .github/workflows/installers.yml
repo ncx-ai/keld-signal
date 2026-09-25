@@ -482,6 +482,20 @@ jobs:
           # Apple path already uses, because the secrets context is not available
           # to a step-level `if:` and a per-step re-derivation could disagree.
           $on = if ($env:AZURE_CLIENT_ID -and $n -gt 0) { "1" } else { "0" }
+
+          # ⚠️ A RELEASE MAY NOT SHIP UNSIGNED — the same hard gate macOS makes
+          # with KELD_NOTARY_REQUIRED, for the same reason: an unsigned Windows
+          # installer is not distributable, it is a lottery drawn per release
+          # against Smart App Control's per-file reputation guess. Degrading to
+          # a warning is right for a fork or a dry run, which are MEANT to
+          # produce non-distributable output; on a release it would mean a
+          # rotated-out client secret silently ships a broken installer and
+          # nobody learns until a customer cannot start keld.exe. Loud here,
+          # cheap to fix; silent there, three weeks of blocks.
+          if ($env:IS_RELEASE -eq 'true' -and $on -ne '1') {
+            throw "refusing to build an UNSIGNED release: Azure signing credentials are absent or no binaries were found to sign (credentials present: $([bool]$env:AZURE_CLIENT_ID), files to sign: $n). See docs/windows-code-signing.md."
+          }
+
           if ($on -ne "1") {
             Write-Warning "Windows signing is OFF (credentials present: $([bool]$env:AZURE_CLIENT_ID), files to sign: $n) - output will be UNSIGNED and Smart App Control will refuse it"
           }

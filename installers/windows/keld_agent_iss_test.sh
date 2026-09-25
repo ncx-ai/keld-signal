@@ -252,4 +252,15 @@ grep -q 'VerifyCatalog' "$wf" || \
 [ "$(grep -c 'timestamp-rfc3161:' "$wf")" -eq 2 ] || \
   fail "expected both signing steps to set timestamp-rfc3161; short-lived certs make this mandatory, not optional"
 
+# 14. ⚠️ A RELEASE MAY NOT SHIP UNSIGNED. Degrading to a warning is correct for
+#     a fork or a dry run — those are MEANT to produce non-distributable output
+#     — and wrong for a release, where it means a rotated-out client secret
+#     silently ships an installer Smart App Control refuses, discovered by a
+#     customer rather than by CI. Same hard gate macOS makes for notarization.
+sign_step="$(sed -n '/name: Enumerate Windows binaries/,/name: Sign the Windows payload/p' "$wf")"
+printf '%s\n' "$sign_step" | grep -q 'IS_RELEASE' || \
+  fail "the Windows signing gate does not consult IS_RELEASE - an unsigned RELEASE would build and upload"
+printf '%s\n' "$sign_step" | grep -qi 'throw .*UNSIGNED release' || \
+  fail "an unsigned release is not refused - macOS hard-gates notarization and Windows must match"
+
 echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, signs the payload before iscc and the installer after without trampling vendor signatures, and claims success from observed state"
