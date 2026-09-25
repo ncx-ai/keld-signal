@@ -142,8 +142,8 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 </dl>
 
 <section id="rev2" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
-<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-draft" style="vertical-align:middle;margin-left:8px">Draft — awaiting sign-off · 2026-09-25</span></h2>
-<p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7.</p>
+<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-signed" style="vertical-align:middle;margin-left:8px">Signed off · 2026-09-25 · in progress</span></h2>
+<p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7. Plan: <span class="mono">docs/superpowers/plans/2026-09-25-signal-labels-on-its-own.md</span>. Status shows DONE only once the named test passes on the merged branch.</p>
 
 <h3>What changes, what stays</h3>
 <div class="wrap">
@@ -165,15 +165,15 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <h3>Acceptance criteria</h3>
 <div class="wrap">
 <table class="ac">
-<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
 <tbody>
-  <tr id="r2-ac-1"><td class="mono">R2-AC-1</td><td>A block matching only an Atlas workstream's rule is unattributed; one matching a Signal workstream lands there as before.</td><td><span class="mono">workstreams.Attribute</span> via the daemon's recorded and live passes</td><td class="mono">go test ./internal/agent/daemon/ -run TestOnlySignalWorkstreamsAttribute</td></tr>
-  <tr id="r2-ac-2"><td class="mono">R2-AC-2</td><td><span class="mono">GET /v1/workstreams</span> returns only Signal workstreams and Signal groups — no Atlas workstream, no group derived from one — and totals and coverage are computed over them.</td><td><span class="mono">GET /v1/workstreams</span></td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHoldsOnlySignalWorkstreams</td></tr>
-  <tr id="r2-ac-3"><td class="mono">R2-AC-3</td><td>The page shows no "in Atlas" row, and "Same as" offers only Signal workstreams.</td><td>Workstreams pane</td><td class="mono">node --test + ui/e2e (fixture with Atlas and Signal workstreams)</td></tr>
-  <tr id="r2-ac-4"><td class="mono">R2-AC-4</td><td>The org's workstreams are still received on the settings poll and held; nothing on the attribution or display path reads them.</td><td>daemon remote state</td><td class="mono">go test ./internal/agent/daemon/ -run TestAtlasWorkstreamsAreHeldNotUsed</td></tr>
-  <tr id="r2-ac-5"><td class="mono">R2-AC-5</td><td>A Signal workstream whose repo an Atlas workstream also declares keeps that rule after a settings poll.</td><td>local <span class="mono">workstreams.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestAPollNoLongerTrimsSignalRules</td></tr>
-  <tr id="r2-ac-6"><td class="mono">R2-AC-6</td><td>An existing "Same as" overlay entry shows and attributes as a Signal workstream with its title and rules.</td><td><span class="mono">GET /v1/workstreams</span>, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestAnOverlayIsASignalWorkstream</td></tr>
-  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td></tr>
+  <tr id="r2-ac-1"><td class="mono">R2-AC-1</td><td>A block matching only an Atlas workstream's rule is unattributed; one matching a Signal workstream lands there as before.</td><td><span class="mono">workstreams.Attribute</span> via the daemon's recorded and live passes</td><td class="mono">go test ./internal/agent/daemon/ -run TestOnlySignalWorkstreamsAttribute</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-2"><td class="mono">R2-AC-2</td><td><span class="mono">GET /v1/workstreams</span> returns only Signal workstreams and Signal groups — no Atlas workstream, no group derived from one — and totals and coverage are computed over them.</td><td><span class="mono">GET /v1/workstreams</span></td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHoldsOnlySignalWorkstreams</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-3"><td class="mono">R2-AC-3</td><td>The page shows no "in Atlas" row, and "Same as" offers only Signal workstreams.</td><td>Workstreams pane</td><td class="mono">node --test + ui/e2e (fixture with Atlas and Signal workstreams)</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-4"><td class="mono">R2-AC-4</td><td>The org's workstreams are still received on the settings poll and held; nothing on the attribution or display path reads them.</td><td>daemon remote state</td><td class="mono">go test ./internal/agent/daemon/ -run TestAtlasWorkstreamsAreHeldNotUsed</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-5"><td class="mono">R2-AC-5</td><td>A Signal workstream whose repo an Atlas workstream also declares keeps that rule after a settings poll.</td><td>local <span class="mono">workstreams.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestAPollNoLongerTrimsSignalRules</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-6"><td class="mono">R2-AC-6</td><td>An existing "Same as" overlay entry shows and attributes as a Signal workstream with its title and rules.</td><td><span class="mono">GET /v1/workstreams</span>, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestAnOverlayIsASignalWorkstream</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td><td><span class="pill p-unver">OPEN</span></td></tr>
 </tbody>
 </table>
 </div>
