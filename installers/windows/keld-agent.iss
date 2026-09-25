@@ -72,6 +72,28 @@ OutputBaseFilename=keld-setup
 SignTool=keldsign
 SignedUninstaller=yes
 #endif
+; ⚠️ **BOTH OF THESE MUST STAY `no`, AND THE DEFAULTS ARE WRONG FOR US.**
+;
+; Inno defaults to CloseApplications=yes, which hands a locked file to the
+; Restart Manager and shows the person a modal listing the processes it wants to
+; close. On an upgrade that fires every time, and it reads as an ERROR rather
+; than a routine step — reported as "a warning message… but it looks too much
+; like an error". Nothing about replacing our own daemon needs a question asked.
+;
+; RestartApplications=yes is worse, and is where the terminal came from: after
+; installing, Inno RELAUNCHES whatever it closed. keld-agent.exe is a CONSOLE
+; binary and Inno is a GUI process with no console, so Windows gives the
+; relaunched daemon a brand-new console window and shows it — the same defect
+; fixed in three other places this release. It also relaunches the daemon
+; WITHOUT `--hide-console` and outside the scheduled task, so the process it
+; starts is not the one the task manages.
+;
+; PrepareToInstall (see [Code]) stops the task and the processes itself, quietly,
+; BEFORE any file is replaced — so nothing is locked, no modal is needed, and
+; nothing has to be restarted by Inno. The [Run] entry re-registers and starts
+; the agent afterwards, which is the path that passes --hide-console.
+CloseApplications=no
+RestartApplications=no
 ChangesEnvironment=yes
 LicenseFile=..\resources\EULA.txt
 InfoBeforeFile=..\resources\SECURITY-OVERVIEW.txt
@@ -1073,6 +1095,42 @@ end;
 function NeedsConsoleOnboarding: Boolean;
 begin
   Result := not Paired;
+end;
+
+// PrepareToInstall stops the running agent BEFORE any file is replaced.
+//
+// ⚠️ THIS IS WHAT REPLACES THE RESTART-MANAGER MODAL. With CloseApplications=no
+// nothing else will free the locked binaries, so an upgrade over a running
+// daemon would fail to replace keld-agent.exe and the sidecar. Doing it here is
+// also the only way it happens QUIETLY: Inno's dialog asks a question that has
+// exactly one sensible answer.
+//
+// ⚠️ SW_HIDE IS REQUIRED ON BOTH CALLS. schtasks and taskkill are console
+// programs and Setup is a GUI process with no console, so an unhidden call
+// gives each one a new console window — the defect this release fixes in the
+// service package, the daemon and the postinstall action. Same rule here.
+//
+// Failures are deliberately IGNORED. A first install has no task and no running
+// process, so both commands return non-zero for the ordinary case; a real
+// inability to stop the daemon surfaces immediately afterwards as a file-in-use
+// error from the copy step, which reports the actual blocked path rather than a
+// guess made here.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  RC: Integer;
+begin
+  Result := '';
+  NeedsRestart := False;
+  Trace('PrepareToInstall: stopping the agent');
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN KeldAgent',
+       '', SW_HIDE, ewWaitUntilTerminated, RC);
+  // /T so the sidecar's own children go with it; naming both images in one call
+  // matches the idiom already in [UninstallRun].
+  Exec(ExpandConstant('{sys}\taskkill.exe'),
+       '/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe',
+       '', SW_HIDE, ewWaitUntilTerminated, RC);
+  // A moment for the OS to release the file handles the copy is about to take.
+  Sleep(600);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

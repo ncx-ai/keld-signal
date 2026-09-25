@@ -216,6 +216,24 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 
+# 9a. ⚠️ THE RESTART MANAGER MUST STAY OFF, AND SOMETHING MUST STOP THE AGENT
+#     INSTEAD. Inno defaults to CloseApplications=yes (a modal listing processes
+#     to close, which reads as an error on every upgrade) and
+#     RestartApplications=yes — which RELAUNCHES the console-subsystem daemon
+#     from a GUI installer, giving it a fresh console window, outside the
+#     scheduled task and without --hide-console.
+grep -q '^CloseApplications=no'   "$iss" || \
+  fail "CloseApplications is not disabled - every upgrade shows a Restart Manager modal that reads as an error"
+grep -q '^RestartApplications=no' "$iss" || \
+  fail "RestartApplications is not disabled - Inno relaunches keld-agent.exe itself, with a console window and outside the task"
+grep -q 'function PrepareToInstall' "$iss" || \
+  fail "nothing stops the running agent before files are replaced; with CloseApplications=no the upgrade would fail on locked binaries"
+prep="$(sed -n '/function PrepareToInstall/,/^end;/p' "$iss")"
+printf '%s\n' "$prep" | grep -q 'taskkill' || fail "PrepareToInstall does not stop the agent processes"
+# Both helpers are console programs launched from a GUI installer.
+[ "$(printf '%s\n' "$prep" | grep -c 'SW_HIDE')" -ge 2 ] || \
+  fail "PrepareToInstall runs schtasks/taskkill without SW_HIDE - each pops a console window"
+
 # 9b. ⚠️ THE CONSOLE FALLBACK MUST NOT AUTO-RUN. `postinstall` entries are TICKED
 #     BY DEFAULT, so on any install that did not end paired, closing the
 #     installer launched onboard.cmd and left a blank console sitting on the
