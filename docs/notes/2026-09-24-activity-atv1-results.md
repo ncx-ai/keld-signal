@@ -413,3 +413,63 @@ second, differently-shaped corpus existed.
 would suppress it; and open-ended extraction mapped into the atv1 space by embedding, which
 would remove the label-wording dependency this section is entirely about (measured worth:
 0.378 on `code.*`, and the difference between 0/7 and 3/7 here).
+
+## 2026-09-25 — team on the VERB axis: a measured category error
+
+**Prediction recorded BEFORE the numbers were read:** team information will not help the verb
+axis, because a verb names WHAT WAS PRODUCED and team names WHAT ENDS IT SERVED. An image is
+`image.create` whoever made it. Expected: T1 (prior) ≈ baseline; T2 (hard branch) worse.
+
+| engineering 100 | primary |
+|---|---|
+| baseline (`docs`, no team info) | **0.700** |
+| T1 — team stated in the prompt | 0.710 (+0.010, noise) |
+| **T2 — label set BRANCHED by team** | **0.670 (-0.030)** |
+| T1 + T2 | 0.700 |
+
+**Confirmed.** Inert as a prior, harmful as a branch.
+
+⚠️ **T2 is unsound in principle as well as in measurement, and this corpus proves it.** The
+non-engineering branch drops `code.write`/`code.edit` — but John, who is not an engineer,
+wrote **23 `.js` files and a `.py`** to generate his deck. A hard exclusion keyed on team makes
+the correct label UNREACHABLE. Do not implement a team branch on the verb axis.
+
+### The principle this establishes
+
+**Evidence must inform the axis it is actually about.**
+
+| evidence | its axis | measured |
+|---|---|---|
+| file extensions | **modality** | 41/41 on code; recall 1.000 |
+| act counts | operation — too coarse to separate intent | refuted 5x |
+| team membership | **context / domain** | false domains 11 -> 4 (-64%) |
+| prose | the verb, and the 9 non-modality operations | 0.700 |
+
+Act counts and team both fail on the verb axis for the SAME reason: they are facts about a
+different question. Team already worked where it belongs — on context.
+
+## 2026-09-25 — the three-source design
+
+`scripts/activity_atv1_threesource.py` + `_run.py`. Modality from WRITE-side file evidence
+PROPOSES candidates at one sub-window's weight; prose votes the verb; team primes the context;
+everything snaps to a legal `atv1` id and ranks by share.
+
+**John's 7 (team=Product):** primary 3/7 = 0.429, in-set 0.429, **recall 0.476 -> 0.548**,
+with **11 candidates added by modality**.
+
+**Deterministic proposals raise RECALL without displacing the top-1** — which is what
+"propose, never gate" is supposed to do, and it is the first measured support for the
+decomposition. `SendUserFile.files` is included, which `paths.PATH_INPUTS` does not cover; on
+John's session that is the only way the delivered `.pptx` is visible at all.
+
+⚠️ **A LEADING-PROMPT DEFECT was found and fixed mid-run.** The first team prior read "they
+work in product and **marketing**" — `marketing` is a taxonomy value, so the context pass
+returned `marketing` almost everywhere. That is encoding the answer, not supplying a prior.
+Restated as "someone on the **Product** team", contexts snapped back to `general` and matched
+gold on J01/J03/J04/J05. **State the team's NAME, never a context value.**
+
+⚠️ **Context scoring on John's set is UNRESOLVABLE and no context number should be quoted from
+it.** Gold is `general` on the revision windows only because `text.transform` has no `sales`
+context. The work genuinely is customer-facing, so a `marketing` or `financial` prediction
+there is not cleanly wrong. The vocabulary gap, not the model, makes the comparison
+meaningless.
