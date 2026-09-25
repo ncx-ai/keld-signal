@@ -23,29 +23,64 @@ test -f "$cmd" || fail "missing onboard.cmd"
 # flags it had never looked at.
 run_block="$(sed -n '/^\[Run\]/,/^\[Code\]/p' "$iss" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}')"
 
-# 1. Registration must ALWAYS happen. Behind `postinstall` it is a tickbox the
-#    user can clear, and `skipifsilent` skips it outright — an MDM /SILENT push
-#    would install the files and register nothing, silently.
+# 1. ⚠️ REGISTRATION MUST ALWAYS HAPPEN, AND IT NO LONGER LIVES IN [Run].
+#    It moved into CurStepChanged/ssPostInstall because `Flags: runhidden` hides
+#    a window without stopping Windows allocating a console, and that console
+#    appeared on a real install ("it pops a terminal window open twice"). Only
+#    keld-wizard-host can pass CREATE_NO_WINDOW, so the call goes through it.
+#
+#    ⚠️ THE MOVE IMMEDIATELY BROKE THE INVARIANT THIS GUARD EXISTS FOR, which is
+#    why it is rewritten rather than deleted. ssPostInstall returns early when
+#    the wizard page did not pair, so registering there put the agent behind
+#    `Paired` — and on an MDM /SILENT push the page never runs, Paired is always
+#    false, and the machine would have installed the files and registered
+#    NOTHING, silently. Exactly the failure the original wording describes.
 # ⚠️ MATCH ENTRY LINES ONLY. The comments in [Run] name `keld-agent.exe` and
 # `runhidden` while explaining why they are the way they are, so an unscoped grep
 # matches the PROSE — and deleting the real entry still passed. Found by testing
-# this guard against a deliberately broken file rather than trusting it.
+# this guard against a deliberately broken file rather than trusting it. Still
+# needed below, for onboard.cmd.
 entries="$(printf '%s\n' "$run_block" | grep '^Filename:' || true)"
-reg_line="$(printf '%s\n' "$entries" | grep -F 'keld-agent.exe' || true)"
-[ -n "$reg_line" ] || fail "no [Run] entry registers the agent; a silent install would register nothing"
-printf '%s\n' "$reg_line" | grep -q 'postinstall' && \
-  fail "agent registration is behind 'postinstall' — a user can untick it and a /SILENT push skips it"
-printf '%s\n' "$reg_line" | grep -q 'skipifsilent' && \
-  fail "agent registration is 'skipifsilent' — MDM pushes would register nothing"
 
-# 1b. Registration must say --headless OUT LOUD. `runhidden` hides the window but
-#     leaves the child a real console, so stdout is a terminal and keld-agent's TTY
-#     probe answers TRUE here — it ran `keld login` invisibly and then blocked
-#     forever on `keld signal setup`'s [Y/n], wedging the installer until someone
-#     killed the process by hand. Inferring "no human" from the absence of a
-#     terminal does not work on Windows; the intent has to be stated.
-printf '%s\n' "$reg_line" | grep -q -- '--headless' || \
-  fail "agent registration omits --headless — install would prompt inside a hidden console and hang"
+# ⚠️ Match the CALL, not its arguments. Keying this on "install --headless"
+# made 1b unreachable: dropping the flag also emptied this variable, so the
+# missing-registration error fired instead and the flag guard could never
+# report. Found by checking that each guard fails for ITS OWN reason.
+reg_call="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss" \
+            | grep -F 'keld-agent.exe' | grep -F 'install' || true)"
+[ -n "$reg_call" ] || \
+  fail "nothing in ssPostInstall registers the agent; a silent install would register nothing"
+
+# 1a. It must NOT sit inside the `if Paired then` block. Checked structurally:
+#     the registration has to appear AFTER that block has closed.
+body="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss")"
+# ⚠️ `|| true` ON EVERY ONE. Under `set -euo pipefail` a command substitution
+# whose grep matches nothing kills this script SILENTLY — exit 1, no message, no
+# indication which check died. That is strictly worse than a failed assertion,
+# because it looks like a crash rather than a finding, and it is what happened
+# the first time these were tested against a file with the registration removed.
+paired_ln="$(printf '%s\n' "$body" | grep -n 'if Paired then' | head -1 | cut -d: -f1 || true)"
+reg_ln="$(printf '%s\n' "$body" | grep -n 'install --headless' | head -1 | cut -d: -f1 || true)"
+close_ln="$(printf '%s\n' "$body" | grep -n '^  end;$' | tail -1 | cut -d: -f1 || true)"
+if [ -n "$paired_ln" ] && [ -n "$reg_ln" ] && [ -n "$close_ln" ]; then
+  [ "$reg_ln" -gt "$close_ln" ] || \
+    fail "agent registration is inside the 'if Paired' block - a /SILENT push (page never runs, Paired false) would register nothing"
+fi
+
+# 1b. Registration must say --headless OUT LOUD. Hiding a window does not take
+#     the console away, so keld-agent's TTY probe answered TRUE and it took its
+#     INTERACTIVE branch: `keld login` invisibly, then `keld signal setup`
+#     blocking forever on a [Y/n] against a stdin no human could reach, wedging
+#     the installer until someone killed the child by hand. Running through
+#     keld-wizard-host removes the console entirely, which makes the flag's job
+#     easier rather than unnecessary - state the intent, do not infer it.
+printf '%s\n' "$reg_call" | grep -q -- '--headless' || \
+  fail "agent registration omits --headless - install would prompt where nobody can answer and hang"
+
+# 1c. And it must go through RunQuiet, not a bare Exec: that is the only path
+#     that passes CREATE_NO_WINDOW.
+printf '%s\n' "$reg_call" | grep -q 'RunQuiet' || \
+  fail "agent registration does not use RunQuiet - Inno's SW_HIDE leaves the console allocated and it shows"
 
 # 2. Onboarding must be VISIBLE. runhidden here is what made every Windows
 #    machine idle forever: an interactive login in a window nobody could see.
