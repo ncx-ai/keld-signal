@@ -39,7 +39,7 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // admin editor is a user-session-gated route this daemon cannot call. So none
 // of these handlers make an outbound call, and this file does not import
 // internal/atlas at all. Every response from bundle/rules/hide/place/
-// project-off carries `{"local_only": true, "atlas_editor_url": …}` so the
+// workstream-off carries `{"local_only": true, "atlas_editor_url": …}` so the
 // page can say plainly that the change has not reached the org.
 func ProjectsRoute(s *projects.Store) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
@@ -106,7 +106,7 @@ func localOnly(v map[string]any) map[string]any {
 }
 
 func atlasEditorURL() string {
-	return strings.TrimRight(paths.APIBase(), "/") + "/projects"
+	return strings.TrimRight(paths.APIBase(), "/") + "/workstreams"
 }
 
 // startOfWeek is Monday 00:00 UTC of t's week — the "current week" coverage
@@ -124,14 +124,14 @@ func startOfWeek(t time.Time) time.Time {
 // groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
 // agent-config.json fresh per request, since a request may arrive right
 // after a PUT /v1/groups/{key}/off changed it. "call it, don't
-// reimplement" — internal/agent/settings/v3.go's ProjectOff.
+// reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
 func groupOffFunc() func(string) bool {
 	return settings.Load().GroupOff
 }
 
 // candidatesFor is every project Attribute/Suggest may consider: this
 // machine's own declared Document.Projects plus, when the daemon wiring has
-// supplied one, the org's pooled project values converted via
+// supplied one, the org's pooled workstream values converted via
 // projects.FromRemoteProjects. A nil RemoteProjects getter contributes
 // nothing — an honest "not known yet", never an error.
 func candidatesFor(s *projects.Store, d projects.Document) []projects.Project {
@@ -149,7 +149,7 @@ func remoteCandidates(s *projects.Store) []projects.Project {
 
 // Attribution is ONE live recomputation of the deterministic attribution
 // pass, held open across as many blocks as a caller has: the projects
-// document, the org's pooled values, and the project-off predicate, each
+// document, the org's pooled values, and the workstream-off predicate, each
 // read exactly once and then applied.
 //
 // ⚠️ **IT EXISTS SO THE TWO SURFACES CANNOT ANSWER DIFFERENTLY.** Attribution
@@ -173,7 +173,7 @@ type Attribution struct {
 	// Candidates is what Attribute may consider: the local document's
 	// projects merged with the org's pooled values.
 	Candidates []projects.Project
-	// Off is the authoritative project-exclusion predicate, read from
+	// Off is the authoritative workstream-exclusion predicate, read from
 	// agent-config.json at the same instant.
 	Off func(string) bool
 }
@@ -191,7 +191,7 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 	}, nil
 }
 
-// Of is one block's decision, from that block's already-published project
+// Of is one block's decision, from that block's already-published workstream
 // dims. The Vector pass is nil: this is the deterministic lane, and a nil
 // Vector is what makes "unattributed" mean "no rule matched" rather than
 // "the encoder was not asked".
@@ -271,14 +271,14 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 
 	// ⚠️ **THE ORG'S VALUES ARE PROJECTS ON THIS PAGE, NOT ONLY CANDIDATES.**
 	// This used to return d.Projects — the LOCAL document — while attributing
-	// against candidatesFor(), which merges the org's pooled project values
+	// against candidatesFor(), which merges the org's pooled workstream values
 	// from the settings poll. So a machine paired with an org that had declared
 	// eight projects showed "Your projects: none" while silently attributing
 	// blocks to them. Found by the D8 end-to-end against the real dev Atlas:
 	// projects=0 with eight values on the wire. The page's "Your projects · from
 	// Atlas" section exists to show exactly these, so they are returned, and the
-	// buckets they belong to (their `team`, which carries the project's name
-	// on the wire) are added to `projects` when the local document does not
+	// buckets they belong to (their `team`, which carries the workstream's name
+	// on the wire) are added to `workstreams` when the local document does not
 	// already name them.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"groups":      withRemoteBuckets(groups, candidates, off),
@@ -539,11 +539,11 @@ func handleGroupOff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, localOnly(nil))
 }
 
-// withRemoteBuckets appends a project entry for every bucket the org's
+// withRemoteBuckets appends a workstream entry for every bucket the org's
 // values belong to that the local document does not already declare, so the
 // page can group "Your projects · from Atlas" under the org's own names. A
-// remote project's bucket is its Team when its Project is empty — that is
-// where wire_projects puts the project's name (docs/v3/contracts.md).
+// remote project's bucket is its Team when its Workstream is empty — that is
+// where wire_projects puts the workstream's name (docs/v3/contracts.md).
 func withRemoteBuckets(local []projects.Group, candidates []projects.Project, off func(string) bool) []projects.Group {
 	// Seeded with KEYS only. It used to hold lower-cased keys AND names, so a
 	// bucket could be skipped because some other bucket's NAME collided with
@@ -560,7 +560,7 @@ func withRemoteBuckets(local []projects.Group, candidates []projects.Project, of
 		}
 		// The NAME is the human label Atlas serves (its `team`); the KEY is
 		// that name normalised. They are two different things and were being
-		// conflated: `p.Project` now HOLDS the key (see
+		// conflated: `p.Workstream` now HOLDS the key (see
 		// projects.FromRemoteProjects), so using it as the name would print
 		// "keld-projects" as a heading, and using the name as the key would
 		// group nothing.

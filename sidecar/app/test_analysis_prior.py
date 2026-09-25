@@ -65,7 +65,7 @@ def test_the_prior_never_supplies_a_value_the_window_lacks():
     assert got["departure"] is None, got
     assert got["novel"] is None, got
     # The prior's own value is still REPORTED -- that is the contrast -- but the window keeps its
-    # own (absent) answer, which lives in `projects` and is not touched here.
+    # own (absent) answer, which lives in `workstreams` and is not touched here.
     assert got["value"] == "TypeScript", got
     # The window's OWN answer stays sub-floor. It publishes (labelled `thin`, with its count of
     # 3) but it is still the window's own top value, never the session's -- inheriting is what
@@ -236,7 +236,7 @@ def test_output_type_is_carried_by_the_prior_where_the_window_cannot_attribute_i
     assert got["value"] == "presentation" and got["status"] == "attributed", got
     assert got["evidence"] == 192, got
     assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
-    # THE RULE: the window keeps its own blank. Nothing here fills `projects`.
+    # THE RULE: the window keeps its own blank. Nothing here fills `workstreams`.
     win = dimensions.payload(window)["workstreams"]["output_type"]
     assert win["status"] != "attributed", win
     assert win["value"] != got["value"], (win, got)

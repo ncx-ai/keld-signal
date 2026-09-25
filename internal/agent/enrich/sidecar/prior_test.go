@@ -104,12 +104,12 @@ func TestAnalyzeDecodesThePriorBlock(t *testing.T) {
 // dynamics subtree — which may carry no level value at all — the prior's `value`
 // IS a reference level, and that is deliberate: `prior.PRIOR_DIMENSIONS` is
 // derived from the sidecar's ALLOCATION list, so a prior can only ever name a
-// value that already publishes in `projects` beside it (a branch, a language,
+// value that already publishes in `workstreams` beside it (a branch, a language,
 // a skill), never `named_terms`, which is the one level read from message TEXT
 // and has held real person names.
 //
 // So the assertion is not "no strings" but "exactly two, and they are the ones
-// argued for": `value` (an allocation level, same class as Project.Value) and
+// argued for": `value` (an allocation level, same class as Workstream.Value) and
 // `status` (a closed vocabulary). A third string field — a `top` list, an
 // example, a reason — fails here rather than in a review.
 func TestThePriorSubtreeCarriesOnlyAnAllocationValueAndAClosedStatus(t *testing.T) {
@@ -156,7 +156,7 @@ func TestThePriorSubtreeCarriesOnlyAnAllocationValueAndAClosedStatus(t *testing.
 
 // THE RULE, at the conversion chokepoint: CONTRAST, NEVER FALLBACK. A prior for
 // a dimension the window could not attribute must reach `Prior` and must not
-// reach `Projects`. Inheriting it would launder "we do not know" into
+// reach `Workstreams`. Inheriting it would launder "we do not know" into
 // something confident — the defect MIN_EVIDENCE exists to prevent, and one this
 // project has paid for twice (activity_type's `transform`: predicted 36 times,
 // right zero).

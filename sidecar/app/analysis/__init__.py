@@ -86,7 +86,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #   8 -> 9: the allocation dimension `workflow` is RENAMED to `skill`. The level behind it is
 #           unchanged (`skill`, written from a `Skill` tool_use's `inp["skill"]` and a turn's
 #           `attributionSkill`) and so is every number -- but the published KEY moves in
-#           `projects`, in `dynamics` and in `prior`, so the same window answers with a key
+#           `workstreams`, in `dynamics` and in `prior`, so the same window answers with a key
 #           it did not answer with before, which is exactly this number's trigger. `workflow`
 #           INFLATED what the level holds: skills exist for everything, not only for processes,
 #           and only 38.4% of 198 corpus transcripts carry any skill evidence at all -- a name
@@ -138,7 +138,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           with before is a window answered differently, which is exactly this number's
 #           trigger. Go's `enrich.SchemaVersion` moves 15 -> 16 for the same addition.
 #   11 -> 12: `repo` is added as a FIRST-CLASS SERIES LEVEL and, through it, an eighth ALLOCATION
-#           project. Its rows are written during INGEST (`levels.events_for_turns`' new
+#           workstream. Its rows are written during INGEST (`levels.events_for_turns`' new
 #           `resolved` argument), one per turn on the same condition `workspace`/`vcs` are, so it
 #           rolls up, bins, and carries a real share and evidence count computed by the same
 #           `dominant` call as every sibling. It is deliberately NOT overlaid onto the payload at
@@ -245,7 +245,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           in the study and nowhere on the live path; this key is it becoming visible.
 #
 #           STRICTLY ADDITIVE. `window_start`, `window_end`, the 60-minute look-back and every
-#           projects / inventory / dynamics / prior / effort value are byte-identical to what
+#           workstreams / inventory / dynamics / prior / effort value are byte-identical to what
 #           schema 14 answered -- pinned by
 #           `test_adding_the_block_changed_no_existing_analyze_field`. Narrowing what the window
 #           characterises to the block is a later phase with its own eval re-run.

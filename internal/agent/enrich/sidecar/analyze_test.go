@@ -74,7 +74,7 @@ func TestAnalyzeReportsFailureOn404(t *testing.T) {
 //
 // TOLERANCE is not assumed from "encoding/json ignores unknown fields" — a
 // DisallowUnknownFields anywhere in post() would turn every /analyze call into
-// ok=false, i.e. a silently failed projects facet on every prompt, so it is
+// ok=false, i.e. a silently failed workstreams facet on every prompt, so it is
 // asserted against a real payload. The block served here carries fields this
 // client models NOWHERE: the per-side slice/baseline objects, the three
 // timestamps, the sizer detail, and `emerged`/`decayed` — dropped by the

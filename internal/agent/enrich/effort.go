@@ -6,7 +6,7 @@ package enrich
 // It is a COUNT, not a share, and that follows from being an inventory rather
 // than an allocation: there is no denominator to divide by, because the acts do
 // not partition the hour — an hour that reads and edits and tests is all three at
-// once, which is precisely why this is not an eighth project (see Acts).
+// once, which is precisely why this is not an eighth workstream (see Acts).
 //
 // PRIVACY, structurally, and the reason this ships while `named_terms` does not.
 // Value is gated against Acts at the decode boundary (sidecar.convertActs), and
@@ -27,7 +27,7 @@ type Act struct {
 }
 
 // Effort is a window's EFFORT signals: how much was authored in it, and how fast
-// its turns came. The digest beside it (Profile.Projects) says what the window
+// its turns came. The digest beside it (Profile.Workstreams) says what the window
 // was about and Profile.Dynamics says how that is changing; this says what the
 // hour COST in work, in the two units that turned out to measure it.
 //

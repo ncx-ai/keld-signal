@@ -44,7 +44,7 @@ var dimensionAnalyzableSources = map[string]bool{
 func DimensionsEligible(source string) bool { return dimensionAnalyzableSources[source] }
 
 // DimensionStatuses is the closed published vocabulary of Labeled.Status on a
-// project dimension: the ATTRIBUTION OUTCOME, mirroring the sidecar's
+// workstream dimension: the ATTRIBUTION OUTCOME, mirroring the sidecar's
 // window.REASONS.
 //
 // It is the SAME LIST as PriorStatuses and is defined as that list rather than
@@ -81,7 +81,7 @@ func KnownDimensionStatus(s string) bool { return KnownPriorStatus(s) }
 // dimensions. Only the former downgrades the profile to "partial".
 var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailable")
 
-// DimensionAnalyzer resolves the deterministic project dimensions for the
+// DimensionAnalyzer resolves the deterministic workstream dimensions for the
 // window of spanMinutes ending at promptID in the transcript at path.
 //
 // It takes COORDINATES, never text — the same rule the enrichment hook and
@@ -176,7 +176,7 @@ func (e DimensionsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// The derivative half of the same call. No Producer stamp: a Dynamic is not a
 	// Labeled and has no field for one, and the pass is already attributed for
 	// this job through extractor_versions — a second, unparsed attribution
-	// channel is what projects' dropped `provenance` was.
+	// channel is what workstreams' dropped `provenance` was.
 	if len(an.Dynamics) > 0 {
 		res["dynamics"] = an.Dynamics
 	}
@@ -239,7 +239,7 @@ func (e DimensionsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		res["inventory_omitted"] = an.InventoryOmitted
 	}
 	// The SESSION PRIOR, same call, same no-Producer reasoning — and published
-	// as its OWN key rather than merged into `projects` above. That is the
+	// as its OWN key rather than merged into `workstreams` above. That is the
 	// design in one line: the prior is a contrast, never a fallback, so a
 	// dimension the loop above skipped for having no value stays skipped no
 	// matter what the session says about it.

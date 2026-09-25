@@ -98,7 +98,7 @@ type transcriptIngester interface {
 //
 // They travel as one value so the next non-model route does not add another
 // parameter to Worker, process and wireEnrichment. A zero value is the honest
-// "this run has no analysis service": the projects pass then never
+// "this run has no analysis service": the workstreams pass then never
 // registers, and sensitivity reports itself degraded (see
 // enrich.WithPIIScanner).
 type serviceFacets struct {
@@ -171,7 +171,7 @@ type serviceFacets struct {
 // client here just as "auto" derives them from the sidecar Model. That is why
 // wireEnrichment returns them as their own value and threads them to process,
 // rather than letting process rederive them from the Model (which would be nil,
-// and would silently drop every project and every PII finding).
+// and would silently drop every workstream and every PII finding).
 //
 // The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
 // *sidecar.Client copies, so the capabilities survive them and the requests are

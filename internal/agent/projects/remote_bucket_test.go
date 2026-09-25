@@ -7,13 +7,13 @@ import (
 )
 
 // ⚠️ **THE SHAPE HERE IS THE ONE LOCAL ATLAS ACTUALLY SERVES, COPIED FROM THE
-// WIRE.** Every earlier test in this area used a fixture with `Project`
+// WIRE.** Every earlier test in this area used a fixture with `Workstream`
 // already set, which is a shape Atlas never sends — `settings.RemoteProject`
-// has no project field at all. That is why twenty real org projects could
-// arrive, be used for matching, and be listed under no project card while
+// has no workstream field at all. That is why twenty real org projects could
+// arrive, be used for matching, and be listed under no workstream card while
 // every test passed.
 //
-// Measured against localhost:8000 before the fix: 20 projects and 4 projects
+// Measured against localhost:8000 before the fix: 20 projects and 4 workstreams
 // fetched, attribution at 91% of 45 blocks, and all four cards reading "No
 // projects yet."
 
@@ -22,7 +22,7 @@ func atlasValue(id, title, team string) settings.RemoteProject {
 }
 
 func TestARemoteProjectCarriesItsBucketKey(t *testing.T) {
-	// The wire shape: a team, and no project field to read.
+	// The wire shape: a team, and no workstream field to read.
 	ps := FromRemoteProjects([]settings.RemoteProject{
 		atlasValue("keld_projects:signal", "Signal On-Device Client", "Keld Projects"),
 		atlasValue("keld_campaigns:launch", "Launch Week", "Keld Campaigns"),
@@ -31,7 +31,7 @@ func TestARemoteProjectCarriesItsBucketKey(t *testing.T) {
 		t.Fatalf("got %d projects", len(ps))
 	}
 	if ps[0].Group != "keld-projects" {
-		t.Fatalf("project = %q, want the normalised team key — an empty one "+
+		t.Fatalf("group = %q, want the normalised team key — an empty one "+
 			"puts the project under no card at all", ps[0].Group)
 	}
 	if ps[1].Group != "keld-campaigns" {
@@ -55,7 +55,7 @@ func TestAProjectAndItsBucketDeriveTheSameKey(t *testing.T) {
 	} {
 		p := FromRemoteProjects([]settings.RemoteProject{atlasValue("x", "X", team)})[0]
 		if got := GroupKey(team); got != p.Group {
-			t.Fatalf("bucket key %q != project project %q for team %q",
+			t.Fatalf("bucket key %q != project group %q for team %q",
 				got, p.Group, team)
 		}
 	}

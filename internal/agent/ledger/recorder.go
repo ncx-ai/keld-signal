@@ -89,7 +89,7 @@ type Measured struct {
 	EstimateUSD         float64 // 0 when no price table applies; the page shows "est." regardless
 }
 
-// Dims are the few project dimensions the PROJECTS pane needs to group
+// Dims are the few workstream dimensions the PROJECTS pane needs to group
 // unattributed blocks into suggestions: which repository, branch and workspace
 // a block belonged to.
 //
@@ -99,7 +99,7 @@ type Measured struct {
 // them, every restart would empty the Projects pane until new work arrived —
 // which is exactly the "the app is broken" reading the ledger exists to
 // prevent. They are identifiers of the class already published to Atlas as
-// project values (`repo`, `branch`), never text, a span or an offset, and
+// workstream values (`repo`, `branch`), never text, a span or an offset, and
 // they pass the same shape validation every other identifier here does.
 //
 // Only these three. The block payload carries eight allocation dimensions and
@@ -113,7 +113,7 @@ type Dims struct {
 
 // Attributed is the outcome of the DETERMINISTIC attribution pass for one
 // block — the rules a person declared, matched against the block's own
-// project dimensions. It is written by exactly one caller
+// workstream dimensions. It is written by exactly one caller
 // (daemon.attributeAndRecord) and read as the machine's answer.
 type Attributed struct {
 	ProjectID string

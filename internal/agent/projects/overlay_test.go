@@ -54,7 +54,7 @@ func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	}
 
 	// After: the merged candidate carries the rule, the block attributes to the
-	// ATLAS ID (what Atlas matches projects against), by repo.
+	// ATLAS ID (what Atlas matches workstreams against), by repo.
 	merged := MergeCandidates(next.Projects, remote)
 	after := Attribute(blockOn("github.com/ncx-ai/keld-cli"), merged, off, nil)
 	if after.ProjectID != "keld_projects:signal" || after.Method != MethodRepo {
@@ -112,7 +112,7 @@ func TestMergeCandidatesIsAUnionByID(t *testing.T) {
 }
 
 // A target that is neither local nor one of the org's values does not exist,
-// and a value in a switched-off project is refused — same rules as before.
+// and a value in a switched-off workstream is refused — same rules as before.
 func TestSameAsRefusalsStillHold(t *testing.T) {
 	remote := atlasValues()
 	sugs := Suggest([]UnattributedBlock{{Dims: blockOn("github.com/ncx-ai/keld-cli"), Minutes: 1, Tokens: 1}})
@@ -121,6 +121,6 @@ func TestSameAsRefusalsStillHold(t *testing.T) {
 	}
 	off := func(k string) bool { return k == "Keld Projects" }
 	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "keld_projects:signal", sugs, off); err != ErrGroupOff {
-		t.Fatalf("a value in a switched-off project must be refused, got %v", err)
+		t.Fatalf("a value in a switched-off group must be refused, got %v", err)
 	}
 }

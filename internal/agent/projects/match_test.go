@@ -100,7 +100,7 @@ func TestT16AGroupThatIsOffIsNeverMatched(t *testing.T) {
 	})
 	off := func(key string) bool { return key == "marketing" || key == "Marketing" }
 	if got := MatchesFor(repoDims("github.com/acme/a"), remote, off); len(got) != 0 {
-		t.Fatalf("matched a switched-off project: %+v", got)
+		t.Fatalf("matched a switched-off group: %+v", got)
 	}
 }
 

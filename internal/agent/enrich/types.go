@@ -9,14 +9,14 @@ import (
 // Labeled is a single classification result with provenance.
 //
 // Evidence and Status are the DETERMINISTIC half's two extra fields and are set
-// only by the projects pass; every ML facet (task_type, domain,
+// only by the workstreams pass; every ML facet (task_type, domain,
 // activity_type, personal, function_guess, subcategory, sensitivity) leaves both
 // zero and marshals byte-identically to before they existed. That is what
 // `omitempty` is for here and it is load-bearing, not tidiness: an ML facet has
 // no observation count and no attribution outcome, so publishing `"evidence":0`
 // beside one would state a measurement nobody took.
 //
-// Status is why this is safe to widen at all. A project dimension below
+// Status is why this is safe to widen at all. A workstream dimension below
 // window.MIN_EVIDENCE used to be DELETED before publish, which discarded the
 // count with the value — measured at 924 of 12,016 dimension-slots (7.7%)
 // holding real evidence and publishing nothing, 198 of them one observation
@@ -26,7 +26,7 @@ import (
 type Labeled struct {
 	Value      string  `json:"value"`
 	Confidence float64 `json:"confidence"`
-	// Evidence is how many observations the value was drawn from. Projects
+	// Evidence is how many observations the value was drawn from. Workstreams
 	// only; 0 (omitted) means "not a counted facet", never "counted zero" — an
 	// absent dimension says so in Status.
 	Evidence int `json:"evidence,omitempty"`
@@ -151,13 +151,13 @@ type Profile struct {
 	Dimensions map[string]Labeled `json:"workstreams,omitempty"`
 	// Dynamics is the same window's DERIVATIVE, keyed by dimension: how the
 	// recent slice differs from the baseline before it (see Dynamic). It comes
-	// from the same /analyze call Projects does and is likewise model-free, so
+	// from the same /analyze call Workstreams does and is likewise model-free, so
 	// it is published in ml_backend "deterministic" too. Absent when the analysis
 	// computed no comparison.
 	Dynamics map[string]Dynamic `json:"dynamics,omitempty"`
 	// Effort is what the same window COST in work: the bytes its edits authored
 	// and how fast its turns came (see Effort). Third half of the same /analyze
-	// call Projects and Dynamics come from, model-free like both, so it is
+	// call Workstreams and Dynamics come from, model-free like both, so it is
 	// published in ml_backend "deterministic" too. Absent when the analysis
 	// produced no block.
 	Effort *Effort `json:"effort,omitempty"`
@@ -167,7 +167,7 @@ type Profile struct {
 	// in ml_backend "deterministic" too.
 	//
 	// A LIST, not a single value, and that is the measured finding rather than a
-	// convenience: assessed as an eighth entry in Projects the level reaches
+	// convenience: assessed as an eighth entry in Workstreams the level reaches
 	// coverage 0.185 against a 0.70 bar, not for lack of evidence (97.8% of
 	// windows, median 34 observations) but because an hour reads AND edits AND
 	// tests — top-act share p50 0.403 over p50 7 distinct acts. See Acts.
@@ -255,9 +255,9 @@ type Profile struct {
 	// one of the five that is about something OUTSIDE the window, which is why a
 	// per-window view structurally cannot produce it.
 	//
-	// A CONTRAST, NEVER A FALLBACK. It is reported ALONGSIDE Projects and
-	// never supplies an answer Projects lacked: a dimension absent from
-	// Projects stays absent no matter what this map says about the session.
+	// A CONTRAST, NEVER A FALLBACK. It is reported ALONGSIDE Workstreams and
+	// never supplies an answer Workstreams lacked: a dimension absent from
+	// Workstreams stays absent no matter what this map says about the session.
 	// Four dimensions carry it (skill, language, branch, output_type), decided
 	// by measurement over 1,022 windows; `project` and `model` agree with their
 	// session 100.0% of the time and would publish a constant, and `tooling`

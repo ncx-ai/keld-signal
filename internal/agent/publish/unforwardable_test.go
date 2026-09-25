@@ -72,7 +72,7 @@ import (
 // permission to forward the block: a field named `inventory`, or one named
 // `named_terms`, still fails here. What makes that a real guard rather than a
 // coincidence of naming is that `physical_acts` is a TOP-LEVEL key on Enrichment
-// (a sibling of `projects`/`dynamics`/`effort`), never nested under an
+// (a sibling of `workstreams`/`dynamics`/`effort`), never nested under an
 // `inventory` object — so nothing had to be removed from this list to let it
 // through, and the presence check below proves the filler reaches it.
 //
@@ -120,7 +120,7 @@ import (
 // picking up whatever fourteenth key the sidecar adds next — still fails here.
 //
 // ⚠️ `evidence` and `status` are INTENDED on the wire and were never on this
-// list; nothing came off it for them. They are the project dimensions'
+// list; nothing came off it for them. They are the workstream dimensions'
 // observation count and attribution outcome, added at enrich.SchemaVersion 21
 // so a sub-floor dimension can publish LABELLED instead of being deleted (924
 // of 12,016 measured dimension-slots held real evidence and published nothing).
@@ -130,7 +130,7 @@ import (
 // deliberately drops — the pass is attributed through `extractor_versions`, and
 // a second unparsed attribution channel is what the field was) and `reason`
 // (the dynamics per-side key, which sits beside a per-side `value` naming a
-// reference level; the project outcome is `status` precisely so the two
+// reference level; the workstream outcome is `status` precisely so the two
 // spellings cannot be confused, the same rule the session prior already
 // follows).
 //
@@ -189,9 +189,9 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// the dynamics per-side objects (which do not publish at all) is a
 		// reader's error waiting to happen, and this list is what enforces it.
 		`"prior"`, `"agrees"`, `"departure"`, `"novel"`, `"status"`,
-		// The project dimensions' own two published fields, so `"provenance"`
+		// The workstream dimensions' own two published fields, so `"provenance"`
 		// and `"reason"` staying forbidden below is a real result about a payload
-		// whose projects DO carry an evidence count and an attribution
+		// whose workstreams DO carry an evidence count and an attribution
 		// outcome, not a vacuous pass over one that carries neither.
 		`"evidence"`} {
 		if !strings.Contains(got, present) {

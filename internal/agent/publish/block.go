@@ -48,7 +48,7 @@ import (
 //
 //	source, correlation{session_id} | session_id, actor,
 //	window{start,end} | start/end, start_reason, end_reason,
-//	projects{}, dynamics{}, prior{}, effort{},
+//	workstreams{}, dynamics{}, prior{}, effort{},
 //	pipeline_status, extractor_versions, schema_version, ts
 //
 // ⚠️ NO `covers`. A block row used to carry the prompt episodes overlapping it;
@@ -136,7 +136,7 @@ type BlockEnrichment struct {
 	// attribution runs carries no concepts and is byte-identical to the payload
 	// before this field existed, exactly as Projects is.
 	Concepts []enrich.Concept `json:"concepts,omitempty"`
-	// AnalysisFacets is the deterministic analysis of this block: projects,
+	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
 	// AnalysisFacets.
@@ -244,7 +244,7 @@ func BlockCorrID(sessionID, start string) string {
 
 // blockExtractorVersions attributes a block row to the pass that produced it.
 // A block runs exactly one thing — the deterministic analysis — so the map has
-// one entry, and it is the SAME key and version a prompt row's projects
+// one entry, and it is the SAME key and version a prompt row's workstreams
 // carry, because it IS the same analysis over different bounds. A reader
 // comparing a block row against a prompt row must not have to learn a second
 // name for one producer; the row's KIND is already stated, once, in

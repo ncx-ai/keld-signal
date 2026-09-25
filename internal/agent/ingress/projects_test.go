@@ -209,7 +209,7 @@ func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 		t.Fatalf("response missing local_only: %+v", body)
 	}
 
-	// Seed a document with a matching project and a project in it, then
+	// Seed a document with a matching workstream and a project in it, then
 	// confirm GET reflects the off flag AND excludes the project's repo from
 	// attribution.
 	doc := projects.Document{
@@ -233,7 +233,7 @@ func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	}
 	cov := got["coverage"].(map[string]any)
 	if cov["attributed"].(float64) != 0 {
-		t.Fatalf("a project in an off project still attributed: %+v", cov)
+		t.Fatalf("a project in an off group still attributed: %+v", cov)
 	}
 }
 

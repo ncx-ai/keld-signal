@@ -37,7 +37,7 @@ test("a hidden project never conflicts with anything", () => {
   assert.equal(c.p2, undefined);
 });
 
-test("a project in a switched-off project never conflicts with anything", () => {
+test("a project in a switched-off group never conflicts with anything", () => {
   const a = project("p1", ["github.com/org/repo"], { group: "marketing" });
   const b = project("p2", ["github.com/org/repo"], { group: "development" });
   const c = findConflicts([a, b], ["marketing"]);

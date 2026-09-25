@@ -46,7 +46,7 @@ func TestNewAttributionOnAMissingDocumentIsAnHonestEmptyOne(t *testing.T) {
 // TestTheSameAttributionValueAnswersForEveryBlock pins the property the two
 // surfaces' agreement rests on: one Attribution, read once, gives one answer
 // per dims — so the pane and the Today rows cannot pick up different documents
-// or a different project-off list halfway through a page load.
+// or a different workstream-off list halfway through a page load.
 func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Save(projects.Document{

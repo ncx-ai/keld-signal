@@ -216,9 +216,9 @@ func epochOf(s string) (int64, bool) {
 }
 
 // dimsOf lifts the three dimensions the Projects pane groups on out of a
-// block's published projects. A dimension that did not reach `attributed` is
+// block's published workstreams. A dimension that did not reach `attributed` is
 // left empty: "only 'attributed' may be read as the window's answer" is the
-// projects contract's own rule, and a thin repo is not evidence to group a
+// workstreams contract's own rule, and a thin repo is not evidence to group a
 // person's work by.
 func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 	get := func(key string) string {
@@ -303,7 +303,7 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 		return
 	}
 	// The candidate set is the local document's projects OVERLAID on the org's
-	// pooled project values, which are the vocabulary and arrive on the
+	// pooled workstream values, which are the vocabulary and arrive on the
 	// settings poll. The vector pass is nil here: this is the deterministic
 	// path, and a nil Vector is what makes "unattributed" mean "no rule
 	// matched" rather than "the encoder was not asked".

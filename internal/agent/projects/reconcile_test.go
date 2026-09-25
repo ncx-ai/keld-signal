@@ -190,7 +190,7 @@ func TestT9AGroupThatIsOffCoversNothing(t *testing.T) {
 	off := func(key string) bool { return key == "marketing" || key == "Marketing" }
 	next, removed, trimmed := Reconcile(d, remote, off)
 	if len(removed) != 0 || len(trimmed) != 0 {
-		t.Fatalf("a switched-off project was treated as coverage: removed=%+v trimmed=%+v",
+		t.Fatalf("a switched-off group was treated as coverage: removed=%+v trimmed=%+v",
 			removed, trimmed)
 	}
 	if len(next.Projects) != 1 {

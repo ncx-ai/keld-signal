@@ -506,7 +506,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 		// See enrich.ResolvedFacts.
 		enrich.WithResolvedFacts(resolvedFacts(j.Cwd)),
 	}, customOpts...)
-	// Wire the deterministic project pass only when this run actually has a
+	// Wire the deterministic workstream pass only when this run actually has a
 	// window-analysis backend; without one the pass stays unregistered rather
 	// than running and failing every job (see facetsFor). The service facets are
 	// threaded in rather than derived from m, because ml_backend
@@ -1058,7 +1058,7 @@ func Run(ctx context.Context) error {
 		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
 	}
 	onRemote := func(r *settings.Remote) {
-		// The Projects pane's vocabulary is the org's pooled project values,
+		// The Projects pane's vocabulary is the org's pooled workstream values,
 		// which arrive here; observing them on every poll is what lets a value
 		// added in Atlas show up without a daemon restart.
 		sig.observeRemote(r)
@@ -1504,7 +1504,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     mode asks the service for no inference) or when enrichment is disabled
 //     entirely.
 //   - svc: the service facets (the non-inference sidecar routes — /analyze
-//     for projects, /pii for sensitivity). Wired in BOTH "auto" and
+//     for workstreams, /pii for sensitivity). Wired in BOTH "auto" and
 //     "deterministic", because neither needs a model — they are derived from
 //     the service client, not from the Model, which is why they are returned
 //     separately rather than left to facetsFor(model).
@@ -1757,13 +1757,13 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 // capability it loads lazily on its first inference. Deterministic mode issues
 // no inference, so nothing ever triggers that load — but /analyze still needs
 // a process to answer it. Not starting the service is what made this mode a
-// trap: it produced no projects at all and published a single
+// trap: it produced no workstreams at all and published a single
 // credential-derived facet.
 //
 // When a service EXISTS, the gate is SERVICE HEALTH, deliberately, and
 // neither alternative is acceptable: model warmth never arrives here (the
 // model never loads), so it would hold every job forever; and a trivially-true
-// gate would publish project-less profiles for every job that landed before
+// gate would publish workstream-less profiles for every job that landed before
 // the service finished starting, silently dropping their dimensions. Waiting
 // is right there because the work becomes doable shortly — the supervisor is
 // bringing the service up.
@@ -1776,7 +1776,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 // ever published — on what is the state of every machine before the sidecar
 // tarball is fetched. So that case takes noAnalysisService: a trivially-true
 // gate and zero service facets, leaving enrichment to run its other model-free
-// facets (credential detection) with the projects pass unregistered.
+// facets (credential detection) with the workstreams pass unregistered.
 //
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
@@ -1825,7 +1825,7 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, re
 // service that is present but not yet ready, and for "auto", where every facet
 // the mode produces needs the model. Here it buys nothing: no service will
 // appear this daemon lifetime, so jobs would queue and spool forever. The
-// caller pairs this gate with zero service facets, so the projects pass
+// caller pairs this gate with zero service facets, so the workstreams pass
 // never registers, sensitivity names itself in facets_degraded, and enrichment
 // runs its remaining model-free work, publishing pipeline_status "partial".
 // Those are dropped facets, reported dropped — not lower-fidelity substitutes

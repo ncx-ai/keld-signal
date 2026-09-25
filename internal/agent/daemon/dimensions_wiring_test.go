@@ -67,7 +67,7 @@ func TestProcessPublishesDimensionsFromTheAnalyzer(t *testing.T) {
 }
 
 // ml_backend "deterministic": NO Model at all, the analysis service wired on its
-// own. Dynamics ride the same model-free /analyze call the projects facet
+// own. Dynamics ride the same model-free /analyze call the workstreams facet
 // does, so the mode that has no GLiNER2 must still publish them — asserted
 // through `process`, not inferred from the wiring.
 func TestProcessPublishesDynamicsWithNoModel(t *testing.T) {
@@ -115,7 +115,7 @@ func TestFacetsForRequiresTheCapability(t *testing.T) {
 }
 
 // A Codex job must not pay for a pass the analysis cannot serve: no sidecar
-// round-trip, no projects, and — critically, since ml_backend "auto" is what
+// round-trip, no workstreams, and — critically, since ml_backend "auto" is what
 // nearly every user runs — no downgrade of the published pipeline_status.
 func TestProcessSkipsDimensionsForGemini(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")

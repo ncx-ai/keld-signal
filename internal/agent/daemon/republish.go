@@ -12,8 +12,8 @@ package daemon
 // remembers what was discarded.
 //
 // The ledger's own `blocks` table (store.go) does not hold enough to rebuild
-// the wire shape (publish.BlockEnrichment) — it keeps three project dims
-// and a handful of delivery-page cells, never the full projects/dynamics/
+// the wire shape (publish.BlockEnrichment) — it keeps three workstream dims
+// and a handful of delivery-page cells, never the full workstreams/dynamics/
 // effort/inventory facets a real block carries. So this file captures the
 // block's own marshalled JSON at CUT time (ledger.Store.SaveUnsentPayload, a
 // new table — see ledger/unsent.go) and republishes EXACTLY that payload:

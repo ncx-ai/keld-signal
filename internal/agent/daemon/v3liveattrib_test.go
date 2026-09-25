@@ -293,12 +293,12 @@ func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
 	if err := projects.SetGroupOff("eng", true); err != nil {
-		t.Fatalf("project off: %v", err)
+		t.Fatalf("group off: %v", err)
 	}
 
 	rows, _ := rowProjects(t, v.ledgerReader())
 	if rows[k] != "" {
-		t.Fatalf("a project in a switched-off project must not name a block, got %q", rows[k])
+		t.Fatalf("a project in a switched-off group must not name a block, got %q", rows[k])
 	}
 	// And the pane says the same thing, which is the whole point.
 	if attributed, total := paneCoverage(t, v.projects); attributed != 0 || total != 1 {

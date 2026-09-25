@@ -565,7 +565,7 @@ type Dynamic struct {
 }
 
 // Analyze asks the sidecar to characterise the window ending at promptID
-// (deterministic project dimensions — no ML model). It sends COORDINATES,
+// (deterministic workstream dimensions — no ML model). It sends COORDINATES,
 // never prompt text — the same rule spool.Pointer follows for the enrichment
 // hook. ok=false on any failure, including a 404 (prompt id not found in the
 // transcript): that is a different fact than "resolved, zero dimensions" and

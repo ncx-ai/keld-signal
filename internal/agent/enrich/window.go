@@ -49,7 +49,7 @@ const PipelineStatusWindow = "window"
 // its prompt, and a window row has no prompt, so the window itself has to say
 // where it sits.
 //
-// Timestamps and integers only. The blocks beside it (projects, dynamics,
+// Timestamps and integers only. The blocks beside it (workstreams, dynamics,
 // effort, physical acts) are the same ones a prompt row carries and are subject
 // to the same vocabulary gates; this adds no new content channel, which is the
 // property that lets the wire-shape test keep asserting nothing from a

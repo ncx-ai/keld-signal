@@ -322,7 +322,7 @@ def _code_names(mod):
 
     AST rather than a substring scan, and that is not fastidiousness: this module's docstrings
     NAME the things it must not use, at length and on purpose (`dimensions.payload` is the wrong
-    input; `MIN_EVIDENCE` is a label and not a filter). A `"projects" not in src` test would
+    input; `MIN_EVIDENCE` is a label and not a filter). A `"workstreams" not in src` test would
     therefore fail on the very prose that records the decision, and the obvious repair — deleting
     the prose — is the opposite of what should happen. Comments and strings are invisible here.
     """
@@ -361,7 +361,7 @@ def test_min_evidence_is_not_applied_as_a_filter():
 
 def test_a_single_observation_still_produces_a_histogram():
     """The consequence, measured: one observation gives share 1.0 and it is emitted, where
-    `projects` would label it `thin` and `dynamics` would refuse to compare it."""
+    `workstreams` would label it `thin` and `dynamics` would refuse to compare it."""
     h = F.histogram([("read", 1)], "action", F.ACTION_SLOTS)
     assert h[F.ACTION_SLOTS.index("read")] == 1.0
     s = F.shape([("read", 1)])

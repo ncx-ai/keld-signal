@@ -30,7 +30,7 @@ def test_a_tie_is_unattributed_rather_than_an_arbitrary_pick():
 # The share floor alone says nothing about how much was counted. One tool call gives share=1.0,
 # and until SCHEMA 16 AnalyzeLabeled dropped `evidence` on the way to the published enrichment, so
 # a report could not tell one observation from five hundred. Measured on the 572-window sample in
-# ~/keld/refseries-context/projects.ndjson: 330 dimension slots publish share=1.0 off fewer
+# ~/keld/refseries-context/workstreams.ndjson: 330 dimension slots publish share=1.0 off fewer
 # than five observations, 129 of them off a single one.
 #
 # ⚠️ THE COUNT NOW CROSSES, AND THE FLOOR STILL STANDS. `evidence` and `status` publish as of

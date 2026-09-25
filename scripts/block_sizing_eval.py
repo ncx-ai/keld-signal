@@ -482,10 +482,10 @@ def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
     would have chained had the walk not absorbed them together), `merge_events` (how many
     absorption operations occurred — one event can absorb several consecutive thin blocks at
     once) split `_forward`/`_backward`, and `value_changed` (how many of those EVENTS changed a
-    published `projects` value) likewise split.
+    published `workstreams` value) likewise split.
 
     ⚠️ **What "value_changed" compares, and why it is not literally "successor vs merged".** The
-    pre-registration's prose reads as "the successor's published projects before the merge
+    pre-registration's prose reads as "the successor's published workstreams before the merge
     against the merged block's after" — but a successor that already clears the floor on its own
     publishes the SAME dominant value whether or not a thin neighbour's evidence is folded in
     (that neighbour can only ever add a MINORITY of the merged total, because if it could

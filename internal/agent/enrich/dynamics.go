@@ -3,7 +3,7 @@ package enrich
 // Dynamic is one window dimension's DERIVATIVE: how that dimension is changing,
 // as computed by the sidecar's dynamics block (a recent slice read against a
 // longer, disjoint baseline — sidecar/app/analysis/dynamics.py). The digest
-// beside it (Profile.Projects) says what the window CONTAINS; this says
+// beside it (Profile.Workstreams) says what the window CONTAINS; this says
 // whether the hour just turned over or has looked like this all day.
 //
 // WHAT IS HERE, AND WHY IT IS ONLY THIS. The sidecar's block carries per
@@ -64,13 +64,13 @@ type Dynamic struct {
 }
 
 // WindowAnalysis is everything one /analyze call yields for the pipeline: what
-// the window CONTAINS (Projects) and how it is CHANGING (Dynamics). They
+// the window CONTAINS (Workstreams) and how it is CHANGING (Dynamics). They
 // travel together because they come from the same call — the dynamics block is
 // computed in the same response the digest is, so publishing it costs no second
 // round-trip and no second inference (it needs none at all).
 //
 // Either half may be nil: a window with no dominant value anywhere has no
-// Projects, and a sidecar too old to compute dynamics — or a window with no
+// Workstreams, and a sidecar too old to compute dynamics — or a window with no
 // series behind it — has no Dynamics. Neither is a failure, and neither may be
 // published as an empty object: "we looked and found nothing" is a different
 // fact from "nobody looked".
@@ -78,7 +78,7 @@ type WindowAnalysis struct {
 	Dimensions map[string]Labeled
 	Dynamics   map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
-	// published as an INVENTORY rather than a project (see Acts for the
+	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the
 	// analysis produced none: "the hour did nothing" is not a fact this can state.
 	PhysicalActs []Act
@@ -131,8 +131,8 @@ type WindowAnalysis struct {
 	// Prior is the SESSION the window sat in, keyed by dimension (see Prior).
 	// Fifth answer from the same call and the only one that is about something
 	// OUTSIDE the window, which is exactly why a per-window view cannot produce
-	// it. It is a CONTRAST and never a fallback: it sits beside Projects and
-	// never fills a dimension Projects left blank. Nil for a sidecar too old
+	// it. It is a CONTRAST and never a fallback: it sits beside Workstreams and
+	// never fills a dimension Workstreams left blank. Nil for a sidecar too old
 	// to compute the block — "we looked at the session and it said nothing" is a
 	// different fact from "nobody looked".
 	Prior map[string]Prior

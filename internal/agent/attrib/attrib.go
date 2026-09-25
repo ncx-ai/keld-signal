@@ -775,11 +775,11 @@ func closeEnough(a, b float64) bool {
 }
 
 // dimsFrom builds the /attribute call's dims argument from a block's own
-// already-computed project dimensions (repo, branch, ...) — the caller's
+// already-computed workstream dimensions (repo, branch, ...) — the caller's
 // own facts, passed through rather than re-derived, per the sidecar contract.
 //
 // ⚠️ THE STATUS IS PART OF THE VALUE AND READING ONE WITHOUT THE OTHER IS I6.
-// A project dimension publishes `value` alongside a `status` from
+// A workstream dimension publishes `value` alongside a `status` from
 // enrich.DimensionStatuses, and only "attributed" may be read as the window's
 // answer — enrich/types.go states that contract in as many words, and says a
 // consumer rendering `thin` identically to `attributed` is misreporting. This

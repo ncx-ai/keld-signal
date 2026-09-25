@@ -25,7 +25,7 @@ type Settings struct {
 	//     queue/spool until the model is resident; there is never a
 	//     lower-fidelity substitute for a facet the model produces.
 	//   "deterministic" — the facets that need no model: credential detection
-	//     (pure Go) and the project dimensions the sidecar's /analyze
+	//     (pure Go) and the workstream dimensions the sidecar's /analyze
 	//     derives from transcript coordinates. The SIDECAR STILL RUNS: it is
 	//     the client-side analysis-and-enrichment service in general, and
 	//     GLiNER2 is one capability it loads lazily on a first inference this
@@ -103,7 +103,7 @@ type Settings struct {
 	// (docs/v3/contracts.md, deliverable D4). nil/absent means ON — Atlas is
 	// the default for an installed daemon — and false means the connector
 	// package is never constructed: no publish, no settings poll, no
-	// projects sync, no code redemption; zero outbound connections.
+	// workstreams sync, no code redemption; zero outbound connections.
 	// A pointer so an absent key stays distinguishable from an explicit false,
 	// the same idiom Remote.PIIRegions uses. KELD_ATLAS=0 overrides to off,
 	// KELD_ATLAS=1 to on. Written by the page's Settings pane.
@@ -272,21 +272,21 @@ func (s Settings) MLEnabled() bool { return s.MLBackend != "off" && s.MLBackend 
 // for everything but "off".
 //
 // "deterministic" runs the passes that need no model: credential detection and
-// the project dimensions /analyze derives from coordinates. That is NOT the
+// the workstream dimensions /analyze derives from coordinates. That is NOT the
 // fallback AGENTS.md forbids — it is a different, smaller set of facets, never
 // a lower-fidelity substitute for the model's.
 //
-// It DOES have a readiness to wait on. The project pass is served by the
+// It DOES have a readiness to wait on. The workstream pass is served by the
 // sidecar, which this mode starts, so its Worker gate polls that service's
 // /health (cached, see daemon.serviceHealthGate). A trivially-true gate would
-// publish project-less profiles for every job that landed while the service
+// publish workstream-less profiles for every job that landed while the service
 // was still coming up, silently dropping their dimensions; model warmth would
 // be worse still, since the model never loads here and the gate would never
 // open. The one exception is a machine where NO service can arrive this daemon
 // lifetime — no sidecar binary installed, or its loopback port could not be
 // allocated. Waiting buys nothing there, so the gate is trivially true, the
 // analyzer nil, and enrichment runs its remaining model-free facets with the
-// projects pass simply unregistered: a dropped facet, reported as
+// workstreams pass simply unregistered: a dropped facet, reported as
 // pipeline_status "partial".
 func (s Settings) EnrichmentEnabled() bool { return s.MLBackend != "off" }
 

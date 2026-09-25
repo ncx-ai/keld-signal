@@ -54,7 +54,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	// The same fixture's `project` object carries NO status, which is the other
 	// half of the pre-16 shape: that sidecar emitted an object only for a
 	// dimension it had attributed, so that is how it is read. Anything else
-	// would blank every project on a machine whose frozen sidecar is behind.
+	// would blank every workstream on a machine whose frozen sidecar is behind.
 	if proj.Status != "attributed" {
 		t.Errorf("a statusless pre-16 dimension must read as attributed, got %+v", proj)
 	}
@@ -129,9 +129,9 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 	// the whole payload, and the scoping is not a weakening. What must not leak
 	// is the dynamics per-side `reason` — the field that sits beside a per-side
 	// `value` naming a reference level, which on `term` can be a person's name.
-	// The project dimensions' own `status` is the same word for a different,
+	// The workstream dimensions' own `status` is the same word for a different,
 	// intended field, so a whole-payload substring check can no longer tell the
-	// two apart. Guarded from both ends: the project status below must BE
+	// two apart. Guarded from both ends: the workstream status below must BE
 	// "attributed" (so the scoping is real and not an accident of an empty
 	// payload), and the dynamics subtree must not contain it anywhere.
 	if got.Dimensions["project"].Status != "attributed" {

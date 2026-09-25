@@ -12,7 +12,7 @@
 # watcher's claude_code root is `$HOME/.claude/projects`. Pointing the tool
 # somewhere else would leave the adapter writing a file the tool never reads —
 # a green setup and a silent lane, which is the failure class this whole
-# project exists to catch.
+# workstream exists to catch.
 
 # tool_supported <tool> — is this tool in the table yet?
 tool_supported() {
@@ -559,7 +559,7 @@ tool_not_expected() {
     codex)
       # ⚠️ **`store_rows` CANNOT PASS AGAINST A FROZEN SIDECAR, and that is the
       # skew this harness already warns about out loud.** Codex IS
-      # projects-eligible (enrich.projectAnalyzableSources) and the reader
+      # workstreams-eligible (enrich.workstreamAnalyzableSources) and the reader
       # that makes it so is NEW IN THIS BRANCH — so the released sidecar CI
       # downloads predates it, answers nothing for a Codex prompt id, and the
       # store stays empty. Measured: 0 prompt rows, 0 event rows, with every

@@ -41,7 +41,7 @@ type WindowEnrichment struct {
 	// row is located by its prompt and this one has no prompt, so without the
 	// bounds the row says nothing about anything.
 	Window enrich.WindowRef `json:"window"`
-	// AnalysisFacets is the deterministic analysis: projects, dynamics,
+	// AnalysisFacets is the deterministic analysis: workstreams, dynamics,
 	// effort, the thirteen inventories, the cut-visibility map and the session
 	// prior. EMBEDDED rather than restated, and shared with BlockEnrichment,
 	// because a tick window and a v2 block carry exactly the same set — see
@@ -51,7 +51,7 @@ type WindowEnrichment struct {
 	//
 	// A tick-emitted window is not a lesser window, which is why it carries all
 	// of it — including the session prior, a CONTRAST reported beside
-	// `projects` and never a value supplied in its place.
+	// `workstreams` and never a value supplied in its place.
 	AnalysisFacets
 	// PipelineStatus is always enrich.PipelineStatusWindow. It rides here so a
 	// reader can tell WHY there is no task_type on this row (there was never a
@@ -125,7 +125,7 @@ func WindowCorrID(sessionID, end string) string {
 
 // windowExtractorVersions attributes a tick row to the pass that produced it. A
 // tick runs exactly one thing — the deterministic window analysis — so the map
-// has one entry, and it is the SAME key and version a prompt row's projects
+// has one entry, and it is the SAME key and version a prompt row's workstreams
 // carry, because it is the same analysis over the same kind of window. A reader
 // comparing the two must not have to learn a second name for one producer.
 func windowExtractorVersions() map[string]string {

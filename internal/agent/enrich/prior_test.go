@@ -32,7 +32,7 @@ func TestPriorStatusVocabularyMatchesTheSidecar(t *testing.T) {
 	if strings.Join(want, ",") != strings.Join(PriorStatuses, ",") {
 		t.Errorf("REASONS drifted:\n python %v\n go     %v", want, PriorStatuses)
 	}
-	// The PROJECT dimensions publish the same vocabulary under their own
+	// The WORKSTREAM dimensions publish the same vocabulary under their own
 	// name, and this pin covers both because there is only one list. Asserted
 	// rather than assumed: `DimensionStatuses = PriorStatuses` is what makes
 	// two names safe, and retyping it would put a second copy of window.REASONS

@@ -33,10 +33,10 @@ type Remote struct {
 	// ⚠️ **ATLAS SERVES THIS NOW, and this comment used to say it did not.**
 	// Verified against keld-atlas on 2026-09-04: `_org_settings` fills the key
 	// from `services/workstream_attribution.wire_projects`, which POOLS every
-	// authored project's VALUES into one flat list — deliberately, so
-	// attribution runs one competition rather than one per project. Two
+	// authored workstream's VALUES into one flat list — deliberately, so
+	// attribution runs one competition rather than one per workstream. Two
 	// consequences the shape does not announce:
-	//   - `Team` carries the PROJECT'S NAME when a value has no owning team,
+	//   - `Team` carries the WORKSTREAM'S NAME when a value has no owning team,
 	//     so it is the only way to recover which bucket a value belongs to.
 	//   - `Keywords` are the value's authored tags with their PREFIX STRIPPED:
 	//     an admin types `repository: acme/web` and this field receives

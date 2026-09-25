@@ -73,7 +73,7 @@ def _user(off, uuid, text, cwd):
     """A human turn. `promptId` is present and is NOT the uuid.
 
     AGENTS.md: the daemon names a prompt by `promptId` and only by it, and the sidecar's own
-    fixtures carrying no `promptId` at all is why a total failure of the projects facet went
+    fixtures carrying no `promptId` at all is why a total failure of the workstreams facet went
     unnoticed. A new fixture file starts out correct rather than inheriting that.
     """
     return {"type": "user", "uuid": uuid, "promptId": "pid-" + uuid, "timestamp": _ts(off),

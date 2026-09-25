@@ -62,7 +62,7 @@ def min_evidence_for(floor=0.5, alpha=0.05):
 # however high, says anything about the hour. That makes 5 the smallest floor that is a
 # consequence of the 0.50 already in the code rather than a second arbitrary number beside it.
 #
-# Measured cost on the 572-window sample in ~/keld/refseries-context/projects.ndjson (4004
+# Measured cost on the 572-window sample in ~/keld/refseries-context/workstreams.ndjson (4004
 # dimension slots, 2927 attributed today): 347 slots become unattributed — 11.9% of what is
 # attributed, touching 207 of 572 windows. 330 of those 347 are currently published at
 # share=1.0, and 129 of them rest on a SINGLE observation. That is the number this exists for:

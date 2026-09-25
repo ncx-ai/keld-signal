@@ -2,14 +2,14 @@ package projects
 
 import "testing"
 
-// ⚠️ **A PROJECT FILED UNDER A PROJECT THAT DOES NOT EXIST IS AN INVISIBLE
-// PROJECT.** The Projects pane draws projects by looping over projects, so a
-// project whose project is in no list is never rendered: it exists in
+// ⚠️ **A PROJECT FILED UNDER A WORKSTREAM THAT DOES NOT EXIST IS AN INVISIBLE
+// PROJECT.** The Projects pane draws projects by looping over workstreams, so a
+// project whose workstream is in no list is never rendered: it exists in
 // projects.json, it attributes blocks, and the person who made it sees nothing
 // where their suggestion used to be.
 //
 // Measured on a real machine before this: two projects on disk,
-// `"projects": null`, and a pane reading "YOUR PROJECTS" followed by nothing.
+// `"workstreams": null`, and a pane reading "YOUR PROJECTS" followed by nothing.
 // It is the state of EVERY machine with Send to Atlas off, because the list is
 // pushed down by Atlas and nothing local ever seeded it.
 
@@ -18,7 +18,7 @@ func suggestionFor(value string) Suggestion {
 }
 
 func TestBundleSeedsTheGroupWhenTheOrgHasDeclaredNone(t *testing.T) {
-	d := Document{Version: CurrentVersion} // no projects at all — Atlas off
+	d := Document{Version: CurrentVersion} // no groups at all — Atlas off
 	sug := suggestionFor("github.com/acme/web")
 
 	next, p, err := Bundle(d, "Web", "development", []string{sug.ID}, []Suggestion{sug})
@@ -35,10 +35,10 @@ func TestBundleSeedsTheGroupWhenTheOrgHasDeclaredNone(t *testing.T) {
 		}
 	}
 	if found == nil {
-		t.Fatal("the project's project was not seeded — the project would be invisible")
+		t.Fatal("the project's group was not seeded — the project would be invisible")
 	}
 	if found.Name != "Development" {
-		t.Fatalf("project name = %q, want a readable label", found.Name)
+		t.Fatalf("group name = %q, want a readable label", found.Name)
 	}
 	// LOCAL, never atlas: this is the machine inventing a bucket to keep its own
 	// work visible, and it must not be mistaken for an org declaration.
@@ -48,7 +48,7 @@ func TestBundleSeedsTheGroupWhenTheOrgHasDeclaredNone(t *testing.T) {
 }
 
 func TestBundleDoesNotDuplicateAGroupTheOrgAlreadyDeclared(t *testing.T) {
-	// NEGATIVE: a machine that DOES have org projects must keep grouping
+	// NEGATIVE: a machine that DOES have org workstreams must keep grouping
 	// projects under them. Matching is by key, so the org's own entry — with its
 	// own name and atlas origin — is the one that stays.
 	d := Document{

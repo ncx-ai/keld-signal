@@ -16,7 +16,7 @@ import (
 // (or, for SetGroupOff, ~/.keld/agent-config.json) and nothing else.
 // docs/v3/contracts.md's verified note is explicit that Atlas has no route a
 // machine's ingest token can write a project or a tag through today
-// (`PATCH /api/projects/{key}` needs an admin USER SESSION) — so this
+// (`PATCH /api/workstreams/{key}` needs an admin USER SESSION) — so this
 // package makes NO outbound call of any kind. Re-attribution after an edit is
 // TOTAL by construction rather than by a cache-invalidation step: Attribute is
 // a pure function of (dims, current Document.Projects, groupOff,
@@ -44,7 +44,7 @@ type Rule struct {
 var ErrProjectNotFound = fmt.Errorf("projects: project not found")
 
 // ErrGroupOff is returned by PlaceSameAs when the target project's
-// project is switched off — such a project must not gain new rules while
+// workstream is switched off — such a project must not gain new rules while
 // its bucket is excluded from matching, or a "same as" click would silently
 // resurrect it.
 var ErrGroupOff = fmt.Errorf("projects: target project's project is off")
@@ -165,7 +165,7 @@ func removeFold(list []string, v string) []string {
 	return out
 }
 
-// Bundle creates one new project from title/project plus the rules the
+// Bundle creates one new project from title/workstream plus the rules the
 // selected suggestions carry, and adds it to d. suggestions is the CURRENT
 // suggestion set the caller just computed with Suggest — suggestion ids are
 // never persisted in the document, so resolving one to its {kind, value} pair
@@ -204,26 +204,26 @@ func Bundle(d Document, title, group string, suggestionIDs []string, suggestions
 // ensureGroup adds the project's project to the document if the org has
 // not declared one by that key.
 //
-// ⚠️ **A PROJECT FILED UNDER A PROJECT THAT DOES NOT EXIST IS AN INVISIBLE
-// PROJECT.** The Projects pane renders projects by looping over projects and
-// showing each one's members, so a project whose project is in no list is
+// ⚠️ **A PROJECT FILED UNDER A WORKSTREAM THAT DOES NOT EXIST IS AN INVISIBLE
+// PROJECT.** The Projects pane renders projects by looping over workstreams and
+// showing each one's members, so a project whose workstream is in no list is
 // never drawn — it exists in this file, it attributes blocks, and the person who
 // made it sees nothing.
 //
-// Measured on a real machine: two projects on disk, `"projects": null`, and a
-// pane reading "YOUR PROJECTS" followed by nothing and "PROJECTS ON 0 of 0".
+// Measured on a real machine: two projects on disk, `"workstreams": null`, and a
+// pane reading "YOUR PROJECTS" followed by nothing and "WORKSTREAMS ON 0 of 0".
 // From the outside that is indistinguishable from the suggestion having been
 // thrown away, which is exactly how it was reported.
 //
-// It happens whenever the org has declared no projects — every machine with
+// It happens whenever the org has declared no workstreams — every machine with
 // Send to Atlas off, which is the default for anyone trying Signal locally —
 // because the list is pushed down from Atlas and nothing local ever seeded it.
 // `bundleSuggestion` falls back to the key "development", so that was the name
-// of a project that never existed anywhere.
+// of a workstream that never existed anywhere.
 //
 // Origin is LOCAL: this is the machine inventing a bucket to keep its own work
 // visible, and it must never be mistaken for something the org declared. If
-// Atlas later declares a project with the same key, the match is by key and
+// Atlas later declares a workstream with the same key, the match is by key and
 // the org's own entry is the one already present, so this adds nothing.
 func ensureGroup(existing []Group, key string) []Group {
 	if key == "" {
@@ -308,7 +308,7 @@ func Hide(d Document, projectID string, hidden bool) (Document, error) {
 }
 
 // SameAsCandidates lists the projects a suggestion may be placed under: not
-// hidden, not in a project that is off. Mirrors Visible so the "place same
+// hidden, not in a workstream that is off. Mirrors Visible so the "place same
 // as" picker can never offer a target Attribute itself would ignore.
 func SameAsCandidates(d Document, groupOff func(key string) bool) []Project {
 	return SameAsCandidatesWithRemote(d, nil, groupOff)
@@ -342,7 +342,7 @@ func PlaceSameAs(d Document, suggestionID, targetProjectID string, suggestions [
 // 2026-09-05; a user-rights question deliberately deferred). MergeCandidates
 // unions the overlay onto the value at read time, so the next attribution pass
 // puts the suggestion's blocks under the Atlas value's id — which is what Atlas
-// already matches projects against.
+// already matches workstreams against.
 func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetProjectID string, suggestions []Suggestion, groupOff func(key string) bool) (Document, error) {
 	s, ok := findSuggestion(suggestions, suggestionID)
 	if !ok {
@@ -505,7 +505,7 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 
 // SetGroupOff writes settings.Settings.GroupsOff — the AUTHORITATIVE
 // exclusion list Attribute's groupOff parameter reads (see
-// internal/agent/settings/v3.go's ProjectOff) — adding or removing key.
+// internal/agent/settings/v3.go's WorkstreamOff) — adding or removing key.
 // This is the one edit in this file that does not touch projects.json: the
 // PUT /v1/groups/{key}/off route writes agent-config.json instead, so
 // this package never has two copies of the same fact to keep in sync. It

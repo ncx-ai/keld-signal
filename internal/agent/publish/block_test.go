@@ -19,7 +19,7 @@ func sampleBlock() enrich.BlockCharacterisation {
 	departure := 0.12
 	agrees := true
 	// The session prior rides a block row exactly as it rides a window row: a
-	// CONTRAST beside `projects`, never a value supplied in its place.
+	// CONTRAST beside `workstreams`, never a value supplied in its place.
 	w.Analysis.Prior = map[string]enrich.Prior{
 		"branch": {Value: "main", Share: 0.78, Evidence: 140, Status: "attributed",
 			Agrees: &agrees, Departure: &departure, Novel: &novel},
@@ -157,7 +157,7 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		"named_terms": true,
 		// `project_matches` is allowed after checking exactly what the comment above
 		// demands. Its values are RULES — a repository remote and a ticket key
-		// — and both already cross on this same row as `projects`
+		// — and both already cross on this same row as `workstreams`
 		// dimensions, so it opens no channel that was not already open. What it
 		// deliberately does NOT carry is a local project's title or its id (the
 		// id is derived from the title, so sending it would send the title in a

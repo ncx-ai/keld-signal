@@ -335,7 +335,7 @@ def test_the_dimensions_that_measured_CONSTANT_are_not_reported_at_all():
         comparable it points the wrong way: mean turnover 0.010 INSIDE a transition window
         against 0.070 outside.
 
-    The digest still reports all three as allocation projects. Only their DYNAMICS are gone.
+    The digest still reports all three as allocation workstreams. Only their DYNAMICS are gone.
     Discriminating both ways: the survivors must still be there, or dropping everything passes.
     """
     got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))

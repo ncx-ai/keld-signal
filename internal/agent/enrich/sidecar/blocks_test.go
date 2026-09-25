@@ -121,7 +121,7 @@ func TestBlocksCharacterisedConvertsThroughTheSameGatesAWindowRowUses(t *testing
 	if b.Ref.SpanMinutes != 20 || b.Ref.Evidence != 9 {
 		t.Errorf("span/evidence = %v/%v", b.Ref.SpanMinutes, b.Ref.Evidence)
 	}
-	// The same convert* functions a window row goes through: the project
+	// The same convert* functions a window row goes through: the workstream
 	// carries its status and evidence, and the inventories arrive converted.
 	if w := b.Analysis.Dimensions["branch"]; w.Value != "main" || w.Status != "attributed" || w.Evidence != 9 {
 		t.Errorf("branch = %+v", w)

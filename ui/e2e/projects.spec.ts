@@ -63,8 +63,8 @@ test.describe("Projects", () => {
     await expect(page.getByText(APPLIED).first()).toBeVisible();
     await expect(heading).toHaveText(`Suggested by your activity · ${before - 1}`);
 
-    // ⚠️ **AND IT IS VISIBLE WITH NO ORG PROJECTS AT ALL, WHICH IS THE CASE
-    // THAT WAS BROKEN.** The pane draws projects by looping over projects,
+    // ⚠️ **AND IT IS VISIBLE WITH NO ORG WORKSTREAMS AT ALL, WHICH IS THE CASE
+    // THAT WAS BROKEN.** The pane draws projects by looping over workstreams,
     // and that list is pushed down by Atlas — so on every machine with Send to
     // Atlas off (this daemon included, and the default for anyone trying Signal
     // locally) it was empty, the loop body never ran, and a freshly created
@@ -74,13 +74,13 @@ test.describe("Projects", () => {
     // exactly how it was reported.
     //
     // Asserted explicitly rather than left implicit: this suite ALWAYS runs with
-    // no projects, so without naming it a reader would not know the case is
+    // no workstreams, so without naming it a reader would not know the case is
     // covered — and the earlier version of this test asserted `.group-card`
-    // while believing the fixture had org projects it never had.
-    // ⚠️ **EVERY PROJECT HERE IS `origin: "local"`, AND THAT IS THE ASSERTION
+    // while believing the fixture had org workstreams it never had.
+    // ⚠️ **EVERY WORKSTREAM HERE IS `origin: "local"`, AND THAT IS THE ASSERTION
     // THAT MATTERS.** This suite always runs with Send to Atlas off, so the org
     // has declared NONE — and the pane draws projects by looping over
-    // projects, so with an empty list a freshly created project was drawn
+    // workstreams, so with an empty list a freshly created project was drawn
     // nowhere at all. Measured on a real machine: two projects on disk, "YOUR
     // PROJECTS" followed by nothing, which from the outside is indistinguishable
     // from the suggestion having been thrown away. That is exactly how it was
@@ -90,7 +90,7 @@ test.describe("Projects", () => {
     // emptiness is a property of the daemon at bring-up, not of this test's
     // moment, and a serial suite that creates projects would make a
     // before-assertion pass only when this test ran first — which is not a test.
-    // An org-declared project would show `origin: "atlas"`, so this still
+    // An org-declared workstream would show `origin: "atlas"`, so this still
     // fails if the machine's own bucket is ever mislabelled as the org's.
     const afterCreate = await readCatalog(page);
     const origins = (afterCreate.groups || []).map((w: any) => w.origin);
@@ -198,12 +198,12 @@ test.describe("Projects", () => {
     expect(rulesAfter).toMatch(/repo \S+ \+\d+/);
   });
 
-  test("switching a project off changes its row and the 'projects on' tile, and back", async ({ signal, page }) => {
+  test("switching a group off changes its row and the 'groups on' tile, and back", async ({ signal, page }) => {
     await signal.open("projects");
     // ⚠️ Read the tile's VALUE element and match its WHOLE text. The count and
     // the "of N" caption are adjacent with no whitespace, so the value renders
     // as "1of 1" — every word-boundary assertion around the digit fails, twice
-    // over: "Projects on1of 1" for the tile, "1of 1" for the value. Anchoring
+    // over: "Workstreams on1of 1" for the tile, "1of 1" for the value. Anchoring
     // the whole string is unambiguous and says what a person reads.
     const onTileValue = page.getByText("Groups on", { exact: true }).locator("..").locator(".value, .v").first();
     await expect(onTileValue).toHaveText(/^1of \d+$/);

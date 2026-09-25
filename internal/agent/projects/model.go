@@ -18,7 +18,7 @@
 // offset: a Project's rules are a normalised git remote and a ticket-key
 // prefix, and everything else a machine could observe about a project
 // (branches, languages, tools, workspaces seen) is EVIDENCE, computed on read
-// from a block's already-published project dims — never a rule, never
+// from a block's already-published workstream dims — never a rule, never
 // matched on (see evidence.go and attribute.go's evidence-is-not-a-rule test).
 package projects
 
@@ -58,7 +58,7 @@ const (
 	OriginAtlas     = "atlas"
 )
 
-// Origin values for a Project.
+// Origin values for a Workstream.
 const (
 	GroupOriginAtlas = "atlas"
 	GroupOriginLocal = "local"
@@ -104,7 +104,7 @@ type Group struct {
 // real owning sub-team (informational only, never matched on); for a value
 // converted by FromRemoteProjects it is that value's PROJECT'S NAME
 // whenever the value has no owning team of its own. projectGroupOff
-// checks both Project (the local key) and Team (the Atlas name proxy)
+// checks both Workstream (the local key) and Team (the Atlas name proxy)
 // against settings.Settings.GroupOff, case-insensitively, so a project
 // switched off excludes a project however its bucket happens to be spelled.
 type Project struct {
@@ -119,7 +119,7 @@ type Project struct {
 	// Group is this project's project KEY (Group.Key above), set
 	// for a locally-declared project. An Atlas-sourced value (see
 	// FromRemoteProjects) never carries one — Atlas pools its values across
-	// every project and derives the project from the value id itself
+	// every workstream and derives the workstream from the value id itself
 	// when a block is later matched server-side (docs/v3/contracts.md,
 	// "What Atlas actually offers today", point 2) — so its bucket is carried
 	// in Team instead (see Team's doc comment) and projectGroupOff checks
@@ -194,7 +194,7 @@ func DefaultPath() string {
 }
 
 // Load reads and decodes path. A MISSING file is not an error — it is a
-// fresh, empty document (version stamped, no projects, no projects): the
+// fresh, empty document (version stamped, no workstreams, no projects): the
 // document does not exist until the first edit, and "nobody has declared a
 // project yet" must not be confused with "the file could not be read". Any
 // other read or decode error is returned, never silently swallowed into an
@@ -261,7 +261,7 @@ func Save(path string, d Document) error {
 }
 
 // BlockSummary is the minimal shape this package needs from a block to
-// compute suggestions and coverage: its already-published project dims
+// compute suggestions and coverage: its already-published workstream dims
 // (never text) plus its measured cost. It is deliberately NOT
 // enrich.BlockCharacterisation or publish.BlockEnrichment — this package
 // must not depend on either lane's full block shape, only the dims map

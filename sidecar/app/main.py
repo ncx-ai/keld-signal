@@ -925,7 +925,7 @@ async def blocks(body: BlocksIn):
     Returns `{"blocks": [...], "watermark": ...}`. A block carries its span
     (`start`/`end`/`block_minutes`, epoch seconds — the unit `since_ts` is in), the two boundary
     reasons from the closed `blocks.REASONS` vocabulary, and the same analysis payload /analyze
-    publishes for a window: `projects`, `inventory`, `inventory_omitted`, `evidence`, `effort`,
+    publishes for a window: `workstreams`, `inventory`, `inventory_omitted`, `evidence`, `effort`,
     `dynamics`, `prior`. NO prompt ids: a block is (principal, session, span, reasons, facets),
     and the `covers` mapping that once carried them is deleted — see BlocksIn.
 
@@ -2220,7 +2220,7 @@ async def detect_pii(body: PiiIn):
 
 @app.post("/analyze")
 async def analyze(body: AnalyzeIn):
-    """Turn `span_minutes` of one transcript ending at `prompt_id` into the project +
+    """Turn `span_minutes` of one transcript ending at `prompt_id` into the workstream +
     inventory payload (see app.analysis.analyze.analyze_window). Coordinates in — a path and a
     prompt id — never text; the response itself carries no span/offset/text either (see
     test_analyze_response_carries_no_prompt_text).
@@ -2278,7 +2278,7 @@ async def analyze(body: AnalyzeIn):
         # the Go client's post() waits and retries through (sidecar/client.go: 503 -> wait +
         # retry with backoff, anything else -> ok=false), so this reads to the daemon as "not
         # ready yet, ask again" rather than as errAnalysisUnavailable, which would fail the
-        # projects facet and publish the profile as "partial" for a facet that was one
+        # workstreams facet and publish the profile as "partial" for a facet that was one
         # append away from succeeding. That is the same reasoning the enrich pipeline already
         # applies to a sidecar that is not ready: queue, never degrade.
         _count("analyze_not_ingested")
@@ -2289,7 +2289,7 @@ async def analyze(body: AnalyzeIn):
         # retrying can never help — whereas 503 is the one status the Go client's post() waits
         # and retries through, which would spin forever here. 410 falls into that client's
         # `default: return false, false` ("genuine error — do not spin forever"), so the
-        # projects facet fails and the profile publishes as `partial`. That is the honest
+        # workstreams facet fails and the profile publishes as `partial`. That is the honest
         # outcome for a facet whose inputs no longer exist, and it is the same idiom this
         # pipeline already uses for a pass that could not complete.
         #

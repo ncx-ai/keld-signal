@@ -713,15 +713,15 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         # turn's uuid resolved then and must resolve now.
         #
         # ⚠️ BOTH IDS, and indexing only the per-line one was a silent, total failure of the
-        # projects facet. A Claude Code user line carries TWO: `uuid` (unique per line, the
+        # workstreams facet. A Claude Code user line carries TWO: `uuid` (unique per line, the
         # record's `line_id`) and `promptId` (the identity of the human TURN, shared by every
         # follow-on line of it, the record's `prompt_id`). The daemon names a prompt by the
         # latter everywhere -- watch/filter.go REJECTS a line without one,
         # the spool pointer carries it, and it is published to Atlas as `corr_id`, which Atlas
         # joins against ToolEvent.prompt_id. So `promptId` is the id this index is ASKED about,
         # and while it held only uuids every /analyze call 404'd, failing the pass and publishing
-        # `pipeline_status:"partial"` with no projects, no dynamics and no prior. Measured on a
-        # live machine: 8 of 8 prompts, 0 of 1,627 enrichments ever carrying a project.
+        # `pipeline_status:"partial"` with no workstreams, no dynamics and no prior. Measured on a
+        # live machine: 8 of 8 prompts, 0 of 1,627 enrichments ever carrying a workstream.
         #
         # Nothing caught it because BOTH halves of the sidecar agreed on uuid -- this index and
         # `analyze.py`'s oracle scan -- so the equality test that guards the store compared two

@@ -10,7 +10,7 @@ import (
 )
 
 // Dimension keys this package reads off a block's already-published
-// projects map. DimWorkspace is the ALLOCATION dimension the sidecar
+// workstreams map. DimWorkspace is the ALLOCATION dimension the sidecar
 // publishes as `project` (the directory/checkout identity resolved from
 // `cwd`) — named "workspace" in docs/v3/contracts.md's prose to avoid
 // colliding with this package's own Project type, which is a different
@@ -65,13 +65,13 @@ type Result struct {
 // toggle is on; Attribute falls through to unattributed when Vector is nil.
 type Vector interface {
 	// Attribute is handed the block's dims and the visible (non-hidden,
-	// project-on) candidate projects, and returns the pass's own final
+	// workstream-on) candidate projects, and returns the pass's own final
 	// Result for this block — including a weights-unavailable Reason if the
 	// encoder could not run, since only the implementation knows that.
 	Attribute(dims map[string]enrich.Labeled, candidates []Project) Result
 }
 
-// attributedValue reads dims[key], returning it only when the project
+// attributedValue reads dims[key], returning it only when the workstream
 // dimension actually reached the attributed floor. "Only 'attributed' may be
 // read as the window's answer" (enrich.DimensionStatuses' own rule) applies
 // here identically: a `thin`/`tie`/`no_majority`/`absent` repo or branch
@@ -306,8 +306,8 @@ func ticketKeyIn(branch string) (string, bool) {
 }
 
 // projectGroupOff reports whether p's bucket is switched off, checking
-// BOTH Project (a local project's key) and Team (an Atlas value's
-// project-name proxy — see Project's doc comment), because the wire gives
+// BOTH Workstream (a local project's key) and Team (an Atlas value's
+// workstream-name proxy — see Project's doc comment), because the wire gives
 // no way to tell which spelling an operator's groups_off entry used.
 func projectGroupOff(p Project, groupOff func(key string) bool) bool {
 	if groupOff == nil {
@@ -323,7 +323,7 @@ func projectGroupOff(p Project, groupOff func(key string) bool) bool {
 }
 
 // Visible returns the projects Attribute (and a same-as picker) may ever
-// consider: not hidden, and not in a project switched off.
+// consider: not hidden, and not in a workstream switched off.
 func Visible(candidates []Project, groupOff func(key string) bool) []Project {
 	out := make([]Project, 0, len(candidates))
 	for _, p := range candidates {
@@ -362,12 +362,12 @@ func GroupOffFunc(s settings.Settings) func(string) bool {
 // are always empty on the wire — so a repository rule has to be recovered
 // from Keywords BY SHAPE (RepoLike), never a "repo:" prefix, because Atlas
 // strips authored-tag prefixes before the daemon ever sees them. Team carries
-// the value's project NAME when it has no owning team of its own (Atlas
+// the value's workstream NAME when it has no owning team of its own (Atlas
 // does not distinguish the two on the wire), which is why it rides straight
-// into Project.Team rather than Project — see Project's doc comment and
+// into Project.Team rather than Workstream — see Project's doc comment and
 // projectGroupOff.
 // NOTE: this is the ONLY converter from settings.RemoteProject. internal/atlas
-// used to carry a second one (grouping into its own Project/Value types for
+// used to carry a second one (grouping into its own Workstream/Value types for
 // a consumer that never materialised); it was removed on 2026-09-10 as dead.
 // This package still deliberately does not import internal/atlas: the
 // attribution engine must work with zero dependency on the (optional,
@@ -482,22 +482,22 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 			Team:        v.Team,
 			// ⚠️ **THE BUCKET KEY IS SET HERE, AND IT USED TO BE LEFT EMPTY.**
 			// Atlas serves a value's bucket in `team` (see docs/v3/contracts.md:
-			// team carries the PROJECT'S NAME when a value has no owning
+			// team carries the WORKSTREAM'S NAME when a value has no owning
 			// team), and nothing turned that into the key the Projects pane
-			// groups by. The pane groups projects by `project` and draws one
-			// card per project, so twenty org projects arrived with an empty
+			// groups by. The pane groups projects by `workstream` and draws one
+			// card per workstream, so twenty org projects arrived with an empty
 			// key, matched no card, and every Atlas workstream read "No projects
 			// yet." while its projects were listed nowhere at all.
 			//
-			// Measured against the local Atlas: 20 projects and 4 projects
+			// Measured against the local Atlas: 20 projects and 4 workstreams
 			// fetched, attribution at 91% — and all four cards empty.
 			//
 			// The rule that prevents the next one: a project and its card derive
 			// the key from the SAME function. GroupKey is that function, and
 			// withRemoteBuckets now calls it too, so the two cannot disagree.
 			// `team` is the ONLY bucket Atlas serves (settings.RemoteProject has
-			// no project field); docs/v3/contracts.md records that it carries
-			// the project's name when a value has no owning team.
+			// no workstream field); docs/v3/contracts.md records that it carries
+			// the workstream's name when a value has no owning team.
 			Group:     GroupKey(v.Team),
 			Repos:     repos,
 			Keywords:  keywords,
@@ -519,7 +519,7 @@ func GroupKey(name string) string {
 // Attribute implements the four-step order docs/v3/contracts.md specifies,
 // exactly:
 //
-//  1. block `repo` dim ∈ some non-hidden, project-on project's repos
+//  1. block `repo` dim ∈ some non-hidden, workstream-on project's repos
 //     (EffectiveRepos: declared Repos plus RepoLike Keywords) → that project,
 //     method `repo`. Two matches → Reason ReasonConflict, listing every
 //     matching id (sorted), NEVER silently the first.

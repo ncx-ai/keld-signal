@@ -4,6 +4,7 @@ package ingress
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,14 @@ func TestTheRoutesSayProject(t *testing.T) {
 		if r := doRequest(t, srv, m, p, "s3cret", map[string]any{}); r.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s %s = %d, want 404", m, p, r.StatusCode)
 		}
+	}
+}
+
+// The link the page offers for the org-wide edit is ATLAS's page, and Atlas calls
+// it workstreams. The Revision 3 rename flipped this to /projects once and no
+// test noticed, so it is pinned here: a project is Signal's word, not Atlas's.
+func TestTheAtlasEditorLinkIsAtlassWorkstreamsPage(t *testing.T) {
+	if u := atlasEditorURL(); !strings.HasSuffix(u, "/workstreams") {
+		t.Fatalf("atlas_editor_url = %q, want Atlas's /workstreams page", u)
 	}
 }

@@ -37,15 +37,15 @@ func TestParsePrompt(t *testing.T) {
 // TestHumanPromptIDIsThePromptIdFieldNotTheUUID pins the daemon's half of the
 // Go<->sidecar prompt-id contract.
 //
-// ⚠️ THIS SEAM HAD NO TEST ON EITHER SIDE, and the gap cost every project
+// ⚠️ THIS SEAM HAD NO TEST ON EITHER SIDE, and the gap cost every workstream
 // facet on every prompt. A Claude Code user line carries TWO ids: `uuid`
 // (unique per line) and `promptId` (the human TURN's identity, shared by its
 // follow-on lines). The daemon names a prompt by `promptId` — this function,
 // the spool pointer, the queue dedup key, and `corr_id` on the wire, which
 // Atlas joins against ToolEvent.prompt_id. The sidecar's `prompt` index used
-// to hold only `uuid`, so every /analyze lookup 404'd, the projects pass
+// to hold only `uuid`, so every /analyze lookup 404'd, the workstreams pass
 // failed, and 8 of 8 live prompts published `pipeline_status:"partial"` with
-// no projects, no dynamics and no prior.
+// no workstreams, no dynamics and no prior.
 //
 // Nothing caught it: the sidecar was self-consistent (its index AND its oracle
 // scan both used uuid, so their equality test compared two identical wrong

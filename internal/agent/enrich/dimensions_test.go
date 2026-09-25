@@ -230,7 +230,7 @@ func TestDimensionsEligibleSources(t *testing.T) {
 
 // The counter-example, and the proof the Codex work is wired end to end: the
 // pass IS registered and the analyzer IS called for a Codex job. Codex spent its
-// whole life as a configured source publishing no project at all; this is the
+// whole life as a configured source publishing no workstream at all; this is the
 // assertion that would fail first if any half of that chain regressed.
 func TestRunRegistersDimensionsForCodex(t *testing.T) {
 	called := false

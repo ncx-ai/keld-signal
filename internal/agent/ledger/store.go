@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   start_reason TEXT NOT NULL DEFAULT '',
   end_reason   TEXT NOT NULL DEFAULT '',
 
-  -- The three project dims the Projects pane groups unattributed work by.
+  -- The three workstream dims the Projects pane groups unattributed work by.
   -- Stored here because nothing else persists them and a suggestion must
   -- survive a restart; see Dims in recorder.go for why only these three.
   dim_repo      TEXT NOT NULL DEFAULT '',
@@ -218,7 +218,7 @@ func validSource(s string) string {
 	return ""
 }
 
-// dimShape bounds a project dimension VALUE: a repository remote
+// dimShape bounds a workstream dimension VALUE: a repository remote
 // ("github.com/ncx-ai/keld-signal"), a branch ("feat/KELD-214-proxy") or a
 // workspace name. All three legitimately contain "/", so the charset alone
 // cannot separate them from a path — which is exactly why validDimValue also

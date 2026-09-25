@@ -351,7 +351,7 @@ def test_a_sub_agents_own_work_in_the_parent_produces_no_tool_row():
 
 # ---------------------------------------------------------------- the store (AC-6)
 
-def test_ingesting_a_rollout_writes_the_levels_the_projects_need():
+def test_ingesting_a_rollout_writes_the_levels_the_workstreams_need():
     """AC-6. `workspace`, `model`, `tool`, `exe`, `action` and a token magnitude, per version."""
     for name in ALL:
         with tempfile.TemporaryDirectory() as tmp:

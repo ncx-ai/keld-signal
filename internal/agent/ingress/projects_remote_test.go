@@ -19,7 +19,7 @@ import (
 // projects · from Atlas" section showed nothing on a machine paired with an org
 // that had declared everything. This pins the merge, and the bucket derivation
 // that goes with it: a remote value's bucket is its `team`, which is where
-// wire_projects puts the project's name (docs/v3/contracts.md).
+// wire_projects puts the workstream's name (docs/v3/contracts.md).
 func TestGetProjectsReturnsTheOrgValuesAndTheirBuckets(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	s := projects.NewStore(filepath.Join(t.TempDir(), "projects.json"))

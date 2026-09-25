@@ -94,7 +94,7 @@ BUSY_TIMEOUT_MS = 30000
 # be: the raw events are retained, so adding a rollup is a backfill query over `event` (see
 # `_register_levels`), never a transcript re-read.
 #
-# Deriving this from `projects` is the point. Hardcoding the thirteen would let the payload and
+# Deriving this from `workstreams` is the point. Hardcoding the thirteen would let the payload and
 # the precomputed set drift apart silently, and the failure that produces — a level the payload
 # asks for that no bin holds — is an undercount, not an error.
 PRECOMPUTED_LEVELS = tuple(dict.fromkeys(

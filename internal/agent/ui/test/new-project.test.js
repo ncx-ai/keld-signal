@@ -75,13 +75,13 @@ test("the name field is prefilled from the suggestion and is reachable by label"
 });
 
 // The display half of the same rule: even if a project reaches the page filed
-// under a project the API did not return, it must be drawn. Two guards
-// rather than one, deliberately — the daemon seeds the project now
-// (projects.ensureProject), and the rule worth keeping is "the page never
+// under a workstream the API did not return, it must be drawn. Two guards
+// rather than one, deliberately — the daemon seeds the workstream now
+// (projects.ensureWorkstream), and the rule worth keeping is "the page never
 // silently drops a project", not "that one data bug was fixed".
 
-test("THE STORY: a project is grouped even when the org declared no projects", () => {
-  // The real shape from a machine with Send to Atlas off: projects empty,
+test("THE STORY: a project is grouped even when the org declared no workstreams", () => {
+  // The real shape from a machine with Send to Atlas off: workstreams empty,
   // projects present. Before this the render loop had nothing to iterate and
   // both projects were invisible.
   const groups = groupsForProjects([], [
@@ -94,7 +94,7 @@ test("THE STORY: a project is grouped even when the org declared no projects", (
   assert.equal(groups[0].synthetic, true, "a machine-invented bucket must say so");
 });
 
-test("NEGATIVE: org projects are kept as they are, and not duplicated", () => {
+test("NEGATIVE: org workstreams are kept as they are, and not duplicated", () => {
   const groups = groupsForProjects(
     [{ key: "development", name: "Engineering", off: false }],
     [{ id: "p1", title: "web", group: "development" }]

@@ -106,7 +106,7 @@ type Trimmed struct {
 
 // coveredRules is every rule held by a VISIBLE org project.
 //
-// ⚠️ A project that is switched off covers NOTHING. Its projects are
+// ⚠️ A workstream that is switched off covers NOTHING. Its projects are
 // excluded from matching entirely, so counting their rules as coverage would
 // delete a local project and leave its blocks in no project at all — the exact
 // opposite of what coverage is supposed to guarantee.
