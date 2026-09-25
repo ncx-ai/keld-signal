@@ -100,10 +100,10 @@ cat > "$HOME_DIR/agent-config.json" <<JSON
 {"ml_backend":"deterministic","blocks":true,"auto_setup_integrations":false}
 JSON
 
-# One group so the Projects pane has a "counts for my work" switch to
-# drive and a bucket for "New project" to land in. This is the org-vocabulary
-# shape docs/v3/contracts.md defines; no projects yet, so every repository
-# starts out as a suggestion.
+# An empty project document in 3.0.6's stored shape, with the one group that
+# shape needs (the page has no groups since 2026-09-25; the file keeps one so
+# a 3.0.6 rollback renders every project). No projects yet, so every
+# repository starts out as a suggestion.
 # 3.0.6's stored shape: groups under `workstreams` (vocab:keep).
 cat > "$HOME_DIR/state/projects.json" <<JSON
 {"version":1,
