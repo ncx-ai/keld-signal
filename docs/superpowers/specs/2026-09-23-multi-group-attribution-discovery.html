@@ -141,6 +141,74 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <dt>Semantic pass default</dt><dd class="mono">OFF · a developer toggle (KELD_ATTRIBUTION) · limits who a wrong decision can affect</dd>
 </dl>
 
+<section id="rev3" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r3" style="margin-top:18px">Revision 3 · A project is a project again <span class="chip chip-signed" style="vertical-align:middle;margin-left:8px">Agreed · 2026-09-25 · in progress</span></h2>
+<p class="lede">Decided 2026-09-25: Signal's own buckets are called <strong>projects</strong> again. Revision 2 stopped Signal matching Atlas's workstreams, so sharing the word would make people ask "which workstreams?". The other two renames stay. Every earlier criterion keeps holding under the new names.</p>
+
+<h3>Words, amended</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Thing</th><th>Before this work</th><th>Revision 1 said</th><th>Revision 3 says</th></tr></thead>
+<tbody>
+  <tr><td>Signal's bucket (e.g. "SDKs")</td><td>project</td><td>workstream</td><td><strong>project</strong> — back, and distinct from Atlas's workstreams</td></tr>
+  <tr><td>A set of buckets (e.g. "Products")</td><td>workstream</td><td>group</td><td><strong>group</strong> — unchanged from Revision 1</td></tr>
+  <tr><td>repo, branch, model… facets</td><td>workstreams</td><td>dimensions</td><td><strong>dimensions</strong> — unchanged from Revision 1</td></tr>
+  <tr><td>Atlas's value (e.g. "Atlas Platform")</td><td>project</td><td>workstream</td><td>an <strong>Atlas workstream</strong> — held, not shown (Revision 2)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Revision 1–2</th><th>Revision 3</th></tr></thead>
+<tbody>
+  <tr><td>Go package and types</td><td><span class="mono">internal/agent/workstreams</span>, <span class="mono">Workstream</span></td><td><span class="mono">internal/agent/projects</span>, <span class="mono">Project</span>; <span class="mono">Group</span> stays</td></tr>
+  <tr><td>Local routes and page</td><td><span class="mono">/v1/workstreams*</span>, <span class="mono">#/workstreams</span>, "Workstreams"</td><td><span class="mono">/v1/projects*</span>, <span class="mono">#/projects</span>, "Projects"; <span class="mono">/v1/groups/{key}/off</span> stays</td></tr>
+  <tr><td>Stored names on disk</td><td><span class="mono">workstreams.json</span> (migrated once), <span class="mono">groups_off</span>, <span class="mono">KELD_WORKSTREAMS_FILE</span></td><td><strong>exactly 3.0.6's</strong>: <span class="mono">projects.json</span> in its v1 shape, <span class="mono">workstreams_off</span>, <span class="mono">KELD_PROJECTS_FILE</span>. The one-time file move is deleted.</td></tr>
+  <tr><td>Ledger cells (local)</td><td><span class="mono">workstreams: [{workstream_id, group, method}]</span></td><td><span class="mono">projects: [{project_id, group, method}]</span> — an old row's single <span class="mono">project_id</span> still reads as a one-entry list</td></tr>
+  <tr><td>Wire to Atlas, sidecar route</td><td><span class="mono">projects</span>, <span class="mono">project_matches</span>, facet key <span class="mono">workstreams</span>, <span class="mono">POST /projects</span></td><td><strong>unchanged</strong> — byte-identical</td></tr>
+  <tr><td>Behaviour</td><td>per-group attribution, overlap, totals, Signal-only (R1, R2)</td><td><strong>unchanged</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Why stored names go back to 3.0.6's</h3>
+<ul>
+  <li><strong>A rollback must still find its data.</strong> Auto-update can roll a machine back to 3.0.6. The Revision 1 move renamed <span class="mono">projects.json</span> away, so 3.0.6 found nothing; whatever it saved then was ignored after the next upgrade.</li>
+  <li><strong>It already happened once, on a developer Mac.</strong> A test run did the move on the real home while it was empty (fixed: the daemon suite now runs under a throwaway home). A later dev build then read the empty file and hid two real projects.</li>
+  <li>Keeping 3.0.6's names means there is no move to get wrong. The cost: <span class="mono">workstreams_off</span> and the file's inner <span class="mono">workstreams</span> key still mean groups on disk. That stays on the keep list, invisible to people.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
+<tbody>
+  <tr id="r3-ac-1"><td class="mono">R3-AC-1</td><td>The code names Signal's bucket a project: <span class="mono">internal/agent/projects</span> exists with type <span class="mono">Project</span>, <span class="mono">internal/agent/workstreams</span> does not, and the vocabulary gate bans the Revision 1 names for it.</td><td><span class="mono">go list ./...</span>, the gate</td><td class="mono">scripts/check_vocabulary.sh · scripts/check_vocabulary_test.sh</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r3-ac-2"><td class="mono">R3-AC-2</td><td><span class="mono">GET /v1/projects</span> returns <span class="mono">{groups, projects, suggestions, coverage, totals}</span>; <span class="mono">/v1/workstreams</span> answers 404; the page's nav and headings say "Projects" and never "workstream".</td><td>local routes, the page</td><td class="mono">go test ./internal/agent/ingress/ · node --test · ui/e2e</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r3-ac-3"><td class="mono">R3-AC-3</td><td>A home written by 3.0.6 is read in place. After an edit from the page, the state dir holds <span class="mono">projects.json</span> in the shape 3.0.6's loader reads, no <span class="mono">workstreams.json</span> and no <span class="mono">.pre-rename</span> file; a group switched off is saved as <span class="mono">workstreams_off</span>.</td><td><span class="mono">~/.keld/state</span>, <span class="mono">agent-config.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestA306HomeIsReadAndWrittenInPlace</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r3-ac-4"><td class="mono">R3-AC-4</td><td>The wire is byte-identical: the golden block row is unchanged, and the sidecar project post keeps its route and body.</td><td><span class="mono">POST /v1/signal/blocks</span>, <span class="mono">POST /projects</span></td><td class="mono">go test ./internal/agent/publish/ -run TestGoldenBlockIsTheCurrentWire (golden file not regenerated) · go test ./internal/agent/enrich/sidecar/</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r3-ac-5"><td class="mono">R3-AC-5</td><td>Groups and dimensions keep their Revision 1 names: <span class="mono">Group</span>, <span class="mono">/v1/groups/{key}/off</span>, <span class="mono">enrich</span> dimensions, the sidecar <span class="mono">dimensions</span> module.</td><td>code, routes</td><td class="mono">grep + go test ./internal/agent/ingress/ -run TestGroupOffRoute</td><td><span class="pill p-unver">OPEN</span></td></tr>
+  <tr id="r3-ac-6"><td class="mono">R3-AC-6</td><td>Every Revision 1 and 2 criterion still passes, its named test renamed where it says "workstream".</td><td>all suites</td><td class="mono">go test ./... · node --test · sidecar scripts · full Playwright · the real-daemon Revision 2 check (7/7)</td><td><span class="pill p-unver">OPEN</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger (Revision 3)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Branch history rewritten: PR A gains a "project keeps its name" commit; PR B and Revision 2 are replayed onto it</td><td>yes — the old branches are kept as <span class="mono">backup/*</span></td><td>local only; nothing was pushed</td><td>each layer's diff is re-checked against its own criteria</td></tr>
+  <tr><td>The one-time <span class="mono">projects.json</span> → <span class="mono">workstreams.json</span> move is deleted</td><td>yes</td><td>only machines that ran a dev build of this work: a stray <span class="mono">workstreams.json</span> is left and ignored</td><td>R3-AC-3</td></tr>
+  <tr><td>Local routes and page hash rename again</td><td>yes</td><td>the page only; it is embedded in the daemon</td><td>R3-AC-2</td></tr>
+  <tr><td>New ledger JSON columns named for projects</td><td>yes</td><td>unreleased columns; a dev machine may hold unused <span class="mono">workstreams</span> columns</td><td>additive; old single <span class="mono">project_id</span> rows still read</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
 <section id="rev2" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
 <h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Reviewed — 7/7 met · 2026-09-25</span></h2>
 <p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7. Plan: <span class="mono">docs/superpowers/plans/2026-09-25-signal-labels-on-its-own.md</span>. Status shows DONE only once the named test passes on the merged branch.</p>
@@ -243,6 +311,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <h2 id="s1">1 · Hypothesis &amp; scope</h2>
 
 <h3>Words: Signal adopts Atlas's, as part of this work</h3>
+<p><span class="pill p-partial">SUPERSEDED IN PART</span> Revision 3 (2026-09-25) calls Signal's bucket a <strong>project</strong> again; group and dimensions stand. See <a href="#rev3">Revision 3</a>.</p>
 <div class="wrap">
 <table>
 <thead><tr><th>Atlas says</th><th>Signal says today</th><th>Signal says after</th><th>Where it lives today</th></tr></thead>
