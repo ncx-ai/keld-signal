@@ -27,6 +27,7 @@ var (
 	pPostThreadMsgW  = user32.NewProc("PostThreadMessageW")
 	pGetClientRect   = user32.NewProc("GetClientRect")
 	pIsWindow        = user32.NewProc("IsWindow")
+	pIsWindowVisible = user32.NewProc("IsWindowVisible")
 	pMoveWindow      = user32.NewProc("MoveWindow")
 	pDefWindowProcW  = user32.NewProc("DefWindowProcW")
 	pRegisterClassEx = user32.NewProc("RegisterClassExW")
@@ -359,14 +360,40 @@ func panel(o options) int {
 
 	// Track the panel: an Inno page can be resized with the window, and a webview
 	// left at its original size would sit in the corner of a larger panel.
+	//
+	// ⚠️ IT ALSO TRACKS VISIBILITY, AND THAT IS NOT COSMETIC. A WebView2
+	// controller created under a HIDDEN parent never starts rendering, and
+	// showing the parent afterwards does not notify it — the page loads, its
+	// JavaScript runs, and nothing is ever painted. The wizard no longer hides
+	// the panel (see ShowApproval in keld-agent.iss), so this is defence rather
+	// than the fix: any future hide/show, from any cause, is repaired here.
+	// Size changes alone cannot catch it, because showing a window does not
+	// change its client size.
 	go func() {
 		last := [2]int32{pw, ph}
+		wasVisible := false
+		if v, _, _ := pIsWindowVisible.Call(o.Panel); v != 0 {
+			wasVisible = true
+		}
 		for {
 			time.Sleep(400 * time.Millisecond)
 			if alive, _, _ := pIsWindow.Call(o.Panel); alive == 0 {
 				pPostThreadMsgW.Call(mainThread, wmQuit, 0, 0)
 				return
 			}
+			vis := false
+			if v, _, _ := pIsWindowVisible.Call(o.Panel); v != 0 {
+				vis = true
+			}
+			if vis && !wasVisible {
+				// The three calls a revealed controller needs: become visible,
+				// re-take the parent's bounds, and be told its parent moved.
+				_ = chromium.Show()
+				chromium.Resize()
+				_ = chromium.NotifyParentWindowPositionChanged()
+			}
+			wasVisible = vis
+
 			w, h := clientSize(o.Panel)
 			if w != last[0] || h != last[1] {
 				last = [2]int32{w, h}

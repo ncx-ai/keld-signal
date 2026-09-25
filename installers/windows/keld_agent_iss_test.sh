@@ -216,6 +216,25 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 
+# 10b. ⚠️ THE WEB PANEL MUST BE VISIBLE BEFORE THE HELPER EMBEDS INTO IT.
+#      StartPanel hands WebPanel.Handle to the helper, which creates a WebView2
+#      controller as a child of that window. A controller created under a HIDDEN
+#      parent NEVER STARTS RENDERING, and showing the parent afterwards does not
+#      notify it — so the page loads, its JavaScript runs (proved by
+#      atlas.keld.co bytes in the WebView2 code cache) and nothing is painted.
+#      Shipped in 31cafa0 and reported as "this used to work".
+approval="$(sed -n '/^procedure ShowApproval/,/^end;/p' "$iss")"
+printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := True' || \
+  fail "ShowApproval does not make WebPanel visible - a WebView2 embedded into a hidden window renders nothing, ever"
+# and the order matters: visible FIRST, then hand the handle over.
+vis_ln="$(printf '%s\n' "$approval" | grep -n 'WebPanel.Visible := True' | head -1 | cut -d: -f1)"
+start_ln="$(printf '%s\n' "$approval" | grep -n 'StartPanel(' | head -1 | cut -d: -f1)"
+if [ -n "$vis_ln" ] && [ -n "$start_ln" ] && [ "$vis_ln" -gt "$start_ln" ]; then
+  fail "WebPanel is shown AFTER StartPanel - the controller is still created under a hidden window"
+fi
+printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := False' && \
+  fail "ShowApproval still hides WebPanel; that is the line that made the sign-in page render nothing"
+
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
 #     LOADS, so an installer signed over an unsigned payload installs fine and
