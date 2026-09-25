@@ -206,8 +206,12 @@ def main():
     for nm in ("P", "H", "F", "A", "T"):
         if nm not in a.arms:
             continue
-        from gliner2 import GLiNER2
-        ex = GLiNER2.from_pretrained(a.model)
+        try:                      # 2.5 models dispatch on the `architecture` field
+            from gliner2 import AutoExtractor
+            ex = AutoExtractor.from_pretrained(a.model)
+        except Exception:
+            from gliner2 import GLiNER2
+            ex = GLiNER2.from_pretrained(a.model)
         print(f"  [model {a.model}]")
         STY = STYLES[a.wording]
         verb_labels = [f"{v}: {STY[v]}".rstrip(": ") for v in STY]

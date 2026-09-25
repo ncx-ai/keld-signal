@@ -276,11 +276,41 @@ own blast radius (the sidecar's `/classify`, `/extract`, `/entities` all ride th
 ⚠️ **Library version is confounded with model.** All three arms below are therefore re-run
 under 2.0.0, INCLUDING the current model, so the comparison isolates the weights.
 
-| model | lib | accuracy | lift | `code.*` |
-|---|---|---|---|---|
-| `gliner2-large-v1` (baseline, re-run) | 2.0.0 | _running_ | | |
-| `GLiNER2.5-Decide` | 2.0.0 | _running_ | | |
-| `gliner2.5-base-v1` | 2.0.0 | _running_ | | |
+### RESULT: 2.5 does NOT beat what Keld already ships
 
-Reference: `gliner2-large-v1` under lib 1.3.2 scored **0.660 / +0.290 / code.\* 0.600**
-(arm P, rich wording).
+Arm P, rich wording, all under lib 2.0.0.
+
+| model | size | accuracy | lift | `code.*` |
+|---|---|---|---|---|
+| **`gliner2-large-v1` (current)** | 1.95 GB | **0.660** | **+0.290** | 0.600 |
+| `GLiNER2.5-Decide` | 1.95 GB | 0.520 | +0.150 | 0.489 |
+| `gliner2.5-base-v1` | 0.77 GB | **0.340** | **-0.030** | 0.089 |
+| `gliner2.5-small-v1` | 0.30 GB | not run — 1/3 on smoke | | |
+
+**CONTROL HOLDS: the current model scores 0.660 under BOTH libraries** (1.3.2 and 2.0.0), so
+the library upgrade is not a confound and these differences are the weights.
+
+**`GLiNER2.5-Decide` is 14 points WORSE than the model it was fine-tuned from**, despite being
+the classification-specialised variant and despite claiming +11 over the general large on its
+own `fast-decisions` benchmark. That suite is intent/routing/sentiment over 17 domains; it does
+not transfer to "what kind of work is this window". Its signature is abstention —
+`research`->`other` x13 — plus oddities like `code.edit`->`audio.create` x2.
+
+⚠️ **`gliner2.5-base-v1` went 3/3 on a three-sentence CONTEXT smoke test at 0.99 confidence,
+then scored BELOW THE MAJORITY CONSTANT on the real 17-way verb task (0.340, lift -0.030,
+`code.*` 0.089).** This is the same trap recorded in
+`2026-09-24-term-extraction-bakeoff.md` — a smoke test proves the MECHANISM, never a RATE —
+re-encountered the same day. Stopping at the smoke test would have recommended a model that is
+worse than always answering `code.edit`.
+
+⚠️ **`gliner2.5-base-v1` and `-small-v1` are a DIFFERENT ARCHITECTURE** (`boundary` /
+`BoundaryExtractor`, not `span` / `SpanExtractor`) and load only through `AutoExtractor`.
+`GLiNER2.from_pretrained` raises a misleading `max_width` AttributeError on them. Patching
+`max_width` into the config to force a load builds the WRONG model class — do not do it.
+`GLiNER2.5-Decide` IS a span model, so its number above was produced by the correct path.
+
+**Live thread, untested:** `base-v1` aced the CONTEXT smoke test while failing the VERB task,
+and those are different problems (11 well-separated categories vs 17 overlapping ones). Since
+the winning design scores the axes SEPARATELY, a 0.77 GB model on the context pass with the
+large on verbs is reachable. The paragraph above is the reason not to believe it without a
+full run.
