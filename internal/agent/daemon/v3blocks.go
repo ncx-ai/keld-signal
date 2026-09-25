@@ -284,13 +284,13 @@ func dominantModel(ws map[string]enrich.Labeled) string {
 }
 
 // attributeAndRecord runs the DETERMINISTIC attribution pass for one block and
-// records its outcome — including, deliberately, the outcomes that are not a
-// project: no rule matched, or two projects claim the same one.
+// records its outcome — including, deliberately, the outcome that is not a
+// project: no rule matched.
 //
-// ⚠️ **A conflict is recorded as a conflict, never resolved by picking first.**
-// Two projects tagged with the same repository is a configuration error only a
-// person can settle, and choosing one silently would put a confident number
-// against work that belongs to neither.
+// ⚠️ **Two projects claiming one block is not a conflict any more.** It used
+// to be recorded as one and attributed to neither; since 2026-09-23 the block
+// lands in every project that matches it, in any group and inside one, and
+// a group's totals count it once (projects.Rollup).
 func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, now time.Time) {
 	if v.projects == nil {
 		return

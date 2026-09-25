@@ -300,13 +300,16 @@ type Store struct {
 	// Blocks is the optional BlocksSource — see its doc comment. nil until
 	// the daemon wiring sets it.
 	Blocks BlocksSource
-	// RemoteProjects, when set, returns the org's pooled project values
-	// most recently seen on the settings poll (settings.Remote.Projects),
-	// converted at read time via FromRemoteProjects. This package cannot hold
-	// that state itself — the settings poll lives in the daemon, which is
-	// wired separately from this deliverable — so it is a getter the daemon
-	// wiring supplies, mirroring Blocks. nil means "no remote projects known
-	// yet", which GET /v1/projects treats as an honest empty, never an error.
+	// RemoteProjects, when set, returns the org's workstreams most recently
+	// seen on the settings poll. The settings poll lives in the daemon, so it is
+	// a getter the daemon wiring supplies, mirroring Blocks; nil means "none
+	// known yet".
+	//
+	// ⚠️ **HELD, NOT USED (Revision 2, 2026-09-25).** These used to be merged
+	// into the rule pass's candidates and shown on the page. Signal now
+	// attributes only to its own projects (Candidates), so nothing on the
+	// rule, page or project_matches path reads this. It is kept because the org's
+	// list is still received, and how to use it again is separate work.
 	RemoteProjects func() []settings.RemoteProject
 }
 
