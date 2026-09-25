@@ -213,47 +213,35 @@ func panel(o options) int {
 	// space the wizard page has left over, and Atlas's approval page is a compact
 	// form — so bordering the panel drew a box with the form in its top-left
 	// corner and a large empty region down and to the right. Nothing outside the
-	// page knows how big the page is, so the page is ASKED: a script injected at
-	// document-create posts its scroll size back, and the two windows shrink to
-	// it.
-	//
-	// ⚠️ SHRINK ONLY, AND BOUNDED. Resizing the window changes the viewport, which
-	// can change the reported size, which would resize again — a loop that shows
-	// up as a flickering panel. Growing is never needed (the panel is the maximum)
-	// and a small adjustment budget ends it regardless.
+	// page knows how big the page is, and the attempt to ASK it is what broke —
+	// see the block below.
 	chromium := edge.NewChromium()
 
-	fits := 0
-	// fitHeight tightens the box VERTICALLY to the height the page needs, and
-	// never touches its width.
+	// ⚠️ **FIT-TO-CONTENT IS GONE, AND IT IS WHAT MADE THE PANEL GO BLANK.**
+	// This used to shrink the box to the page's reported height. Two properties
+	// made that unrecoverable rather than merely imperfect:
 	//
-	// ⚠️ **FITTING THE WIDTH TOO MADE IT WORSE, AND THE REASON IS WHAT
-	// `scrollWidth` MEANS.** It reports the content's MINIMUM width — what the
-	// layout collapses to — not the width the page wants. Atlas's approval route
-	// has no width constraint at all (a `px-5 py-4` wrapper with `w-full`
-	// inputs), so it fills whatever viewport it is given and its scrollWidth is
-	// far narrower than any comfortable reading width. Shrinking to it squeezed
-	// the form into a column, which is worse than the empty space it was meant to
-	// remove. The panel's width is the right width; only its height was wrong.
-	fitHeight := func(ch int) {
-		if ch <= 0 || fits >= 4 {
-			return
-		}
-		h := ch + 2*inset
-		if h > int(ph) {
-			h = int(ph)
-		}
-		_, oh := clientSize(outer)
-		// Only ever tighten, and ignore noise.
-		if h >= int(oh)-2 {
-			return
-		}
-		fits++
-		pMoveWindow.Call(outer, 0, 0, uintptr(pw), uintptr(h), 1)
-		pMoveWindow.Call(child, uintptr(inset), uintptr(inset),
-			uintptr(int(pw)-2*inset), uintptr(h-2*inset), 1)
-		chromium.Resize()
-	}
+	//  1. It was ONE-WAY. The rule was `if h >= oh-2 { return }` — "only ever
+	//     tighten" — so every report could shrink the panel and none could ever
+	//     grow it back. A single early small reading was permanent.
+	//  2. The measurement is SELF-REFERENTIAL on this page. Atlas serves
+	//     `<html class="h-full">`, so `documentElement.scrollHeight` reports the
+	//     VIEWPORT height, not the content's. The script was therefore feeding
+	//     the window its own size back, and the one-way rule turned that loop
+	//     into a ratchet: measure, shrink, measure smaller, shrink again. The
+	//     end state is a sliver, which reads as a blank panel.
+	//
+	// Both were introduced on 2026-09-15 in the same commit as the loading
+	// state, which is exactly when the sign-in page stopped rendering — the
+	// symptom was reported as "it used to work", and it did.
+	//
+	// The panel is now simply the size the wizard gives it. That restores the
+	// behaviour that worked and costs the cosmetic win the fit was after: the
+	// border hugs the panel rather than the form, so a compact form leaves space
+	// inside the box. That is a known, accepted trade — a roomy box beats an
+	// empty one. Anything that reintroduces content-fitting must (a) grow as
+	// well as shrink and (b) measure something that does not depend on the
+	// window's own height, or it rebuilds this exact bug.
 
 	// ⚠️ "embedded" IS NOT "LOADED", AND THE PAGE NEEDS THE SECOND ONE. Embedding
 	// succeeds the moment the control exists — before a single byte of Atlas has
@@ -293,6 +281,10 @@ func panel(o options) int {
 	chromium.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
 		markLoaded("navigation")
 	}
+	// The script's message no longer RESIZES anything — it is kept purely as a
+	// readiness signal, and it is the strongest of the three: a message can only
+	// arrive from a document that parsed and ran JavaScript, which is more than
+	// NavigationCompleted proves.
 	chromium.MessageCallback = func(s string) {
 		var m struct {
 			H float64 `json:"h"`
@@ -301,7 +293,6 @@ func panel(o options) int {
 			return
 		}
 		markLoaded("script")
-		fitHeight(int(m.H))
 	}
 	if !chromium.Embed(child) {
 		// ⚠️ A DISTINCT EXIT CODE, because the page's response is specific: fall
@@ -312,44 +303,40 @@ func panel(o options) int {
 		say("no_runtime")
 		return exitNoWebView2
 	}
-	// Report the content's own size once it has laid out, and again if the page
-	// reflows. `requestAnimationFrame` after `load` is what makes the first
-	// reading come after layout rather than during it.
-	// Report the content's own HEIGHT once it has laid out, and again whenever it
-	// changes — an error message appearing under the form makes the page taller,
-	// and a box that did not follow would clip it.
+	// A READINESS PING, NOT A MEASUREMENT. It used to report the document's
+	// height so the box could shrink to it; that is what ratcheted the panel to a
+	// sliver (see the block above). All that is wanted now is evidence the
+	// document parsed and ran JavaScript — which is a stronger statement than
+	// NavigationCompleted makes, since that also fires on failure.
 	//
-	// ⚠️ HEIGHT ONLY. See fitHeight: `scrollWidth` is the content's MINIMUM width,
-	// and fitting to it collapses a full-width form into a column.
+	// It still posts the height, because a number that says how tall the page
+	// thinks it is costs nothing and is worth having in a diagnostic; nothing
+	// acts on it.
+	//
+	// NOT THE load EVENT ALONE. It waits for every subresource, so one slow font
+	// or beacon withholds it indefinitely - which is how this hung on a real
+	// install. DOMContentLoaded fires when the document is usable, which is the
+	// question being asked.
+	// (No backticks in here: this whole script is a Go raw string literal.)
 	chromium.Init(`(function () {
-  var last = -1;
-  function report() {
+  var sent = false;
+  function ping() {
+    if (sent) return;
     var d = document.documentElement, b = document.body;
     if (!d || !b) return;
-    var h = Math.max(d.scrollHeight, b.scrollHeight);
-    if (h === last) return;
-    last = h;
-    window.chrome.webview.postMessage(JSON.stringify({ h: h }));
+    sent = true;
+    try {
+      window.chrome.webview.postMessage(JSON.stringify({
+        h: Math.max(d.scrollHeight, b.scrollHeight)
+      }));
+    } catch (e) {}
   }
-  function schedule() { requestAnimationFrame(report); }
-  // NOT THE load EVENT ALONE. It waits for every subresource, so one slow font
-  // or analytics beacon withholds the first report indefinitely - which is
-  // exactly how this hung on a real install. DOMContentLoaded fires once the
-  // document is usable, which is the question being asked; load is kept because
-  // it is when the final layout is known.
-  // (No backticks in here: this whole script is a Go raw string literal.)
+  function schedule() { requestAnimationFrame(ping); }
   document.addEventListener("DOMContentLoaded", schedule);
   window.addEventListener("load", schedule);
   // And if this script somehow runs after the document is already parsed,
   // neither event is coming.
   if (document.readyState !== "loading") { schedule(); }
-  function observe() {
-    if (window.ResizeObserver && document.body) {
-      new ResizeObserver(schedule).observe(document.body);
-    }
-  }
-  document.addEventListener("DOMContentLoaded", observe);
-  window.addEventListener("load", observe);
 })();`)
 	chromium.Resize()
 	chromium.Navigate(o.URL)

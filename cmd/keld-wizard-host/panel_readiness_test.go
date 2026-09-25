@@ -60,6 +60,51 @@ func TestPanelHasMoreThanOneReadinessSourceAndADeadline(t *testing.T) {
 	}
 }
 
+// ⚠️ THE PANEL MUST NOT RESIZE ITSELF TO A HEIGHT THE PAGE REPORTS.
+//
+// It did, from 2026-09-15 until 2026-09-25, and it rendered the sign-in page
+// blank on a real install — reported, exactly, as "this used to work". Two
+// properties made it unrecoverable rather than merely imperfect:
+//
+//   - the rule was ONE-WAY ("only ever tighten"), so any report could shrink the
+//     panel and none could grow it back; and
+//   - the measurement is SELF-REFERENTIAL on the page it runs against. Atlas
+//     serves `<html class="h-full">`, so `documentElement.scrollHeight` is the
+//     VIEWPORT height, not the content's. The script fed the window its own size
+//     back, and one-way shrinking turned that into a ratchet ending at a sliver.
+//
+// So the message from the page is a readiness ping and nothing else. Anything
+// that reintroduces content-fitting must grow as well as shrink AND measure
+// something independent of the window's own height — otherwise it rebuilds this.
+func TestPanelDoesNotResizeToPageReportedHeight(t *testing.T) {
+	b, err := os.ReadFile("panel_windows.go")
+	if err != nil {
+		t.Fatalf("read panel_windows.go: %v", err)
+	}
+	src := string(b)
+
+	if strings.Contains(src, "fitHeight") {
+		t.Error("fitHeight is back: shrinking the panel to a page-reported height ratcheted it to a sliver and read as a blank page")
+	}
+	// The one-way rule is the specific shape that made it unrecoverable.
+	if strings.Contains(src, "Only ever tighten") {
+		t.Error("a one-way shrink rule is back; a panel that can only get smaller cannot recover from one bad reading")
+	}
+	// The message handler must not feed the reported height into any sizing call.
+	i := strings.Index(src, "chromium.MessageCallback")
+	if i < 0 {
+		t.Fatal("no MessageCallback - the readiness ping is gone")
+	}
+	end := strings.Index(src[i:], "\n\t}")
+	if end < 0 {
+		end = len(src) - i
+	}
+	body := src[i : i+end]
+	if strings.Contains(body, "MoveWindow") || strings.Contains(body, "Resize()") {
+		t.Error("the page's reported height is being used to resize the panel again")
+	}
+}
+
 // The injected script lives in a Go RAW STRING, so a backtick anywhere inside it
 // silently terminates the literal — which turns into a compile error some lines
 // later that names the JavaScript rather than the quoting. It cost a build here.
