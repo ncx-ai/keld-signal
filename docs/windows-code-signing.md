@@ -67,7 +67,12 @@ the payload — replacing third-party attestations with ours, which we have no
 standing to make and cannot recreate. Measured on the real CI payload
 (run 35021526816): **16,498 files, 188 PE binaries, 78 already vendor-signed,
 110 needing ours.** An earlier local measurement said 42 and was low by 2.6x;
-size any signing quota off 110 per release, not 42.
+size any signing quota off ~110 per release, not 42.
+
+⚠️ **The count is not a constant** — run 36144191695 catalogued **111**. It moves
+with what the sidecar freeze happens to bundle, so treat it as ~110 and read the
+real number off the `catalog written` line in the run log. Nothing should be
+asserted against an exact value.
 
 ⚠️ **Verification reads the CATALOG, never a fresh scan.** A rescan after signing
 finds every file `Valid` — including the ones just signed — so it could never

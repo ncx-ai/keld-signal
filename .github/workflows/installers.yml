@@ -466,9 +466,10 @@ jobs:
       # ⚠️ ENUMERATION STAYS IN THE SCRIPT, NOT IN THE ACTION, BECAUSE THE
       # ALREADY-SIGNED RULE LIVES THERE. The action can sweep a folder itself
       # (files-folder + files-folder-recurse) and that would re-sign all 188 PE
-      # binaries in the payload — replacing 78 third-party vendor attestations
+      # binaries in the payload - replacing 78 third-party vendor attestations
       # with ours, which is both rude and a loss of information we cannot
-      # recreate. The catalog is the exact list of the 110 that need us.
+      # recreate. The catalog is the exact list of the ~110 that need us (110 on run
+      # 35021526816, 111 on 36144191695 - it moves with the sidecar freeze).
       - name: Enumerate Windows binaries needing our signature
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -555,7 +556,13 @@ jobs:
           endpoint: https://eus.codesigning.azure.net/
           signing-account-name: keld
           certificate-profile-name: keld-public-trust
-          files: installers\windows\Output\keld-setup.exe
+          # ⚠️ ABSOLUTE, AND THE ACTION SAYS SO: `files` is documented as "a list
+          # of ABSOLUTE paths" and answers a relative one with "The file path
+          # '...' is not rooted." — measured, run 36144191695. `files-catalog`
+          # is the opposite (the catalog path may be relative, and its ENTRIES
+          # are relative to the catalog), so the two inputs do not agree and
+          # copying the shape from one to the other is the mistake to avoid.
+          files: ${{ github.workspace }}\installers\windows\Output\keld-setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
