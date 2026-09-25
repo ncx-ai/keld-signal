@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -39,6 +40,11 @@ var (
 // borderColor is the dark gray drawn around the embedded page, as a COLORREF
 // (0x00BBGGRR — Windows orders the bytes blue-green-red, not red-green-blue).
 const borderColor = 0x00595959
+
+// How long the panel waits for any readiness signal before revealing itself
+// anyway. Generous: this is a backstop against a page that never finishes, not
+// a latency budget, and firing it early would hide a page that was merely slow.
+const panelLoadDeadline = 25 * time.Second
 
 type wndClassExW struct {
 	cbSize        uint32
@@ -255,7 +261,38 @@ func panel(o options) int {
 	// for as long as the network takes. The first size report can only come from
 	// a document that has fired `load`, so it doubles as the signal that there is
 	// something worth looking at.
+	// ⚠️ `loaded` HAS THREE SOURCES, AND IT USED TO HAVE ONE — WHICH HUNG THE
+	// WIZARD ON A REAL INSTALL. The only trigger was the injected script's first
+	// height message, posted from a `load` listener. `load` waits for EVERY
+	// subresource, so one slow font or beacon on the Atlas page means it never
+	// fires, no message is ever posted, and the page sits on "Loading the Keld
+	// sign-in page…" forever with no timeout and nothing to look at. Measured on
+	// a real Windows 11 install 2026-09-25: panel `embedded` at 11:50:26, and no
+	// `loaded` ever — WebView2 alive, the URL answering 200, the wizard stuck.
+	//
+	// Gating a UI reveal on the strictest possible readiness signal, with no
+	// fallback, is the defect. The three sources, in order of authority:
+	//   1. NavigationCompleted — WebView2's own answer to "did the page load",
+	//      which does not wait on stragglers and fires on failure too.
+	//   2. the script's first height report — kept, since it means the document
+	//      has laid out, and it is what sizes the border.
+	//   3. a deadline — because a panel showing a half-drawn page is strictly
+	//      better than a wizard that never continues. Reveal, and let the person
+	//      decide whether what they see is usable.
+	var loadedMu sync.Mutex
 	loaded := false
+	markLoaded := func(via string) {
+		loadedMu.Lock()
+		first := !loaded
+		loaded = true
+		loadedMu.Unlock()
+		if first && em != nil {
+			em.emitValue(panelEvent{Event: "panel", Status: "loaded", Via: via})
+		}
+	}
+	chromium.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		markLoaded("navigation")
+	}
 	chromium.MessageCallback = func(s string) {
 		var m struct {
 			H float64 `json:"h"`
@@ -263,10 +300,7 @@ func panel(o options) int {
 		if json.Unmarshal([]byte(s), &m) != nil {
 			return
 		}
-		if !loaded {
-			loaded = true
-			say("loaded")
-		}
+		markLoaded("script")
 		fitHeight(int(m.H))
 	}
 	if !chromium.Embed(child) {
@@ -298,16 +332,39 @@ func panel(o options) int {
     window.chrome.webview.postMessage(JSON.stringify({ h: h }));
   }
   function schedule() { requestAnimationFrame(report); }
+  // NOT THE load EVENT ALONE. It waits for every subresource, so one slow font
+  // or analytics beacon withholds the first report indefinitely - which is
+  // exactly how this hung on a real install. DOMContentLoaded fires once the
+  // document is usable, which is the question being asked; load is kept because
+  // it is when the final layout is known.
+  // (No backticks in here: this whole script is a Go raw string literal.)
+  document.addEventListener("DOMContentLoaded", schedule);
   window.addEventListener("load", schedule);
-  if (window.ResizeObserver) {
-    window.addEventListener("load", function () {
+  // And if this script somehow runs after the document is already parsed,
+  // neither event is coming.
+  if (document.readyState !== "loading") { schedule(); }
+  function observe() {
+    if (window.ResizeObserver && document.body) {
       new ResizeObserver(schedule).observe(document.body);
-    });
+    }
   }
+  document.addEventListener("DOMContentLoaded", observe);
+  window.addEventListener("load", observe);
 })();`)
 	chromium.Resize()
 	chromium.Navigate(o.URL)
 	say("embedded")
+
+	// ⚠️ THE DEADLINE IS THE POINT OF THIS WHOLE BLOCK: a wizard that cannot
+	// continue is worse than one showing an imperfect page. Everything above can
+	// fail silently — a navigation that never completes, a document that never
+	// parses — and without this the person is left on a spinner with no way
+	// forward and nothing to report. `emit` is mutex-guarded, so firing this from
+	// a goroutine is safe; `markLoaded` only ever emits once.
+	go func() {
+		time.Sleep(panelLoadDeadline)
+		markLoaded("deadline")
+	}()
 
 	watchForExit(o.Sentinel, o.ParentPID, func() {
 		pPostThreadMsgW.Call(mainThread, wmQuit, 0, 0)
