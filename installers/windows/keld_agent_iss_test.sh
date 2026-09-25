@@ -216,4 +216,40 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 
-echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, and claims success from observed state"
+# 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
+#     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
+#     LOADS, so an installer signed over an unsigned payload installs fine and
+#     is refused the moment keld.exe starts — the exact failure measured on a
+#     real machine. Reordered, every step still "passes" and the product is
+#     dead on the machines this exists for, which is why it is pinned by LINE
+#     ORDER rather than by presence.
+ln_payload="$(grep -n 'name: Sign the Windows payload'   "$wf" | cut -d: -f1)"
+ln_iscc="$(   grep -n 'name: Package Windows installer'  "$wf" | cut -d: -f1)"
+ln_setup="$(  grep -n 'name: Sign the Windows installer' "$wf" | cut -d: -f1)"
+for v in ln_payload ln_iscc ln_setup; do
+  [ -n "${!v}" ] || fail "installers.yml has no step for $v - the Windows signing chain is incomplete"
+done
+[ "$ln_payload" -lt "$ln_iscc" ] || \
+  fail "the payload is signed AFTER iscc - the installer would carry unsigned binaries and SAC refuses them at load"
+[ "$ln_setup" -gt "$ln_iscc" ] || \
+  fail "keld-setup.exe is signed BEFORE iscc builds it - that step can only be signing a stale or absent file"
+
+# 12. Vendor signatures must not be swept away: the action is handed an explicit
+#     catalog, never a recursive folder sweep. 78 of the payload's 188 PE
+#     binaries arrive signed by their own vendors, and re-signing replaces an
+#     attestation we cannot recreate with one we have no standing to make.
+grep -q 'files-catalog:' "$wf" || \
+  fail "installers.yml does not hand the signing action a catalog"
+grep -q 'files-folder-recurse:' "$wf" && \
+  fail "installers.yml sweeps a folder recursively - that re-signs vendor-signed binaries; use the catalog"
+grep -q 'CatalogOut' "$wf" || fail "nothing generates the signing catalog"
+grep -q 'VerifyCatalog' "$wf" || \
+  fail "nothing verifies the catalog after signing - a signer that exits 0 having skipped a file would ship"
+
+# 13. Timestamping. Artifact Signing certificates are short-lived and rotated by
+#     the service, so an untimestamped signature stops validating within weeks of
+#     shipping. Both signing steps must carry it.
+[ "$(grep -c 'timestamp-rfc3161:' "$wf")" -eq 2 ] || \
+  fail "expected both signing steps to set timestamp-rfc3161; short-lived certs make this mandatory, not optional"
+
+echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, signs the payload before iscc and the installer after without trampling vendor signatures, and claims success from observed state"
