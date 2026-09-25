@@ -314,3 +314,49 @@ and those are different problems (11 well-separated categories vs 17 overlapping
 the winning design scores the axes SEPARATELY, a 0.77 GB model on the context pass with the
 large on verbs is reachable. The paragraph above is the reason not to believe it without a
 full run.
+
+## ⚠️ 2026-09-25 — the 0.660 DOES NOT TRANSFER off engineering work
+
+John's product/marketing session (7 windows, multi-label gold,
+`scripts/activity-atv1-john-labels.txt`) is the first non-engineering ground truth. The
+measured arm was re-run on it.
+
+| framing | result |
+|---|---|
+| top1 == gold primary | **0/7 = 0.000** |
+| top1 in gold set (multi-label) | 1/7 = 0.143 |
+| mean gold-set recall in the ranked list | **0.190** |
+
+**Across 45 independent sub-window calls on document-authoring work, the model proposed a
+`text.*` verb ZERO times.** Not `text.transform` (5 of 7 gold primaries), not `text.create`,
+not `transcribe`. It answered `extract` or `other` nearly everywhere.
+
+**Why this was not visible before.** The 100-window engineering frame is 37% `code.edit`,
+28% `review`, and contains **zero** `text.*` gold. The 0.660 was therefore measured on a
+population that excludes the verbs this session is made of. ⚠️ **A headline accuracy is only
+a claim about the label distribution it was measured on**, and this is what that costs.
+
+**Windowing is NOT the cause.** The single-call arm truncates at 2000 chars because GLiNER2
+has 512 positions, and J05/J06 lost ~50% of their text that way. Cutting into 400-char
+sub-windows and ranking by share — the design the single call structurally cannot express —
+produced the SAME 0/7. The truncation was a real confound and a red herring for this failure.
+
+**Prime suspect: wording, and it is testable.** The `rich` description for `text.transform`
+reads "rewriting, translating or reformatting PROSE that already exists". John's work is
+editing a SLIDE DECK — reordering slides, fixing arrow labels, splicing slide XML. The wording
+study already measured a **0.378** swing on `code.*` from description changes alone, larger
+than any arm gap in this study, so "describe `text.*` in terms of documents, decks and pages
+rather than prose" is a cheap hypothesis rather than an excuse. **Untested as of this note.**
+
+⚠️ **n = 7 windows, one session, one person.** No rate here is stable. The 45-call
+zero-proposal observation is the durable part; the 0/7 is not a rate.
+
+**Consequence for the spec** (`2026-09-25-block-activity-type-design.md`): its headline number
+is scoped to engineering work and must not be read as a general claim. The spec is NOT ready
+to implement until either the wording hypothesis is tested or the claim is narrowed in writing.
+
+**Vocabulary finding from the same labelling:** `text.create` has a `sales` context;
+`text.transform` does NOT (financial/general/legal/marketing/media/medical/scientific only).
+John's session creates a customer deck once and revises it five times, so identical work is
+labelable `sales` at creation and only `general` afterwards. That asymmetry is in `atv1`, not
+in the labelling.
