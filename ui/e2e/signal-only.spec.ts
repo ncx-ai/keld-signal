@@ -8,12 +8,12 @@ import { test as base, expect } from "@playwright/test";
 //
 // Every project on the Projects pane is the person's own Signal
 // project. The daemon's catalog no longer says `origin: "atlas"` (an old
-// "Same as" overlay reads "user", its group "local"), but the page must be
-// right even when handed the old shape, so this fixture serves it on purpose:
-// an overlay stored with `origin: "atlas"` and an Atlas id, in a group whose
-// origin is also "atlas", beside ordinary Signal projects and a
-// suggestion. The DOM under test is the real page; only the data is fixed —
-// the same mocked-catalog shell groups.spec.ts uses.
+// "Same as" overlay reads "user"), but the page must be right even when
+// handed the old shape, so this fixture serves it on purpose: an overlay
+// stored with `origin: "atlas"` and an Atlas id, beside ordinary Signal
+// projects and a suggestion. The DOM under test is the real page; only the
+// data is fixed — the same mocked-catalog shell flat-projects.spec.ts uses.
+// Since Revision 4 the catalog carries no groups, so neither does this one.
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const UI_DIR = path.join(REPO_ROOT, "internal", "agent", "ui");
@@ -28,7 +28,6 @@ const TYPES: Record<string, string> = {
 const OVERLAY = {
   id: "keld_projects:signal",
   title: "Signal Platform",
-  group: "products",
   repos: ["github.com/ncx-ai/keld-signal"],
   rules: ["github.com/ncx-ai/keld-signal"],
   origin: "atlas",
@@ -36,21 +35,17 @@ const OVERLAY = {
 };
 
 const CATALOG = {
-  groups: [
-    { key: "development", name: "Development", origin: "local" },
-    { key: "products", name: "Products", origin: "atlas" },
-  ],
   projects: [
     OVERLAY,
-    { id: "development:billing", title: "Billing", group: "development", repos: ["github.com/ncx-ai/keld-billing"], rules: ["github.com/ncx-ai/keld-billing"], origin: "user" },
-    { id: "development:docs", title: "Docs site", group: "development", repos: ["github.com/ncx-ai/keld-docs"], rules: ["github.com/ncx-ai/keld-docs"], origin: "local" },
-    { id: "development:old", title: "Old experiment", group: "development", repos: [], rules: [], origin: "user", hidden: true },
+    { id: "development:billing", title: "Billing", repos: ["github.com/ncx-ai/keld-billing"], rules: ["github.com/ncx-ai/keld-billing"], origin: "user" },
+    { id: "development:docs", title: "Docs site", repos: ["github.com/ncx-ai/keld-docs"], rules: ["github.com/ncx-ai/keld-docs"], origin: "local" },
+    { id: "development:old", title: "Old experiment", repos: [], rules: [], origin: "user", hidden: true },
   ],
   suggestions: [
     { id: "repo:github.com/ncx-ai/keld-website", kind: "repo", value: "github.com/ncx-ai/keld-website", blocks: 3, minutes: 45, tokens: 12000 },
   ],
   coverage: { attributed: 4, total: 7, since: new Date().toISOString() },
-  totals: { groups: [], projects: [] },
+  totals: { projects: [] },
 };
 
 // The catalog's visible projects, in its order: what every picker must offer.
@@ -105,7 +100,7 @@ const test = base.extend<{ shell: Shell }>({
 
 async function openProjects(page: any, shell: Shell) {
   await page.goto(`${shell.url}/?secret=irrelevant#/projects`);
-  await expect(page.locator(".group-card").first()).toBeVisible();
+  await expect(page.locator(".projects-card").first()).toBeVisible();
 }
 
 test.describe("Signal labels on its own: the Projects pane", () => {
@@ -117,7 +112,7 @@ test.describe("Signal labels on its own: the Projects pane", () => {
     await expect(pane).not.toContainText(/in Atlas/i);
     await expect(pane).not.toContainText(/from Atlas/i);
     // Every row carries the same pill; none is marked as the org's.
-    const pills = pane.locator(".project-row .pill");
+    const pills = pane.locator(".projects-card:not(.hidden-projects) .project-row .pill");
     await expect(pills).toHaveCount(VISIBLE.length);
     await expect(pills).toHaveText(VISIBLE.map(() => "local"));
   });
