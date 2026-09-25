@@ -408,7 +408,7 @@ export function projectRulesSummary(p) {
  *  imply the org learned anything.
  *
  *  ⚠️ **IT USED TO END "To change it for everyone, edit the project in
- *  Atlas", with an "Open the project in Atlas" link.** Revision 2 (Signal
+ *  Atlas", with an "Open the workstream in Atlas" link.** Revision 2 (Signal
  *  labels on its own) made every project on this page the person's own
  *  Signal project: there is no org copy of it to go and edit, so that
  *  advice pointed at something that does not exist. The response's
@@ -463,20 +463,20 @@ export const SETTINGS_ENV = {
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
 /** groupsForProjects is what "Your projects" iterates: the catalog's groups, plus
- *  one group for any project whose project is in none of them.
+ *  one group for any project whose workstream is in none of them.
  *
  *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
- *  projects by looping over projects and drawing each one's members, so a
+ *  projects by looping over workstreams and drawing each one's members, so a
  *  project filed under a key that is in no list is never drawn at all. Measured
- *  on a real machine: two projects on disk, `"projects": null` from the API,
+ *  on a real machine: two projects on disk, `"workstreams": null` from the API,
  *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
  *  them saw their suggestion disappear and nothing appear, which is
  *  indistinguishable from the suggestion having been thrown away.
  *
  *  That is the state of EVERY machine with Send to Atlas off, because the
- *  project list is pushed down by Atlas and nothing local seeded it.
+ *  workstream list is pushed down by Atlas and nothing local seeded it.
  *
- *  The daemon now seeds it too (projects.ensureProject), so this is the
+ *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
  *  second of two guards rather than the only one — deliberately, because the
  *  rule worth keeping is "the page never silently drops a project", not "that
  *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
@@ -497,7 +497,7 @@ export function groupsForProjects(groups, projects) {
 }
 
 /** groupDisplayName turns a key into something a person reads. Mirrors the
- *  Go side's function of the same name so a locally-seeded project is
+ *  Go side's function of the same name so a locally-seeded workstream is
  *  labelled identically whether the page or the daemon named it. */
 export function groupDisplayName(key) {
   const out = String(key || "").replace(/[_-]+/g, " ").trim();
@@ -1303,7 +1303,7 @@ if (typeof document !== "undefined") {
     // an input would be lost the moment anything else refreshed.
     naming: null,
     // confirmations: rowKey -> true. Set after any /v1/projects (or
-    // /v1/projects) mutation whose response carries local_only — read by
+    // /v1/groups) mutation whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1872,7 +1872,7 @@ if (typeof document !== "undefined") {
           el("span", { class: "name" }, `${w.name}`, totalLine(totals.groups.get(w.key)) ? el("small", { class: "group-total" }, totalLine(totals.groups.get(w.key))) : null),
           // A synthetic group is this machine's own bucket, not one the org
           // declared, so it offers no "counts for my work" switch: that flag is
-          // stored per project key and would appear to reset on reload,
+          // stored per workstream key and would appear to reset on reload,
           // which is a control that lies about what it did.
           w.synthetic
             ? null

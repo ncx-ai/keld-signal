@@ -48,5 +48,5 @@ test('the page never branches on origin "atlas" for a project or group, and neve
   absent(/origin\s*[!=]==?\s*["']atlas["']/, 'branches on origin "atlas"');
   absent(/["'`][^"'`\n]*\bin Atlas\b[^"'`\n]*["'`]/, 'says "in Atlas"');
   absent(/from Atlas/, 'says "from Atlas"');
-  absent(/edit the project in Atlas|Open the project in Atlas/, "sends a person to Atlas to edit a project");
+  absent(/edit the workstream in Atlas|Open the workstream in Atlas/, "sends a person to Atlas to edit a project");
 });
