@@ -94,8 +94,17 @@ type panelEvent struct {
 	//
 	// ⚠️ They exist because a DPI mismatch between the installer and this helper
 	// rendered the page at 80% of its frame, and the only way anyone noticed was
-	// a screenshot. Two numbers that should agree, printed side by side, turn
-	// that into something a log answers. W==VW means the embed is honest.
+	// a screenshot. Printed side by side they turn that into something a log
+	// answers.
+	//
+	// ⚠️ **THE TEST IS `W ≈ VW * DPR`, NOT `W == VW`.** W/H are PHYSICAL pixels
+	// and VW/VH are CSS pixels, so at any scaling above 100% they are SUPPOSED
+	// to differ. A healthy reading on a 125% display looks like
+	//   w=687 h=311 vw=550 vh=250 dpr=1.25   (550*1.25 = 687.5)
+	// and equality there would mean the webview was 1.25x too LARGE for its
+	// frame. The equality reading was written down first and would have
+	// condemned a correct result: mind the rounding, and compare the ratio to
+	// DPR rather than the raw numbers to each other.
 	W   int     `json:"w,omitempty"`
 	H   int     `json:"h,omitempty"`
 	VW  int     `json:"vw,omitempty"`
