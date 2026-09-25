@@ -180,8 +180,19 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 ;    registers the task, starts the daemon, and prompts for NOTHING. macOS and
 ;    Linux are unaffected — they never pass it, and their launchers really do
 ;    detach stdio.
-Filename: "{app}\keld-agent.exe"; Parameters: "install --headless"; \
-  StatusMsg: "Registering the Keld agent..."; Flags: runhidden
+; ⚠️ **THIS ENTRY MOVED INTO [Code] (CurStepChanged/ssPostInstall) AND MUST NOT
+;    COME BACK HERE.** `Flags: runhidden` hides keld-agent's WINDOW; it does not
+;    stop Windows allocating a console for it, and on a real install that console
+;    appeared — "after it finishes the progress bar for installing, it pops a
+;    terminal window open twice". Pascal Script cannot pass CREATE_NO_WINDOW and
+;    neither can a [Run] entry, so the call now goes through
+;    keld-wizard-host --run, which can (see RunQuiet).
+;
+;    The ordering [Run] used to provide is preserved explicitly: ssPostInstall
+;    runs `signal setup` first, then registers the agent, so the daemon still
+;    comes up with a hook.json to read rather than idling on awaitConfig.
+;
+;    Re-adding it here would ALSO register the agent twice.
 
 ; 2. THE CONSOLE FALLBACK, which a normal install no longer reaches.
 ;
@@ -1133,6 +1144,45 @@ begin
   Sleep(600);
 end;
 
+// RunQuiet runs a console program with NO CONSOLE WINDOW AT ALL, and waits.
+//
+// ⚠️ **Inno's own `Exec(…, SW_HIDE, …)` AND `Flags: runhidden` ARE NOT ENOUGH,
+// AND THIS IS THE FOURTH PLACE THAT HAS BEEN TRUE.** Both set
+// STARTF_USESHOWWINDOW/SW_HIDE, which asks a window not to be shown once it
+// exists; the console is still allocated, and on a real install two of them
+// appeared anyway — reported as "after it finishes the progress bar for
+// installing, it pops a terminal window open twice". CREATE_NO_WINDOW is what
+// stops the console being created, and Pascal Script cannot pass it.
+//
+// keld-wizard-host can: it is built -H windowsgui and applies CREATE_NO_WINDOW
+// to every child (cmd/keld-wizard-host/nowindow_windows.go). The wizard page
+// already drives four or five `keld` runs through it with no flash at all,
+// which is the evidence this is the mechanism that works here. `--run` waits
+// for the child and returns ITS exit code, so this stays synchronous.
+//
+// Falls back to a direct Exec if the helper is missing, because an install that
+// skips these steps is worse than one that flashes.
+function RunQuiet(const Exe, Args, EvDir: String): Integer;
+var
+  Host, Params: String;
+  RC: Integer;
+begin
+  Result := -1;
+  Host := ExpandConstant('{app}\keld-wizard-host.exe');
+  if not FileExists(Host) then
+  begin
+    Trace('RunQuiet: no helper, falling back to Exec for ' + Exe);
+    if Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, RC) then
+      Result := RC;
+    exit;
+  end;
+  ForceDirectories(EvDir);
+  Params := '--run "' + Exe + '" --events-dir "' + EvDir + '" -- ' + Args;
+  if Exec(Host, Params, '', SW_HIDE, ewWaitUntilTerminated, RC) then
+    Result := RC;
+  Trace('RunQuiet ' + Exe + ' rc=' + IntToStr(Result));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Args: String;
@@ -1141,8 +1191,17 @@ var
 begin
   if CurStep <> ssPostInstall then
     exit;
-  if not Paired then
-    exit;
+
+  // ⚠️ **EVERYTHING BELOW IS GATED ON `Paired` EXCEPT THE REGISTRATION, AND
+  // THAT ASYMMETRY IS LOAD-BEARING.** This procedure used to `exit` here when
+  // unpaired, which was correct while registering the agent lived in [Run] and
+  // happened unconditionally. Moving it in here made that early return skip it
+  // — so an MDM /SILENT push, where the wizard page never runs and Paired is
+  // always false, would have installed the files and registered NOTHING,
+  // silently. That is the exact failure `keld_agent_iss_test.sh` guard #1 was
+  // written for, and it is what caught this.
+  if Paired then
+  begin
 
   // ⚠️ AN EMPTY SELECTION MUST CONFIGURE NOTHING, NOT EVERYTHING.
   // `tools.Select(nil)` reads "no --tool flags at all" as "configure every
@@ -1152,20 +1211,47 @@ begin
   for I := 0 to GetArrayLength(ToolChecks) - 1 do
     if ToolChecks[I].Checked then
       AnyTicked := True;
-  if not AnyTicked then
-    exit;
+  // ⚠️ AN EMPTY SELECTION SKIPS TOOL CONFIGURATION, NOT THE WHOLE STEP. This
+  // used to `exit` here, which also skipped registering the agent below — so a
+  // person who unticked every tool got no daemon at all. Configuring nothing is
+  // their choice; not installing the product is not.
+  if AnyTicked then
+  begin
+    // ⚠️ --bin-path PINS THE INSTALLED BINARY. The page drove {tmp}\keld.exe, a
+    // path that stops existing when the wizard closes; without this flag every
+    // hook written here points at it and silently never runs.
+    Args := 'signal setup --yes --bin-path "' + ExpandConstant('{app}\keld.exe') + '"';
+    if PairedAPIURL <> '' then
+      Args := Args + ' --api-url "' + PairedAPIURL + '"';
+    for I := 0 to GetArrayLength(ToolChecks) - 1 do
+      if ToolChecks[I].Checked then
+        Args := Args + ' --tool ' + ToolNames[I];
 
-  // ⚠️ --bin-path PINS THE INSTALLED BINARY. The page drove {tmp}\keld.exe, a
-  // path that stops existing when the wizard closes; without this flag every
-  // hook written here points at it and silently never runs.
-  Args := 'signal setup --yes --bin-path "' + ExpandConstant('{app}\keld.exe') + '"';
-  if PairedAPIURL <> '' then
-    Args := Args + ' --api-url "' + PairedAPIURL + '"';
-  for I := 0 to GetArrayLength(ToolChecks) - 1 do
-    if ToolChecks[I].Checked then
-      Args := Args + ' --tool ' + ToolNames[I];
+    WizardForm.StatusLabel.Caption := 'Configuring your AI tools...';
+    RC := RunQuiet(ExpandConstant('{app}\keld.exe'), Args,
+                   ExpandConstant('{tmp}\post-setup'));
+    end;
+  end;
 
-  Exec(ExpandConstant('{app}\keld.exe'), Args, '', SW_HIDE, ewWaitUntilTerminated, RC);
+  // ⚠️ REGISTERING THE AGENT MOVED HERE FROM [Run], AND THE ORDER IS THE POINT.
+  // It has to happen AFTER `signal setup` has written hook.json, so the daemon
+  // comes up with a configuration to read instead of idling on awaitConfig —
+  // which is exactly what the [Run] entry's position used to guarantee.
+  //
+  // ⚠️ `--headless` IS LOAD-BEARING AND MUST NOT BE DROPPED. Without it,
+  // keld-agent detects a console (it HAS one — hiding a window does not take the
+  // console away, so term.IsTerminal answers true) and takes its INTERACTIVE
+  // branch: it runs `keld login` where nobody can see it, then `keld signal
+  // setup`, which blocks forever on a [Y/n] prompt reading a stdin no human can
+  // type into. Measured on a real machine: the install sat at "Registering the
+  // Keld agent..." indefinitely and killing the child by hand was the only way
+  // on. Through RunQuiet there is no console at all, which makes the flag's
+  // job easier rather than unnecessary — keep it.
+  WizardForm.StatusLabel.Caption := 'Registering the Keld agent...';
+  RC := RunQuiet(ExpandConstant('{app}\keld-agent.exe'), 'install --headless',
+                 ExpandConstant('{tmp}\post-agent'));
+  if RC <> 0 then
+    Trace('agent install rc=' + IntToStr(RC));
 end;
 
 // Cancel and teardown both write the sentinel, so a helper — and the `keld`
