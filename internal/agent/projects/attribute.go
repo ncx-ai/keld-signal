@@ -354,6 +354,21 @@ func projectGroupOff(p Project, groupOff func(key string) bool) bool {
 	return false
 }
 
+// Candidates is every project the rule pass may attribute to: the local
+// document's, and nothing from the settings poll.
+//
+// ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** This used to be
+// MergeCandidates(d.Projects, the org's values), so an Atlas workstream's
+// rule could claim a block and an Atlas workstream showed on the page. Signal
+// now attributes only to what people define in Signal; the org's list is still
+// received and held (Store.RemoteProjects) and nothing on the rule, page or
+// project_matches path reads it. An overlay a person made with "Same as" is a
+// local entry, so it is here. Every rule-pass caller goes through this one
+// function so the recorded pass, the page and the wire cannot disagree.
+func Candidates(d Document) []Project {
+	return append([]Project(nil), d.Projects...)
+}
+
 // Visible returns the projects Attribute (and a same-as picker) may ever
 // consider: not hidden, and not in a workstream switched off.
 func Visible(candidates []Project, groupOff func(key string) bool) []Project {
