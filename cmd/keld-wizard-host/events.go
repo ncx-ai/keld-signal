@@ -81,7 +81,13 @@ type exitEvent struct {
 // can fall back to the default browser for the one case that deserves it.
 type panelEvent struct {
 	Event  string `json:"event"`
-	Status string `json:"status"` // embedded | no_runtime | failed
+	Status string `json:"status"` // embedded | loaded | no_runtime | failed
+	// Which of the three readiness sources produced a `loaded`
+	// (navigation | script | deadline). Diagnostic only — the wizard keys on
+	// Status alone — but without it a panel revealed by the DEADLINE is
+	// indistinguishable from one that genuinely loaded, and those want very
+	// different follow-up: the first means the page never finished.
+	Via string `json:"via,omitempty"`
 }
 
 // clipboardEvent carries what the clipboard held, so the wizard page can decide
