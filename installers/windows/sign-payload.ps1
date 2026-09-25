@@ -56,6 +56,19 @@
 param(
   [Parameter(Mandatory)][string]$PayloadDir,
   [string]$SignCommand,
+  # ⚠️ THE CATALOG IS WHAT KEEPS THE VENDORS' SIGNATURES ON THE VENDORS' FILES.
+  # Azure/artifact-signing-action can sweep a folder itself (`files-folder` +
+  # `files-folder-recurse`), and doing that would re-sign all 188 PE binaries —
+  # replacing 78 third-party attestations with ours, which is both rude and a
+  # loss of information we cannot recreate. So the enumeration stays here, where
+  # the already-signed rule lives, and the action is handed the exact list.
+  # Paths are written RELATIVE TO THE CATALOG'S OWN LOCATION, which is what the
+  # action's `files-catalog` input specifies.
+  [string]$CatalogOut,
+  # Re-reads a catalog after the action has run and fails on any file that is
+  # still unsigned. Separate from -SignCommand's own post-pass because with the
+  # action doing the signing this script never sees the result otherwise.
+  [string]$VerifyCatalog,
   # ⚠️ NOT named $all: PowerShell variables are CASE-INSENSITIVE, so a local
   # $all would silently overwrite this switch with whatever it held.
   [switch]$SignEverything,
@@ -77,6 +90,33 @@ if (-not (Test-Path $PayloadDir)) { throw "payload directory not found: $Payload
 # about to be signed. Display-only, and exactly the kind of wrong that gets
 # believed.
 $payloadRoot = (Resolve-Path -LiteralPath $PayloadDir).Path
+
+# ⚠️ VERIFY MODE RUNS FIRST AND RETURNS — it must not re-enumerate. After the
+# action has signed, "what was supposed to be signed" is the catalog, not a
+# fresh scan: a fresh scan would find every file now Valid (including the ones
+# the action signed) and could never report a gap, which is the whole failure
+# this guards. A signing tool that exits 0 having silently skipped a file is
+# what turns into one refused binary on a customer's machine weeks later.
+if ($VerifyCatalog) {
+  if (-not (Test-Path $VerifyCatalog)) { throw "catalog not found: $VerifyCatalog" }
+  $catRoot = Split-Path -Parent (Resolve-Path -LiteralPath $VerifyCatalog).Path
+  $entries = Get-Content -LiteralPath $VerifyCatalog | Where-Object { $_.Trim() -ne '' }
+  if ($entries.Count -eq 0) { Write-Host "catalog is empty - nothing was queued for signing."; exit 0 }
+  $bad = @()
+  foreach ($rel in $entries) {
+    $full = Join-Path $catRoot $rel.Trim()
+    if (-not (Test-Path -LiteralPath $full)) { $bad += "MISSING : $rel"; continue }
+    $st = (Get-AuthenticodeSignature -LiteralPath $full).Status
+    if ($st -ne 'Valid') { $bad += "$st : $rel" }
+  }
+  if ($bad.Count -gt 0) {
+    Write-Host "::error::$($bad.Count) of $($entries.Count) catalogued binaries are not validly signed"
+    $bad | ForEach-Object { Write-Host "  $_" }
+    exit 1
+  }
+  Write-Host "verified signed: $($entries.Count) binaries"
+  exit 0
+}
 
 # The extensions Windows loads as code. Data files are not evaluated and must not
 # be signed — signing them wastes quota and tells the reader something false
@@ -100,6 +140,27 @@ Write-Host "files total        : $((Get-ChildItem $PayloadDir -Recurse -File).Co
 Write-Host "PE binaries        : $($binaries.Count)"
 Write-Host "already signed     : $($alreadySigned.Count) (left untouched)"
 Write-Host "to sign            : $($needed.Count)"
+
+# Written BEFORE the nothing-to-do exit, so an empty payload produces an empty
+# catalog rather than no file at all — the caller then skips the signing step on
+# a count it can read, instead of on a missing path it has to interpret.
+if ($CatalogOut) {
+  $catRoot = Split-Path -Parent $CatalogOut
+  if ($catRoot -and -not (Test-Path $catRoot)) { New-Item -ItemType Directory -Force $catRoot | Out-Null }
+  $rel = $needed | ForEach-Object { $_.FullName.Substring($payloadRoot.Length).TrimStart('\') }
+  # ⚠️ ASCII, NO BOM. signtool's catalog reader takes the file as plain lines;
+  # a UTF-8 BOM rides onto the FIRST path and that one file silently fails to
+  # resolve — the first entry is keld-agent.exe, i.e. the one that matters.
+  # ⚠️ ABSOLUTE PATH, COMPUTED HERE. .NET file APIs resolve a relative path
+  # against the PROCESS working directory, which `Set-Location` does not move —
+  # so a relative $CatalogOut writes somewhere nobody looks and the step still
+  # reports success. Measured once already in this repo's PowerShell.
+  $catFull = if ([System.IO.Path]::IsPathRooted($CatalogOut)) { $CatalogOut }
+             else { Join-Path (Get-Location).Path $CatalogOut }
+  [System.IO.File]::WriteAllLines($catFull, [string[]]@($rel), (New-Object System.Text.ASCIIEncoding))
+  Write-Host "catalog written    : $catFull ($(@($rel).Count) entries, relative to $payloadRoot)"
+  exit 0
+}
 
 if ($needed.Count -eq 0) { Write-Host "nothing to do."; exit 0 }
 

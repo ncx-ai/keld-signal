@@ -1,9 +1,42 @@
 # Windows code signing — procurement task
 
+> ## ✅ RESOLVED 2026-09-25 — AND §3 BELOW WAS WRONG
+>
+> **Procurement is done. Nothing in this document needs actioning.** Keld signs
+> with **Azure Artifact Signing** (formerly Trusted Signing): organization
+> validation for **Keld Inc** is Completed, the `keld-public-trust` certificate
+> profile exists, the `keld-github-actions` service principal holds the signer
+> role, and the four `AZURE_*` secrets are set on `ncx-ai/keld-signal`. CI is
+> wired in `.github/workflows/installers.yml`.
+>
+> **§3 said this exact option was unavailable to us, and that has been the most
+> expensive sentence in the file.** It was true in public preview — Microsoft
+> required three years of verifiable operating history — and that rule was
+> **dropped at GA**, which nothing here re-checked. §3 even asks for a calendar
+> reminder to re-check "at our three-year mark", so the document scheduled its
+> own correction three years too late. The cost was real: §3b talks a founder
+> into signing releases under their **personal legal identity** to escape a
+> requirement that no longer existed.
+>
+> **The rest of the document is kept rather than deleted**, because §1 and §3a
+> are still the right description of the problem and the reason no packaging
+> trick avoids it. Read §§3, 3b, 4, 5, 8 and the Appendix as **superseded
+> history**: do not buy anything, and do not sign as an individual.
+>
+> ⚠️ **The one number to carry forward is corrected too.** §6 said ~45 unsigned
+> third-party components off a local measurement; the real CI payload is
+> **16,498 files / 188 PE binaries / 78 already vendor-signed / 110 needing
+> ours** (run 35021526816). Anything sized off the old figure — a signing quota
+> in particular — is low by 2.6x.
+>
+> **Live operational notes** (secret expiry, identity renewal, the subscription
+> constraint) are in `docs/windows-code-signing.md`. This file is history.
+
 **Owner:** whoever manages the Microsoft/Azure account and can complete company
 verification. **Not an engineering task** — engineering cannot start until a
 certificate exists.
 **Raised:** 2026-09-15, from `docs/superpowers/specs/2026-09-15-windows-wizard-native-onboarding-design.md` §11.
+**Closed:** 2026-09-25 — see the banner above.
 
 ## 1. What is broken
 
@@ -37,7 +70,23 @@ reliable answer.
 A **code signing certificate**, plus a way to use it from our automated build
 (GitHub Actions). Both halves matter — see §4.
 
-## 3. The cheap option we CANNOT use — do not spend time on it
+## 3. ~~The cheap option we CANNOT use — do not spend time on it~~ SUPERSEDED
+
+> ❌ **THIS SECTION IS WRONG AND IS THE REASON THIS DOCUMENT EXISTED.** It is
+> the option we now use. The three-year rule was a **public-preview**
+> restriction that Microsoft dropped at GA, and this section has no date on the
+> claim, no source, and no way to notice it had expired — the only re-check it
+> asks for is scheduled three years out. Everything downstream of it (§3b's
+> sign-as-an-individual route, §4's hardware-token shopping, the Appendix's
+> request letter) was reasoning from a constraint that was already gone.
+>
+> Kept unedited below, because a claim this costly should stay legible next to
+> its correction rather than vanish. See the banner at the top of the file.
+>
+> **The lesson worth keeping is not "check eligibility rules".** It is that a
+> blocking claim about somebody else's product needs the DATE it was verified
+> and a re-check interval measured against how fast that product changes —
+> which for a service in preview is months, not years.
 
 **Azure Trusted Signing** (now "Azure Artifact Signing") is Microsoft's own
 service at **$9.99/month**, needs no hardware, and is built for automated builds.

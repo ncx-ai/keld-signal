@@ -428,76 +428,145 @@ jobs:
             keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
             keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256
 
+      # ── Windows payload + code signing (Azure Artifact Signing) ──────────────
+      #
+      # ⚠️ SIGNING THE INSTALLER ALONE DOES NOT WORK, AND THAT IS WHY THIS IS TWO
+      # PASSES. Smart App Control evaluates a binary AS IT LOADS, not once at
+      # install time, so a signed keld-setup.exe that installs an unsigned
+      # keld.exe buys nothing — the install succeeds and the product is refused
+      # the moment it starts. Measured on a real Windows 11 machine 2026-09-15
+      # against the RELEASED product: keld.exe NotSigned, launch answered "An
+      # Application Control policy has blocked this file". It is not even a
+      # steady failure — the same file ran at 2:05pm and was blocked at 2:44pm
+      # unchanged, because unsigned code is admitted on a per-file reputation
+      # guess that moves. So the loose payload is signed BEFORE iscc, and the
+      # installer AFTER.
+      #
+      # There is no PFX and there never will be: Artifact Signing keeps the key
+      # in the service and lends it at signing time only, which is what the CA/B
+      # Forum June-2023 hardware-key rule requires. The four AZURE_* secrets are
+      # an App Registration; endpoint, account and profile are NOT secrets.
+      #
+      # Absent secrets (forks, PRs) => unsigned output rather than a failed
+      # build, mirroring the Apple path in this same workflow.
+      - name: Stage Windows payload
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
+          # ⚠️ keld-wizard-host.exe is REQUIRED by the .iss — the wizard page
+          # drives it — so a missing copy here fails the build rather than
+          # shipping a page that silently cannot run anything.
+          # ⚠️ NO TRAILING `\` ON THE DESTINATION. It is a path separator to
+          # PowerShell and a line-continuation to scripts/workflow_continuation_test.sh,
+          # which reads every workflow shell-agnostically — so a comment after
+          # it fails that guard. Copy-Item resolves a directory either way.
+          Copy-Item stage\keld.exe, stage\keld-agent.exe, stage\keld-wizard-host.exe installers\windows
+
+      # ⚠️ ENUMERATION STAYS IN THE SCRIPT, NOT IN THE ACTION, BECAUSE THE
+      # ALREADY-SIGNED RULE LIVES THERE. The action can sweep a folder itself
+      # (files-folder + files-folder-recurse) and that would re-sign all 188 PE
+      # binaries in the payload — replacing 78 third-party vendor attestations
+      # with ours, which is both rude and a loss of information we cannot
+      # recreate. The catalog is the exact list of the 110 that need us.
+      - name: Enumerate Windows binaries needing our signature
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          ./installers/windows/sign-payload.ps1 -PayloadDir installers\windows -CatalogOut installers\windows\sign-catalog.txt
+          if ($LASTEXITCODE -ne 0) { throw "payload enumeration failed" }
+          $n = @(Get-Content installers\windows\sign-catalog.txt | Where-Object { $_.Trim() -ne '' }).Count
+          # One marker decided here and read by every later step — the idiom the
+          # Apple path already uses, because the secrets context is not available
+          # to a step-level `if:` and a per-step re-derivation could disagree.
+          $on = if ($env:AZURE_CLIENT_ID -and $n -gt 0) { "1" } else { "0" }
+          if ($on -ne "1") {
+            Write-Warning "Windows signing is OFF (credentials present: $([bool]$env:AZURE_CLIENT_ID), files to sign: $n) - output will be UNSIGNED and Smart App Control will refuse it"
+          }
+          "KELD_WINDOWS_SIGNING=$on" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Sign the Windows payload
+        if: matrix.os == 'windows-latest' && env.KELD_WINDOWS_SIGNING == '1'
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: keld
+          certificate-profile-name: keld-public-trust
+          files-catalog: installers\windows\sign-catalog.txt
+          file-digest: SHA256
+          # ⚠️ TIMESTAMPING IS NOT OPTIONAL HERE. Artifact Signing certificates
+          # are short-lived and rotated by the service, so an untimestamped
+          # signature stops validating when the certificate that produced it
+          # expires — weeks after shipping, not years.
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # ⚠️ VERIFY AGAINST THE CATALOG, NEVER A FRESH SCAN. A rescan finds every
+      # file Valid — including the ones just signed — so it could never report a
+      # gap, which is the whole point of checking. A signing tool that exits 0
+      # having silently skipped a file is what becomes one refused binary on a
+      # customer machine weeks later with nothing to point at.
+      - name: Verify the Windows payload is signed
+        if: matrix.os == 'windows-latest' && env.KELD_WINDOWS_SIGNING == '1'
+        shell: pwsh
+        run: |
+          ./installers/windows/sign-payload.ps1 -PayloadDir installers\windows -VerifyCatalog installers\windows\sign-catalog.txt
+          if ($LASTEXITCODE -ne 0) { throw "payload signature verification failed" }
+
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
         env:
           KELD_VERSION: ${{ env.TAG }}
-          # The whole signing configuration, as one command template with {FILES}
-          # standing in for the file list. Deliberately opaque to this workflow:
-          # the certificate authority is not chosen yet, and every cloud signing
-          # service exposes a different tool (signtool with a CSP/KSP, SSL.com's
-          # CodeSignTool, DigiCert's smctl). Whichever it turns out to be, it is
-          # set once as a secret and nothing here changes.
-          #
-          # ⚠️ ABSENT ON A FORK OR A DRY RUN, AND THAT MUST STAY HARMLESS — the
-          # build produces an unsigned installer rather than failing, exactly as
-          # the Apple secrets behave for the macOS job.
-          KELD_SIGN_COMMAND: ${{ secrets.KELD_SIGN_COMMAND }}
         run: |
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
-          Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
-          # ⚠️ keld-wizard-host.exe is REQUIRED by the .iss — the wizard page
-          # drives it — so a missing copy here fails the build rather than
-          # shipping a page that silently cannot run anything. It rides the same
-          # GoReleaser archive as the other two (windows/amd64 only).
-          Copy-Item stage\keld.exe, stage\keld-agent.exe, stage\keld-wizard-host.exe installers\windows\
-          # ⚠️ SIGN THE PAYLOAD BEFORE iscc, NOT AFTER. Smart App Control
-          # evaluates binaries AS THEY LOAD, so a signed installer carrying
-          # unsigned binaries is refused the moment the product runs — the
-          # installer would succeed and `keld.exe` would not start. The payload
-          # must therefore be signed while it is still loose files.
-          #
-          # Inert without KELD_SIGN_COMMAND: the build still produces an
-          # (unsigned, SAC-blocked) installer rather than failing over a
-          # purchase order. See docs/superpowers/plans/2026-09-15-windows-code-signing-procurement.md
-          ./installers/windows/sign-payload.ps1 -PayloadDir installers\windows -SignCommand $env:KELD_SIGN_COMMAND
-          if ($LASTEXITCODE -ne 0) { throw "payload signing failed" }
-
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-
-          # The .iss enables SignedUninstaller only when KELD_SIGN_COMMAND is
-          # set, and it then requires a SignTool named `keldsign` to exist — so
-          # the two must be supplied together or iscc halts. Inno's template uses
-          # $f for the file; ours uses {FILES}.
-          # ⚠️ THE /S ARGUMENT MUST BE ONE QUOTED TOKEN. A signing command contains
-          # spaces, and unquoted iscc reads each word after the first as another
-          # script filename and fails with "You may not specify more than one
-          # script filename" — measured, not guessed.
-          $isccArgs = @()
-          if ($env:KELD_SIGN_COMMAND) {
-            $isccArgs += '"/Skeldsign=' + $env:KELD_SIGN_COMMAND.Replace('{FILES}', '$f') + '"'
-          }
-          $isccArgs += "installers\windows\keld-agent.iss"
-          & $iscc @isccArgs
+          & $iscc "installers\windows\keld-agent.iss"
           if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
 
-          # And the installer itself, last — it does not exist until iscc runs.
-          # ⚠️ THE UNINSTALLER IS A THIRD THING AND IS EASY TO MISS: Inno
-          # extracts unins000.exe onto the target machine at install time, so it
-          # is never signed by this step. `SignedUninstaller=yes` in the .iss is
-          # what covers it, and without it uninstalling is blocked on exactly the
-          # machines installing was blocked on.
-          if ($env:KELD_SIGN_COMMAND) {
-            $setup = "installers\windows\Output\keld-setup.exe"
-            Invoke-Expression ($env:KELD_SIGN_COMMAND.Replace('{FILES}', "`"$setup`""))
-            if ($LASTEXITCODE -ne 0) { throw "installer signing failed" }
-            if ((Get-AuthenticodeSignature $setup).Status -ne 'Valid') { throw "keld-setup.exe is not validly signed" }
-            Write-Host "signed: $setup"
-          } else {
-            Write-Warning "KELD_SIGN_COMMAND not set - keld-setup.exe is UNSIGNED and Smart App Control will refuse it"
+      # The installer itself, last — it does not exist until iscc has run.
+      - name: Sign the Windows installer
+        if: matrix.os == 'windows-latest' && env.KELD_WINDOWS_SIGNING == '1'
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: keld
+          certificate-profile-name: keld-public-trust
+          files: installers\windows\Output\keld-setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Runs on BOTH paths, unlike the two steps above: on the unsigned path it
+      # is what puts the fact in the run summary instead of leaving a silently
+      # unsigned installer to be discovered on someone's machine.
+      - name: Verify the Windows installer is signed
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $setup = "installers\windows\Output\keld-setup.exe"
+          if ($env:KELD_WINDOWS_SIGNING -ne '1') {
+            Write-Host "::warning title=Unsigned Windows installer::keld-setup.exe is UNSIGNED; Smart App Control machines will refuse it."
+            exit 0
           }
+          $sig = Get-AuthenticodeSignature $setup
+          if ($sig.Status -ne 'Valid') { throw "keld-setup.exe is not validly signed: $($sig.Status)" }
+          $subject = $sig.SignerCertificate.Subject
+          # Name the identity in the log, so a run answers "signed by whom"
+          # without anyone downloading the artifact. Same two facts the manual
+          # acceptance test on a real Windows 11 machine checks.
+          Write-Host "signed: $setup"
+          Write-Host "signer: $subject"
+          if ($subject -notmatch 'Keld Inc') { throw "unexpected signer: $subject" }
 
       # Release runs attach the installers to the GitHub release.
       - name: Upload installers to release

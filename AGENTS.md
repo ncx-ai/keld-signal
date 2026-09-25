@@ -2821,6 +2821,34 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves
   `onboard.cmd` is staged (a missing `Source:` is a compile error) and nothing
   more; no CI check can confirm a console appeared and a human pasted a code.
+- **Windows code signing needs TWO passes, and the ORDER is the point.** Windows
+  11 ships **Smart App Control** on by default and refuses unsigned native code,
+  and SAC evaluates a binary **as it LOADS** — so a signed `keld-setup.exe` that
+  installs an unsigned `keld.exe` buys nothing: the install succeeds and the
+  product is refused the moment it starts. That is what was measured on a real
+  machine 2026-09-15 against the RELEASED product (`keld.exe` `NotSigned`, "An
+  Application Control policy has blocked this file"), and ⚠️ **it is not a steady
+  failure** — the same file ran at 2:05pm and was blocked at 2:44pm unchanged,
+  because unsigned code is admitted on a per-file reputation guess that moves.
+  Every release is a fresh set of files with no history, so shipping unsigned was
+  a lottery drawn per release, which is why nobody noticed for weeks. So the
+  loose payload is signed BEFORE `iscc` and the installer AFTER, via
+  **Azure Artifact Signing** (`CN=Keld Inc`); there is no PFX and never will be.
+  ⚠️ **The action is handed a CATALOG, never a recursive folder sweep** — 78 of
+  the payload's 188 PE binaries arrive signed by their own vendors, and a sweep
+  replaces attestations we have no standing to make; `sign-payload.ps1` owns that
+  rule and `-VerifyCatalog` re-reads the catalog afterwards (⚠️ **never a fresh
+  scan**, which would find every file Valid and could not report a gap).
+  ⚠️ **The UNINSTALLER is still unsigned** — Inno extracts it at install time and
+  only `SignedUninstaller=yes` reaches it, which needs a COMMAND LINE that a
+  GitHub Action cannot be; so installing works on a SAC machine and uninstalling
+  is refused. The gated seam in the `.iss` is kept for the signtool-dlib fix.
+  ⚠️ **`docs/superpowers/plans/2026-09-15-windows-code-signing-procurement.md`
+  §3 says this service is unavailable to us. It is wrong** — a public-preview
+  rule Microsoft dropped at GA, which that document could not notice because its
+  own re-check was scheduled three years out; it nearly cost a release signed
+  under a founder's personal legal identity. Live doc:
+  **`docs/windows-code-signing.md`**.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
