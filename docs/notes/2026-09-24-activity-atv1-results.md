@@ -515,3 +515,45 @@ verb-phrase-only extraction is UNTESTED and is the obvious next variant.
 So free-form belongs as a CANDIDATE GENERATOR feeding the closed-label ranker, not as a
 replacement for it — the same "propose, never gate" shape that made modality work. ⚠️ Untested
 as a combination; n=7 throughout.
+
+## 2026-09-25 — the GENERAL TYPE OF WORK classifies cleanly (and better than the verb)
+
+Question asked on its own rather than as half of an activity type: can we say whether work is
+marketing, sales, engineering, legal...? `scripts/activity_domain_probe.py`.
+
+**Answerable without per-window labelling**, because two corpora with DIFFERENT known domains
+exist and the comparison between them is its own control: if both produce the same
+distribution it does not work. `atv1`'s context list has no `engineering` value, so this uses a
+9-value business-function vocabulary matching the question as asked.
+
+| ENGINEERING — 40 windows | | JOHN — 7 windows | |
+|---|---|---|---|
+| engineering | **48%** | sales | **71%** |
+| product | **45%** | product | 14% |
+| finance | 5% | general | 14% |
+| general | 2% | engineering | **0%** |
+| sales / marketing | **0%** | | |
+
+**The corpora separate COMPLETELY on the axis that matters.** The engineering corpus never
+produces `sales` or `marketing`; John's never produces `engineering`.
+
+**This is a stronger signal than the fine-grained verb**, and the reason is structural: nine
+business functions barely overlap, where 17 verbs contain genuinely confusable pairs
+(`review`/`research`). Same model, same prose, better-separated question. It is consistent with
+`gliner2.5-base-v1` acing a CONTEXT smoke test while scoring below the constant on the 17-way
+verb task.
+
+Three readings worth keeping:
+- **The 48/45 engineering-vs-product split is probably not an error.** Many of those windows
+  genuinely are product work — specs, plans, design decisions, reviews. ⚠️ Unprovable without
+  per-window labels; stated as a reading, not a finding.
+- **`sales` 71% for John agrees with the one context label assigned by hand** (`text.create.sales`
+  on the deck-creation window) — a small independent agreement.
+- **`finance` appears in both** (5% / 16% of sub-windows) and is defensible in both: John's deck
+  is inference-spend economics, and the engineering corpus contains real seat-cost, billing and
+  capex work.
+
+⚠️ **What this does NOT establish.** `legal`, `medical`, `support` and `operations` appear in
+NEITHER corpus as ground truth, so this says only that the model does not hallucinate them
+here — never that it finds them when they are real. Ground truth is CORPUS-level and therefore
+coarse. John's side is 7 windows.
