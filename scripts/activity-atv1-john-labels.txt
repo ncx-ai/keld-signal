@@ -1,0 +1,47 @@
+# Hand labels — `atv1`, MULTI-LABEL, prominence-ordered. John's product/marketing session.
+#
+# THIS HEADER IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN. Source views:
+# `scripts/activity_atv1_john_views.py` — user prompts + assistant prose ONLY, fenced code
+# elided, every tool_use / tool_result / thinking block dropped. No tool name, file path,
+# action or count reached the labeller.
+#
+# WHY THIS SET EXISTS. The 100-window engineering frame is 100% software work: 7 of 17 verbs
+# have support and 10 of 11 contexts have NONE. This session is product/marketing — building
+# and revising a customer deck from a whiteboard photo, then updating a milestones page. It is
+# the only non-engineering ground truth available.
+#
+# ⚠️ SEVEN WINDOWS, ONE SESSION, ONE PERSON. This is a CASE, not a corpus. No rate computed
+# from it is stable. It exists to (a) exercise verbs the engineering frame cannot reach and
+# (b) produce the first non-`general` context labels.
+#
+# FORMAT — a change from the engineering set, per the repo owner's instruction that the goal is
+# "to label all that may apply, ranked by prominence" rather than one of a mutually exclusive set:
+#
+#     <index>  <id> > <id> > <id>
+#
+# ordered most prominent first. Every id must be one of the 68 in `keld-activity-types-v1.csv`.
+#
+# ⚠️ VOCABULARY GAP FOUND WHILE LABELLING, recorded because it shapes these labels:
+# `text.create` HAS a `sales` context; `text.transform` DOES NOT (its contexts are financial,
+# general, legal, marketing, media, medical, scientific). This session CREATES a customer deck
+# once and then REVISES it five times, so the same work is labelable as `sales` at creation and
+# only as `general` thereafter. The `.general` labels below are forced by the vocabulary, not
+# chosen — do not read them as evidence that revision work has no domain.
+#
+# RULES, fixed before labelling:
+#  1. Order by prominence within the window, not by what came first.
+#  2. Include a label if that activity genuinely occupies part of the window. Two or three is
+#     normal; this is not hedging, it is the requested output shape.
+#  3. Judge from the artifact and intent, not the mechanism. Writing a script to generate a
+#     deck is deck-making, not coding -- and the blind view does not show the script anyway.
+#  4. `review` means checking work for errors, including the assistant's own visual QA.
+#  5. `transcribe` covers image -> text, which is how this deck began.
+#
+# index  labels, most prominent first
+J01  text.create.sales > transcribe.sales > review.general
+J02  text.transform.general > converse.general
+J03  text.transform.general > review.general
+J04  review.general
+J05  text.transform.general > text.create.general > review.general
+J06  text.transform.general > plan > converse.general
+J07  text.transform.general > extract.general
