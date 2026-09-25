@@ -185,12 +185,12 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <li><strong>Signal's local ids are built from titles</strong> (<span class="mono">p_</span> + slug), which is why they never go on the wire — <span class="mono">project_matches</span> already omits them, and that stays.</li>
 </ul>
 
-<h3>Open question — needs a decision</h3>
+<h3>Decision taken — 2026-09-25</h3>
 <div class="wrap">
 <table class="tests">
-<thead><tr><th>#</th><th>Question</th><th>Recommendation</th></tr></thead>
+<thead><tr><th>#</th><th>Question</th><th>Decided</th></tr></thead>
 <tbody>
-  <tr><td class="mono">Q1</td><td>The model-based pass (off by default, developer-only) scores against the <em>Atlas</em> list and publishes Atlas ids in <span class="mono">projects</span>. Does it switch to Signal workstreams in this revision?</td><td><strong>Not in this revision</strong> — leave it on the Atlas list and fold it into the separate "how to use Atlas workstreams again" work. Switching it means its answers are Signal ids, which are title-derived and so could no longer be published; that is a wire decision, not a UI one.</td></tr>
+  <tr><td class="mono">Q1</td><td>The model-based pass (off by default, developer-only) scores against the <em>Atlas</em> list and publishes Atlas ids in <span class="mono">projects</span>. Does it switch to Signal workstreams in this revision?</td><td><strong>Agreed 2026-09-25: not in this revision</strong> — it stays on the Atlas list and fold it into the separate "how to use Atlas workstreams again" work. Switching it means its answers are Signal ids, which are title-derived and so could no longer be published; that is a wire decision, not a UI one.</td></tr>
 </tbody>
 </table>
 </div>
