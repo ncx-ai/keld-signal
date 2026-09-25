@@ -142,7 +142,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 </dl>
 
 <section id="rev2" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
-<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-signed" style="vertical-align:middle;margin-left:8px">Signed off · 2026-09-25 · in progress</span></h2>
+<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Reviewed — 7/7 met · 2026-09-25</span></h2>
 <p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7. Plan: <span class="mono">docs/superpowers/plans/2026-09-25-signal-labels-on-its-own.md</span>. Status shows DONE only once the named test passes on the merged branch.</p>
 
 <h3>What changes, what stays</h3>
@@ -173,7 +173,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <tr id="r2-ac-4"><td class="mono">R2-AC-4</td><td>The org's workstreams are still received on the settings poll and held; nothing on the attribution or display path reads them.</td><td>daemon remote state</td><td class="mono">go test ./internal/agent/daemon/ -run TestAtlasWorkstreamsAreHeldNotUsed</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAtlasWorkstreamsAreHeldNotUsed PASS on the merged branch (6f5fcd82)</span></td></tr>
   <tr id="r2-ac-5"><td class="mono">R2-AC-5</td><td>A Signal workstream whose repo an Atlas workstream also declares keeps that rule after a settings poll.</td><td>local <span class="mono">workstreams.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestAPollNoLongerTrimsSignalRules</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAPollNoLongerTrimsSignalRules PASS on the merged branch (6f5fcd82) — before the fix the poll deleted the Signal workstream</span></td></tr>
   <tr id="r2-ac-6"><td class="mono">R2-AC-6</td><td>An existing "Same as" overlay entry shows and attributes as a Signal workstream with its title and rules.</td><td><span class="mono">GET /v1/workstreams</span>, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestAnOverlayIsASignalWorkstream</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAnOverlayIsASignalWorkstream PASS on the merged branch (f041d07f)</span></td></tr>
-  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestProjectMatchesAreSignalOnly PASS · TestGoldenBlockIsTheCurrentWire PASS, golden file unchanged (6f5fcd82)</span></td></tr>
+  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestProjectMatchesAreSignalOnly PASS · publish/ TestGoldenBlockIsTheCurrentWire PASS, golden file unchanged (6f5fcd82)</span></td></tr>
 </tbody>
 </table>
 </div>
@@ -182,7 +182,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <ul>
   <li><strong>Coverage drops on org machines</strong> the moment this ships: blocks that only an Atlas workstream matched become unattributed on the page (the Today rows recompute live). They reappear as suggestions, which is where a person makes a Signal workstream for them.</li>
   <li><strong>Atlas's numbers do not move.</strong> Atlas already attributes from its own rules and the block's dimensions; neither changes.</li>
-  <li><strong>Atlas's matcher suggestions keep their input without Signal knowing Atlas's definitions.</strong> Each block's <span class="mono">project_matches</span> still lists the Signal workstreams it matched, each with its repos and ticket key (no name, no id). Atlas can compare a person's grouping with its own — "mine has A and B, theirs has A, B and C, so suggest C" — because only Atlas holds both sides. Today Atlas's suggestion code reads only entries carrying an Atlas id; reading these by shared repos is Atlas-side follow-up work. Existing "Same as" entries keep their Atlas id and keep feeding it as they do now.</li>
+  <li><strong>Atlas's matcher suggestions keep their input without Signal knowing Atlas's definitions.</strong> Each block's <span class="mono">project_matches</span> still lists the Signal workstreams it matched, each with its repos and ticket key (no name, no id). Atlas can compare a person's grouping with its own — "mine has A and B, theirs has A, B and C, so suggest C" — because only Atlas holds both sides. Today Atlas's suggestion code reads only entries carrying an Atlas id; reading these by shared repos is Atlas-side follow-up work. Existing "Same as" entries keep their Atlas id and keep feeding it as they do now — until the person maps one onto another workstream, which removes the entry and its id with it (an overlay is now theirs to fold, like any Signal workstream). No new entry carries an Atlas id: "Same as" no longer offers Atlas workstreams.</li>
   <li><strong>Signal's local ids are built from titles</strong> (<span class="mono">p_</span> + slug), which is why they never go on the wire — <span class="mono">project_matches</span> already omits them, and that stays.</li>
 </ul>
 
@@ -204,9 +204,40 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <tr><td>Atlas workstreams leave the rule pass and the page</td><td>yes, revert</td><td>every machine paired with an org that declares workstreams</td><td>they are still received (R2-AC-4); nothing is deleted</td></tr>
   <tr><td>Reconcile stops</td><td>yes, revert</td><td>local rules are no longer trimmed on a poll</td><td>R2-AC-5; nothing stored is removed by this change</td></tr>
   <tr><td><span class="mono">project_matches</span> stops naming Atlas-only matches</td><td>yes</td><td>Atlas's matcher suggestions (the only reader)</td><td>Atlas attribution does not read it</td></tr>
+  <tr><td>An overlay can be mapped away <em>(declared after review, 2026-09-25)</em></td><td>no — the Atlas id goes with the entry</td><td>one entry, on the person's own action</td><td>the rules move to the target, so no block becomes unattributed; <span class="mono">TestAnOverlayCanBeMapped</span></td></tr>
+  <tr><td>Local <span class="mono">GET /v1/workstreams</span> reports an overlay as <span class="mono">origin: "user"</span> and a stored Atlas group as <span class="mono">"local"</span> <em>(declared after review)</em></td><td>yes</td><td>loopback route, the page only</td><td>relabelled on the view copy; the stored document is untouched (asserted)</td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="r2-review">Review Log (Revision 2)</h3>
+<p><strong>7/7 criteria met</strong> — ship with follow-ups. Graded by an independent reviewer agent against <span class="mono">feat/per-group-attribution...feat/signal-only-workstreams</span>; the named tests re-run by it.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#r2-ac-1">R2-AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/v3blocks.go:321 · TestOnlySignalWorkstreamsAttribute PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-2">R2-AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ingress/workstreams.go:145,301 · TestTheCatalogHoldsOnlySignalWorkstreams PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-3">R2-AC-3</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ui/app.js:431,1908,1911 · node --test 175/175 · Playwright 132 passed on the merged branch</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-4">R2-AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/v3.go:106-112 · TestAtlasWorkstreamsAreHeldNotUsed PASS · only remaining reader: v3attrib.go:203 (the Q1 semantic pass)</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-5">R2-AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">reconcileWithRemote deleted · TestAPollNoLongerTrimsSignalRules PASS (byte-equal document)</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-6">R2-AC-6</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ingress/workstreams.go:334 · TestAnOverlayIsASignalWorkstream PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-7">R2-AC-7</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/workstreammatches.go:49 · TestProjectMatchesAreSignalOnly PASS · publish/ TestGoldenBlockIsTheCurrentWire PASS</td></tr>
+</tbody>
+</table>
+</div>
+<h3>System check — a real daemon against a mock Atlas</h3>
+<ul>
+  <li>A mock Atlas served two workstreams (one on the corpus's repo R1, one on R2); the local document held a Signal workstream on R1 and a "Same as" overlay on R2. 21 blocks, all published to the mock.</li>
+  <li><strong>Before the change: 1 of 7.</strong> R1 blocks landed on the Atlas workstream, a poll deleted the Signal workstream outright, the page said "in Atlas" six times.</li>
+  <li><strong>After: 7 of 7.</strong> No cell or published row names the Atlas-only id; the document is byte-identical after 9 polls; the page lists only Signal workstreams, with no Atlas wording.</li>
+</ul>
+<h3>Follow-ups from the review</h3>
+<ul>
+  <li><strong>Mapping an overlay away drops its Atlas id</strong> — now declared in the ledger above. A person's explicit action on their own workstream; accepted.</li>
+  <li>A group an older release stored as an Atlas group still shows, relabelled local. Nothing writes one any more; it is the person's document, not the Atlas list.</li>
+  <li>A heading reads off when its key <em>or</em> name is switched off, matching the rule the attribution pass already applies.</li>
+  <li>Dead code kept on purpose for the Atlas-import work: <span class="mono">Reconcile</span>, <span class="mono">MergeCandidates</span>, the <span class="mono">remote</span> branches of the same-as and map functions.</li>
+</ul>
 </section>
 
 <h2 id="s1">1 · Hypothesis &amp; scope</h2>
