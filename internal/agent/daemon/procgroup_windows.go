@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"syscall"
 	"strconv"
 )
 
@@ -36,10 +37,34 @@ import (
 // Residual gap: a descendant whose intermediate parent has already exited is
 // not reachable by the tree walk, and a job object would have caught it.
 
-// setProcessGroup is a no-op on Windows: there are no Unix process groups, and
-// the job object that would be the equivalent is deliberately not implemented
-// (see the file comment). Behaviour is unchanged from before the fix.
-func setProcessGroup(cmd *exec.Cmd) {}
+// createNoWindow is CREATE_NO_WINDOW: run a console application with no console
+// window of its own.
+const createNoWindow = 0x08000000
+
+// setProcessGroup does no grouping on Windows — there are no Unix process
+// groups, and the job object that would be the equivalent is deliberately not
+// implemented (see the file comment).
+//
+// ⚠️ **IT DOES SUPPRESS THE CHILD'S CONSOLE WINDOW, AND THAT IS NOT COSMETIC.**
+// The sidecar is a console binary. The daemon runs as a scheduled task with no
+// console of its own, and when a console child is started by a parent that has
+// none, Windows ALLOCATES A NEW ONE AND SHOWS IT. So starting the sidecar put a
+// blank black window on the person's desktop and left it there for as long as
+// the daemon ran — reported on a real install as "another terminal opened,
+// blank, and just sat there".
+//
+// This is the same defect and the same fix as
+// cmd/keld-wizard-host/nowindow_windows.go and internal/agent/service; that
+// first file carries the full explanation of why HideWindow alone is not
+// enough. It lives in this function because this is the one place the
+// supervisor calls before every spawn, so no future spawn site can forget it.
+func setProcessGroup(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= createNoWindow
+}
 
 // childGroup has no meaning on Windows; the caller only forwards these values
 // to killProcessTree, which ignores them.
@@ -62,7 +87,9 @@ func terminateChild(pid int) error {
 func killProcessTree(pid, pgid int, group bool) error {
 	// /T is the whole point — it is what makes this a tree kill rather than
 	// the pid-only Process.Kill() that leaked gigabytes.
-	if err := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run(); err != nil {
+	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid))
+	kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	if err := kill.Run(); err != nil {
 		// taskkill missing or refused: fall back to the pre-fix behaviour so a
 		// stop is never worse than it used to be.
 		p, ferr := os.FindProcess(pid)

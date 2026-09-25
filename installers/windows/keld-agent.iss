@@ -181,8 +181,20 @@ Filename: "{app}\keld-agent.exe"; Parameters: "install --headless"; \
 ;    skipifsilent is correct HERE and only here: a /SILENT push must not block on a
 ;    console waiting for a human. Such a machine is registered by entry 1 and
 ;    finished with `keld-agent install --code <CODE>` from the management tool.
+; ⚠️ `unchecked` IS LOAD-BEARING: THIS MUST NEVER OPEN A CONSOLE BY ITSELF.
+;    It is a postinstall checkbox, which Inno TICKS BY DEFAULT — so on any
+;    install where the wizard page did not end paired, closing the installer
+;    launched this and left a blank console sitting on the desktop waiting for
+;    input. Measured on a real install and reported as "when the installer
+;    itself closed, another terminal opened, blank, and just sat there", on a
+;    product whose entire Windows story is that no terminal ever appears.
+;
+;    Unchecked keeps the fallback REACHABLE (see the note above about not
+;    deleting it — it is what a machine falls back to when the page fails) while
+;    making it a deliberate choice rather than a surprise. A person who needs it
+;    ticks it; nobody else ever sees a console.
 Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
-  Check: NeedsConsoleOnboarding; Flags: postinstall shellexec skipifsilent
+  Check: NeedsConsoleOnboarding; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallRun]
 ; UNINSTALL USED TO REMOVE THE FILES AND NOTHING ELSE, which left three things

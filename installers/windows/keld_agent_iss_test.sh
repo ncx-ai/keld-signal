@@ -216,6 +216,15 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 
+# 9b. ⚠️ THE CONSOLE FALLBACK MUST NOT AUTO-RUN. `postinstall` entries are TICKED
+#     BY DEFAULT, so on any install that did not end paired, closing the
+#     installer launched onboard.cmd and left a blank console sitting on the
+#     desktop waiting for input — on a product whose whole Windows story is that
+#     no terminal ever appears. `unchecked` keeps the fallback reachable while
+#     making it a deliberate choice.
+printf '%s\n' "$onb_line" | grep -q 'unchecked' || \
+  fail "onboard.cmd is a ticked-by-default postinstall action - it will open a console at every unpaired install"
+
 # 10a. ⚠️ ONLY A KNOWN FAILURE MAY FALL BACK TO A BROWSER. DrainPanel used to end
 #      in an unconditional else, so ANY panel status the script did not
 #      recognise tore down a working embed and launched a browser. Adding one
