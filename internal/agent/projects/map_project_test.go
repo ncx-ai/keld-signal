@@ -97,18 +97,30 @@ func TestNEGATIVEKeepingBothWouldDoubleCountWhichIsWhyOneIsRemoved(t *testing.T)
 	}
 }
 
-func TestNEGATIVEAnOrgProjectCannotBeFoldedAway(t *testing.T) {
-	// Its identity lives in Atlas. Removing the local overlay would drop the
-	// rules this machine added while leaving the org's value untouched — a
-	// deletion that looks like a move.
+func TestAnOverlayCanBeMapped(t *testing.T) {
+	// Revision 2 (2026-09-25): an overlay made with "Same as" is the person's
+	// own Signal project — shown and attributed like any other — so it can be
+	// folded into another one like any other. It used to be refused as "an org
+	// project, not ours to fold away"; with Atlas workstreams off the page, that
+	// refusal left the person no way to merge it at all.
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		{ID: "keld_projects:signal", Title: "Signal", Origin: OriginAtlas,
 			Repos: []string{"github.com/ncx-ai/keld-signal"}},
-		localProject("p_other", "other"),
+		localProject("p_other", "other", "github.com/acme/other"),
 	}}
-	_, err := MapProjectTo(d, orgValues(), "keld_projects:signal", "p_other", noneOff)
-	if !errors.Is(err, ErrProjectNotFound) {
-		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	next, err := MapProjectTo(d, nil, "keld_projects:signal", "p_other", noneOff)
+	if err != nil {
+		t.Fatalf("MapProjectTo(overlay onto a local project): %v", err)
+	}
+	if _, still := findProject(next, "keld_projects:signal"); still {
+		t.Fatal("the overlay survived the map — two projects would share its rule")
+	}
+	i, ok := findProject(next, "p_other")
+	if !ok {
+		t.Fatal("the target went missing")
+	}
+	if got := next.Projects[i].Repos; len(got) != 2 || !containsFold(got, "github.com/ncx-ai/keld-signal") {
+		t.Fatalf("the overlay's rule did not move onto the target: %v", got)
 	}
 }
 

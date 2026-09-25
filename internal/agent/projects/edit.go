@@ -434,13 +434,13 @@ func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID 
 		return d, ErrProjectNotFound
 	}
 	src := d.Projects[li]
-	// NEGATIVE: an ORG project is not ours to fold away. Its identity lives in
-	// Atlas, and removing the local overlay entry would drop the rules this
-	// machine had added to it while leaving the org's value untouched — a
-	// deletion that looks like a move and is not.
-	if src.Origin == OriginAtlas {
-		return d, ErrProjectNotFound
-	}
+	// ⚠️ **AN OVERLAY IS A VALID SOURCE, AND UNTIL REVISION 2 (2026-09-25) IT
+	// WAS REFUSED** as "an org project, not ours to fold away". That held while
+	// Atlas workstreams were on the page and in the rule pass, so the org's
+	// value stood beside the overlay. Signal now labels only with its own
+	// projects, and a "Same as" overlay is one of them — shown and attributed
+	// as the person's own — so refusing it would leave a project that cannot
+	// be merged. Nothing reaches Atlas either way: the entry is local.
 
 	next := d
 	next.Projects = append([]Project(nil), d.Projects...)
