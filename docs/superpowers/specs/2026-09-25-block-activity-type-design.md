@@ -90,6 +90,12 @@ Additive to the block digest. **Ranked, never a single label** — the repo alre
 single-label attribution of activity to an hour at coverage 0.185 against a 0.70 bar, because
 work is PLURAL (p50 7 distinct acts per window).
 
+**Schema version:** this adds a published vocabulary (the 68 `atv1` ids, plus the closed
+`context_status` set), which is contract-affecting under AGENTS.md's rule. **Bump
+`enrich.SchemaVersion` 23 -> 24 and re-run the eval**; producer strings move `-v23` -> `-v24`.
+A consumer must also learn `atv1` itself, which is why `vocabulary_version` is on the wire
+rather than implied.
+
 ```
 activity: {
   ranked: [ {activity_type_id, share, confidence}, ... ],
@@ -143,10 +149,25 @@ only in its false-positive half; whether it helps FIND true domains needs multi-
 the per-prompt enrichment pipeline. It inherits the durable per-block job, the version-skew
 HOLD (`RouteUnsupported` on 404), and the quarantine path.
 
-**A new `ml_backend` mode.** `deterministic`-only was provisional until a model could be
-reintroduced; this is that reintroduction. The new mode runs the full deterministic pass PLUS
-this block facet, and **not** the 5-inference-per-prompt enrichment pipeline. `auto` keeps its
-current meaning so existing machines are unaffected.
+**A new `ml_backend` mode: `"activity"`.** `deterministic`-only was provisional until a model
+could be reintroduced; this is that reintroduction. `"activity"` runs the full deterministic
+pass PLUS this block facet, and **not** the 5-inference-per-prompt enrichment pipeline.
+`auto`, `deterministic` and `off` keep their current meanings exactly, so no existing machine
+changes behaviour.
+
+`keld-agent install` writes `ml_backend:"activity"` via `settings.WriteInstallDefaults`, which
+MERGES, so an operator's other keys survive. ⚠️ **`ml_backend` is startup-only and has NO
+REMOTE OVERRIDE** — the installer is the only lever that will ever exist, so a re-install flips
+an existing machine with no server-side brake. `--backend` remains the manual path back.
+
+⚠️ **The mode set is now FOUR and a reader must be able to tell them apart:**
+
+| mode | deterministic passes | block activity facet | per-prompt ML pipeline |
+|---|---|---|---|
+| `off` | no enrichment at all | no | no |
+| `deterministic` | yes | no | no |
+| **`activity`** (new install default) | **yes** | **yes** | **no** |
+| `auto` | yes | yes | yes |
 
 **Cost, measured on 258 real blocks:** p50 **17 prose windows -> ~4.5 s**, p90 57 -> 15 s,
 max 140 -> 37 s, at GLiNER2's 264 ms/call. Against a >=20-minute block cadence that is a
