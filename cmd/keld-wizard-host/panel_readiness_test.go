@@ -105,6 +105,44 @@ func TestPanelDoesNotResizeToPageReportedHeight(t *testing.T) {
 	}
 }
 
+// ⚠️ THE HELPER MUST DECLARE DPI AWARENESS, AND IT MUST DO SO BEFORE IT TOUCHES
+// A WINDOW.
+//
+// Inno Setup 6 is DPI-aware; a plain Go binary has no DPI manifest and is
+// therefore DPI-unaware. The two processes then disagree about what the panel's
+// coordinates mean. Measured on a real install at 125% scaling: the page
+// rendered at ~80% of its frame in both dimensions — exactly 1/1.25 — with the
+// remainder as empty margin right and bottom. It was found by a screenshot,
+// because nothing in the logs could show it.
+//
+// The ordering matters as much as the presence: DPI awareness is process-wide
+// and can only be set before the first window exists.
+func TestPanelDeclaresDPIAwarenessBeforeCreatingWindows(t *testing.T) {
+	b, err := os.ReadFile("panel_windows.go")
+	if err != nil {
+		t.Fatalf("read panel_windows.go: %v", err)
+	}
+	src := string(b)
+
+	// ⚠️ Look for the CALL, not the name. `strings.Contains(src, "setDPIAware()")`
+	// also matches `func setDPIAware() {`, so deleting the call left this guard
+	// passing — caught only by testing that it fails, which is the reason every
+	// guard here is verified against a broken copy rather than trusted.
+	if !strings.Contains(src, "\n\tsetDPIAware()") {
+		t.Fatal("the helper never CALLS setDPIAware; under a DPI-aware installer the page renders at a fraction of its frame")
+	}
+	call := strings.Index(src, "\n\tsetDPIAware()")
+	win := strings.Index(src, "pCreateWindowExW.Call")
+	if win >= 0 && call > win {
+		t.Error("setDPIAware() runs AFTER a window is created; DPI awareness is process-wide and only settable beforehand")
+	}
+	// The measured-geometry report is what turns this from "looks wrong in a
+	// screenshot" into something a log answers.
+	if !strings.Contains(src, `Status: "metrics"`) {
+		t.Error("nothing reports the window size and the page's viewport together; a DPI mismatch is then invisible to every log")
+	}
+}
+
 // The injected script lives in a Go RAW STRING, so a backtick anywhere inside it
 // silently terminates the literal — which turns into a compile error some lines
 // later that names the JavaScript rather than the quoting. It cost a build here.
