@@ -1958,12 +1958,12 @@ timings — no text, no span, no offset, in either direction.
   genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
   skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
   invisible to the fleet.
-- ⚠️ **A BLOCK LANDS IN EVERY WORKSTREAM THAT MATCHES IT, AND EACH GROUP IS ITS OWN
+- ⚠️ **A BLOCK LANDS IN EVERY PROJECT THAT MATCHES IT, AND EACH GROUP IS ITS OWN
   COMPETITION (2026-09-23).** An org's groups are different angles on the same work (a
-  product, a feature, a customer), so one block can legitimately belong to a workstream in
+  product, a feature, a customer), so one block can legitimately belong to a project in
   each — and, inside one group, to several (overlap is the model, not an error). Three
   consequences, each of them a reversal:
-  - the RULE pass (`workstreams.Attribute`) no longer refuses: two workstreams claiming one
+  - the RULE pass (`projects.Attribute`) no longer refuses: two projects claiming one
     repo both get the block, and `ReasonConflict` is never produced (the constant survives
     so an old ledger row reads). There is no precedence and no order to maintain;
   - the SIDECAR runs the rule below once PER GROUP. Pooled, a strong match in one group
@@ -1972,12 +1972,12 @@ timings — no text, no span, no offset, in either direction.
     and the quality eval asserts it on every fixture). A list posted with no `group` key —
     an older daemon — is ONE pooled competition, never grouped by `team`, so its answers do
     not change. The daemon posts `group` = `settings.GroupKeyOf(team)`, the one normaliser
-    `workstreams.GroupKey` delegates to. Rows carry `model_versions.decision:
+    `projects.GroupKey` delegates to. Rows carry `model_versions.decision:
     "per-group-margin-v1"`;
-  - TOTALS (`workstreams.Rollup`, `GET /v1/workstreams`' `totals`): a group counts each block
-    once, a workstream counts each of its blocks in full, so a group's workstreams add up to
+  - TOTALS (`projects.Rollup`, `GET /v1/projects`' `totals`): a group counts each block
+    once, a project counts each of its blocks in full, so a group's projects add up to
     more than the group — by design, and the page says so. Atlas is untouched: it still keeps
-    one value per group from what Signal sends, so its per-workstream numbers can be lower
+    one value per group from what Signal sends, so its per-project numbers can be lower
     than the page's for a shared block. Signal sends every id it assigned.
   Spec: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html`.
 - **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
@@ -2020,7 +2020,7 @@ timings — no text, no span, no offset, in either direction.
   **Rollback is one environment variable:** `KELD_ATTRIBUTION_SCORING=user-max` restores the
   pre-2026-09-03 decision exactly (user turns only, MAX, no centring, no baseline observed)
   and stamps `scoring: user-max-uncentred-v0`. ⚠️ It restores the SCORING rule, and since 2026-09-23 the decision on top of it is cut per group:
-  for a list posted with no `group` key, or with every workstream in one group, that is the
+  for a list posted with no `group` key, or with every project in one group, that is the
   pre-2026-09-03 decision exactly; for a multi-group list it is that decision run once per group
   (`model_versions.decision` says which). The baseline file is `{"stats", "seen"}`:
   `seen` is the last 2,000 block keys folded in, so a RETRIED job (held on publish failure,

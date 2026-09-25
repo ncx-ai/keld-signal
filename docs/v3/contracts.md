@@ -45,9 +45,9 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
       "cells": {
         "cut":        {"status": "ok", "at": "…"},
         "measured":   {"status": "ok", "at": "…", "tokens": {"input": 2, "output": 277, "cache_read": 26915, "cache_creation": 86736, "request": 41000}, "requests": 12, "model": "claude-opus-4-8", "estimate_usd": 1.84},
-        "attributed": {"status": "ok", "at": "…", "workstreams": [
-          {"workstream_id": "products:atlas_platform", "group": "products", "method": "repo"},
-          {"workstream_id": "features:billing",        "group": "features", "method": "ticket"}]},
+        "attributed": {"status": "ok", "at": "…", "projects": [
+          {"project_id": "products:atlas_platform", "group": "products", "method": "repo"},
+          {"project_id": "features:billing",        "group": "features", "method": "ticket"}]},
         "sent":       {"status": "ok", "at": "…"},
         "received":   {"status": "failed", "at": "…", "reason": "atlas_rejected", "http_status": 401}
       }
@@ -68,9 +68,9 @@ ordering rule above ("marking a stage twice never loses information"):
 - A cell that is currently `failed` but previously reached `ok` also carries `ok_at` (the
   earlier success's timestamp) — so a re-send that broke stays visible instead of looking
   like the stage never worked. Absent whenever the stage has never succeeded.
-- ⚠️ **An `attributed` cell names EVERY workstream the block landed in (since 2026-09-23).**
-  `workstreams` is a list of `{workstream_id, group, method}`, in the order the rule pass
-  assigned them, and appears only on `"status": "ok"`. A block lands in every workstream
+- ⚠️ **An `attributed` cell names EVERY project the block landed in (since 2026-09-23).**
+  `projects` is a list of `{project_id, group, method}`, in the order the rule pass
+  assigned them, and appears only on `"status": "ok"`. A block lands in every project
   that matches it — in any group and inside one — so there is no conflict to report and
   `"reason": "conflict"` is no longer produced. A row recorded before that still reads: its
   single `project_id` comes back as a one-entry list with `group: ""`, and an old conflict
@@ -83,15 +83,15 @@ against the block's dims. The **vectorised** pass (`attribution`, off by default
 SECOND OPINION on the same block and gets its own cell:
 
 ```json
-"vector": {"status": "ok", "at": "…", "workstreams": [
-  {"workstream_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
-  {"workstream_id": "features:billing",        "group": "features", "confidence": 0.51}]}
+"vector": {"status": "ok", "at": "…", "projects": [
+  {"project_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
+  {"project_id": "features:billing",        "group": "features", "confidence": 0.51}]}
 ```
 
 `status` is `ok` (it named a project), `pending` (warming, or `"reason":
 "weights_unavailable"` while the encoder's weights are still downloading), `n/a` (nothing
 declared to match against) or `failed` (`"reason": "attribute_failed"` — the job was
-retried and given up on). `workstreams` appears only on `ok` and holds EVERY id the pass
+retried and given up on). `projects` appears only on `ok` and holds EVERY id the pass
 assigned (it used to keep only the first, which was declaration order, not the top score);
 each id's group is resolved by the daemon from the list it posted to the sidecar.
 
