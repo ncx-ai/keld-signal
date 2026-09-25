@@ -216,6 +216,19 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 
+# 10a. ⚠️ ONLY A KNOWN FAILURE MAY FALL BACK TO A BROWSER. DrainPanel used to end
+#      in an unconditional else, so ANY panel status the script did not
+#      recognise tore down a working embed and launched a browser. Adding one
+#      diagnostic event to the helper was enough to trigger it: the sign-in form
+#      rendered, the next event arrived, and a browser window replaced it.
+#      The helper and this script ship together but are edited separately, so an
+#      unrecognised status means "newer helper", never "the embed failed".
+drain="$(sed -n '/^procedure DrainPanel/,/^end;/p' "$iss")"
+printf '%s\n' "$drain" | grep -q "Status <> 'no_runtime'" || \
+  fail "DrainPanel falls back to a browser on ANY unrecognised status - one new diagnostic event would eject a working embed"
+printf '%s\n' "$drain" | grep -q 'ShellExec' || \
+  fail "DrainPanel no longer has a browser fallback at all - the no-WebView2 case would leave a blank rectangle"
+
 # 10b. ⚠️ THE WEB PANEL MUST BE VISIBLE BEFORE THE HELPER EMBEDS INTO IT.
 #      StartPanel hands WebPanel.Handle to the helper, which creates a WebView2
 #      controller as a child of that window. A controller created under a HIDDEN

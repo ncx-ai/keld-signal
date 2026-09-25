@@ -596,6 +596,24 @@ begin
     exit;
   end;
 
+  // ⚠️ **ONLY A KNOWN FAILURE FALLS BACK. ANYTHING ELSE IS IGNORED.** This used
+  // to be an unconditional else, so ANY status the wizard did not recognise
+  // tore down the panel and launched a browser. Adding one diagnostic event to
+  // the helper (`metrics`, reporting the window size against the page's
+  // viewport) was therefore enough to eject a WORKING embed: the form rendered
+  // on `loaded`, the next event arrived, and the panel was replaced by a
+  // browser window a second later.
+  //
+  // An unrecognised status means a helper newer than this script, which is
+  // normal — the two ship in one installer but are edited separately — and it
+  // is never evidence that the embed failed. Falling back on it is a confident
+  // negative from a check nobody performed, which is the failure mode this
+  // codebase refuses everywhere else.
+  //
+  // The browser is a LAST RESORT, not a default. Keep this list closed.
+  if (Status <> 'no_runtime') and (Status <> 'failed') then
+    exit;
+
   // Degraded, stated, and still no console: the approval opens in the default
   // browser and the device-flow poll carries on unchanged.
   //
@@ -603,6 +621,7 @@ begin
   // ~150 MB install-time download, for a case this fallback already covers, and
   // it needs admin rights this installer deliberately never asks for
   // (PrivilegesRequired=lowest).
+  Trace('panel FELL BACK to browser on status=' + Status);
   WebPanel.Visible := False;
   LoadingBar.Visible := False;
   PanelRunning := False;
