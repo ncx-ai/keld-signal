@@ -29,13 +29,14 @@ func TestAGroupSwitchedOffBy306StaysOff(t *testing.T) {
 	}
 }
 
-// ⚠️ Written under `workstreams_off`, 3.0.6's key, never a new one: a machine
-// auto-updated back to 3.0.6 must keep the groups a person switched off
-// (Revision 3, 2026-09-25).
-func TestSwitchingAGroupOffWrites306sKey(t *testing.T) {
-	writeAgentConfig(t, `{"blocks": true}`)
-	off := []string{"sales"}
-	if err := WriteV3Settings(V3Patch{GroupsOff: &off}); err != nil {
+// ⚠️ LEFT UNTOUCHED by a settings write (Revision 4, 2026-09-25): nothing
+// writes the off-list any more, and a machine auto-updated back to 3.0.6 must
+// keep the groups a person switched off. So a write of another key merges
+// around it, and no second key ever appears beside 3.0.6's.
+func TestASettingsWriteLeaves306sOffListAlone(t *testing.T) {
+	writeAgentConfig(t, `{"blocks": true, "workstreams_off": ["sales"]}`)
+	on := true
+	if err := WriteV3Settings(V3Patch{ShowBreaks: &on}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(paths.AgentConfigPath())
@@ -48,13 +49,13 @@ func TestSwitchingAGroupOffWrites306sKey(t *testing.T) {
 	}
 	var got []string
 	if err := json.Unmarshal(raw["workstreams_off"], &got); err != nil || len(got) != 1 || got[0] != "sales" {
-		t.Fatalf("workstreams_off = %s (%v)", raw["workstreams_off"], err)
+		t.Fatalf("workstreams_off = %s (%v), want [sales] left as it was", raw["workstreams_off"], err)
 	}
 	if _, ok := raw["groups_off"]; ok {
 		t.Fatalf("no second key may appear beside 3.0.6's: %s", b)
 	}
-	if string(raw["blocks"]) != "true" {
-		t.Fatalf("an unrelated key must survive the write: %s", b)
+	if string(raw["blocks"]) != "true" || string(raw["show_breaks"]) != "true" {
+		t.Fatalf("an unrelated key must survive the write and the new one land: %s", b)
 	}
 }
 

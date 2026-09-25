@@ -1,14 +1,8 @@
 package projects
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
-	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func TestHideExcludesFromMatchingButKeepsRules(t *testing.T) {
@@ -25,7 +19,7 @@ func TestHideExcludesFromMatchingButKeepsRules(t *testing.T) {
 	}
 
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
-	res := Attribute(dims, doc.Projects, nil, nil)
+	res := Attribute(dims, doc.Projects, nil)
 	if only(res).ProjectID != "" {
 		t.Fatalf("hidden project still attributed: %+v", res)
 	}
@@ -46,7 +40,7 @@ func TestEditsOnUnknownProjectFail(t *testing.T) {
 
 func TestBundleUnknownSuggestionFails(t *testing.T) {
 	doc := Document{}
-	if _, _, err := Bundle(doc, "Title", "development", []string{"nope"}, nil); !errors.Is(err, ErrUnknownSuggestion) {
+	if _, _, err := Bundle(doc, "Title", []string{"nope"}, nil); !errors.Is(err, ErrUnknownSuggestion) {
 		t.Fatalf("Bundle with unknown suggestion: err = %v, want ErrUnknownSuggestion", err)
 	}
 }
@@ -55,7 +49,7 @@ func TestPlaceSameAsAddsRuleAndReattributes(t *testing.T) {
 	doc := Document{Projects: []Project{{ID: "p1", Title: "One"}}}
 	suggestions := []Suggestion{{ID: "sug1", Kind: SuggestKindRepo, Value: normalizeRepo(repoKeldSignal)}}
 
-	doc, err := PlaceSameAs(doc, "sug1", "p1", suggestions, nil)
+	doc, err := PlaceSameAs(doc, "sug1", "p1", suggestions)
 	if err != nil {
 		t.Fatalf("PlaceSameAs: %v", err)
 	}
@@ -64,49 +58,8 @@ func TestPlaceSameAsAddsRuleAndReattributes(t *testing.T) {
 	}
 
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
-	res := Attribute(dims, doc.Projects, nil, nil)
+	res := Attribute(dims, doc.Projects, nil)
 	if only(res).Method != MethodRepo || only(res).ProjectID != "p1" {
 		t.Fatalf("block did not re-attribute after PlaceSameAs: %+v", res)
-	}
-}
-
-func TestSetGroupOffTogglesAndSurvivesOtherSettings(t *testing.T) {
-	t.Setenv("KELD_HOME", t.TempDir())
-
-	// A pre-existing, unrelated setting must survive the round trip (merge,
-	// not overwrite).
-	before := settings.Load()
-	before.Attribution = true
-	// Seed agent-config.json directly (Settings' fields are exported and
-	// match the file's JSON shape 1:1) rather than through SetGroupOff
-	// itself, which would make this test circular.
-	b, err := json.MarshalIndent(before, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.AgentConfigPath()), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(paths.AgentConfigPath(), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := SetGroupOff("marketing", true); err != nil {
-		t.Fatalf("SetGroupOff(on): %v", err)
-	}
-	s := settings.Load()
-	if !s.GroupOff("marketing") {
-		t.Fatalf("marketing not off after SetGroupOff(true): %+v", s.GroupsOff)
-	}
-	if !s.Attribution {
-		t.Fatalf("unrelated setting (Attribution) was lost by SetGroupOff")
-	}
-
-	if err := SetGroupOff("marketing", false); err != nil {
-		t.Fatalf("SetGroupOff(off): %v", err)
-	}
-	s = settings.Load()
-	if s.GroupOff("marketing") {
-		t.Fatalf("marketing still off after SetGroupOff(false): %+v", s.GroupsOff)
 	}
 }

@@ -14,13 +14,9 @@ import (
 
 // catalogBody is the part of GET /v1/projects these tests read.
 type catalogBody struct {
-	Groups []struct {
-		Key, Name, Origin string
-	} `json:"groups"`
 	Projects []struct {
 		ID     string   `json:"id"`
 		Title  string   `json:"title"`
-		Group  string   `json:"group"`
 		Origin string   `json:"origin"`
 		Rules  []string `json:"rules"`
 	} `json:"projects"`
@@ -86,23 +82,12 @@ func TestTheCatalogHoldsOnlySignalProjects(t *testing.T) {
 	if len(body.Projects) != 1 || body.Projects[0].ID != "w_signal" {
 		t.Fatalf("catalog projects = %+v, want exactly the Signal project", body.Projects)
 	}
-	if len(body.Groups) != 1 || body.Groups[0].Key != "products" {
-		t.Fatalf("catalog groups = %+v, want only the document's own group", body.Groups)
-	}
-	for _, g := range body.Groups {
-		if g.Origin == projects.GroupOriginAtlas {
-			t.Fatalf("the catalog reported an atlas group: %+v", g)
-		}
-	}
 	if body.Coverage.Total != 2 || body.Coverage.Attributed != 1 {
 		t.Fatalf("coverage = %+v, want 1 of 2: only the Signal project's block", body.Coverage)
 	}
 	if len(body.Totals.Projects) != 1 || body.Totals.Projects[0].ID != "w_signal" ||
 		body.Totals.Projects[0].USD != 4 || body.Totals.Projects[0].Blocks != 1 {
 		t.Fatalf("project totals = %+v, want Signal Client $4 over 1 block", body.Totals.Projects)
-	}
-	if len(body.Totals.Groups) != 1 || body.Totals.Groups[0].Key != "products" || body.Totals.Groups[0].SharedBlocks != 0 {
-		t.Fatalf("group totals = %+v, want Products alone, nothing shared", body.Totals.Groups)
 	}
 
 	// The live pass (what the ledger's attributed cells are drawn from) agrees.
@@ -122,8 +107,8 @@ func TestTheCatalogHoldsOnlySignalProjects(t *testing.T) {
 // R2-AC-6. An overlay — the entry "Same as" laid down for an Atlas value
 // before Revision 2 — is a Signal project now. It keeps its stored origin
 // and Atlas id in the document (project_matches still carries that id), but
-// the catalog reports it as the person's own and shows its group, which the
-// document never declared, under a local heading.
+// the catalog reports it as the person's own. (It also used to get a local
+// heading for its undeclared group; there are no headings since Revision 4.)
 func TestAnOverlayIsASignalProject(t *testing.T) {
 	s := newTestStore(t)
 	doc := projects.Document{Version: projects.CurrentVersion,
@@ -149,10 +134,6 @@ func TestAnOverlayIsASignalProject(t *testing.T) {
 	if len(w.Rules) != 1 || w.Rules[0] != "github.com/ncx-ai/keld-atlas" {
 		t.Fatalf("overlay rules = %v, want its one repo", w.Rules)
 	}
-	if len(body.Groups) != 1 || body.Groups[0].Key != "keld-products" || body.Groups[0].Name != "Keld Products" ||
-		body.Groups[0].Origin != projects.GroupOriginLocal {
-		t.Fatalf("groups = %+v, want one local heading for the overlay's group", body.Groups)
-	}
 	if len(body.Totals.Projects) != 1 || body.Totals.Projects[0].ID != "keld_products:atlas" || body.Totals.Projects[0].USD != 6 {
 		t.Fatalf("totals = %+v, want the overlay's block counted under it", body.Totals.Projects)
 	}
@@ -173,21 +154,6 @@ func TestAnOverlayIsASignalProject(t *testing.T) {
 	}
 	if stored.Projects[0].Origin != projects.OriginAtlas {
 		t.Fatalf("stored origin = %q, want it left %q", stored.Projects[0].Origin, projects.OriginAtlas)
-	}
-}
-
-// A group STORED with origin atlas (a heading an earlier release derived) is
-// reported as local: the catalog never says "atlas".
-func TestTheCatalogNeverReportsAnAtlasGroup(t *testing.T) {
-	s := newTestStore(t)
-	if err := s.Save(projects.Document{Version: projects.CurrentVersion,
-		Groups: []projects.Group{{Key: "keld-products", Name: "Keld Products", Origin: projects.GroupOriginAtlas}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	body := getCatalog(t, s)
-	if len(body.Groups) != 1 || body.Groups[0].Origin != projects.GroupOriginLocal {
-		t.Fatalf("groups = %+v, want the stored atlas group reported as local", body.Groups)
 	}
 }
 
@@ -260,14 +226,13 @@ func TestGetProjectsWithoutAnOrgIsTheLocalDocumentOnly(t *testing.T) {
 	}
 	defer res.Body.Close()
 	var body struct {
-		Groups   []json.RawMessage `json:"groups"`
 		Projects []json.RawMessage `json:"projects"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Projects) != 0 || len(body.Groups) != 0 {
-		t.Fatalf("no org and an empty local document must yield nothing, got %d projects, %d groups",
-			len(body.Projects), len(body.Groups))
+	if len(body.Projects) != 0 {
+		t.Fatalf("no org and an empty local document must yield nothing, got %d projects",
+			len(body.Projects))
 	}
 }

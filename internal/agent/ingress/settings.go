@@ -46,11 +46,15 @@ func SettingsRoute(restart func() error) Route {
 // settingsView is GET /v1/settings' body: the EFFECTIVE values (file merged
 // with env), plus which keys an env var currently pins so the page can grey
 // them out rather than let a person "change" a setting that cannot move.
+//
+// ⚠️ `groups_off` left this view and the patch in Revision 4 (2026-09-25):
+// Signal has no groups to switch. The stored `workstreams_off` is NOT removed // vocab:keep
+// from agent-config.json — a rollback to 3.0.6 still honours it — and every
+// write here merges, so it survives untouched.
 type settingsView struct {
 	SendToAtlas bool     `json:"send_to_atlas"`
 	DevBlocks   string   `json:"dev_blocks"`
 	ShowBreaks  bool     `json:"show_breaks"`
-	GroupsOff   []string `json:"groups_off"`
 	Attribution bool     `json:"attribution"`
 	Readonly    []string `json:"readonly"`
 	DevGenerate bool     `json:"dev_generate"`
@@ -60,10 +64,6 @@ type settingsView struct {
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	set := settings.Load()
 	devBlocks, _ := set.DevBlocksMode() // GET reports the effective value, not a refusal
-	off := set.GroupsOff
-	if off == nil {
-		off = []string{}
-	}
 	devRepos := set.DevRepos
 	if devRepos == nil {
 		devRepos = []string{}
@@ -74,7 +74,6 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		SendToAtlas: set.AtlasEnabled(),
 		DevBlocks:   devBlocks,
 		ShowBreaks:  set.ShowBreaks,
-		GroupsOff:   off,
 		Attribution: attrib.Enabled(set.Attribution),
 		Readonly:    readonlySettingsKeys(),
 	})
@@ -137,7 +136,6 @@ type settingsPatch struct {
 	SendToAtlas *bool     `json:"send_to_atlas"`
 	DevBlocks   *string   `json:"dev_blocks"`
 	ShowBreaks  *bool     `json:"show_breaks"`
-	GroupsOff   *[]string `json:"groups_off"`
 	Attribution *bool     `json:"attribution"`
 	DevGenerate *bool     `json:"dev_generate"`
 	DevRepos    *[]string `json:"dev_repos"`
@@ -178,7 +176,6 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 		SendToAtlas: patch.SendToAtlas,
 		DevBlocks:   patch.DevBlocks,
 		ShowBreaks:  patch.ShowBreaks,
-		GroupsOff:   patch.GroupsOff,
 		Attribution: patch.Attribution,
 		DevGenerate: patch.DevGenerate,
 		DevRepos:    patch.DevRepos,

@@ -189,7 +189,7 @@ func TestADedupedProjectStillAttributes(t *testing.T) {
 	}})
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, got, nil, nil)
+	res := Attribute(dims, got, nil)
 
 	if only(res).ProjectID != "keld_projects:signal_on_device_client" {
 		t.Fatalf("project = %q, want the deduped project to still match", only(res).ProjectID)

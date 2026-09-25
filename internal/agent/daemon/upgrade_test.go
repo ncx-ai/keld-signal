@@ -43,13 +43,12 @@ func copyHome(t *testing.T, src string) string {
 }
 
 type projectsPane struct {
-	Groups []struct {
-		Key, Name, Origin string
-		Off               bool
-	} `json:"groups"`
+	// Groups is decoded only to prove it is ABSENT (R4-AC-2): Signal has no
+	// groups since Revision 4.
+	Groups   json.RawMessage `json:"groups"`
 	Projects []struct {
-		ID, Title, Group string
-		Hidden           bool
+		ID, Title string
+		Hidden    bool
 	} `json:"projects"`
 }
 
@@ -86,43 +85,64 @@ func serveProjects(t *testing.T, method, path, body string) *httptest.ResponseRe
 	return rec
 }
 
-// R3-AC-3. A home 3.0.6 wrote (the fixture is main's own Save output, with
-// `workstreams_off` in agent-config.json) is read IN PLACE, and an edit from the
-// page is written back in the shape 3.0.6 reads — no workstreams.json, no
-// .pre-rename, no groups_off. ⚠️ This is what makes an auto-update rollback to
-// 3.0.6 safe: that build finds exactly the file it wrote, with the edit in it.
+// R3-AC-3 + R4-AC-5. A home 3.0.6 wrote (the fixture is main's own Save
+// output, with `workstreams_off` in agent-config.json) is read IN PLACE, and an
+// edit from the page is written back in the shape 3.0.6 reads — no
+// workstreams.json, no .pre-rename, no groups_off. ⚠️ This is what makes an
+// auto-update rollback to 3.0.6 safe: that build finds exactly the file it
+// wrote, with the edit in it.
+//
+// ⚠️ **AND EVERY VISIBLE PROJECT STILL RENDERS THERE (Revision 4).** Signal
+// has no groups any more, but 3.0.6 draws a project only under a group the
+// file declares. So after the edits — a rule added, and a brand-new project
+// created, which has no group at all — every visible project's `workstream`
+// must name a group in the file's `workstreams`, and the person's own groups
+// must still be there. The group-off edit this test used to make is gone with
+// its route.
 func TestA306HomeIsReadAndWrittenInPlace(t *testing.T) {
 	home := copyHome(t, "testdata/home-306")
 	t.Setenv(settings.EnvProjectsFile, "")
 
 	pane := getProjectsPane(t)
-	if len(pane.Groups) != 2 || pane.Groups[0].Key != "development" || pane.Groups[1].Key != "marketing" {
-		t.Fatalf("groups: %+v", pane.Groups)
+	if pane.Groups != nil {
+		t.Fatalf("the catalog must carry no groups since Revision 4: %s", pane.Groups)
 	}
-	if pane.Groups[0].Off || !pane.Groups[1].Off {
-		t.Fatalf("marketing was switched off by 3.0.6 and must still be: %+v", pane.Groups)
-	}
-	byID := map[string]string{}
+	hidden := map[string]bool{}
 	for _, w := range pane.Projects {
-		byID[w.ID] = w.Group
+		hidden[w.ID] = w.Hidden
 	}
-	for id, g := range map[string]string{
-		"p_signal_client":              "development",
-		"p_site":                       "marketing",
-		"keld_projects:atlas_platform": "development",
+	for id, want := range map[string]bool{
+		"p_signal_client":              false,
+		"p_site":                       true,
+		"keld_projects:atlas_platform": false,
 	} {
-		if byID[id] != g {
-			t.Fatalf("project %s: group %q, want %q (all: %+v)", id, byID[id], g, pane.Projects)
+		h, ok := hidden[id]
+		if !ok || h != want {
+			t.Fatalf("project %s: present=%v hidden=%v, want hidden=%v (all: %+v)", id, ok, h, want, pane.Projects)
 		}
 	}
 
-	// Two edits from the page: a rule added to a project, a group switched off.
+	// Two edits from the page: a rule added to a project, and a new project.
 	if rec := serveProjects(t, http.MethodPost, "/v1/projects/p_signal_client/rules",
 		`{"add":[{"kind":"repo","value":"github.com/ncx-ai/keld-docs"}]}`); rec.Code != http.StatusOK {
 		t.Fatalf("add rule = %d: %s", rec.Code, rec.Body)
 	}
-	if rec := serveProjects(t, http.MethodPut, "/v1/groups/development/off", `{"off":true}`); rec.Code != http.StatusOK {
-		t.Fatalf("group off = %d: %s", rec.Code, rec.Body)
+	rec := serveProjects(t, http.MethodPost, "/v1/projects/bundle", `{"title":"Docs site","suggestions":[]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bundle = %d: %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		Project map[string]any `json:"project"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	newID, _ := created.Project["id"].(string)
+	if newID == "" {
+		t.Fatalf("bundle created no project: %s", rec.Body)
+	}
+	if _, ok := created.Project["group"]; ok {
+		t.Fatalf("the bundle response must not name a group: %s", rec.Body)
 	}
 
 	state := filepath.Join(home, "state")
@@ -149,6 +169,7 @@ func TestA306HomeIsReadAndWrittenInPlace(t *testing.T) {
 			ID         string   `json:"id"`
 			Repos      []string `json:"repos"`
 			Workstream string   `json:"workstream"`
+			Hidden     bool     `json:"hidden"`
 		} `json:"projects"`
 	}
 	b, err := os.ReadFile(filepath.Join(state, "projects.json"))
@@ -158,20 +179,32 @@ func TestA306HomeIsReadAndWrittenInPlace(t *testing.T) {
 	if err := json.Unmarshal(b, &v306); err != nil {
 		t.Fatal(err)
 	}
-	if v306.Version != 1 || len(v306.Workstreams) != 2 {
-		t.Fatalf("3.0.6 must read version 1 with its groups under `workstreams`: %s", b)
+	if v306.Version != 1 || len(v306.Workstreams) != 2 ||
+		v306.Workstreams[0].Key != "development" || v306.Workstreams[1].Key != "marketing" {
+		t.Fatalf("3.0.6 must read version 1 with the person's own groups under `workstreams`: %s", b)
 	}
-	found := false
+	declared := map[string]bool{}
+	for _, g := range v306.Workstreams {
+		declared[g.Key] = true
+	}
+	seen := map[string]bool{}
 	for _, p := range v306.Projects {
+		seen[p.ID] = true
+		if !p.Hidden && !declared[p.Workstream] {
+			t.Fatalf("visible project %s is under %q, which the file does not declare — 3.0.6 would not render it: %s",
+				p.ID, p.Workstream, b)
+		}
 		if p.ID == "p_signal_client" {
-			found = p.Workstream == "development"
+			if p.Workstream != "development" {
+				t.Fatalf("p_signal_client lost its group under `workstream`: %+v", p)
+			}
 			if !contains(p.Repos, "github.com/ncx-ai/keld-docs") {
 				t.Fatalf("the page's edit must be in the file 3.0.6 reads: %+v", p)
 			}
 		}
 	}
-	if !found {
-		t.Fatalf("p_signal_client missing or lost its group under `workstream`: %s", b)
+	if !seen[newID] || !seen["p_signal_client"] {
+		t.Fatalf("projects missing from the file 3.0.6 reads (want %s and p_signal_client): %s", newID, b)
 	}
 
 	cfg, err := os.ReadFile(paths.AgentConfigPath())
@@ -187,8 +220,39 @@ func TestA306HomeIsReadAndWrittenInPlace(t *testing.T) {
 	}
 	var off []string
 	_ = json.Unmarshal(raw["workstreams_off"], &off)
-	if !contains(off, "development") || !contains(off, "marketing") {
-		t.Fatalf("workstreams_off = %v, want development and marketing", off)
+	if len(off) != 1 || off[0] != "marketing" {
+		t.Fatalf("workstreams_off = %v, want 3.0.6's [marketing] left as it was", off)
+	}
+}
+
+// A document that declares NO group — the state of a machine where nobody
+// had made one — gains exactly one internal group on save, and a new project
+// is filed under it, so a rollback to 3.0.6 still draws it.
+func TestANewProjectInAGrouplessHomeIsFiledUnderOneInternalGroup(t *testing.T) {
+	home := copyHome(t, "testdata/home-306-empty")
+	t.Setenv(settings.EnvProjectsFile, "")
+	if rec := serveProjects(t, http.MethodPost, "/v1/projects/bundle", `{"title":"Docs site"}`); rec.Code != http.StatusOK {
+		t.Fatalf("bundle = %d: %s", rec.Code, rec.Body)
+	}
+	b, err := os.ReadFile(filepath.Join(home, "state", "projects.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v306 struct {
+		Workstreams []struct{ Key, Name, Origin string } `json:"workstreams"`
+		Projects    []struct {
+			Workstream string `json:"workstream"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(b, &v306); err != nil {
+		t.Fatal(err)
+	}
+	if len(v306.Workstreams) != 1 || v306.Workstreams[0].Key != "projects" ||
+		v306.Workstreams[0].Name != "Projects" || v306.Workstreams[0].Origin != "local" {
+		t.Fatalf("want one internal group {projects, Projects, local}: %s", b)
+	}
+	if len(v306.Projects) != 1 || v306.Projects[0].Workstream != "projects" {
+		t.Fatalf("the new project must be filed under the internal group: %s", b)
 	}
 }
 
@@ -206,7 +270,7 @@ func contains(xs []string, x string) bool {
 func TestTheReal306EmptyDocumentReadsAsEmpty(t *testing.T) {
 	copyHome(t, "testdata/home-306-empty")
 	pane := getProjectsPane(t)
-	if len(pane.Groups) != 0 || len(pane.Projects) != 0 {
+	if pane.Groups != nil || len(pane.Projects) != 0 {
 		t.Fatalf("an empty 3.0.6 document must read as empty: %+v", pane)
 	}
 }

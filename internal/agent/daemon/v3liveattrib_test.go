@@ -56,12 +56,12 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	return ledger.BlockKey{Session: session, Start: start.Unix()}
 }
 
-func declareProject(t *testing.T, v *v3, id, title, repo, group string) {
+func declareProject(t *testing.T, v *v3, id, title, repo string) {
 	t.Helper()
 	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
 		d.Projects = append(d.Projects, projects.Project{
 			ID: id, Title: title, Repos: []string{repo},
-			Group: group, Origin: projects.OriginUser,
+			Origin: projects.OriginUser,
 		})
 		return d, nil
 	}); err != nil {
@@ -162,7 +162,7 @@ func TestTodayRowsAndProjectsPaneAgreeOnEveryBlock(t *testing.T) {
 		}
 		cutBlock(t, v, fmt.Sprintf("sess-anchor-%d", i), 10*(i+1), repo)
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	rows, _ := rowProjects(t, v.ledgerReader())
 	pane := paneProjects(t, v.projects)
@@ -212,7 +212,7 @@ func TestTheAnchorHasTeethAgainstTheFrozenCell(t *testing.T) {
 		}
 		cutBlock(t, v, fmt.Sprintf("sess-teeth-%d", i), 10*(i+1), repo)
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	frozen, _ := rowProjects(t, v.ledger) // the pre-change reader
 	pane := paneProjects(t, v.projects)
@@ -243,7 +243,7 @@ func TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared(t *testing.T)
 		t.Fatalf("with nothing declared the block must name no project, got %q", before[k])
 	}
 
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	after, cells := rowProjects(t, v.ledgerReader())
 	if after[k] != "p_signal" {
@@ -259,7 +259,7 @@ func TestBlockCutBeforeItsProjectExistedAttributesOnceItIsDeclared(t *testing.T)
 // a confident answer nobody can trace back to anything.
 func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 	k := cutBlock(t, v, "sess-ac2", 30, "github.com/ncx-ai/keld-signal")
 
 	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
@@ -281,24 +281,27 @@ func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T)
 	}
 }
 
-// TestGroupSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
-// exclusion a person sets on the page applies to what the page then shows
-// them, without a restart.
-func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
+// TestHidingAProjectDropsItFromTheRows — AC2's sibling: the exclusion a person
+// sets on the page applies to what the page then shows them, without a
+// restart. (It switched a GROUP off until Revision 4; hiding a project is the
+// exclusion there is now, and what an off group's projects became.)
+func TestHidingAProjectDropsItFromTheRows(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 	k := cutBlock(t, v, "sess-ac2b", 30, "github.com/ncx-ai/keld-signal")
 
 	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
-	if err := projects.SetGroupOff("eng", true); err != nil {
-		t.Fatalf("group off: %v", err)
+	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
+		return projects.Hide(d, "p_signal", true)
+	}); err != nil {
+		t.Fatalf("hide: %v", err)
 	}
 
 	rows, _ := rowProjects(t, v.ledgerReader())
 	if rows[k] != "" {
-		t.Fatalf("a project in a switched-off group must not name a block, got %q", rows[k])
+		t.Fatalf("a hidden project must not name a block, got %q", rows[k])
 	}
 	// And the pane says the same thing, which is the whole point.
 	if attributed, total := paneCoverage(t, v.projects); attributed != 0 || total != 1 {
@@ -313,7 +316,7 @@ func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 // renders as "no project".
 func TestUnreadableProjectsDocumentYieldsUnknownNotNoProject(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 	k := cutBlock(t, v, "sess-ac3", 30, "github.com/ncx-ai/keld-signal")
 
 	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
@@ -357,7 +360,7 @@ func TestMissingProjectsDocumentIsNoProjectNotUnknown(t *testing.T) {
 // not a fault.
 func TestBlockWithNoRepoDimIsUnattributedAndErrorFree(t *testing.T) {
 	v := liveFixture(t)
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 	k := cutBlock(t, v, "sess-ac6", 30, "")
 
 	rows, cells := rowProjects(t, v.ledgerReader())
@@ -375,7 +378,7 @@ func TestBlockWithNoRepoDimIsUnattributedAndErrorFree(t *testing.T) {
 func TestRecomputationRewritesNothingStored(t *testing.T) {
 	v := liveFixture(t)
 	k := cutBlock(t, v, "sess-ac5", 30, "github.com/ncx-ai/keld-signal")
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	stored, err := v.ledger.Read(time.Time{}, 100)
 	if err != nil {
@@ -414,7 +417,7 @@ func TestRecomputationIsOneBoundedPassPerRequest(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		cutBlock(t, v, fmt.Sprintf("sess-cost-%d", i), i+1, "github.com/ncx-ai/keld-signal")
 	}
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	calls := 0
 	var gotSince time.Time
@@ -451,7 +454,7 @@ func TestRecomputationIsOneBoundedPassPerRequest(t *testing.T) {
 func TestDimsQueryFailureIsUnknownNotNoProject(t *testing.T) {
 	v := liveFixture(t)
 	cutBlock(t, v, "sess-dimsfail", 30, "github.com/ncx-ai/keld-signal")
-	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
+	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal")
 
 	r := liveAttribution{
 		inner: v.ledger,

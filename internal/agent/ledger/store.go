@@ -257,18 +257,6 @@ func validModelID(s string) string {
 	return ""
 }
 
-// groupShape bounds a GROUP key: projects.GroupKey of an org's group name —
-// lowercased, spaces to hyphens — so letters and digits of any script plus a
-// few joiners, never whitespace and never a path.
-var groupShape = regexp.MustCompile(`^[\p{L}\p{N}._:&+-]{1,128}$`)
-
-func validGroup(s string) string {
-	if groupShape.MatchString(s) {
-		return s
-	}
-	return ""
-}
-
 func validProjectID(s string) string {
 	if s != "" && projectIDShape.MatchString(s) {
 		return s
@@ -663,9 +651,14 @@ func (s *Store) Measure(k BlockKey, m Measured, at time.Time) {
 
 // storedProject is one entry of the `projects` / `vector_projects`
 // JSON columns — and, keyed the same, one entry of a cell's `projects` list.
+//
+// ⚠️ **NO `group` (Revision 4, 2026-09-25).** Rows written by Revisions 1–3
+// carry one in these columns; decoding into this struct simply ignores it,
+// so those rows still read — as `{project_id, method}` like every new one.
+// The columns themselves are unchanged: history is additive here and nothing
+// is dropped or rewritten.
 type storedProject struct {
 	ProjectID  string   `json:"project_id"`
-	Group      string   `json:"group"`
 	Method     string   `json:"method,omitempty"`
 	Confidence *float64 `json:"confidence,omitempty"`
 }
@@ -691,7 +684,7 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 				"project id refused by shape (%d chars); that attribution was computed and could not be stored", len(w.ProjectID)))
 			continue
 		}
-		list = append(list, storedProject{ProjectID: id, Group: validGroup(w.Group), Method: string(validMethod(w.Method))})
+		list = append(list, storedProject{ProjectID: id, Method: string(validMethod(w.Method))})
 	}
 	status := StatusOK
 	if r != ReasonNone {
@@ -793,7 +786,7 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 		if !(conf >= 0 && conf <= 1) {
 			conf = 0
 		}
-		list = append(list, storedProject{ProjectID: id, Group: validGroup(w.Group), Confidence: &conf})
+		list = append(list, storedProject{ProjectID: id, Confidence: &conf})
 	}
 	// ⚠️ **A SECOND OPINION THAT NAMED NOTHING IS NOT A SECOND OPINION**, and
 	// the same invariant Attribute enforces applies here for the same reason: a
@@ -1135,9 +1128,10 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 }
 
 // projectsCell turns a stored list column into the cell's `projects`
-// list. An empty column is a row written before the list existed: it reads as
-// the one entry its single-id columns hold (legacy), with an unknown group —
-// and as nothing when those are empty too. An unreadable column is treated the
+// list: `{project_id, method}` or `{project_id, confidence}`. An empty column
+// is a row written before the list existed: it reads as the one entry its
+// single-id columns hold (legacy) — and as nothing when those are empty too.
+// A row that stored a `group` per entry (Revisions 1–3) reads without it. An unreadable column is treated the
 // same way rather than failing the whole route over one row.
 func projectsCell(stored string, legacy storedProject) []map[string]any {
 	var list []storedProject
@@ -1149,7 +1143,7 @@ func projectsCell(stored string, legacy storedProject) []map[string]any {
 	}
 	out := make([]map[string]any, 0, len(list))
 	for _, w := range list {
-		e := map[string]any{"project_id": w.ProjectID, "group": w.Group}
+		e := map[string]any{"project_id": w.ProjectID}
 		if w.Method != "" {
 			e["method"] = w.Method
 		}
