@@ -143,6 +143,29 @@ func TestPanelDeclaresDPIAwarenessBeforeCreatingWindows(t *testing.T) {
 	}
 }
 
+// ⚠️ Show() AND Hide() MUST COME AS A PAIR.
+//
+// WebView2 paints through a DirectComposition visual, not WM_PAINT into this
+// HWND, so hiding the parent window does NOT clear the page — the controller's
+// own IsVisible is what retires the visual. Show() was added on its own to fix a
+// panel that never started rendering; once IsVisible was explicitly true, the
+// wizard's `WebPanel.Visible := False` stopped taking the page off screen and
+// the tools checklist rendered on top of a still-painted sign-in form.
+//
+// Either both calls exist or neither should.
+func TestPanelVisibilityCallsAreSymmetric(t *testing.T) {
+	b, err := os.ReadFile("panel_windows.go")
+	if err != nil {
+		t.Fatalf("read panel_windows.go: %v", err)
+	}
+	src := string(b)
+	show := strings.Contains(src, "chromium.Show()")
+	hide := strings.Contains(src, "chromium.Hide()")
+	if show != hide {
+		t.Errorf("visibility calls are asymmetric (Show=%v Hide=%v); a controller left IsVisible=true keeps painting over whatever the wizard shows next", show, hide)
+	}
+}
+
 // The injected script lives in a Go RAW STRING, so a backtick anywhere inside it
 // silently terminates the literal — which turns into a compile error some lines
 // later that names the JavaScript rather than the quoting. It cost a build here.

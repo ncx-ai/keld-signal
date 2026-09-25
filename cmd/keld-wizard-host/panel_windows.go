@@ -432,6 +432,20 @@ func panel(o options) int {
 				chromium.Resize()
 				_ = chromium.NotifyParentWindowPositionChanged()
 			}
+			// ⚠️ **AND THE HIDE MUST BE SYMMETRIC, OR THE PAGE KEEPS PAINTING
+			// OVER WHATEVER COMES NEXT.** WebView2 draws through a
+			// DirectComposition visual rather than by WM_PAINT into this HWND, so
+			// hiding the parent window is NOT sufficient to clear it — the
+			// controller's own IsVisible is what retires the visual.
+			//
+			// Adding Show() without Hide() is what made this visible: once
+			// IsVisible was explicitly true, the wizard's `WebPanel.Visible :=
+			// False` no longer took the page off the screen, and the tools
+			// checklist rendered ON TOP of a still-painted sign-in form.
+			// An asymmetric pair of calls is the bug; keep them together.
+			if !vis && wasVisible {
+				_ = chromium.Hide()
+			}
 			wasVisible = vis
 
 			w, h := clientSize(o.Panel)

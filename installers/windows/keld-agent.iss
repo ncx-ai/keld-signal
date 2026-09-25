@@ -745,10 +745,24 @@ begin
   // and the empty-selection rule there would correctly configure nothing — for a
   // choice they never made.
   WizardForm.NextButton.Enabled := False;
+  // ⚠️ AND SAY SO. MarkConnected has just printed "Connected — …" and enabled
+  // Next; this disables it again to enumerate tools, which takes long enough to
+  // notice. Without a word of explanation that reads as the installer having
+  // frozen at the exact moment the person expects to continue — reported as
+  // "the Next button remained disabled… it was not clear that anything was
+  // happening". The marquee says only "still working", which is all anything
+  // here knows.
+  SetStatus('Checking which AI tools are installed…');
+  LoadingBar.Visible := True;
+  LoadingBar.BringToFront;
   // --dry-run writes NOTHING: it enumerates what is installed and returns before
   // any write, which is what makes it safe to run before the commit point.
   if not StartRun(RunTools, 'signal setup --dry-run --json') then
+  begin
+    LoadingBar.Visible := False;
+    SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
     WizardForm.NextButton.Enabled := True;
+  end;
 end;
 
 procedure MarkConnected;
@@ -926,7 +940,11 @@ begin
       AfterLogin;
     RunTools:
       begin
+        LoadingBar.Visible := False;
         RenderTools;
+        // Back to the fact that matters once the list is on screen.
+        if Paired then
+          SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
         WizardForm.NextButton.Enabled := Paired;
       end;
   end;
