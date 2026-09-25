@@ -337,15 +337,18 @@ def test_decision_is_pooled_and_ignores_group():   # R4-AC-6
 
 
 def test_the_row_is_the_pre_per_group_shape():   # R4-AC-6
-    # No `decision` stamp in model_versions, and the published projects keep the
-    # decision's own (declaration) order — both exactly as before 2026-09-23.
+    # No `decision` stamp in model_versions, as before 2026-09-23. The published
+    # projects come HIGHEST CONFIDENCE FIRST — not the declaration order the
+    # pooled rule produces: the daemon reads the list as ranked (attrib.Outcome,
+    # "highest confidence first"), and declaration order is what it once took
+    # for a ranking. That sort is not a group feature, so it survived Revision 4.
     assert set(attribution.MODEL_VERSIONS) == {"encoder", "verifier", "null_doc", "scoring"}, \
         attribution.MODEL_VERSIONS
     attribution.set_projects(_with_groups("row-shape",
                                           {"proj_pay": "products", "proj_ui": "features"}))
     # ui scores higher than pay and is declared second; both within MARGIN.
     out = attribution.attribute_block(["work"], {}, GeomEncoder([0.66, 0.70, 0.0, 0.2728]), None)
-    assert [p["id"] for p in out["projects"]] == ["proj_pay", "proj_ui"], out["projects"]
+    assert [p["id"] for p in out["projects"]] == ["proj_ui", "proj_pay"], out["projects"]
     assert "decision" not in out["attribution"]["model_versions"], out["attribution"]
 
 
