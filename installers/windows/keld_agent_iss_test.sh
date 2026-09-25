@@ -252,6 +252,15 @@ grep -q 'VerifyCatalog' "$wf" || \
 [ "$(grep -c 'timestamp-rfc3161:' "$wf")" -eq 2 ] || \
   fail "expected both signing steps to set timestamp-rfc3161; short-lived certs make this mandatory, not optional"
 
+# 13b. ⚠️ THE ACTION'S `files:` INPUT REQUIRES AN ABSOLUTE PATH AND REFUSES A
+#      RELATIVE ONE ("The file path '...' is not rooted." — measured, run
+#      36144191695, which signed all 111 payload binaries and then failed on the
+#      installer). `files-catalog` is the opposite: its path may be relative and
+#      its ENTRIES are relative to it. The two inputs disagree, so copying the
+#      shape from one to the other is exactly the mistake that shipped.
+awk '/files:/ && !/files-catalog:/ && !/files-folder/' "$wf" | grep -q 'github.workspace' || \
+  fail "the signing action's files: input is not rooted at github.workspace - the action refuses a relative path"
+
 # 14. ⚠️ A RELEASE MAY NOT SHIP UNSIGNED. Degrading to a warning is correct for
 #     a fork or a dry run — those are MEANT to produce non-distributable output
 #     — and wrong for a release, where it means a rotated-out client secret
