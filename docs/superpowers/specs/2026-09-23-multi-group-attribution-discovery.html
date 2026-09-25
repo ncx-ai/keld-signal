@@ -142,8 +142,8 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 </dl>
 
 <section id="rev4" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
-<h2 id="r4" style="margin-top:18px">Revision 4 · Only projects, no groups <span class="chip chip-draft" style="vertical-align:middle;margin-left:8px">Draft — awaiting sign-off · 2026-09-25</span></h2>
-<p class="lede">Proposed 2026-09-25: Signal drops the container. There are only <strong>projects</strong>, in one flat list. Groups came from mirroring Atlas; Revision 2 stopped that, so a group now only carried a heading, group totals and the "counts for my work" switch. A block still lands in every project that matches it.</p>
+<h2 id="r4" style="margin-top:18px">Revision 4 · Only projects, no groups <span class="chip chip-signed" style="vertical-align:middle;margin-left:8px">Signed off · 2026-09-25 · in progress</span></h2>
+<p class="lede">Decided 2026-09-25: Signal drops the container. There are only <strong>projects</strong>, in one flat list. Groups came from mirroring Atlas; Revision 2 stopped that, so a group now only carried a heading, group totals and the "counts for my work" switch. A block still lands in every project that matches it.</p>
 
 <h3>What changes, what stays</h3>
 <div class="wrap">
@@ -163,7 +163,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 </table>
 </div>
 
-<h3>Decision proposed: what happens to a switched-off group</h3>
+<h3>Decided: what happens to a switched-off group</h3>
 <ul>
   <li>A project whose group was switched off becomes a <strong>hidden project</strong> on first load. It keeps attributing nothing, exactly as before, and the person can unhide it on the page. 3.0.6 honours <span class="mono">hidden</span> too.</li>
   <li><span class="mono">workstreams_off</span> is left in agent-config.json, so a rollback to 3.0.6 still sees those groups as off.</li>
