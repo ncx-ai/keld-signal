@@ -244,6 +244,16 @@ Read against `keld-atlas` on this machine, not assumed:
      "atlas"` and its own `repos`; those rules are unioned with the value's own keywords at
      read time, and they never leave the machine. The earlier "one Atlas route" ask is
      withdrawn, not postponed.
+   - ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** Signal attributes blocks only
+     to the workstreams defined in Signal — the entries of the local `workstreams.json`. The
+     org's workstreams still arrive on the settings poll and are held, but the rule pass, the
+     page, `totals`/`coverage` and `project_matches` no longer read them, and nothing
+     reconciles local entries against them any more (a poll used to trim or delete a local
+     workstream whose rules an Atlas one covered). An overlay made by "same as" before this
+     is a local entry, so it stays: `GET /v1/workstreams` reports it as `origin: "user"` (a
+     group stored as `"atlas"` reads `"local"`), while the stored entry keeps its Atlas id so
+     `project_matches` still names it. The model-based pass is unchanged and still scores
+     against the org's list; how imported Atlas workstreams are used again is separate work.
 
 `repos` ARE the rules (one `repo:` rule per entry, full remote `host/org/name`, lowercase);
 `ticket_key` is the second rule kind (a Jira-style prefix, e.g. `KELD`). Everything else
@@ -269,8 +279,10 @@ Suggestion ids are **stable**: `sha1(kind + ":" + value)[:12]`, so a description
 against a suggestion survives, and a split repo comes back with the id it had.
 
 Attribution order (deterministic pass, `internal/agent/projects`):
-1. block `repo` dim ∈ some non-hidden project's `repos` whose workstream is not off → that
-   project, method `repo`. Two matches → `conflict`, NOT the first.
+Candidates are the local document's projects only (`projects.Candidates`, since
+2026-09-25). Per group, every match is assigned (since 2026-09-23) — no conflict:
+1. block `repo` dim ∈ a non-hidden project's `repos` whose group is not off → that
+   project, method `repo`.
 2. else block branch carries a ticket key matching a project's `ticket_key` → method `ticket`.
 3. else (vector toggle on) → the encoder path, method `embedding`.
 4. else unattributed → grouped into a suggestion by repo, then ticket key, then workspace.
