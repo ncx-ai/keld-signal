@@ -216,9 +216,9 @@ func epochOf(s string) (int64, bool) {
 }
 
 // dimsOf lifts the three dimensions the Projects pane groups on out of a
-// block's published workstreams. A dimension that did not reach `attributed` is
+// block's published projects. A dimension that did not reach `attributed` is
 // left empty: "only 'attributed' may be read as the window's answer" is the
-// workstreams contract's own rule, and a thin repo is not evidence to group a
+// projects contract's own rule, and a thin repo is not evidence to group a
 // person's work by.
 func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 	get := func(key string) string {
@@ -302,24 +302,23 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 		// ABSENT, which the page renders as unknown rather than as unattributed.
 		return
 	}
-	// The candidate set is the local document's projects OVERLAID on the org's
-	// pooled workstream values, which are the vocabulary and arrive on the
-	// settings poll. The vector pass is nil here: this is the deterministic
-	// path, and a nil Vector is what makes "unattributed" mean "no rule
-	// matched" rather than "the encoder was not asked".
+	// The candidate set is the projects defined IN SIGNAL — the local
+	// document, overlays included — and nothing from the settings poll. The
+	// vector pass is nil here: this is the deterministic path, and a nil Vector
+	// is what makes "unattributed" mean "no rule matched" rather than "the
+	// encoder was not asked".
 	//
-	// ⚠️ **MergeCandidates, not a plain append.** A local overlay carrying
-	// rules a person added to an ORG value shares that value's id, so
-	// concatenating the two lists hands Attribute the same id twice and it
-	// reports the block as CONFLICTING WITH ITSELF — the exact failure
-	// MergeCandidates' own comment names. This is also the list the page's
-	// live pass uses (ingress.Attribution), so the recorded answer and the
-	// displayed one are computed over one candidate set rather than two.
-	var remote []projects.Project
-	if v.projects.RemoteProjects != nil {
-		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
-	}
-	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
+	// ⚠️ **THE ORG'S LIST IS NOT READ HERE, AND UNTIL REVISION 2 (2026-09-25)
+	// IT WAS.** This merged the org's Atlas workstreams in as candidates, so an
+	// Atlas rule could claim a block on this machine. Signal now labels on its
+	// own: the org's list is still received and held (Store.RemoteProjects)
+	// but a block matching only an Atlas rule records no_rule_matched, and it
+	// comes back as a suggestion — where a person makes a Signal project for
+	// it. Atlas still runs its own rules over the same dimensions, so its
+	// numbers do not move. projects.Candidates is the ONE definition the page's
+	// live pass (ingress) and project_matches use too, so the recorded answer
+	// and the displayed one cannot be computed over two different sets.
+	res := projects.Attribute(r.Dimensions, projects.Candidates(doc),
 		projects.GroupOffFunc(settings.Load()), nil)
 	v.ledger.Attribute(k, ledger.Attributed{Projects: ledgerProjects(res)}, ledger.Reason(res.Reason), now)
 }
