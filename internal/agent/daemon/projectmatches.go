@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"sort"
-	"sync/atomic"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
@@ -16,13 +15,12 @@ import (
 // ⚠️ **THIS IS THE LOCAL SIDE OF A COMPARISON ATLAS CANNOT MAKE ALONE.** Atlas
 // knows its own projects' rules and nothing about the ones a person made here,
 // so "a machine groups C with your A and B" is unanswerable from what it
-// receives today. Putting both sides on the block makes it a set difference
-// over rows it already stores: no route, no suggestion object, nothing to
-// schedule or retract.
+// receives today. Putting this machine's side on the block makes it a set
+// difference over rows Atlas already stores, against its own side: no route, no
+// suggestion object, nothing to schedule or retract.
 //
 // ⚠️ **READ PER BLOCK, NOT CAPTURED ONCE.** The projects document changes while
-// the daemon runs — someone makes a project, the settings poll reconciles one
-// away — and a snapshot taken at wiring time would stamp every row for the rest
+// the daemon runs — someone makes, edits or maps one on the page — and a snapshot taken at wiring time would stamp every row for the rest
 // of the process against a document that no longer exists. The file is small
 // and the emitter sweeps every five minutes, so re-reading is not the expensive
 // part of anything.
@@ -30,36 +28,25 @@ import (
 // A failure to read is not fatal and not logged per block: the row simply
 // carries an empty list, which is the honest statement that this machine could
 // not say. A block is still worth publishing without it.
-// remoteProjects is the org's current values, installed once the projects store
-// exists. A package-level atomic for the reason blockAdvance and devIngestHook
-// are: this hook is handed to the emitter before that store is built, so it
-// cannot be a parameter.
-var remoteProjects atomic.Pointer[func() []settings.RemoteProject]
-
-func setRemoteProjects(fn func() []settings.RemoteProject) {
-	if fn == nil {
-		remoteProjects.Store(nil)
-		return
-	}
-	remoteProjects.Store(&fn)
-}
-
+//
+// ⚠️ **SIGNAL PROJECTS ONLY, SINCE REVISION 2 (2026-09-25).** The org's
+// Atlas workstreams used to be merged in as candidates here, through a
+// package-level atomic installed by newV3, so a block entering an Atlas
+// project said so. It no longer does: the row names only what the person
+// defined in Signal, with its rules — which is still exactly the comparison
+// above, because Atlas holds its own side and can take the difference itself.
+// An overlay made with "Same as" before this revision is a local entry, so it
+// is a candidate, and it keeps its Atlas id on the wire (MatchesFor emits an id
+// only for an entry whose origin is atlas); every other Signal id is
+// title-derived and never sent. projects.Candidates is the one candidate
+// rule, shared with the recorded pass and the page.
 func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 	store := projects.NewStore(projects.DefaultPath())
 	d, err := store.Load()
 	if err != nil {
 		return nil
 	}
-	// The org's values as candidates too, so a block entering an ATLAS project
-	// says so — Atlas can then see which of its own projects a machine agrees
-	// with, not only which local ones it invented.
-	candidates := d.Projects
-	if fn := remoteProjects.Load(); fn != nil {
-		if remote := projects.FromRemoteProjects((*fn)()); len(remote) > 0 {
-			candidates = projects.MergeCandidates(candidates, remote)
-		}
-	}
-	matches := projects.MatchesFor(b.Analysis.Dimensions, candidates,
+	matches := projects.MatchesFor(b.Analysis.Dimensions, projects.Candidates(d),
 		projects.GroupOffFunc(settings.Load()))
 	if len(matches) == 0 {
 		return nil
