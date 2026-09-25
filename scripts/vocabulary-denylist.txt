@@ -65,3 +65,6 @@ workstreams\.json
 workstream-row|#/workstreams\b|workstream_id
 # the spec files Revision 1 moved (a Playwright project regex once kept the old name)
 map-workstream\.spec|\bworkstreams\.spec\.ts|new-workstream\.test
+# the conflict UI a block matching two projects used to get (retired 2026-09-23)
+conflict · pick one
+pick one in (Projects|Workstreams)
