@@ -177,7 +177,7 @@ func TestAPollNoLongerTrimsSignalRules(t *testing.T) {
 }
 
 // R2-AC-4.
-func TestAtlasProjectsAreHeldNotUsed(t *testing.T) {
+func TestAtlasWorkstreamsAreHeldNotUsed(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	v := newV3(settings.Settings{}, enabledAtlas{})
 	declareProject(t, v, "p_signal", "Signal work", repoSignal, "development")
