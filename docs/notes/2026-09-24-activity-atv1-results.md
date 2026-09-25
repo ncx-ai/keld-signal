@@ -17,6 +17,41 @@ route measured worse, and two were refuted outright.
 page.** The corpus is 100% software engineering: all 100 gold labels carry context
 `general` or `none`. Contexts are Study 4, on external corpora.
 
+## MASTER METRICS TABLE — kept current as arms land
+
+Last updated 2026-09-24. 100 blind hand labels; majority constant `code.edit` = 0.370.
+`code.*` = accuracy restricted to the 45 windows whose gold verb is `code.write`/`code.edit`.
+
+| arm | what it scores | wording | accuracy | lift | `code.*` | coverage |
+|---|---|---|---|---|---|---|
+| **D** | `action` level -> verb, precedence | n/a | 0.452 | +0.036 | 0.628 | 0.84 |
+| **G** | **file extensions -> code/not-code (binary)** | n/a | **0.729** | **+0.247** | n/a | 0.85 |
+| **P** | prose -> 17 verbs (factored) | bare | 0.500 | +0.130 | 0.222 | 1.00 |
+| **P** | prose -> 17 verbs (factored) | gloss | 0.640 | +0.270 | 0.467 | 1.00 |
+| **P** | prose -> 17 verbs (factored) | **rich** | **0.660** | **+0.290** | 0.600 | 1.00 |
+| **H** | prose -> 7 families -> verb | gloss | 0.350 | -0.020 | 0.556 | 1.00 |
+| **F** | prose -> all 68 ids at once | gloss | 0.480 | +0.110 | 0.667 | 1.00 |
+| **F** | prose -> all 68 ids at once | rich | 0.430 | +0.060 | 0.822 (artifact) | 1.00 |
+| **A** | prose + raw act counts as hint | rich | 0.640 | +0.270 | 0.511 | 1.00 |
+| **T** | prose + 68 ids + **Atlas team stated** | rich | _running_ | | | |
+
+**Winner: P/rich — 0.660, +0.290, full coverage.** For calibration, shipped Keld facets
+measured `activity_type` 0.670, `domain` 0.683, `task_type` 0.733.
+
+⚠️ `F/rich`'s 0.822 on `code.*` is an ARTIFACT of calling nearly everything `code.edit`;
+never read the `code.*` column without the accuracy column beside it.
+
+### Pre-registered bars — adjudication
+
+| bar | verdict |
+|---|---|
+| 1 — beat the majority constant | **PASS** for P (+0.290). FAIL for H (-0.020). Marginal for D (+0.036). |
+| 2 — `code.*` >= 0.70 | **FAIL for every arm** on its merits (best genuine 0.628). |
+| 3 — H beats P by >=5; P beats F | **H REFUTED** (29 pts worse). **P beats F by 0.230** at matched wording > 0.160 spread, so factoring is claimed. |
+| 4 — wording spread vs arm gaps | Spread 0.160 overall / 0.378 `code.*`. H's refutation survives; the P-vs-F claim was withheld at `gloss` and is made at `rich`. |
+| 5 — context, with shuffled control | **NOT RUN** — corpus has no non-engineering work. Study 4. |
+| 6 — proportions denominator | **NOT RUN.** |
+
 ## The arms
 
 | arm | wording | accuracy | lift | `code.*` acc | coverage |

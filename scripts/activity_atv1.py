@@ -202,7 +202,7 @@ def main():
                 f"{gold[i]}->{pred[i]}" for i in gold if pred.get(i) and pred[i] != gold[i]).most_common(6)
             results.append(res)
 
-    for nm in ("P", "H", "F", "A"):
+    for nm in ("P", "H", "F", "A", "T"):
         if nm not in a.arms:
             continue
         from gliner2 import GLiNER2
@@ -219,7 +219,12 @@ def main():
             if not t:
                 pred[i], reason[i] = None, "thin"
                 continue
-            if nm == "A":
+            if nm == "T":
+                pre = ("The person doing this work is on the Engineering team. ")
+                out = ex.classify_text(pre + t, {"activity": {"labels": id_labels}},
+                                       include_confidence=True)
+                pred[i] = out["activity"]["label"].split(":")[0]
+            elif nm == "A":
                 out = ex.classify_text(fact_preamble(r) + t, {"verb": {"labels": verb_labels}},
                                        include_confidence=True)
                 v = out["verb"]["label"].split(":")[0]
