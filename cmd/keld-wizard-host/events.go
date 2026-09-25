@@ -88,6 +88,19 @@ type panelEvent struct {
 	// indistinguishable from one that genuinely loaded, and those want very
 	// different follow-up: the first means the page never finished.
 	Via string `json:"via,omitempty"`
+	// Geometry, reported once, from BOTH sides of the embed: W/H are the child
+	// window's client size as this process measures it, VW/VH are the viewport
+	// the page believes it has, DPR its devicePixelRatio.
+	//
+	// ⚠️ They exist because a DPI mismatch between the installer and this helper
+	// rendered the page at 80% of its frame, and the only way anyone noticed was
+	// a screenshot. Two numbers that should agree, printed side by side, turn
+	// that into something a log answers. W==VW means the embed is honest.
+	W   int     `json:"w,omitempty"`
+	H   int     `json:"h,omitempty"`
+	VW  int     `json:"vw,omitempty"`
+	VH  int     `json:"vh,omitempty"`
+	DPR float64 `json:"dpr,omitempty"`
 }
 
 // clipboardEvent carries what the clipboard held, so the wizard page can decide

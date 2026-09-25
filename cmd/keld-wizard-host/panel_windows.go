@@ -137,6 +137,29 @@ func clientSize(h uintptr) (int32, int32) {
 func panel(o options) int {
 	// The loop must stay on the thread that created the window.
 	runtime.LockOSThread()
+	// ⚠️ **MATCH THE INSTALLER'S DPI AWARENESS BEFORE TOUCHING A WINDOW, OR THE
+	// PAGE RENDERS AT A FRACTION OF ITS FRAME.** Inno Setup 6 is DPI-aware; a
+	// plain Go binary has no DPI manifest and is therefore DPI-UNAWARE. The two
+	// processes then disagree about what the panel's coordinates mean, and the
+	// webview is laid out against virtualized numbers while the frame around it
+	// is physical.
+	//
+	// Measured on a real install at 125% scaling: the rendered page covered
+	// ~80% of the bordered box in BOTH dimensions, which is exactly 1/1.25, with
+	// the remainder showing as empty margin on the right and bottom.
+	//
+	// ⚠️ A DPI CHECK FROM A DPI-UNAWARE PROCESS ALWAYS ANSWERS 96. That is how
+	// this was nearly dismissed — PowerShell reported "100% scaling" on a machine
+	// running at 125%. The honest test is comparing the virtualized screen size
+	// against the adapter's real resolution (1536 vs 1920 here).
+	//
+	// Per-monitor v2 first (Win10 1703+), then the older per-monitor context,
+	// then the process-wide system call. Each is a strict fallback: being
+	// slightly less aware is better than being unaware, and every one of them is
+	// better than leaving the default. This MUST run before any window is
+	// created or the WebView2 environment exists.
+	setDPIAware()
+
 	mainThread, _, _ := pGetCurrentThrd.Call()
 
 	if alive, _, _ := pIsWindow.Call(o.Panel); alive == 0 {
@@ -286,14 +309,28 @@ func panel(o options) int {
 	// readiness signal, and it is the strongest of the three: a message can only
 	// arrive from a document that parsed and ran JavaScript, which is more than
 	// NavigationCompleted proves.
+	reportedGeometry := false
 	chromium.MessageCallback = func(s string) {
 		var m struct {
-			H float64 `json:"h"`
+			H   float64 `json:"h"`
+			VW  float64 `json:"vw"`
+			VH  float64 `json:"vh"`
+			DPR float64 `json:"dpr"`
 		}
 		if json.Unmarshal([]byte(s), &m) != nil {
 			return
 		}
 		markLoaded("script")
+		// Both sides' idea of the same rectangle, once. They must agree.
+		if !reportedGeometry && em != nil {
+			reportedGeometry = true
+			cw, chh := clientSize(child)
+			em.emitValue(panelEvent{
+				Event: "panel", Status: "metrics",
+				W: int(cw), H: int(chh),
+				VW: int(m.VW), VH: int(m.VH), DPR: m.DPR,
+			})
+		}
 	}
 	if !chromium.Embed(child) {
 		// ⚠️ A DISTINCT EXIT CODE, because the page's response is specific: fall
@@ -328,7 +365,10 @@ func panel(o options) int {
     sent = true;
     try {
       window.chrome.webview.postMessage(JSON.stringify({
-        h: Math.max(d.scrollHeight, b.scrollHeight)
+        h: Math.max(d.scrollHeight, b.scrollHeight),
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+        dpr: window.devicePixelRatio
       }));
     } catch (e) {}
   }
@@ -420,4 +460,32 @@ func panel(o options) int {
 		pDispatchMsgW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	return 0
+}
+
+// setDPIAware puts this process in the same coordinate space as the installer
+// that owns the panel. See the call site for why this is load-bearing rather
+// than cosmetic.
+//
+// The constants are the documented DPI_AWARENESS_CONTEXT pseudo-handles:
+//
+//	-4  PER_MONITOR_AWARE_V2   (Win10 1703+, what Inno Setup 6 uses)
+//	-3  PER_MONITOR_AWARE
+//
+// SetProcessDpiAwarenessContext fails with ERROR_ACCESS_DENIED if awareness has
+// already been set (by a manifest, say), which is fine — something already
+// answered the question.
+func setDPIAware() {
+	if p := user32.NewProc("SetProcessDpiAwarenessContext"); p.Find() == nil {
+		for _, ctx := range []uintptr{^uintptr(3), ^uintptr(2)} { // -4, -3
+			if r, _, _ := p.Call(ctx); r != 0 {
+				return
+			}
+		}
+	}
+	// Windows 8.1 and earlier, or the contexts above were refused. System-DPI
+	// awareness still beats none: it fixes the scale on the primary monitor,
+	// which is where an installer overwhelmingly runs.
+	if p := user32.NewProc("SetProcessDPIAware"); p.Find() == nil {
+		p.Call()
+	}
 }
