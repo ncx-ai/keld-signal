@@ -39,10 +39,12 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 	}
 }
 
-// Each posted project carries the GROUP it competes in — the key the rule
-// pass and the page use, derived from the value's `team`, which Atlas fills with
-// the group's name. The sidecar decides each group on its own.
-func TestPostProjectsSendsEachProjectsGroup(t *testing.T) {
+// R4-AC-6 (Go half). Signal has no groups since Revision 4, so the model-based
+// pass is ONE pooled competition again — and the sidecar already decides that
+// way whenever no `group` is posted. So no posted project may carry the key at
+// all: not empty, not derived from `team`, absent. The org's own fields still
+// ride unchanged.
+func TestPostProjectsPostsNoGroup(t *testing.T) {
 	var got struct {
 		Projects []map[string]any `json:"projects"`
 	}
@@ -58,8 +60,13 @@ func TestPostProjectsSendsEachProjectsGroup(t *testing.T) {
 	if err := New(srv.URL, 5*time.Second).PostProjects(list); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Projects) != 2 || got.Projects[0]["group"] != "products" || got.Projects[1]["group"] != "q3-initiatives" {
-		t.Fatalf("groups not posted: %+v", got.Projects)
+	if len(got.Projects) != 2 {
+		t.Fatalf("posted = %+v", got.Projects)
+	}
+	for _, p := range got.Projects {
+		if _, ok := p["group"]; ok {
+			t.Fatalf("a posted project must carry no group key (one pooled competition): %+v", p)
+		}
 	}
 	if got.Projects[1]["team"] != "Q3 Initiatives" {
 		t.Fatalf("the org's own fields must ride unchanged: %+v", got.Projects[1])
