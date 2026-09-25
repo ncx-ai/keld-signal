@@ -8,7 +8,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
-// attributed builds an enrich.Labeled the way a real block's projects map
+// attributed builds an enrich.Labeled the way a real block's workstreams map
 // carries a dimension that reached the attribution floor.
 func attributed(value string) enrich.Labeled {
 	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.DimensionAttributed}
@@ -198,7 +198,7 @@ func TestTwoProjectsClaimingOneRepoBothGetTheBlock(t *testing.T) {
 	}
 }
 
-// T22: a project switched off excludes its projects from matching AND
+// T22: a workstream switched off excludes its projects from matching AND
 // from the "place same as" candidate list.
 func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 	off := func(key string) bool { return key == "marketing" }
@@ -207,13 +207,13 @@ func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 
 	res := Attribute(dims, []Project{p}, off, nil)
 	if only(res).ProjectID != "" || res.Reason != ReasonNoRuleMatched {
-		t.Fatalf("project-off project still matched: %+v", res)
+		t.Fatalf("group-off project still matched: %+v", res)
 	}
 
 	same := SameAsCandidates(Document{Projects: []Project{p}}, off)
 	for _, c := range same {
 		if c.ID == p.ID {
-			t.Fatalf("project-off project appeared in same-as candidates: %+v", same)
+			t.Fatalf("group-off project appeared in same-as candidates: %+v", same)
 		}
 	}
 
