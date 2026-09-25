@@ -413,8 +413,7 @@ fieldset:disabled { opacity: .55; }
 }
 .project-row .row-title { min-width: 0; }
 .project-row select { width: 100%; }
-/* The pill column is right-aligned so a shorter label ("local") still ends on
-   the same edge as a longer one ("✓ in Atlas") — the edge the header's switch
+/* The pill column is right-aligned so it ends on the edge the header's switch
    also sits on. */
 .project-row .pill { justify-self: end; }
 .suggestion-row:last-child, .project-row:last-child { border-bottom: none; }
@@ -423,13 +422,23 @@ fieldset:disabled { opacity: .55; }
 /* At phone width the three-column row squeezed the title to a word per line and
    an unbreakable repo name pushed the pill past the card (measured: 84px of
    sideways page scroll at 400px). Two columns — title and pill — with the
-   picker on its own line beneath; an org row's empty spacer takes no line. */
+   picker on its own line beneath. */
 @media (max-width: 560px) {
   .project-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .project-row > select { grid-column: 1 / -1; grid-row: 2; }
-  .project-row > .row-spacer { display: none; }
 }
 .row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+/* A suggestion row at phone width: the actions wrap under the title. Left on
+   one line, the "Same as…" picker (as wide as its longest project title)
+   plus "New project" did not shrink, and pushed the page sideways —
+   measured 14px at 400px with a 15-character title, 62px when the labels
+   still carried "· in Atlas". */
+@media (max-width: 560px) {
+  .suggestion-row { flex-wrap: wrap; row-gap: 6px; }
+  .suggestion-row > .row-title { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+  .suggestion-row > .row-actions { flex-shrink: 1; min-width: 0; max-width: 100%; }
+  .suggestion-row > .row-actions select { flex: 1 1 auto; min-width: 0; }
+}
 .group-card {
   background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
   padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);

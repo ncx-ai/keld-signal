@@ -402,44 +402,33 @@ export function projectRulesSummary(p) {
   return bits.join(" · ") || "no rules yet";
 }
 
-/** Every mutating /v1/projects (or /v1/projects) route answers
- *  `{local_only: true, atlas_editor_url: "..."}` (docs/v3/contracts.md's
- *  verified note: a machine cannot write to Atlas's vocabulary today). This
- *  is the ONE sentence the page ever shows for that fact — one function so
- *  two call sites cannot drift into saying it differently, and so neither
- *  can accidentally imply the org learned anything. */
+/** Every mutating /v1/projects route answers `{local_only: true, ...}`,
+ *  and this is the ONE sentence the page shows for it — one function so no
+ *  two call sites can drift into saying it differently, and so neither can
+ *  imply the org learned anything.
+ *
+ *  ⚠️ **IT USED TO END "To change it for everyone, edit the project in
+ *  Atlas", with an "Open the project in Atlas" link.** Revision 2 (Signal
+ *  labels on its own) made every project on this page the person's own
+ *  Signal project: there is no org copy of it to go and edit, so that
+ *  advice pointed at something that does not exist. The response's
+ *  `atlas_editor_url` is therefore not rendered. */
 export function localOnlyConfirmationText() {
-  return "Applied on this machine. To change it for everyone, edit the workstream in Atlas.";
+  return "Applied on this machine.";
 }
 
-/** Every project a suggestion's "Same as" picker may offer — every project
- *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
- *  internal/agent/ingress/projects.go's handleGetProjects already merges the
- *  local document with the org's pooled workstream values into one list, so
- *  "same as" is never limited to local projects. A hidden project is left
- *  out — placing a suggestion on one a person chose to hide would silently
- *  un-hide nothing and just confuse the coverage count. */
+/** Every project a "Same as" picker may offer: every one GET
+ *  /v1/projects returns, labelled by its title alone. Since Revision 2
+ *  that list is Signal's own projects only, and one a person placed with
+ *  "Same as" before it (stored with origin `atlas`) is theirs like any other —
+ *  so nothing here reads `origin`, and a stale one cannot bring back an
+ *  "in Atlas" label. A hidden project is left out — placing a suggestion on
+ *  one a person chose to hide would silently un-hide nothing and just confuse
+ *  the coverage count. */
 export function sameAsOptions(projects) {
   return (projects || [])
     .filter((p) => !p.hidden)
-    .map((p) => ({ id: p.id, label: p.origin === "atlas" ? `${p.title} · in Atlas` : p.title }));
-}
-
-/** The confirmation sentence after "same as" specifically — placing a
- *  suggestion onto an Atlas-origin project is a LOCAL OVERLAY (this
- *  machine's rule is added locally; the org's project itself is never
- *  written), so it needs its own sentence rather than
- *  localOnlyConfirmationText(): that one's "edit the workstream in Atlas"
- *  reads as an invitation to go change the org's copy, which is backwards
- *  for a project this machine did not create. Placing onto a LOCAL project
- *  (or "New project", which only ever creates one) keeps the general
- *  sentence — there IS no org copy to leave alone in that case, so the
- *  "edit it in Atlas" advice is the real next step. */
-export function sameAsConfirmationText(targetOrigin) {
-  if (targetOrigin === "atlas") {
-    return "Applied on this machine. The org's workstream is unchanged.";
-  }
-  return localOnlyConfirmationText();
+    .map((p) => ({ id: p.id, label: p.title }));
 }
 
 /** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
@@ -473,21 +462,21 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
-/** groupsForProjects is what "Your projects" iterates: the org's workstreams, plus
- *  one group for any project whose workstream is in none of them.
+/** groupsForProjects is what "Your projects" iterates: the catalog's groups, plus
+ *  one group for any project whose project is in none of them.
  *
  *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
- *  projects by looping over workstreams and drawing each one's members, so a
+ *  projects by looping over projects and drawing each one's members, so a
  *  project filed under a key that is in no list is never drawn at all. Measured
- *  on a real machine: two projects on disk, `"workstreams": null` from the API,
+ *  on a real machine: two projects on disk, `"projects": null` from the API,
  *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
  *  them saw their suggestion disappear and nothing appear, which is
  *  indistinguishable from the suggestion having been thrown away.
  *
  *  That is the state of EVERY machine with Send to Atlas off, because the
- *  workstream list is pushed down by Atlas and nothing local seeded it.
+ *  project list is pushed down by Atlas and nothing local seeded it.
  *
- *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
+ *  The daemon now seeds it too (projects.ensureProject), so this is the
  *  second of two guards rather than the only one — deliberately, because the
  *  rule worth keeping is "the page never silently drops a project", not "that
  *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
@@ -508,7 +497,7 @@ export function groupsForProjects(groups, projects) {
 }
 
 /** groupDisplayName turns a key into something a person reads. Mirrors the
- *  Go side's function of the same name so a locally-seeded workstream is
+ *  Go side's function of the same name so a locally-seeded project is
  *  labelled identically whether the page or the daemon named it. */
 export function groupDisplayName(key) {
   const out = String(key || "").replace(/[_-]+/g, " ").trim();
@@ -1313,8 +1302,8 @@ if (typeof document !== "undefined") {
     // DOM because `route()` re-renders the whole pane, so a value held only in
     // an input would be lost the moment anything else refreshed.
     naming: null,
-    // confirmations: rowKey -> {url}. Set after any /v1/projects (or
-    // /v1/groups) mutation whose response carries local_only — read by
+    // confirmations: rowKey -> true. Set after any /v1/projects (or
+    // /v1/projects) mutation whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1883,7 +1872,7 @@ if (typeof document !== "undefined") {
           el("span", { class: "name" }, `${w.name}`, totalLine(totals.groups.get(w.key)) ? el("small", { class: "group-total" }, totalLine(totals.groups.get(w.key))) : null),
           // A synthetic group is this machine's own bucket, not one the org
           // declared, so it offers no "counts for my work" switch: that flag is
-          // stored per workstream key and would appear to reset on reload,
+          // stored per project key and would appear to reset on reload,
           // which is a control that lies about what it did.
           w.synthetic
             ? null
@@ -1912,21 +1901,14 @@ if (typeof document !== "undefined") {
               p.title,
               el("small", {}, projectRulesSummary(p) + (wsTotal ? ` · ${wsTotal}` : ""))
             ),
-            // ⚠️ **THE PICKER IS ON LOCAL PROJECTS ONLY.** An org project is not
-            // ours to fold away: its identity lives in Atlas, and removing the
-            // local overlay entry would drop the rules this machine added while
-            // leaving the org's value untouched — a deletion that looks like a
-            // move. The daemon refuses it too (projects.MapProjectTo); this is
-            // the half that keeps a person from being offered it.
-            // ⚠️ An EMPTY CELL, never `null`, for an org project. The row is a
-            // three-column grid; skipping the child entirely lets the pill fall
-            // into the picker's column, and the org cards' pills then sat 16px
-            // left of the local ones (measured 1871 against 1887) — a whole
-            // column of misalignment from an absent element.
-            p.origin === "atlas"
-              ? el("span", { class: "row-spacer", "aria-hidden": "true" })
-              : mapProjectSelect(p),
-            el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
+            // Map-to is offered on EVERY project. It used to be hidden on an
+            // Atlas-origin row ("not ours to fold away"); since Revision 2 every
+            // project here is the person's own, including one placed with
+            // "Same as" before it, and the daemon accepts it as a source.
+            mapProjectSelect(p),
+            // One pill for every row: they all live on this machine. It used to
+            // read "✓ in Atlas" on an Atlas-origin row.
+            el("span", { class: "pill ok" }, "local")
           );
           card.appendChild(row);
           appendConfirmation(card, `project:${p.id}`);
@@ -1946,42 +1928,23 @@ if (typeof document !== "undefined") {
   // this lane's own choice of "the affected row" — the daemon's response
   // names no row, only the fact — so the caller (which knows what it just
   // mutated) supplies it.
-  function noteLocalConfirmation(rowKey, resp, targetOrigin) {
-    if (resp && resp.local_only) {
-      state.confirmations.set(rowKey, { url: resp.atlas_editor_url || "", origin: targetOrigin || "" });
-    }
+  function noteLocalConfirmation(rowKey, resp) {
+    if (resp && resp.local_only) state.confirmations.set(rowKey, true);
   }
 
   // appendConfirmation renders noteLocalConfirmation's result under the row
   // it belongs to, once — a quiet line, never a claim the org learned
   // anything (localOnlyConfirmationText's own doc comment).
   function appendConfirmation(parent, rowKey) {
-    const c = state.confirmations.get(rowKey);
-    if (!c) return;
-    // ⚠️ The sentence depends on whose project was the target. Placing onto an
-    // ATLAS project is a local overlay, so it says the org's project is
-    // unchanged; "edit the workstream in Atlas" would read as an invitation to
-    // go change the org's copy, which is backwards. A local project has no org
-    // copy to leave alone, so the general advice is the real next step.
-    const atlasTarget = c.origin === "atlas";
-    parent.appendChild(
-      el(
-        "div",
-        { class: "local-note" },
-        sameAsConfirmationText(c.origin),
-        !atlasTarget && c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
-      )
-    );
+    if (!state.confirmations.get(rowKey)) return;
+    parent.appendChild(el("div", { class: "local-note" }, localOnlyConfirmationText()));
   }
 
   /** The "Same as" picker for one suggestion.
    *
    *  A <select> rather than the prompt() this replaced: a person cannot be
-   *  expected to type a project id, and the ids the org's values carry
-   *  ("keld_projects:signal") are not something anyone would guess. The
-   *  options come from sameAsOptions, which includes the org's own projects —
-   *  placing onto one is a LOCAL OVERLAY, so the confirmation says the org's
-   *  project is unchanged.
+   *  expected to type a project id. The options come from sameAsOptions:
+   *  this machine's own projects, by title.
    *
    *  It reads as a button until used ("Same as…") because it is an action,
    *  not a setting: the first option is a non-selectable label, and choosing a
@@ -2004,8 +1967,7 @@ if (typeof document !== "undefined") {
     return sel;
   }
 
-  /** mapProjectSelect folds a LOCAL project into another one — normally one of
-   *  the org's. The rules move with it and the local entry goes; see
+  /** mapProjectSelect folds one project into another. The rules move with it and the local entry goes; see
    *  projects.MapProjectTo for why keeping it beside its target would make
    *  every one of its blocks a conflict.
    *
@@ -2037,23 +1999,19 @@ if (typeof document !== "undefined") {
 
   async function mapProject(ws, target) {
     if (!target) return;
-    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
     const res = await sendJSON(`/v1/projects/${encodeURIComponent(ws.id)}/same-as`, "POST", { same_as: target });
     // The confirmation is placed on the TARGET row, because the source row is
     // about to stop existing — a note under a row that disappears is a note
     // nobody reads.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
     await loadAll();
     route();
   }
 
   async function placeSuggestion(suggestion, target) {
     if (!target) return;
-    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
     const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
-    // The sentence depends on WHOSE project it was: an Atlas-origin target gets
-    // "the org's project is unchanged", a local one gets the general advice.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
     await loadAll();
     route();
   }
