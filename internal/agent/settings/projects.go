@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 )
 
 // RemoteProject is one org project definition, distributed via the settings
@@ -48,12 +47,4 @@ func LoadProjectsFile(path string) ([]RemoteProject, error) {
 		return nil, fmt.Errorf("projects file %s: %w", path, err)
 	}
 	return out, nil
-}
-
-// GroupKeyOf is the group key for a group's display name — lowercased, spaces
-// to hyphens. projects.GroupKey is this function; it lives here so the
-// sidecar client, which posts each project's group, can reach the one
-// definition without importing the projects package.
-func GroupKeyOf(name string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
 }

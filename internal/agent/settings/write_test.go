@@ -92,20 +92,6 @@ func TestWriteV3SettingsAcceptsEveryKnownDevBlocksMode(t *testing.T) {
 	}
 }
 
-func TestWriteV3SettingsGroupsOffNilBecomesEmptyList(t *testing.T) {
-	t.Setenv("KELD_HOME", t.TempDir())
-	var nilSlice []string
-	if err := WriteV3Settings(V3Patch{GroupsOff: &nilSlice}); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(paths.AgentConfigPath())
-	var raw map[string]json.RawMessage
-	_ = json.Unmarshal(data, &raw)
-	if string(raw["workstreams_off"]) != "[]" { // vocab:keep — 3.0.6's stored key
-		t.Fatalf("want an empty array, got %s", raw["workstreams_off"]) // vocab:keep
-	}
-}
-
 func TestWriteV3SettingsAttributionAndDevBlocksTogether(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	attr := true

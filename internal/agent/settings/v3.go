@@ -4,9 +4,10 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/ncx-ai/keld-signal/internal/paths"
 	"os"
 	"strings"
+
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // Env overrides for the v3 keys (docs/v3/contracts.md). Env wins over the
@@ -99,8 +100,10 @@ func validDevBlocks(m string) bool {
 	return false
 }
 
-// GroupOff reports whether a project key is excluded from attribution
-// on this machine.
+// GroupOff reports whether key — a group's key or name, compared
+// case-insensitively — is on the stored off-list. Its one caller is the
+// daemon's start-up pass that turns those groups' projects hidden; nothing
+// excludes by group any more (Revision 4, 2026-09-25).
 func (s Settings) GroupOff(key string) bool {
 	for _, k := range s.GroupsOff {
 		if strings.EqualFold(strings.TrimSpace(k), strings.TrimSpace(key)) {

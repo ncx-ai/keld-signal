@@ -31,11 +31,10 @@ func blockOn(repo string) map[string]enrich.Labeled {
 func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	remote := atlasValues()
 	d := Document{Version: 1}
-	off := func(string) bool { return false }
 
 	// Before: the block on keld-cli matches nothing — the org's values carry
 	// free-text keywords, not repositories.
-	before := Attribute(blockOn("github.com/ncx-ai/keld-cli"), MergeCandidates(d.Projects, remote), off, nil)
+	before := Attribute(blockOn("github.com/ncx-ai/keld-cli"), MergeCandidates(d.Projects, remote), nil)
 	if only(before).ProjectID != "" {
 		t.Fatalf("precondition: the block must be unattributed, got %+v", before)
 	}
@@ -45,7 +44,7 @@ func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	}
 
 	// "Same as Signal On-Device Client" — an Atlas value with no local entry.
-	next, err := PlaceSameAsWithRemote(d, remote, sugs[0].ID, "keld_projects:signal", sugs, off)
+	next, err := PlaceSameAsWithRemote(d, remote, sugs[0].ID, "keld_projects:signal", sugs)
 	if err != nil {
 		t.Fatalf("same-as onto an Atlas value must succeed via an overlay, got %v", err)
 	}
@@ -56,7 +55,7 @@ func TestSameAsOntoAnAtlasValueCreatesALocalOverlayAndAttributes(t *testing.T) {
 	// After: the merged candidate carries the rule, the block attributes to the
 	// ATLAS ID (what Atlas matches workstreams against), by repo.
 	merged := MergeCandidates(next.Projects, remote)
-	after := Attribute(blockOn("github.com/ncx-ai/keld-cli"), merged, off, nil)
+	after := Attribute(blockOn("github.com/ncx-ai/keld-cli"), merged, nil)
 	if only(after).ProjectID != "keld_projects:signal" || only(after).Method != MethodRepo {
 		t.Fatalf("after same-as the block must attribute to the Atlas value by repo, got %+v", after)
 	}
@@ -112,15 +111,16 @@ func TestMergeCandidatesIsAUnionByID(t *testing.T) {
 }
 
 // A target that is neither local nor one of the org's values does not exist,
-// and a value in a switched-off workstream is refused — same rules as before.
+// and neither does a hidden one. (The switched-off-group refusal went with
+// groups in Revision 4.)
 func TestSameAsRefusalsStillHold(t *testing.T) {
 	remote := atlasValues()
 	sugs := Suggest([]UnattributedBlock{{Dims: blockOn("github.com/ncx-ai/keld-cli"), Minutes: 1, Tokens: 1}})
-	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "nope", sugs, func(string) bool { return false }); err != ErrProjectNotFound {
+	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "nope", sugs); err != ErrProjectNotFound {
 		t.Fatalf("unknown target must be ErrProjectNotFound, got %v", err)
 	}
-	off := func(k string) bool { return k == "Keld Projects" }
-	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "keld_projects:signal", sugs, off); err != ErrGroupOff {
-		t.Fatalf("a value in a switched-off group must be refused, got %v", err)
+	remote[0].Hidden = true
+	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, remote[0].ID, sugs); err != ErrProjectNotFound {
+		t.Fatalf("a hidden value must be refused, got %v", err)
 	}
 }

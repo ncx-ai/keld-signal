@@ -140,7 +140,8 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	}
 	sugID := sugs[0].(map[string]any)["id"].(string)
 
-	// Bundle it.
+	// Bundle it. The body still carries an old page's `group`: it is tolerated
+	// (not refused) and not read since Revision 4.
 	res = doRequest(t, srv, http.MethodPost, "/v1/projects/bundle", "s3cret", map[string]any{
 		"title": "SDK work", "group": "development", "suggestions": []string{sugID},
 	})
@@ -192,48 +193,6 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	res = doRequest(t, srv, http.MethodPost, "/v1/projects/does-not-exist/hide", "s3cret", map[string]any{"hidden": true})
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("hide unknown project status = %d, want 404", res.StatusCode)
-	}
-}
-
-func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
-	s := newTestStore(t)
-	srv := httptest.NewServer(DiscardHandler("s3cret", ProjectsRoute(s)))
-	defer srv.Close()
-
-	res := doRequest(t, srv, http.MethodPut, "/v1/groups/marketing/off", "s3cret", map[string]any{"off": true})
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", res.StatusCode)
-	}
-	body := decodeBody(t, res)
-	if body["local_only"] != true {
-		t.Fatalf("response missing local_only: %+v", body)
-	}
-
-	// Seed a document with a matching workstream and a project in it, then
-	// confirm GET reflects the off flag AND excludes the project's repo from
-	// attribution.
-	doc := projects.Document{
-		Groups: []projects.Group{{Key: "marketing", Name: "Marketing"}},
-		Projects: []projects.Project{
-			{ID: "p_mkt", Title: "Site", Repos: []string{"github.com/ncx-ai/keld-signal"}, Group: "marketing"},
-		},
-	}
-	if err := s.Save(doc); err != nil {
-		t.Fatal(err)
-	}
-	s.Blocks = fakeBlocks{rows: []projects.BlockSummary{
-		{Dims: map[string]enrich.Labeled{"repo": attributedDim("github.com/ncx-ai/keld-signal")}, Minutes: 1, Tokens: 1},
-	}}
-
-	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
-	got := decodeBody(t, res)
-	ws := got["groups"].([]any)[0].(map[string]any)
-	if ws["off"] != true {
-		t.Fatalf("group off flag not reflected: %+v", ws)
-	}
-	cov := got["coverage"].(map[string]any)
-	if cov["attributed"].(float64) != 0 {
-		t.Fatalf("a project in an off group still attributed: %+v", cov)
 	}
 }
 

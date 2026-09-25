@@ -247,12 +247,6 @@ func walkNoFreeText(t *testing.T, key string, v any) {
 			if vv != "" && !projectIDShape.MatchString(vv) {
 				t.Errorf("field %q does not match the project id shape: %q", key, vv)
 			}
-		// A group key is an identifier too — projects.GroupKey of an org's
-		// group name — and is held to the store's own group shape.
-		case "group":
-			if vv != "" && validGroup(vv) != vv {
-				t.Errorf("field %q does not match the group key shape: %q", key, vv)
-			}
 		case "detail":
 			// Not one of the four attacked identifier fields (session,
 			// source, model, project_id) — Health.Detail is documented as

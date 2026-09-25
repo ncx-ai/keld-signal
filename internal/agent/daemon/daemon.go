@@ -952,7 +952,7 @@ func Run(ctx context.Context) error {
 	vecLedger := sig.vectorLedger()
 	setAttribQuarantineHandler(vecLedger.recordQuarantine)
 	setAttribOutcomeHandler(func(o attrib.Outcome) {
-		vecLedger.recordOutcome(withOutcomeGroups(o, sig.remote.Load()))
+		vecLedger.recordOutcome(o)
 	})
 	// telemetryLast reads the running telemetry proxy's own record of its
 	// last successful forward — TelemetryLastForward already returns the zero

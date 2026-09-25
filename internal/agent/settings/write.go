@@ -19,7 +19,6 @@ type V3Patch struct {
 	DevRepos    *[]string
 	DevBlocks   *string
 	ShowBreaks  *bool
-	GroupsOff   *[]string
 	Attribution *bool
 }
 
@@ -34,8 +33,7 @@ type V3Patch struct {
 //
 // ⚠️ UNLIKE WriteInstallDefaults, this touches ONLY the keys p sets. A PUT
 // that means to flip send_to_atlas alone must not also rewrite
-// dev_blocks/show_breaks/workstreams_off/attribution // vocab:keep back to whatever the
-// file already held — harmless today because every key here already lives in
+// dev_blocks/show_breaks/attribution back to whatever the file already held — harmless today because every key here already lives in
 // the same file, but exactly the mistake that would silently reintroduce a
 // stale value the day one of these keys gains an independent writer (a
 // second route, a future remote override) that could race this one.
@@ -98,15 +96,6 @@ func WriteV3Settings(p V3Patch) error {
 		if err := set("show_breaks", *p.ShowBreaks); err != nil {
 			return err
 		}
-	}
-	if p.GroupsOff != nil {
-		v := *p.GroupsOff
-		if v == nil {
-			v = []string{}
-		}
-		if err := set("workstreams_off", v); err != nil { // vocab:keep — 3.0.6's stored key
-			return err
-		} // vocab:keep
 	}
 	if p.Attribution != nil {
 		if err := set("attribution", *p.Attribution); err != nil {

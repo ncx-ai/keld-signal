@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +55,7 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	// functions so internal/agent/projects depends on neither the ledger nor
 	// the Atlas connector — it is a pure decision layer and must stay one.
 	p.Blocks = ledgerBlocks{l}
+	hideProjectsInOffGroups(p, set)
 	v := &v3{ledger: l, projects: p, atlasOn: cl.Enabled(), atlas: cl}
 	p.RemoteProjects = func() []settings.RemoteProject {
 		r := v.remote.Load()
@@ -71,13 +73,89 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	return v
 }
 
+// hideProjectsInOffGroups turns every project whose group a person switched
+// off into a HIDDEN project, once, on daemon start (R4-AC-4).
+//
+// ⚠️ **GROUPS LEFT SIGNAL IN REVISION 4 (2026-09-25), AND THEIR SWITCH WITH
+// THEM — BUT WHAT IT EXCLUDED MUST STAY EXCLUDED.** "Counts for my work"
+// switched off meant a group's projects attributed nothing. Dropping the
+// switch and letting them count again would change numbers a person chose to
+// exclude, silently. So each such project is marked hidden instead: it keeps
+// attributing nothing, exactly as before, the page shows it hidden and the
+// person can unhide it — per project now — and 3.0.6 honours hidden too.
+//
+// A project is in an off group when `workstreams_off` names its stored group's // vocab:keep
+// KEY or that group's NAME, or its Team — the last because the old predicate
+// (projectGroupOff) checked Team as well, for an Atlas value whose bucket rode
+// there, and "exactly as before" means the same projects.
+//
+// Three properties, each deliberate:
+//   - `workstreams_off` is LEFT in agent-config.json: a machine rolled back to // vocab:keep
+//     3.0.6 still sees those groups off. This reads it and never writes it.
+//   - IDEMPOTENT, and a no-op writes nothing: the document is only saved when
+//     at least one visible project needs hiding, so a second start (or a
+//     machine that never switched a group off) never rewrites projects.json.
+//   - It cannot take the daemon down: an unreadable document is logged and
+//     left alone — the page reports it as unreadable, as it would anyway.
+func hideProjectsInOffGroups(s *projects.Store, set settings.Settings) {
+	if s == nil || len(set.GroupsOff) == 0 {
+		return
+	}
+	inOffGroup := func(d projects.Document, p projects.Project) bool {
+		if p.Hidden {
+			return false
+		}
+		if p.Group != "" && set.GroupOff(p.Group) {
+			return true
+		}
+		for _, g := range d.Groups {
+			if g.Key == p.Group && g.Name != "" && set.GroupOff(g.Name) {
+				return true
+			}
+		}
+		return p.Team != "" && set.GroupOff(p.Team)
+	}
+	d, err := s.Load()
+	if err != nil {
+		log.Printf("keld-agent: could not read projects to hide switched-off groups' projects: %v", err)
+		return
+	}
+	need := false
+	for _, p := range d.Projects {
+		if inOffGroup(d, p) {
+			need = true
+			break
+		}
+	}
+	if !need {
+		return
+	}
+	hidden := 0
+	if _, err := s.Update(func(d projects.Document) (projects.Document, error) {
+		next := d
+		next.Projects = append([]projects.Project(nil), d.Projects...)
+		for i, p := range next.Projects {
+			if inOffGroup(d, p) {
+				next.Projects[i].Hidden = true
+				hidden++
+			}
+		}
+		return next, nil
+	}); err != nil {
+		log.Printf("keld-agent: could not hide switched-off groups' projects: %v", err)
+		return
+	}
+	log.Printf("keld-agent: %d project(s) in a switched-off group are now hidden "+
+		"(groups left Signal; unhide one on the Projects page — workstreams_off is kept for a rollback)", hidden) // vocab:keep
+}
+
 // observeRemote is called from Run's onRemote on every successful settings
 // poll and stores what the org sent, so the org's list is HELD — current, live,
 // no restart needed — behind Store.RemoteProjects and v.remote. What still
 // reads it belongs to the semantic pass, which stays on the Atlas list by
-// decision Q1 of the Revision 2 discovery: withOutcomeGroups labels a vector
-// outcome's groups from it. The future "use Atlas workstreams again" work is
-// the other intended reader. Nothing on the rule pass, the page or
+// decision Q1 of the Revision 2 discovery (resolveProjects; since Revision 4
+// nothing labels its outcome with a group). The future "use Atlas workstreams
+// again" work is the other intended reader. Nothing on the rule pass, the page or
 // project_matches reads it.
 //
 // ⚠️ **IT NO LONGER RECONCILES, AND UNTIL REVISION 2 (2026-09-25) IT DID.** On

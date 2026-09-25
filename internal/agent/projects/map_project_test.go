@@ -30,7 +30,7 @@ func TestTheStoryTheRulesMoveAndTheLocalEntryGoes(t *testing.T) {
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
 
-	next, err := MapProjectTo(d, orgValues(), "p_signal", "keld_projects:signal", noneOff)
+	next, err := MapProjectTo(d, orgValues(), "p_signal", "keld_projects:signal")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
@@ -61,16 +61,16 @@ func TestNEGATIVEBlocksKeepAttributingAfterTheMove(t *testing.T) {
 		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
 	}
 
-	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), noneOff, nil)
+	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), nil)
 	if only(got).ProjectID != "p_signal" {
 		t.Fatalf("before the move, attributed to %q", only(got).ProjectID)
 	}
 
-	after, err := MapProjectTo(before, orgValues(), "p_signal", "keld_projects:signal", noneOff)
+	after, err := MapProjectTo(before, orgValues(), "p_signal", "keld_projects:signal")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
-	got = Attribute(dims, MergeCandidates(after.Projects, orgValues()), noneOff, nil)
+	got = Attribute(dims, MergeCandidates(after.Projects, orgValues()), nil)
 	if only(got).ProjectID != "keld_projects:signal" {
 		t.Fatalf("after the move, attributed to %q (reason %q) — the block fell out",
 			only(got).ProjectID, got.Reason)
@@ -89,7 +89,7 @@ func TestNEGATIVEKeepingBothWouldDoubleCountWhichIsWhyOneIsRemoved(t *testing.T)
 	}}
 	got := Attribute(map[string]enrich.Labeled{
 		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
-	}, both.Projects, noneOff, nil)
+	}, both.Projects, nil)
 	if len(got.Projects) != 2 {
 		t.Fatalf("assigned = %+v, want both — if a shared rule ever stops assigning "+
 			"both, keeping the local entry as a reference becomes viable and "+
@@ -108,7 +108,7 @@ func TestAnOverlayCanBeMapped(t *testing.T) {
 			Repos: []string{"github.com/ncx-ai/keld-signal"}},
 		localProject("p_other", "other", "github.com/acme/other"),
 	}}
-	next, err := MapProjectTo(d, nil, "keld_projects:signal", "p_other", noneOff)
+	next, err := MapProjectTo(d, nil, "keld_projects:signal", "p_other")
 	if err != nil {
 		t.Fatalf("MapProjectTo(overlay onto a local project): %v", err)
 	}
@@ -130,7 +130,7 @@ func TestNEGATIVEMappingOntoItselfIsRefused(t *testing.T) {
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
-	if _, err := MapProjectTo(d, nil, "p_signal", "p_signal", noneOff); !errors.Is(err, ErrProjectNotFound) {
+	if _, err := MapProjectTo(d, nil, "p_signal", "p_signal"); !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestMappingOntoAnotherLocalProjectMergesRules(t *testing.T) {
 		localProject("p_a", "A", "github.com/acme/a"),
 		localProject("p_b", "B", "github.com/acme/b"),
 	}}
-	next, err := MapProjectTo(d, nil, "p_a", "p_b", noneOff)
+	next, err := MapProjectTo(d, nil, "p_a", "p_b")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestNEGATIVEAnUnknownTargetChangesNothing(t *testing.T) {
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
-	next, err := MapProjectTo(d, orgValues(), "p_signal", "nope", noneOff)
+	next, err := MapProjectTo(d, orgValues(), "p_signal", "nope")
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}

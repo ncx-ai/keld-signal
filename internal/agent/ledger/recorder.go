@@ -111,11 +111,11 @@ type Dims struct {
 	Workspace string
 }
 
-// AttributedProject is one project the deterministic pass put a block
-// in: which, in which group ("" when unknown), and by which rule.
+// AttributedProject is one project the deterministic pass put a block in:
+// which, and by which rule. (It also carried a group until Revision 4,
+// 2026-09-25; Signal has only projects now.)
 type AttributedProject struct {
 	ProjectID string
-	Group     string
 	Method    Method
 }
 
@@ -125,18 +125,17 @@ type AttributedProject struct {
 // (daemon.attributeAndRecord) and read as the machine's answer.
 //
 // ⚠️ **A LIST, AND IT USED TO BE ONE ID.** Since 2026-09-23 a block lands in
-// every project that matches it, in any group and inside one — overlap is
-// the model, not a conflict to refuse (projects.Result). A row written
+// every project that matches it — overlap is the model, not a conflict to
+// refuse (projects.Result). A row written
 // before that holds a single project_id and reads back as a one-entry list.
 type Attributed struct {
 	Projects []AttributedProject
 }
 
-// VectorProject is one id the vectorised pass named, with its group and the
-// pass's own confidence for it.
+// VectorProject is one id the vectorised pass named, with the pass's own
+// confidence for it.
 type VectorProject struct {
 	ProjectID string
-	Group     string
 	// Confidence is that pass's own score for the id, in [0,1]. It is stored
 	// because a second opinion at 0.42 and one at 0.91 are different second
 	// opinions, and nothing else on the row would say which this was.
