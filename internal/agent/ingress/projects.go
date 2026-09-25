@@ -23,7 +23,8 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // getters (Blocks, RemoteProjects) the daemon wiring may set later. Neither
 // being set degrades gracefully to an honest empty (no blocks/values known
 // yet), never an error — see their doc comments in
-// internal/agent/projects/model.go.
+// internal/agent/projects/model.go. Since Revision 2 (2026-09-25) nothing
+// in this file reads RemoteProjects: see candidatesFor.
 //
 // ⚠️ Named ProjectsRoute, not Route: this file lives in package ingress
 // (every file in a directory shares one package), which already declares
@@ -39,7 +40,7 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // admin editor is a user-session-gated route this daemon cannot call. So none
 // of these handlers make an outbound call, and this file does not import
 // internal/atlas at all. Every response from bundle/rules/hide/place/
-// workstream-off carries `{"local_only": true, "atlas_editor_url": …}` so the
+// project-off carries `{"local_only": true, "atlas_editor_url": …}` so the
 // page can say plainly that the change has not reached the org.
 func ProjectsRoute(s *projects.Store) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
@@ -55,10 +56,10 @@ func ProjectsRoute(s *projects.Store) Route {
 		mux.Handle("POST /v1/projects/{id}/hide", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleHide(w, r, s)
 		})))
-		// Fold a LOCAL project into another (normally one of the org's). The
-		// rules move with it and the local entry goes — see
-		// projects.MapProjectTo for why keeping it would make every one of its
-		// blocks a conflict.
+		// Fold one Signal project into another Signal project (never an
+		// Atlas-only id since Revision 2 — see handleProjectSameAs). The
+		// rules move with it and the source entry goes — see
+		// projects.MapProjectTo for why.
 		mux.Handle("POST /v1/projects/{id}/same-as", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleProjectSameAs(w, r, s)
 		})))
@@ -106,7 +107,7 @@ func localOnly(v map[string]any) map[string]any {
 }
 
 func atlasEditorURL() string {
-	return strings.TrimRight(paths.APIBase(), "/") + "/workstreams"
+	return strings.TrimRight(paths.APIBase(), "/") + "/projects"
 }
 
 // startOfWeek is Monday 00:00 UTC of t's week — the "current week" coverage
@@ -124,33 +125,31 @@ func startOfWeek(t time.Time) time.Time {
 // groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
 // agent-config.json fresh per request, since a request may arrive right
 // after a PUT /v1/groups/{key}/off changed it. "call it, don't
-// reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
+// reimplement" — internal/agent/settings/v3.go's ProjectOff.
 func groupOffFunc() func(string) bool {
 	return settings.Load().GroupOff
 }
 
-// candidatesFor is every project Attribute/Suggest may consider: this
-// machine's own declared Document.Projects plus, when the daemon wiring has
-// supplied one, the org's pooled workstream values converted via
-// projects.FromRemoteProjects. A nil RemoteProjects getter contributes
-// nothing — an honest "not known yet", never an error.
-func candidatesFor(s *projects.Store, d projects.Document) []projects.Project {
-	return projects.MergeCandidates(d.Projects, remoteCandidates(s))
-}
-
-// remoteCandidates is the org's values as attribution candidates, or nil when
-// the daemon wiring has supplied no getter (Atlas off, or never polled).
-func remoteCandidates(s *projects.Store) []projects.Project {
-	if s.RemoteProjects == nil {
-		return nil
-	}
-	return projects.FromRemoteProjects(s.RemoteProjects())
+// candidatesFor is every project Attribute/Suggest may consider: the ones
+// defined in Signal — the local document, overlays included — and nothing
+// else.
+//
+// ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** This used to
+// merge in the org's pooled values from the settings poll
+// (Store.RemoteProjects, via FromRemoteProjects + MergeCandidates). It
+// is the ONE seam the live pass (Attribution), the page's catalog, the totals
+// (projects.Rollup) and the coverage count all go through, so switching it
+// is what makes all four Signal-only at once — and keeps them from answering
+// differently. The Store is still taken because the org's list is still HELD
+// on it; nothing on this path reads it.
+func candidatesFor(_ *projects.Store, d projects.Document) []projects.Project {
+	return projects.Candidates(d)
 }
 
 // Attribution is ONE live recomputation of the deterministic attribution
 // pass, held open across as many blocks as a caller has: the projects
-// document, the org's pooled values, and the workstream-off predicate, each
-// read exactly once and then applied.
+// document and the group-off predicate, each read exactly once and then
+// applied.
 //
 // ⚠️ **IT EXISTS SO THE TWO SURFACES CANNOT ANSWER DIFFERENTLY.** Attribution
 // used to run once, at cut time, and the stored cell was never revisited — so
@@ -171,9 +170,9 @@ type Attribution struct {
 	// Document is the local projects file as it was read.
 	Document projects.Document
 	// Candidates is what Attribute may consider: the local document's
-	// projects merged with the org's pooled values.
+	// projects (see candidatesFor — never the org's list).
 	Candidates []projects.Project
-	// Off is the authoritative workstream-exclusion predicate, read from
+	// Off is the authoritative project-exclusion predicate, read from
 	// agent-config.json at the same instant.
 	Off func(string) bool
 }
@@ -191,7 +190,7 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 	}, nil
 }
 
-// Of is one block's decision, from that block's already-published workstream
+// Of is one block's decision, from that block's already-published project
 // dims. The Vector pass is nil: this is the deterministic lane, and a nil
 // Vector is what makes "unattributed" mean "no rule matched" rather than
 // "the encoder was not asked".
@@ -239,6 +238,11 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 	groups := make([]projects.Group, len(d.Groups))
 	for i, ws := range d.Groups {
 		ws.Off = off(ws.Key)
+		// A group stored with origin atlas (a heading an earlier release
+		// derived from the org's list) is reported as local; ws is a copy.
+		if ws.Origin == projects.GroupOriginAtlas {
+			ws.Origin = projects.GroupOriginLocal
+		}
 		groups[i] = ws
 	}
 
@@ -273,19 +277,28 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		suggestions = projects.Suggest(unattributed)
 	}
 
-	// ⚠️ **THE ORG'S VALUES ARE PROJECTS ON THIS PAGE, NOT ONLY CANDIDATES.**
-	// This used to return d.Projects — the LOCAL document — while attributing
-	// against candidatesFor(), which merges the org's pooled workstream values
-	// from the settings poll. So a machine paired with an org that had declared
-	// eight projects showed "Your projects: none" while silently attributing
-	// blocks to them. Found by the D8 end-to-end against the real dev Atlas:
-	// projects=0 with eight values on the wire. The page's "Your projects · from
-	// Atlas" section exists to show exactly these, so they are returned, and the
-	// buckets they belong to (their `team`, which carries the workstream's name
-	// on the wire) are added to `workstreams` when the local document does not
-	// already name them.
+	// ⚠️ **THE ORG'S VALUES ARE NO LONGER ON THIS PAGE — A DELIBERATE
+	// REVERSAL (Revision 2, 2026-09-25).** This block used to say the
+	// opposite: the D8 end-to-end found a paired machine showing "Your
+	// projects: none" while silently attributing blocks to the org's eight
+	// values, and the fix was to list those values here under "from Atlas"
+	// headings derived from their teams. The rule that fix rested on still
+	// holds — the page lists exactly what attribution considers — but what
+	// attribution considers changed: Signal now attributes only to projects
+	// defined in Signal (candidatesFor), so the catalog is the local document
+	// and nothing else. The org's list is still received and held; it reaches
+	// neither the rules nor this page.
+	//
+	// Two consequences are handled here rather than left to the page. An
+	// overlay ("Same as" onto an Atlas value, made before this revision) is a
+	// Signal project now, so it gets a heading from its own group key when
+	// the document declares none (withEntryGroups) — otherwise it would render
+	// under no heading at all. And the catalog never says "atlas": an overlay
+	// is reported as "user" (projectViews) and a stored atlas group as
+	// "local" (above), on the view COPY only — the stored origin is what keeps
+	// the overlay's Atlas id flowing into project_matches.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"groups":      withRemoteBuckets(groups, candidates, off),
+		"groups":      withEntryGroups(groups, candidates, off),
 		"projects":    projectViews(candidates, observed),
 		"suggestions": suggestions,
 		// The same blocks and the same live pass as `coverage`: a group counts
@@ -316,6 +329,11 @@ type projectView struct {
 func projectViews(ps []projects.Project, observed []string) []projectView {
 	out := make([]projectView, len(ps))
 	for i, p := range ps {
+		// An overlay is reported as the person's own (see handleGetProjects'
+		// ⚠️ block). p is a copy; the stored document is untouched.
+		if p.Origin == projects.OriginAtlas {
+			p.Origin = projects.OriginUser
+		}
 		out[i] = projectView{Project: p, Rules: projects.Rules(p, observed)}
 	}
 	return out
@@ -473,9 +491,13 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 	off := groupOffFunc()
 
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
-		// An Atlas value may be the target: the merge lives in a local overlay
-		// and nothing is sent to Atlas (decided 2026-09-05).
-		return projects.PlaceSameAsWithRemote(d, remoteCandidates(s), body.Suggestion, body.SameAs, suggestions, off)
+		// ⚠️ nil for the org's list (Revision 2, 2026-09-25): the target must
+		// be a project Signal holds. Before it, an Atlas-only id was
+		// accepted and an overlay laid down for it (decided 2026-09-05) — the
+		// path by which an org value came to attribute. It is closed here, at
+		// the caller, so PlaceSameAsWithRemote stays intact for the separate
+		// "use Atlas workstreams again" work. An Atlas-only id now answers 404.
+		return projects.PlaceSameAsWithRemote(d, nil, body.Suggestion, body.SameAs, suggestions, off)
 	})
 	if err != nil {
 		switch {
@@ -510,9 +532,9 @@ func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Sto
 	}
 	off := groupOffFunc()
 	_, err := s.Update(func(d projects.Document) (projects.Document, error) {
-		// An Atlas value may be the target: the merge lives in a local overlay
-		// and nothing is sent to Atlas (decided 2026-09-05).
-		return projects.MapProjectTo(d, remoteCandidates(s), id, body.SameAs, off)
+		// nil for the org's list, for the reason handlePlace gives: only a
+		// project Signal holds may be the target (Revision 2, 2026-09-25).
+		return projects.MapProjectTo(d, nil, id, body.SameAs, off)
 	})
 	if err != nil {
 		switch {
@@ -547,12 +569,20 @@ func handleGroupOff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, localOnly(nil))
 }
 
-// withRemoteBuckets appends a workstream entry for every bucket the org's
-// values belong to that the local document does not already declare, so the
-// page can group "Your projects · from Atlas" under the org's own names. A
-// remote project's bucket is its Team when its Workstream is empty — that is
-// where wire_projects puts the workstream's name (docs/v3/contracts.md).
-func withRemoteBuckets(local []projects.Group, candidates []projects.Project, off func(string) bool) []projects.Group {
+// withEntryGroups is the document's own groups plus a heading for every Signal
+// project whose group the document does not declare — so every project
+// the catalog lists renders under SOME heading. The case that needs it is an
+// overlay: "Same as" onto an Atlas value (before Revision 2) copied the value's
+// group key and team onto the entry but never declared the group.
+//
+// ⚠️ It replaces withRemoteBuckets, which did the same over the ORG's values
+// and marked each derived heading origin "atlas". Same derivation — the NAME
+// is the human label (Team, else the key) and the KEY is the entry's Group,
+// else the name normalised; they are two different things and conflating them
+// printed "keld-projects" as a heading — but over local entries only, with no
+// Origin filter, and always origin "local": the catalog never says "atlas"
+// (Revision 2, 2026-09-25).
+func withEntryGroups(local []projects.Group, entries []projects.Project, off func(string) bool) []projects.Group {
 	// Seeded with KEYS only. It used to hold lower-cased keys AND names, so a
 	// bucket could be skipped because some other bucket's NAME collided with
 	// this one's key — a membership test about two different things.
@@ -562,16 +592,7 @@ func withRemoteBuckets(local []projects.Group, candidates []projects.Project, of
 		seen[projects.GroupKey(ws.Name)] = true
 	}
 	out := append([]projects.Group(nil), local...)
-	for _, p := range candidates {
-		if p.Origin != projects.OriginAtlas {
-			continue
-		}
-		// The NAME is the human label Atlas serves (its `team`); the KEY is
-		// that name normalised. They are two different things and were being
-		// conflated: `p.Workstream` now HOLDS the key (see
-		// projects.FromRemoteProjects), so using it as the name would print
-		// "keld-projects" as a heading, and using the name as the key would
-		// group nothing.
+	for _, p := range entries {
 		name := p.Team
 		if name == "" {
 			name = p.Group
@@ -580,15 +601,17 @@ func withRemoteBuckets(local []projects.Group, candidates []projects.Project, of
 		if p.Group != "" {
 			key = p.Group
 		}
-		if name == "" || key == "" || seen[key] {
+		if name == "" || key == "" || seen[strings.ToLower(key)] {
 			continue
 		}
-		seen[key] = true
+		seen[strings.ToLower(key)] = true
 		out = append(out, projects.Group{
 			Key:    key,
 			Name:   name,
-			Origin: "atlas",
-			Off:    off(name),
+			Origin: projects.GroupOriginLocal,
+			// Either label switches the entry off (projectGroupOff checks
+			// its Group and its Team), so either reports the heading off.
+			Off: off(key) || off(name),
 		})
 	}
 	return out
