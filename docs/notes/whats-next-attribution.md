@@ -142,8 +142,8 @@ primed messages, no verifier; Qwen3-Embedding-0.6B from the HF cache; run under
 
 | arm | ids per block | precision | recall | F1 |
 |---|---|---|---|---|
-| pooled — every workstream in one group (the shipped single-group case) | **1.21** | 0.760 | 0.868 | **0.811** |
-| every workstream in ONE posted group | 1.21 | identical to pooled on **100/100** fixtures | | |
+| pooled — every project in one group (the shipped single-group case) | **1.21** | 0.760 | 0.868 | **0.811** |
+| every project in ONE posted group | 1.21 | identical to pooled on **100/100** fixtures | | |
 | grouped by the fixtures' 7 `team`s | **4.03** | 0.253 | 0.962 | 0.401 |
 
 - The single-group answer is unchanged (0.811, the §9 figure), and the per-group rule reproduces
