@@ -59,7 +59,7 @@ func signalOnlyFixture(t *testing.T) *v3 {
 	if v.projects.RemoteProjects == nil {
 		t.Fatal("test setup: a paired machine must wire the RemoteProjects getter")
 	}
-	declareProject(t, v, "p_signal", "Signal work", repoSignal, "development")
+	declareProject(t, v, "p_signal", "Signal work", repoSignal)
 	v.remote.Store(orgRemote(repoAtlasOnly))
 	if got := v.projects.RemoteProjects(); len(got) != 1 || got[0].ID != atlasWSID {
 		t.Fatalf("test setup: the getter must return the org's list, got %+v", got)
@@ -158,7 +158,7 @@ func TestAPollNoLongerTrimsSignalRules(t *testing.T) {
 	v := newV3(settings.Settings{}, enabledAtlas{})
 	// A Signal project on repo A — and the org declares repo A too. Under
 	// Revision 1 the poll deleted this entry (the org "covered" every rule).
-	declareProject(t, v, "p_signal", "Signal work", repoAtlasOnly, "development")
+	declareProject(t, v, "p_signal", "Signal work", repoAtlasOnly)
 	before, err := os.ReadFile(projects.DefaultPath())
 	if err != nil {
 		t.Fatalf("read document: %v", err)
@@ -180,7 +180,7 @@ func TestAPollNoLongerTrimsSignalRules(t *testing.T) {
 func TestAtlasWorkstreamsAreHeldNotUsed(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	v := newV3(settings.Settings{}, enabledAtlas{})
-	declareProject(t, v, "p_signal", "Signal work", repoSignal, "development")
+	declareProject(t, v, "p_signal", "Signal work", repoSignal)
 
 	v.observeRemote(orgRemote(repoAtlasOnly, "github.com/acme/second"))
 

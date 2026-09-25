@@ -7,8 +7,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
-	"github.com/ncx-ai/keld-signal/internal/agent/projects"
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // THE VECTORISED ATTRIBUTION PASS'S ONLY DOOR INTO THE DELIVERY LEDGER.
@@ -165,7 +163,7 @@ func (l vectorLedger) recordOutcome(o attrib.Outcome) {
 		var a ledger.VectorAttributed
 		for _, w := range o.Projects {
 			a.Projects = append(a.Projects, ledger.VectorProject{
-				ProjectID: w.ProjectID, Group: w.Group, Confidence: w.Confidence,
+				ProjectID: w.ProjectID, Confidence: w.Confidence,
 			})
 		}
 		l.write(o.SessionID, o.Start, a, ledger.StatusOK, ledger.ReasonNone)
@@ -193,26 +191,4 @@ func (l vectorLedger) write(sessionID string, start float64, a ledger.VectorAttr
 	}
 	k := ledger.BlockKey{Session: sessionID, Start: int64(start)}
 	l.rec.Vector(k, a, status, r, time.Now().UTC())
-}
-
-// withOutcomeGroups fills each assigned id's group from the project list the
-// daemon resolves for the sidecar — the same list, the same precedence
-// (resolveProjects), and the one group-key definition (projects.GroupKey
-// of the value's `team`). An id no longer in that list keeps an unknown ("")
-// group rather than a guess.
-func withOutcomeGroups(o attrib.Outcome, remote *settings.Remote) attrib.Outcome {
-	if len(o.Projects) == 0 {
-		return o
-	}
-	groups := map[string]string{}
-	for _, w := range resolveProjects(remote).list {
-		groups[w.ID] = projects.GroupKey(w.Team)
-	}
-	out := o
-	out.Projects = make([]attrib.OutcomeProject, len(o.Projects))
-	for i, w := range o.Projects {
-		w.Group = groups[w.ProjectID]
-		out.Projects[i] = w
-	}
-	return out
 }

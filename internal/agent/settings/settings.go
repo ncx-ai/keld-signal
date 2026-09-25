@@ -151,13 +151,15 @@ type Settings struct {
 	// resets.
 	ShowBreaks bool `json:"show_breaks,omitempty"`
 
-	// GroupsOff lists group keys whose projects are EXCLUDED from
-	// attribution on this machine ("counts for my work" switched off). Local
-	// only; Atlas is never told. A developer's work can then never land in the
-	// Marketing group.
+	// GroupsOff lists the group keys (or names) a person switched off —
+	// "counts for my work" — in a build that still had groups.
 	//
-	// ⚠️ Stored as `workstreams_off`, 3.0.6's key, so a machine rolled back to // vocab:keep
-	// 3.0.6 keeps its groups switched off (Revision 3, 2026-09-25).
+	// ⚠️ **READ ONCE, NEVER WRITTEN, NEVER REMOVED (Revision 4, 2026-09-25).**
+	// Signal has no groups now, so nothing excludes by group: on daemon start
+	// the projects in a listed group are marked hidden instead
+	// (daemon.hideProjectsInOffGroups), which keeps them attributing nothing.
+	// The list itself stays in the file, under `workstreams_off` — 3.0.6's key // vocab:keep
+	// — so a machine rolled back to 3.0.6 still sees those groups off.
 	GroupsOff []string `json:"workstreams_off,omitempty"` // vocab:keep
 
 	// AutoSetupIntegrations decides whether the daemon's integrations detector

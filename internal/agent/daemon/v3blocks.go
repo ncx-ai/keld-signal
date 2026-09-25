@@ -11,7 +11,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/pricing"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
@@ -289,8 +288,8 @@ func dominantModel(ws map[string]enrich.Labeled) string {
 //
 // ⚠️ **Two projects claiming one block is not a conflict any more.** It used
 // to be recorded as one and attributed to neither; since 2026-09-23 the block
-// lands in every project that matches it, in any group and inside one, and
-// a group's totals count it once (projects.Rollup).
+// lands in every project that matches it, and each project counts it in full
+// (projects.Rollup).
 func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, now time.Time) {
 	if v.projects == nil {
 		return
@@ -318,8 +317,11 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 	// numbers do not move. projects.Candidates is the ONE definition the page's
 	// live pass (ingress) and project_matches use too, so the recorded answer
 	// and the displayed one cannot be computed over two different sets.
-	res := projects.Attribute(r.Dimensions, projects.Candidates(doc),
-		projects.GroupOffFunc(settings.Load()), nil)
+	//
+	// ⚠️ Hidden is the only exclusion (Revision 4, 2026-09-25); there is no
+	// group-off read here any more. A switched-off group's projects were
+	// turned hidden at daemon start (hideProjectsInOffGroups).
+	res := projects.Attribute(r.Dimensions, projects.Candidates(doc), nil)
 	v.ledger.Attribute(k, ledger.Attributed{Projects: ledgerProjects(res)}, ledger.Reason(res.Reason), now)
 }
 
@@ -433,61 +435,9 @@ func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, erro
 		if b.Cells == nil {
 			b.Cells = map[string]map[string]any{}
 		}
-		b.Cells[string(ledger.StageAttributed)] = attributedCell(pass.Of(d), at)
-	}
-
-	// A vector cell stored before the list carried groups (or naming an id whose
-	// group the sidecar could not be told) reads with group "". Fill it from the
-	// CURRENT candidates — the same document and org list the rule pass above
-	// just used — so the page can place it under a group filter. An id no longer
-	// declared keeps "": unknown, never a guessed group. Nothing stored changes.
-	groups := make(map[string]string, len(pass.Candidates))
-	for _, c := range pass.Candidates {
-		groups[c.ID] = c.Group
-	}
-	for i := range snap.Blocks {
-		fillGroups(snap.Blocks[i].Cells["vector"], groups)
+		b.Cells[string(ledger.StageAttributed)] = ingress.AttributedCell(pass.Of(d), at)
 	}
 	return snap, nil
-}
-
-// fillGroups sets each empty `group` in a cell's `projects` list from groups.
-func fillGroups(cell map[string]any, groups map[string]string) {
-	list, _ := cell["projects"].([]map[string]any)
-	for _, w := range list {
-		if g, _ := w["group"].(string); g != "" {
-			continue
-		}
-		if id, _ := w["project_id"].(string); groups[id] != "" {
-			w["group"] = groups[id]
-		}
-	}
-}
-
-// attributedCell builds the wire cell for one recomputed decision, in the
-// shape ledger.Store.Read produces for a recorded one — same keys, same
-// values — so no consumer needs to learn a second shape.
-func attributedCell(res projects.Result, at string) map[string]any {
-	if res.Reason == projects.ReasonNone && res.Attributed() {
-		list := make([]map[string]any, 0, len(res.Projects))
-		for _, a := range res.Projects {
-			list = append(list, map[string]any{
-				"project_id": a.ProjectID,
-				"group":      a.Group,
-				"method":     string(a.Method),
-			})
-		}
-		return map[string]any{
-			"status":   string(ledger.StatusOK),
-			"at":       at,
-			"projects": list,
-		}
-	}
-	return map[string]any{
-		"status": string(ledger.StatusFailed),
-		"at":     at,
-		"reason": string(reasonOr(res.Reason, projects.ReasonNoRuleMatched)),
-	}
 }
 
 // ledgerProjects is a rule-pass result as the ledger records it.
@@ -495,17 +445,10 @@ func ledgerProjects(res projects.Result) []ledger.AttributedProject {
 	out := make([]ledger.AttributedProject, 0, len(res.Projects))
 	for _, a := range res.Projects {
 		out = append(out, ledger.AttributedProject{
-			ProjectID: a.ProjectID, Group: a.Group, Method: ledger.Method(a.Method),
+			ProjectID: a.ProjectID, Method: ledger.Method(a.Method),
 		})
 	}
 	return out
-}
-
-func reasonOr(r, fallback projects.Reason) projects.Reason {
-	if r == projects.ReasonNone {
-		return fallback
-	}
-	return r
 }
 
 // dimsOfRecord turns one stored block row into the dims map the attribution

@@ -6,7 +6,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // projectMatchesFor answers, for one block about to be published, which
@@ -46,8 +45,7 @@ func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 	if err != nil {
 		return nil
 	}
-	matches := projects.MatchesFor(b.Analysis.Dimensions, projects.Candidates(d),
-		projects.GroupOffFunc(settings.Load()))
+	matches := projects.MatchesFor(b.Analysis.Dimensions, projects.Candidates(d))
 	if len(matches) == 0 {
 		return nil
 	}

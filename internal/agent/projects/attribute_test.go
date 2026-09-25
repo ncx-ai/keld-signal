@@ -38,7 +38,7 @@ func TestRepoRuleAttributesWithoutAnyEncoder(t *testing.T) {
 	p := Project{ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{p}, nil, nil)
+	res := Attribute(dims, []Project{p}, nil)
 
 	if only(res).Method != MethodRepo {
 		t.Fatalf("method = %q, want %q", only(res).Method, MethodRepo)
@@ -62,7 +62,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	var blocks []UnattributedBlock
 	for i := 0; i < 4; i++ {
 		dims := dimsWith(map[string]string{DimRepo: unclaimed})
-		res := Attribute(dims, nil, nil, nil)
+		res := Attribute(dims, nil, nil)
 		if only(res).ProjectID != "" || res.Reason != ReasonNoRuleMatched {
 			t.Fatalf("block %d: got %+v, want unattributed/no_rule_matched", i, res)
 		}
@@ -104,7 +104,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	}
 
 	doc := Document{Version: CurrentVersion}
-	doc, created, err := Bundle(doc, "SDK work", "development", ids, sdkSuggestions)
+	doc, created, err := Bundle(doc, "SDK work", ids, sdkSuggestions)
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 
 	// All three repos' blocks now re-attribute to the new project.
 	for _, r := range sdkRepos {
-		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
+		res := Attribute(sdkDims[r], doc.Projects, nil)
 		if only(res).Method != MethodRepo || only(res).ProjectID != created.ID {
 			t.Fatalf("repo %s: got %+v after bundle, want method repo / project %s", r, res, created.ID)
 		}
@@ -126,7 +126,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 	// Suggestions for those three blocks are gone (all now attributed).
 	var stillUnattributed []UnattributedBlock
 	for _, r := range sdkRepos {
-		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
+		res := Attribute(sdkDims[r], doc.Projects, nil)
 		if only(res).ProjectID == "" {
 			stillUnattributed = append(stillUnattributed, UnattributedBlock{Dims: sdkDims[r]})
 		}
@@ -152,7 +152,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 		t.Fatalf("RemoveRules: %v", err)
 	}
 
-	res := Attribute(sdkDims[repoSDKTestbench], doc.Projects, nil, nil)
+	res := Attribute(sdkDims[repoSDKTestbench], doc.Projects, nil)
 	if only(res).ProjectID != "" {
 		t.Fatalf("sdk-testbench still attributed after RemoveRules: %+v", res)
 	}
@@ -166,7 +166,7 @@ func TestSuggestBundleRemoveRoundTrip(t *testing.T) {
 
 	// The other two repos are unaffected.
 	for _, r := range []string{repoAtlasTSTel, repoAtlasPyTel} {
-		res := Attribute(sdkDims[r], doc.Projects, nil, nil)
+		res := Attribute(sdkDims[r], doc.Projects, nil)
 		if only(res).Method != MethodRepo || only(res).ProjectID != created.ID {
 			t.Fatalf("repo %s: got %+v after removing a DIFFERENT rule, want it unaffected", r, res)
 		}
@@ -180,7 +180,7 @@ func TestTwoProjectsClaimingOneRepoBothGetTheBlock(t *testing.T) {
 	b := Project{ID: "p_b", Title: "B", Repos: []string{repoKeldAtlas}}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldAtlas})
 
-	res := Attribute(dims, []Project{a, b}, nil, nil)
+	res := Attribute(dims, []Project{a, b}, nil)
 
 	if res.Reason != ReasonNone {
 		t.Fatalf("reason = %q, want none: %+v", res.Reason, res)
@@ -192,35 +192,36 @@ func TestTwoProjectsClaimingOneRepoBothGetTheBlock(t *testing.T) {
 	}
 
 	// Order of candidates changes only the order, never the set.
-	res2 := Attribute(dims, []Project{b, a}, nil, nil)
+	res2 := Attribute(dims, []Project{b, a}, nil)
 	if len(res2.Projects) != 2 {
 		t.Fatalf("the set is order-dependent: %+v", res2)
 	}
 }
 
-// T22: a workstream switched off excludes its projects from matching AND
-// from the "place same as" candidate list.
-func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
-	off := func(key string) bool { return key == "marketing" }
-	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Group: "marketing"}
+// T22, as amended by Revision 4: a HIDDEN project is excluded from matching
+// AND from the "place same as" candidate list — hidden is the only exclusion
+// now that groups are gone (a switched-off group's projects are hidden on
+// upgrade, so this is the same guarantee the group-off version pinned).
+func TestHiddenExcludesFromMatchingAndSameAs(t *testing.T) {
+	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Hidden: true}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{p}, off, nil)
+	res := Attribute(dims, []Project{p}, nil)
 	if only(res).ProjectID != "" || res.Reason != ReasonNoRuleMatched {
-		t.Fatalf("group-off project still matched: %+v", res)
+		t.Fatalf("hidden project still matched: %+v", res)
 	}
 
-	same := SameAsCandidates(Document{Projects: []Project{p}}, off)
+	same := SameAsCandidates(Document{Projects: []Project{p}})
 	for _, c := range same {
 		if c.ID == p.ID {
-			t.Fatalf("group-off project appeared in same-as candidates: %+v", same)
+			t.Fatalf("hidden project appeared in same-as candidates: %+v", same)
 		}
 	}
 
 	doc := Document{Projects: []Project{p}}
 	suggestions := []Suggestion{{ID: "s1", Kind: SuggestKindRepo, Value: normalizeRepo(repoKeldSignal)}}
-	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions, off); err != ErrGroupOff {
-		t.Fatalf("PlaceSameAs onto an off-project project: err = %v, want ErrGroupOff", err)
+	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions); err != ErrProjectNotFound {
+		t.Fatalf("PlaceSameAs onto a hidden project: err = %v, want ErrProjectNotFound", err)
 	}
 }
 
@@ -238,7 +239,7 @@ func TestEvidenceFieldsAreNeverMatchInputs(t *testing.T) {
 	}
 	for name, dims := range cases {
 		t.Run(name, func(t *testing.T) {
-			res := Attribute(dims, []Project{p}, nil, nil)
+			res := Attribute(dims, []Project{p}, nil)
 			if only(res).ProjectID != "" || only(res).Method != MethodNone {
 				t.Fatalf("%s dim attributed as if it were a rule: %+v", name, res)
 			}
@@ -290,7 +291,7 @@ func TestRemoteProjectAttributesByRepoShapedKeyword(t *testing.T) {
 	candidates := FromRemoteProjects(values)
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, candidates, nil, nil)
+	res := Attribute(dims, candidates, nil)
 	if only(res).Method != MethodRepo || only(res).ProjectID != "v_web" {
 		t.Fatalf("got %+v, want method repo / project v_web", res)
 	}
@@ -305,7 +306,7 @@ func TestRemoteProjectWithNoRepoLikeKeywordsNeverAttributesByRepo(t *testing.T) 
 	candidates := FromRemoteProjects(values)
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, candidates, nil, nil)
+	res := Attribute(dims, candidates, nil)
 	if only(res).ProjectID != "" {
 		t.Fatalf("non-repo-like keywords attributed by repo: %+v", res)
 	}
@@ -326,13 +327,13 @@ func TestSharedMatchesComeOnlyFromRealRepoRulesNeverFromSharedFreeTags(t *testin
 	b := Project{ID: "p_b", Title: "B", Keywords: []string{"design/ux"}}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	if res := Attribute(dims, []Project{a, b}, nil, nil); res.Attributed() {
+	if res := Attribute(dims, []Project{a, b}, nil); res.Attributed() {
 		t.Fatalf("a shared non-repo keyword must attribute nothing: %+v", res)
 	}
 
 	c := Project{ID: "p_c", Title: "C", Keywords: []string{"ncx-ai/keld-signal"}}
 	d := Project{ID: "p_d", Title: "D", Keywords: []string{"ncx-ai/keld-signal"}}
-	if res := Attribute(dims, []Project{c, d}, nil, nil); len(res.Projects) != 2 {
+	if res := Attribute(dims, []Project{c, d}, nil); len(res.Projects) != 2 {
 		t.Fatalf("two projects sharing a real repo-shaped keyword, with a block on that repo, must both get it: %+v", res)
 	}
 }
@@ -382,7 +383,7 @@ func TestRemovingAMatchedKeywordRuleReturnsBlocksToSuggestions(t *testing.T) {
 	doc := Document{Projects: []Project{{ID: "p1", Title: "One", Keywords: []string{"ncx-ai/keld-signal"}}}}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, doc.Projects, nil, nil)
+	res := Attribute(dims, doc.Projects, nil)
 	if only(res).Method != MethodRepo || only(res).ProjectID != "p1" {
 		t.Fatalf("expected attribution via matched keyword candidate, got %+v", res)
 	}
@@ -395,7 +396,7 @@ func TestRemovingAMatchedKeywordRuleReturnsBlocksToSuggestions(t *testing.T) {
 		t.Fatalf("RemoveRules: %v", err)
 	}
 
-	res2 := Attribute(dims, doc.Projects, nil, nil)
+	res2 := Attribute(dims, doc.Projects, nil)
 	if only(res2).ProjectID != "" {
 		t.Fatalf("still attributed after removing the matched keyword rule: %+v", res2)
 	}

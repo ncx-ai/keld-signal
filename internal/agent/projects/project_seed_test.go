@@ -1,93 +1,120 @@
+// vocab:keep-file — reads 3.0.6's stored keys (workstreams, workstream) off disk.
 package projects
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-// ⚠️ **A PROJECT FILED UNDER A WORKSTREAM THAT DOES NOT EXIST IS AN INVISIBLE
-// PROJECT.** The Projects pane draws projects by looping over workstreams, so a
-// project whose workstream is in no list is never rendered: it exists in
-// projects.json, it attributes blocks, and the person who made it sees nothing
-// where their suggestion used to be.
+// ⚠️ **A PROJECT FILED UNDER A GROUP THE FILE DOES NOT DECLARE IS AN INVISIBLE
+// PROJECT — IN 3.0.6.** 3.0.6 draws projects by looping over the file's
+// groups, so a project whose group is in no list is never rendered there: it
+// exists in projects.json, it attributes blocks, and a person whose machine
+// was auto-updated back to 3.0.6 sees nothing.
 //
-// Measured on a real machine before this: two projects on disk,
+// Measured on a real machine before the first fix: two projects on disk,
 // `"workstreams": null`, and a pane reading "YOUR PROJECTS" followed by nothing.
-// It is the state of EVERY machine with Send to Atlas off, because the list is
-// pushed down by Atlas and nothing local ever seeded it.
+//
+// Until Revision 4 Bundle seeded the group it was asked to file under. Signal
+// has no groups now, so a new project carries none and SAVE is what files it
+// (toStored) — these tests pin that on the bytes 3.0.6 reads.
 
 func suggestionFor(value string) Suggestion {
 	return Suggestion{ID: SuggestionID(DimRepo, value), Kind: DimRepo, Value: value}
 }
 
-func TestBundleSeedsTheGroupWhenTheOrgHasDeclaredNone(t *testing.T) {
-	d := Document{Version: CurrentVersion} // no groups at all — Atlas off
-	sug := suggestionFor("github.com/acme/web")
+type stored306 struct {
+	Workstreams []Group `json:"workstreams"`
+	Projects    []struct {
+		ID         string `json:"id"`
+		Workstream string `json:"workstream"`
+	} `json:"projects"`
+}
 
-	next, p, err := Bundle(d, "Web", "development", []string{sug.ID}, []Suggestion{sug})
+func saveAndRead(t *testing.T, d Document) stored306 {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, d); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s stored306
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func bundled(t *testing.T, d Document) Document {
+	t.Helper()
+	sug := suggestionFor("github.com/acme/web")
+	next, p, err := Bundle(d, "Web", []string{sug.ID}, []Suggestion{sug})
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	if p.Group != "development" {
-		t.Fatalf("project project = %q", p.Group)
+	if p.Group != "" {
+		t.Fatalf("a new project carries no group since Revision 4, got %q", p.Group)
 	}
-	var found *Group
-	for i := range next.Groups {
-		if next.Groups[i].Key == "development" {
-			found = &next.Groups[i]
-		}
+	return next
+}
+
+func TestSaveFilesAGrouplessProjectUnderOneInternalGroup(t *testing.T) {
+	s := saveAndRead(t, bundled(t, Document{Version: CurrentVersion})) // no groups at all
+	if len(s.Workstreams) != 1 || s.Workstreams[0] != InternalGroup {
+		t.Fatalf("want exactly the internal group declared, got %+v", s.Workstreams)
 	}
-	if found == nil {
-		t.Fatal("the project's group was not seeded — the project would be invisible")
+	if InternalGroup.Key != "projects" || InternalGroup.Name != "Projects" || InternalGroup.Origin != GroupOriginLocal {
+		t.Fatalf("the internal group is {projects, Projects, local}: %+v", InternalGroup)
 	}
-	if found.Name != "Development" {
-		t.Fatalf("group name = %q, want a readable label", found.Name)
-	}
-	// LOCAL, never atlas: this is the machine inventing a bucket to keep its own
-	// work visible, and it must not be mistaken for an org declaration.
-	if found.Origin != GroupOriginLocal {
-		t.Fatalf("project origin = %q, want %q", found.Origin, GroupOriginLocal)
+	if len(s.Projects) != 1 || s.Projects[0].Workstream != "projects" {
+		t.Fatalf("the project must be filed under it: %+v", s.Projects)
 	}
 }
 
-func TestBundleDoesNotDuplicateAGroupTheOrgAlreadyDeclared(t *testing.T) {
-	// NEGATIVE: a machine that DOES have org workstreams must keep grouping
-	// projects under them. Matching is by key, so the org's own entry — with its
-	// own name and atlas origin — is the one that stays.
+func TestSaveFilesAGrouplessProjectUnderTheFirstDeclaredGroupAndTouchesNoGroup(t *testing.T) {
+	// NEGATIVE: a document that declares groups gets NO internal group, and the
+	// person's own groups are written back exactly as read.
+	org := []Group{
+		{Key: "development", Name: "Engineering", Origin: GroupOriginAtlas},
+		{Key: "marketing", Name: "Marketing", Origin: GroupOriginLocal, Off: true},
+	}
+	s := saveAndRead(t, bundled(t, Document{Version: CurrentVersion, Groups: org}))
+	if len(s.Workstreams) != 2 || s.Workstreams[0] != org[0] || s.Workstreams[1] != org[1] {
+		t.Fatalf("the person's groups must be untouched, got %+v", s.Workstreams)
+	}
+	if len(s.Projects) != 1 || s.Projects[0].Workstream != "development" {
+		t.Fatalf("the project must be filed under the first declared group: %+v", s.Projects)
+	}
+}
+
+func TestSaveKeepsAStoredGroupAndDeclaresItIfTheFileDoesNot(t *testing.T) {
+	// A project already stored under a group keeps it; one naming a group the
+	// file does not declare (an overlay that copied it before Revision 4) gets
+	// that group declared, after the person's own, rather than being moved.
 	d := Document{
 		Version: CurrentVersion,
-		Groups: []Group{
-			{Key: "development", Name: "Engineering", Origin: GroupOriginAtlas},
+		Groups:  []Group{{Key: "marketing", Name: "Marketing", Origin: GroupOriginLocal}},
+		Projects: []Project{
+			{ID: "p_site", Title: "Site", Group: "marketing"},
+			{ID: "p_overlay", Title: "Atlas", Group: "keld-products"},
 		},
 	}
-	sug := suggestionFor("github.com/acme/web")
-
-	next, _, err := Bundle(d, "Web", "development", []string{sug.ID}, []Suggestion{sug})
-	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+	s := saveAndRead(t, d)
+	if len(s.Workstreams) != 2 || s.Workstreams[0].Key != "marketing" ||
+		s.Workstreams[1].Key != "keld-products" || s.Workstreams[1].Name != "Keld products" {
+		t.Fatalf("want marketing kept first and keld-products declared: %+v", s.Workstreams)
 	}
-	if len(next.Groups) != 1 {
-		t.Fatalf("want the org's single project, got %d", len(next.Groups))
+	if s.Projects[0].Workstream != "marketing" || s.Projects[1].Workstream != "keld-products" {
+		t.Fatalf("each project keeps its stored group: %+v", s.Projects)
 	}
-	if next.Groups[0].Name != "Engineering" ||
-		next.Groups[0].Origin != GroupOriginAtlas {
-		t.Fatalf("the org's workstream was overwritten: %+v", next.Groups[0])
-	}
-}
-
-func TestBundleAddsASecondGroupRatherThanRenamingTheFirst(t *testing.T) {
-	d := Document{
-		Version: CurrentVersion,
-		Groups:  []Group{{Key: "marketing", Name: "Marketing", Origin: GroupOriginAtlas}},
-	}
-	sug := suggestionFor("github.com/acme/web")
-
-	next, _, err := Bundle(d, "Web", "development", []string{sug.ID}, []Suggestion{sug})
-	if err != nil {
-		t.Fatalf("Bundle: %v", err)
-	}
-	if len(next.Groups) != 2 {
-		t.Fatalf("want both projects, got %+v", next.Groups)
-	}
-	if next.Groups[0].Key != "marketing" {
-		t.Fatalf("the existing project must keep its place: %+v", next.Groups)
+	// And the in-memory document is not changed by saving it.
+	if len(d.Groups) != 1 {
+		t.Fatalf("Save must not mutate the caller's document: %+v", d.Groups)
 	}
 }
 

@@ -11,23 +11,9 @@ type RollupBlock struct {
 	Result  Result
 }
 
-// GroupTotal is a group's total: every block that landed in ANY of its
-// projects, each counted ONCE. SharedBlocks is how many of those landed in
-// two or more of its projects — the reason the group's project totals
-// add up to more than the group.
-type GroupTotal struct {
-	Key          string  `json:"key"`
-	Blocks       int     `json:"blocks"`
-	Minutes      float64 `json:"minutes"`
-	Tokens       int64   `json:"tokens"`
-	USD          float64 `json:"usd"`
-	SharedBlocks int     `json:"shared_blocks"`
-}
-
 // ProjectTotal is a project's total: every block it holds, in full.
 type ProjectTotal struct {
 	ID      string  `json:"id"`
-	Group   string  `json:"group"`
 	Blocks  int     `json:"blocks"`
 	Minutes float64 `json:"minutes"`
 	Tokens  int64   `json:"tokens"`
@@ -36,59 +22,42 @@ type ProjectTotal struct {
 
 // Totals is Rollup's answer.
 type Totals struct {
-	Groups   []GroupTotal   `json:"groups"`
 	Projects []ProjectTotal `json:"projects"`
 }
 
-// Rollup is THE totals rule, and the only one: a group counts each block once,
-// a project counts each of its blocks in full.
+// Rollup is THE totals rule, and the only one: a project counts each of its
+// blocks in full.
 //
-// ⚠️ **SO PROJECT TOTALS ADD UP TO MORE THAN THEIR GROUP, BY DESIGN.** A
-// block may land in several projects of one group (overlap is the model
-// since 2026-09-23 — see Result), and each of them really did get that work.
-// The group is the figure that never double counts: "what did this area
-// cost". A project answers "how much work touched this". Summing
-// projects is not a total, and the page says so beside the numbers.
+// ⚠️ **SO PROJECT TOTALS ADD UP TO MORE THAN THE WORK, BY DESIGN.** A block
+// may land in several projects (overlap is the model since 2026-09-23 — see
+// Result), and each of them really did get that work: a project answers "how
+// much work touched this". Summing projects is not a total. The figure that
+// never double counts is coverage's "attributed N of M blocks", which counts a
+// shared block once and is computed from the same live pass.
+//
+// ⚠️ **THERE ARE NO GROUP TOTALS ANY MORE (Revision 4, 2026-09-25).** Until
+// then a group counted each block once and reported `shared_blocks`, the reason
+// its projects summed past it. Groups left the product, and with them the only
+// reader of either figure.
 func Rollup(blocks []RollupBlock) Totals {
-	groups := map[string]*GroupTotal{}
 	ws := map[string]*ProjectTotal{}
 	for _, b := range blocks {
-		perGroup := map[string]int{}
 		for _, a := range b.Result.Projects {
 			w := ws[a.ProjectID]
 			if w == nil {
-				w = &ProjectTotal{ID: a.ProjectID, Group: a.Group}
+				w = &ProjectTotal{ID: a.ProjectID}
 				ws[a.ProjectID] = w
 			}
 			w.Blocks++
 			w.Minutes += b.Minutes
 			w.Tokens += b.Tokens
 			w.USD += b.USD
-			perGroup[a.Group]++
-		}
-		for key, n := range perGroup {
-			g := groups[key]
-			if g == nil {
-				g = &GroupTotal{Key: key}
-				groups[key] = g
-			}
-			g.Blocks++
-			g.Minutes += b.Minutes
-			g.Tokens += b.Tokens
-			g.USD += b.USD
-			if n > 1 {
-				g.SharedBlocks++
-			}
 		}
 	}
-	out := Totals{Groups: []GroupTotal{}, Projects: []ProjectTotal{}}
-	for _, g := range groups {
-		out.Groups = append(out.Groups, *g)
-	}
+	out := Totals{Projects: []ProjectTotal{}}
 	for _, w := range ws {
 		out.Projects = append(out.Projects, *w)
 	}
-	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].Key < out.Groups[j].Key })
 	sort.Slice(out.Projects, func(i, j int) bool { return out.Projects[i].ID < out.Projects[j].ID })
 	return out
 }

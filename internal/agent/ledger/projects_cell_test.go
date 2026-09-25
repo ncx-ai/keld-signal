@@ -20,17 +20,17 @@ func cellList(t *testing.T, cell map[string]any) []map[string]any {
 	return list
 }
 
-// AC-7. The attributed cell names every project a block landed in, each
-// with its group and method, in the order the pass assigned them.
+// AC-7 (R4). The attributed cell names every project a block landed in, each
+// with its method, in the order the pass assigned them — and no group.
 func TestProjectsCellAndLegacyRow(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "multi1", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	s.Attribute(k, Attributed{Projects: []AttributedProject{
-		{ProjectID: "products:atlas_platform", Group: "products", Method: MethodRepo},
-		{ProjectID: "products:signal_client", Group: "products", Method: MethodRepo},
-		{ProjectID: "features:billing", Group: "features", Method: MethodTicket},
+		{ProjectID: "products:atlas_platform", Method: MethodRepo},
+		{ProjectID: "products:signal_client", Method: MethodRepo},
+		{ProjectID: "features:billing", Method: MethodTicket},
 	}}, ReasonNone, time.Now())
 
 	cell := attributedCell(t, s, k)
@@ -38,9 +38,9 @@ func TestProjectsCellAndLegacyRow(t *testing.T) {
 		t.Fatalf("status = %v", cell["status"])
 	}
 	want := []map[string]any{
-		{"project_id": "products:atlas_platform", "group": "products", "method": "repo"},
-		{"project_id": "products:signal_client", "group": "products", "method": "repo"},
-		{"project_id": "features:billing", "group": "features", "method": "ticket"},
+		{"project_id": "products:atlas_platform", "method": "repo"},
+		{"project_id": "products:signal_client", "method": "repo"},
+		{"project_id": "features:billing", "method": "ticket"},
 	}
 	if got := cellList(t, cell); !reflect.DeepEqual(got, want) {
 		t.Fatalf("projects = %#v\nwant %#v", got, want)
@@ -50,7 +50,7 @@ func TestProjectsCellAndLegacyRow(t *testing.T) {
 	}
 
 	// A row written before the list existed — only project_id/method set —
-	// reads back as a one-entry list with an unknown ("") group.
+	// reads back as a one-entry list.
 	legacy := BlockKey{Session: "legacy1", Start: 1788500000}
 	s.Cut(legacy, 1788501200, "idle", "budget", "claude_code", time.Now())
 	s.Attribute(legacy, Attributed{Projects: []AttributedProject{{ProjectID: "x", Method: MethodRepo}}}, ReasonNone, time.Now())
@@ -58,8 +58,26 @@ func TestProjectsCellAndLegacyRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := cellList(t, attributedCell(t, s, legacy))
-	if !reflect.DeepEqual(got, []map[string]any{{"project_id": "p_old", "group": "", "method": "repo"}}) {
+	if !reflect.DeepEqual(got, []map[string]any{{"project_id": "p_old", "method": "repo"}}) {
 		t.Fatalf("a legacy row must read as a one-entry list: %#v", got)
+	}
+
+	// A row Revisions 1–3 wrote carries a group in each stored entry. It still
+	// reads — without the group.
+	grouped := BlockKey{Session: "grouped1", Start: 1788400000}
+	s.Cut(grouped, 1788401200, "idle", "budget", "claude_code", time.Now())
+	s.Attribute(grouped, Attributed{Projects: []AttributedProject{{ProjectID: "x", Method: MethodRepo}}}, ReasonNone, time.Now())
+	if _, err := s.handle().Exec(`UPDATE blocks SET projects=? WHERE session=?`,
+		`[{"project_id":"p_a","group":"products","method":"repo"},{"project_id":"p_b","group":"features","method":"ticket"}]`,
+		grouped.Session); err != nil {
+		t.Fatal(err)
+	}
+	got = cellList(t, attributedCell(t, s, grouped))
+	if !reflect.DeepEqual(got, []map[string]any{
+		{"project_id": "p_a", "method": "repo"},
+		{"project_id": "p_b", "method": "ticket"},
+	}) {
+		t.Fatalf("a row with stored groups must read as {project_id, method}: %#v", got)
 	}
 }
 
@@ -70,8 +88,8 @@ func TestOneRefusedIDDoesNotLoseTheOthers(t *testing.T) {
 	k := BlockKey{Session: "multi2", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	s.Attribute(k, Attributed{Projects: []AttributedProject{
-		{ProjectID: "has a space", Group: "g", Method: MethodRepo},
-		{ProjectID: "good", Group: "g", Method: MethodRepo},
+		{ProjectID: "has a space", Method: MethodRepo},
+		{ProjectID: "good", Method: MethodRepo},
 	}}, ReasonNone, time.Now())
 	got := cellList(t, attributedCell(t, s, k))
 	if len(got) != 1 || got[0]["project_id"] != "good" {
@@ -92,16 +110,16 @@ func TestAnOKAttributionWithNoValidIDIsRefused(t *testing.T) {
 	}
 }
 
-// The vector cell keeps EVERY id the pass named, with its group and its own
-// confidence — the second opinion used to keep only index 0.
+// The vector cell keeps EVERY id the pass named, with its own confidence — the
+// second opinion used to keep only index 0 — and no group.
 func TestVectorCellKeepsEveryID(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "vec1", Start: 1788600000}
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	s.Vector(k, VectorAttributed{Projects: []VectorProject{
-		{ProjectID: "products:atlas_platform", Group: "products", Confidence: 0.62},
-		{ProjectID: "features:billing", Group: "features", Confidence: 0.51},
+		{ProjectID: "products:atlas_platform", Confidence: 0.62},
+		{ProjectID: "features:billing", Confidence: 0.51},
 	}}, StatusOK, ReasonNone, time.Now())
 
 	snap, err := s.Read(time.Time{}, 10)
@@ -110,26 +128,11 @@ func TestVectorCellKeepsEveryID(t *testing.T) {
 	}
 	cell := snap.Blocks[0].Cells["vector"]
 	want := []map[string]any{
-		{"project_id": "products:atlas_platform", "group": "products", "confidence": 0.62},
-		{"project_id": "features:billing", "group": "features", "confidence": 0.51},
+		{"project_id": "products:atlas_platform", "confidence": 0.62},
+		{"project_id": "features:billing", "confidence": 0.51},
 	}
 	if got := cellList(t, cell); !reflect.DeepEqual(got, want) {
 		t.Fatalf("vector projects = %#v\nwant %#v", got, want)
-	}
-}
-
-// A group that is not an identifier is cleared, never stored as text.
-func TestAGroupThatIsNotAnIdentifierIsCleared(t *testing.T) {
-	setHome(t)
-	s := New()
-	k := BlockKey{Session: "multi4", Start: 1788600000}
-	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{Projects: []AttributedProject{
-		{ProjectID: "w", Group: "a sentence with spaces", Method: MethodRepo},
-	}}, ReasonNone, time.Now())
-	got := cellList(t, attributedCell(t, s, k))
-	if got[0]["group"] != "" {
-		t.Fatalf("a non-identifier group must be cleared, got %#v", got[0])
 	}
 }
 

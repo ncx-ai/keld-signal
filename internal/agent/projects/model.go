@@ -58,24 +58,26 @@ const (
 	OriginAtlas     = "atlas"
 )
 
-// Origin values for a Workstream.
+// Origin values for a stored Group.
 const (
 	GroupOriginAtlas = "atlas"
 	GroupOriginLocal = "local"
 )
 
-// Group is one of the org's declared projects (the "which project is
-// this work for" categories a project belongs to), mirroring
-// settings.RemoteProject's Atlas-declared siblings for this document.
+// Group is one of the groups a projects.json document declares. It is
+// STORAGE ONLY since Revision 4 (2026-09-25).
 //
-// Off is a DISPLAY MIRROR, not the authority: the authoritative flag is
-// settings.Settings.GroupsOff (agent-config.json's `workstreams_off`), // vocab:keep
-// read live via settings.Settings.GroupOff — see attribute.go's
-// groupOff parameter and the PUT /v1/groups/{key}/off route in
-// ingress/projects.go, which writes THAT file, not this one. It is carried
-// here too so a reader of this document alone (a backup, a support bundle)
-// is not missing the fact; ingress/projects.go overwrites it with the live
-// value before every GET /v1/projects response.
+// ⚠️ **SIGNAL HAS NO GROUPS, BUT THE FILE STILL DOES, ON PURPOSE.** Groups
+// left the product — no heading, no totals, no switch, nothing in the local
+// API — yet 3.0.6 draws a project only under a group the file declares, and
+// auto-update can roll a machine back to 3.0.6. So the person's groups are
+// read and written back untouched, every project is stored under one of them,
+// and a document with none gains ONE internal group on save (see toStored).
+// Nothing reads a group to decide anything.
+//
+// Off is 3.0.6's display mirror of `workstreams_off`; it is round-tripped, // vocab:keep
+// never read. Switched-off groups became hidden projects on the first start
+// of a Revision 4 build (daemon.hideProjectsInOffGroups).
 type Group struct {
 	Key        string `json:"key"`
 	Name       string `json:"name"`
@@ -84,6 +86,10 @@ type Group struct {
 	Origin     string `json:"origin,omitempty"`
 	Off        bool   `json:"off,omitempty"`
 }
+
+// InternalGroup is the one group Save declares when a document declares
+// none, so a project stored under it still renders in 3.0.6 (see Group).
+var InternalGroup = Group{Key: "projects", Name: "Projects", Origin: GroupOriginLocal}
 
 // Project is one declared project. Repos and TicketKey ARE the rules — see
 // attribute.go's Attribute. Everything else that could be said about a
@@ -102,11 +108,8 @@ type Group struct {
 // not distinguish them on the wire (docs/v3/contracts.md, "What Atlas
 // actually offers today", point 1): for a locally-declared project it is a
 // real owning sub-team (informational only, never matched on); for a value
-// converted by FromRemoteProjects it is that value's PROJECT'S NAME
-// whenever the value has no owning team of its own. projectGroupOff
-// checks both Workstream (the local key) and Team (the Atlas name proxy)
-// against settings.Settings.GroupOff, case-insensitively, so a project
-// switched off excludes a project however its bucket happens to be spelled.
+// converted by FromRemoteProjects it is that value's WORKSTREAM'S NAME
+// whenever the value has no owning team of its own.
 type Project struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
@@ -116,15 +119,14 @@ type Project struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	TicketKey   string   `json:"ticket_key,omitempty"`
 
-	// Group is this project's project KEY (Group.Key above), set
-	// for a locally-declared project. An Atlas-sourced value (see
-	// FromRemoteProjects) never carries one — Atlas pools its values across
-	// every workstream and derives the workstream from the value id itself
-	// when a block is later matched server-side (docs/v3/contracts.md,
-	// "What Atlas actually offers today", point 2) — so its bucket is carried
-	// in Team instead (see Team's doc comment) and projectGroupOff checks
-	// both.
-	Group string `json:"group,omitempty"`
+	// Group is the key of the group this project is STORED under (Group.Key
+	// above) — storage only, and never on the local API: `json:"-"` is what
+	// keeps it off every response that marshals a Project, and Load/Save carry
+	// it through 3.0.6's `workstream` key instead (storedProject). Empty means // vocab:keep
+	// "none yet"; Save files such a project under the document's default
+	// group. Nothing reads it to attribute, total or display (Revision 4,
+	// 2026-09-25).
+	Group string `json:"-"`
 	// Origin says how this project came to exist: "suggested" (never
 	// happens — a suggestion is not persisted until bundled), "user"
 	// (bundled/edited by a person) or "atlas" (pushed down as an org
@@ -142,7 +144,9 @@ type Project struct {
 	AtlasValueID *string `json:"atlas_value_id"`
 }
 
-// Document is the whole ~/.keld/state/projects.json file.
+// Document is the whole ~/.keld/state/projects.json file, as the code reads
+// it. Groups is storage only (see Group); the local API never marshals a
+// Document.
 type Document struct {
 	Version  int       `json:"version"`
 	Groups   []Group   `json:"groups"`
@@ -164,13 +168,54 @@ type storedProject struct {
 	StoredGroup string `json:"workstream,omitempty"` // vocab:keep — 3.0.6's stored name
 }
 
+// toStored writes every project under a group the document declares.
+//
+// ⚠️ **A PROJECT UNDER NO DECLARED GROUP IS INVISIBLE TO 3.0.6, SO NONE IS
+// STORED THAT WAY (Revision 4, 2026-09-25).** 3.0.6 renders the Projects pane
+// by looping over the file's groups and drawing each one's members. Signal no
+// longer has groups, so a project created now has none — and written as-is, a
+// machine auto-updated back to 3.0.6 would find it in the file, attribute
+// blocks to it, and show the person nothing. (That exact shape was measured
+// once already: two projects on disk, `"workstreams": null`, and a pane // vocab:keep
+// reading "YOUR PROJECTS" followed by nothing.) So on the way to disk:
+//
+//   - a project with no group is filed under the document's FIRST declared
+//     group, or, when it declares none, under InternalGroup, which is then
+//     declared — once;
+//   - a project naming a group the document does not declare (an overlay
+//     copied one from an Atlas value's team before Revision 4) gets that group
+//     declared, so it keeps its own heading rather than being moved.
+//
+// The person's own groups are written back exactly as read, and first. The
+// in-memory Document is not changed: the filing is a property of the file.
 func toStored(d Document) storedDocument {
-	out := storedDocument{Version: d.Version, Groups: d.Groups}
+	groups := append([]Group(nil), d.Groups...)
+	declared := make(map[string]bool, len(groups))
+	for _, g := range groups {
+		declared[g.Key] = true
+	}
+	fallback := ""
+	if len(groups) > 0 {
+		fallback = groups[0].Key
+	}
+	out := storedDocument{Version: d.Version}
 	for _, p := range d.Projects {
 		g := p.Group
-		p.Group = "" // written once, under 3.0.6's key
+		switch {
+		case g == "":
+			if fallback == "" {
+				groups = append(groups, InternalGroup)
+				declared[InternalGroup.Key] = true
+				fallback = InternalGroup.Key
+			}
+			g = fallback
+		case !declared[g]:
+			groups = append(groups, Group{Key: g, Name: groupDisplayName(g), Origin: GroupOriginLocal})
+			declared[g] = true
+		}
 		out.Projects = append(out.Projects, storedProject{Project: p, StoredGroup: g})
 	}
+	out.Groups = groups
 	return out
 }
 

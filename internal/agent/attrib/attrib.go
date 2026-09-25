@@ -358,16 +358,14 @@ type Outcome struct {
 	// genuine error and reaches retryOrQuarantine instead).
 	Status string
 	// Projects is every id the pass assigned, highest confidence first, set
-	// only for enrich.ProjectsAttributed. Group is left for the observer to
-	// fill: this package holds no project list, and the daemon resolves it
-	// from the one it posted.
+	// only for enrich.ProjectsAttributed.
 	Projects []OutcomeProject
 }
 
-// OutcomeProject is one id the vectorised pass assigned.
+// OutcomeProject is one id the vectorised pass assigned. (It carried a group,
+// filled by the daemon, until Revision 4, 2026-09-25.)
 type OutcomeProject struct {
 	ProjectID  string
-	Group      string
 	Confidence float64
 }
 
@@ -402,8 +400,8 @@ func (a *Attributor) noteOutcome(j Job, status string, res sidecar.AttributeResu
 		// under the belief that the sidecar ranked its list by score — it
 		// iterated in declaration order, so "the winner" was whichever
 		// project happened to be declared first. Since 2026-09-23 a block
-		// may land in several projects, in any group and inside one, and
-		// each is a co-assignment, never a competitor to choose between.
+		// may land in several projects, and each is a co-assignment, never a
+		// competitor to choose between.
 		for _, w := range res.Projects {
 			o.Projects = append(o.Projects, OutcomeProject{ProjectID: w.ID, Confidence: w.Confidence})
 		}

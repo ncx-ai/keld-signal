@@ -28,7 +28,7 @@ func TestOneProjectNamingTheSameRepoTwiceAttributesRatherThanConflicts(t *testin
 	}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{p}, nil, nil)
+	res := Attribute(dims, []Project{p}, nil)
 
 	if len(res.Projects) != 1 {
 		t.Fatalf("a project matching its own duplicated rule must be assigned ONCE: %+v", res.Projects)
@@ -49,7 +49,7 @@ func TestTwoDifferentProjectsClaimingOneRepoAreBothAssigned(t *testing.T) {
 	b := Project{ID: "keld_projects:b", Title: "B", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{a, b}, nil, nil)
+	res := Attribute(dims, []Project{a, b}, nil)
 
 	if len(res.Projects) != 2 || res.Reason != ReasonNone {
 		t.Fatalf("both claimants must be assigned: %+v", res)
