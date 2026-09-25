@@ -21,7 +21,7 @@ import (
 // enrichments UNIQUE(org_id, source_id, corr_scheme, corr_id) and inserts with
 // ON CONFLICT DO UPDATE across every column, so a row riding either of those
 // schemes does not dedup — it OVERWRITES, replacing that row's task_type,
-// sensitivity, workstreams and boundary reasons with the nothing a feature
+// sensitivity, projects and boundary reasons with the nothing a feature
 // vector computes. Under enrich.FeatureCorrScheme the key cannot collide with a
 // prompt row or a block row, and FeatureCorrID is deterministic, so a
 // re-published row upserts itself.

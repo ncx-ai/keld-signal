@@ -38,7 +38,7 @@ SEED=${KELD_E2E_SEED:-1}
 SESSIONS=${KELD_E2E_SESSIONS:-5}
 # The corpus's last event is anchored 30 minutes ago: every intended block is
 # then closed (15 minutes of quiet has already passed) and everything falls in
-# the current week, which /v1/workstreams' coverage tile is scoped to. The STRUCTURE
+# the current week, which /v1/projects' coverage tile is scoped to. The STRUCTURE
 # (sessions, repos, tokens, run/break shape) is identical for a given seed
 # whatever the anchor; only the clock times move, and the visual baseline masks
 # those. Set KELD_E2E_END to an ISO instant to pin them too.
@@ -100,14 +100,15 @@ cat > "$HOME_DIR/agent-config.json" <<JSON
 {"ml_backend":"deterministic","blocks":true,"auto_setup_integrations":false}
 JSON
 
-# One group so the Workstreams pane has a "counts for my work" switch to
-# drive and a bucket for "New workstream" to land in. This is the org-vocabulary
-# shape docs/v3/contracts.md defines; no workstreams yet, so every repository
+# One group so the Projects pane has a "counts for my work" switch to
+# drive and a bucket for "New project" to land in. This is the org-vocabulary
+# shape docs/v3/contracts.md defines; no projects yet, so every repository
 # starts out as a suggestion.
-cat > "$HOME_DIR/state/workstreams.json" <<JSON
-{"version":2,
- "groups":[{"key":"development","name":"Development","question":"Which project is this work for?","template_id":"project","origin":"local","off":false}],
- "workstreams":[]}
+# 3.0.6's stored shape: groups under `workstreams` (vocab:keep).
+cat > "$HOME_DIR/state/projects.json" <<JSON
+{"version":1,
+ "workstreams":[{"key":"development","name":"Development","question":"Which project is this work for?","template_id":"project","origin":"local","off":false}],
+ "projects":[]}
 JSON
 
 # The wrapper records its own pid before exec so teardown can reap the
@@ -236,7 +237,7 @@ echo "e2e-up: waiting for the repository dimension to resolve (up to ${SETTLE_TI
 DEADLINE=$((SECONDS + SETTLE_TIMEOUT))
 REPO_KEYED=0
 while [ $SECONDS -lt $DEADLINE ]; do
-  REPO_KEYED=$(curl -s -H "x-keld-agent-secret: $SECRET" "$BASE/v1/workstreams" | python3 -c '
+  REPO_KEYED=$(curl -s -H "x-keld-agent-secret: $SECRET" "$BASE/v1/projects" | python3 -c '
 import json,sys
 try: print(sum(1 for s in (json.load(sys.stdin).get("suggestions") or []) if s.get("kind") == "repo"))
 except Exception: print(0)' 2>/dev/null)

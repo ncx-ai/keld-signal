@@ -506,7 +506,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 		// See enrich.ResolvedFacts.
 		enrich.WithResolvedFacts(resolvedFacts(j.Cwd)),
 	}, customOpts...)
-	// Wire the deterministic workstream pass only when this run actually has a
+	// Wire the deterministic project pass only when this run actually has a
 	// window-analysis backend; without one the pass stays unregistered rather
 	// than running and failing every job (see facetsFor). The service facets are
 	// threaded in rather than derived from m, because ml_backend
@@ -1042,12 +1042,12 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
-	// lastWorkstreams is the last project list this daemon successfully POSTed
-	// to the sidecar. Mutex-guarded (workstreamsState), NOT owned by a single
-	// goroutine like rejects/custom are — see workstreamsState's doc comment for
+	// lastProjects is the last project list this daemon successfully POSTed
+	// to the sidecar. Mutex-guarded (projectsState), NOT owned by a single
+	// goroutine like rejects/custom are — see projectsState's doc comment for
 	// why: the initial POST runs on its own goroutine (C4), so both it and
 	// onRemote's poll goroutine can touch this value.
-	lastWorkstreams := &workstreamsState{}
+	lastProjects := &projectsState{}
 	updateEvents.replay(emitter)
 	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
 		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
@@ -1058,7 +1058,7 @@ func Run(ctx context.Context) error {
 		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
 	}
 	onRemote := func(r *settings.Remote) {
-		// The Projects pane's vocabulary is the org's pooled workstream values,
+		// The Projects pane's vocabulary is the org's pooled project values,
 		// which arrive here; observing them on every poll is what lets a value
 		// added in Atlas show up without a daemon restart.
 		sig.observeRemote(r)
@@ -1083,28 +1083,28 @@ func Run(ctx context.Context) error {
 			updater.Maybe(ctx, updateTargetFrom(r))
 		}
 
-		// PROJECT ATTRIBUTION: KELD_WORKSTREAMS_FILE wins over the org's remote
-		// list (resolveWorkstreams), and the sidecar is only re-told when the
+		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
+		// list (resolveProjects), and the sidecar is only re-told when the
 		// resolved list actually changed — an org editing unrelated settings
 		// must not re-POST the same projects on every 5-minute poll.
 		//
 		// ⚠️ C4: gated on attrib.Enabled(set.Attribution), NOT merely on
-		// svc.PostWorkstreams != nil. svc.PostWorkstreams is set whenever a sidecar
+		// svc.PostProjects != nil. svc.PostProjects is set whenever a sidecar
 		// client exists AT ALL (ml_backend "auto" or "deterministic"), so
 		// gating on it alone POSTed the org's project list even on a machine
 		// with KELD_ATTRIBUTION=0 — attribution being "off" must mean
 		// nothing about it happens, not merely that the daemon's own loop
 		// doesn't run.
 		//
-		// postWorkstreamsOnChange is the poll half of the NB1 fix (round 2):
-		// see maybePostWorkstreamsAtStartup's doc comment (projects.go) for the
+		// postProjectsOnChange is the poll half of the NB1 fix (round 2):
+		// see maybePostProjectsAtStartup's doc comment (projects.go) for the
 		// startup-vs-poll race this and its sibling close together.
-		if attribOn && svc.PostWorkstreams != nil {
-			postWorkstreamsOnChange(svc.PostWorkstreams, lastWorkstreams, r)
+		if attribOn && svc.PostProjects != nil {
+			postProjectsOnChange(svc.PostProjects, lastProjects, r)
 		}
 	}
 	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
-	// (KELD_WORKSTREAMS_FILE wins over the remote key — see resolveWorkstreams) and
+	// (KELD_PROJECTS_FILE wins over the remote key — see resolveProjects) and
 	// tell the sidecar before anything can ask it to attribute a block; later
 	// changes are picked up by onRemote (above) on the settings poll. Gated
 	// the same way onRemote's own call is — see the C4 note above.
@@ -1116,26 +1116,26 @@ func Run(ctx context.Context) error {
 	// retried connection-refused for up to postProjectsCallTimeout (30s) on
 	// essentially every cold start — BEFORE go pollSettings, the enrichment
 	// Worker, and the /enrich listener, so the whole daemon's startup stalled
-	// behind it. resolveWorkstreams itself is cheap (env/remote lookup, no I/O
+	// behind it. resolveProjects itself is cheap (env/remote lookup, no I/O
 	// beyond an optional local file read) and stays inline; only the actual
-	// HTTP call is deferred, inside maybePostWorkstreamsAtStartup.
+	// HTTP call is deferred, inside maybePostProjectsAtStartup.
 	//
 	// ⚠️ NB1 (round 2): making this call asynchronous REOPENED a race with
 	// onRemote's own poll-driven call above — pollSettings fires its first
 	// poll essentially immediately, so both goroutines can retry against the
-	// same cold sidecar concurrently, and lastWorkstreams being mutex-guarded
-	// (workstreamsState) only prevents a DATA race, not an ORDERING one: whichever
+	// same cold sidecar concurrently, and lastProjects being mutex-guarded
+	// (projectsState) only prevents a DATA race, not an ORDERING one: whichever
 	// POST physically lands last at the sidecar wins, independent of which
-	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostWorkstreamsAtStartup
+	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostProjectsAtStartup
 	// (projects.go) is what actually closes that: it never posts an EMPTY
 	// resolved list (which — before Atlas serves `projects` — is what every
-	// machine without KELD_WORKSTREAMS_FILE resolves to, so it can never be the
-	// stale write that clobbers a real one) and re-checks lastWorkstreams.changed
+	// machine without KELD_PROJECTS_FILE resolves to, so it can never be the
+	// stale write that clobbers a real one) and re-checks lastProjects.changed
 	// immediately before posting a non-empty one, so a POST that raced a
 	// concurrent update becomes a no-op instead of overwriting it.
-	if attribOn && svc.PostWorkstreams != nil {
-		p := resolveWorkstreams(nil)
-		postWorkstreams := svc.PostWorkstreams
+	if attribOn && svc.PostProjects != nil {
+		p := resolveProjects(nil)
+		postProjects := svc.PostProjects
 		// ⚠️ OBSERVED SYNCHRONOUSLY, POSTED ASYNCHRONOUSLY (I8). The attributor's
 		// first drainOnce runs the moment its goroutine starts, concurrently with
 		// the POST above, so the sidecar can legitimately answer
@@ -1147,14 +1147,14 @@ func Run(ctx context.Context) error {
 		// `projectsKnownNonEmpty` true for the whole of that window, so the
 		// attributor holds the job instead. The ordering is now enforced rather
 		// than incidental.
-		lastWorkstreams.observe(p)
-		go maybePostWorkstreamsAtStartup(postWorkstreams, lastWorkstreams, p)
+		lastProjects.observe(p)
+		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
 		// C4: a crash-restarted sidecar comes back with attribution._projects
-		// empty (module state in the parent process it lost), while lastWorkstreams
+		// empty (module state in the parent process it lost), while lastProjects
 		// still records it as told — so the change-gated POST would never speak
 		// again. Re-post on every respawn.
 		if svc.OnSidecarRespawn != nil {
-			svc.OnSidecarRespawn(func() { repostWorkstreamsAfterRespawn(postWorkstreams, lastWorkstreams) })
+			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
 		}
 	}
 	// The integrations catalogue poll. Started unconditionally and outside the
@@ -1197,8 +1197,8 @@ func Run(ctx context.Context) error {
 		// it in cost nothing on a machine that never turned attribution on.
 		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
 			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution,
-			lastWorkstreams.knownNonEmpty,
-			func() { repostWorkstreamsAfterRespawn(svc.PostWorkstreams, lastWorkstreams) })
+			lastProjects.knownNonEmpty,
+			func() { repostProjectsAfterRespawn(svc.PostProjects, lastProjects) })
 		// A scheduled attribution job is "something wants an embedding (and,
 		// for a borderline pair, the verifier)" — the same demand-signal shape
 		// the signal-embeddings path uses its own advance hook for. Both
@@ -1214,14 +1214,14 @@ func Run(ctx context.Context) error {
 		// skipped:no_projects without opening a transcript — the models are
 		// never loaded, so fetching them buys literally nothing. Atlas does not
 		// serve `projects` yet, so TODAY that is every machine without
-		// KELD_WORKSTREAMS_FILE: an org switching attribution on early would pull
+		// KELD_PROJECTS_FILE: an org switching attribution on early would pull
 		// 4.2 GB onto every machine in the fleet for an answer that needs no
 		// model at all. The gate is read LIVE, per published block, not captured
 		// — a list arriving on a later settings poll starts the download with no
 		// restart, which is the same live-re-check shape enc's own `gate`
 		// argument uses for the org's `features` toggle.
 		onBlockPublished = demandModelsForAttribution(onBlockPublished,
-			lastWorkstreams.knownNonEmpty, enc.demand, verifierEnc.demand)
+			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
 		// THE DELIVERY LEDGER hangs off the same hook, CHAINED rather than
 		// replacing: attribution's model-demand wrapper and the ledger both want
 		// to know a block published, and neither is the other's precondition.
@@ -1504,7 +1504,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     mode asks the service for no inference) or when enrichment is disabled
 //     entirely.
 //   - svc: the service facets (the non-inference sidecar routes — /analyze
-//     for workstreams, /pii for sensitivity). Wired in BOTH "auto" and
+//     for projects, /pii for sensitivity). Wired in BOTH "auto" and
 //     "deterministic", because neither needs a model — they are derived from
 //     the service client, not from the Model, which is why they are returned
 //     separately rather than left to facetsFor(model).
@@ -1757,13 +1757,13 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 // capability it loads lazily on its first inference. Deterministic mode issues
 // no inference, so nothing ever triggers that load — but /analyze still needs
 // a process to answer it. Not starting the service is what made this mode a
-// trap: it produced no workstreams at all and published a single
+// trap: it produced no projects at all and published a single
 // credential-derived facet.
 //
 // When a service EXISTS, the gate is SERVICE HEALTH, deliberately, and
 // neither alternative is acceptable: model warmth never arrives here (the
 // model never loads), so it would hold every job forever; and a trivially-true
-// gate would publish workstream-less profiles for every job that landed before
+// gate would publish project-less profiles for every job that landed before
 // the service finished starting, silently dropping their dimensions. Waiting
 // is right there because the work becomes doable shortly — the supervisor is
 // bringing the service up.
@@ -1776,7 +1776,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 // ever published — on what is the state of every machine before the sidecar
 // tarball is fetched. So that case takes noAnalysisService: a trivially-true
 // gate and zero service facets, leaving enrichment to run its other model-free
-// facets (credential detection) with the workstreams pass unregistered.
+// facets (credential detection) with the projects pass unregistered.
 //
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
@@ -1825,7 +1825,7 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, re
 // service that is present but not yet ready, and for "auto", where every facet
 // the mode produces needs the model. Here it buys nothing: no service will
 // appear this daemon lifetime, so jobs would queue and spool forever. The
-// caller pairs this gate with zero service facets, so the workstreams pass
+// caller pairs this gate with zero service facets, so the projects pass
 // never registers, sensitivity names itself in facets_degraded, and enrichment
 // runs its remaining model-free work, publishing pipeline_status "partial".
 // Those are dropped facets, reported dropped — not lower-fidelity substitutes

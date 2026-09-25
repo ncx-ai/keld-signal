@@ -26,7 +26,7 @@ BYTE-IDENTICAL when `KELD_DEV_BLOCKS` is unset -- see `main.py`'s `_blocks_block
     `Store.bin_seconds` in `store.py`.
 
 Every mode is digested through the SAME `blockdigest.digest` / `blockdigest.is_closed` the shipped
-cutter uses, so the WIRE SHAPE (`workstreams`, `inventory`, `effort`, `tokens`, `requests`,
+cutter uses, so the WIRE SHAPE (`projects`, `inventory`, `effort`, `tokens`, `requests`,
 `dynamics`, `prior`, ...) is identical regardless of `KELD_DEV_BLOCKS` -- only the SPAN and the
 boundary reasons differ. Reasons are deliberately NOT drawn from `blocks.REASONS`: that tuple is
 "what the shipped cutter can emit", and a dev-mode block is cut by something else entirely, so

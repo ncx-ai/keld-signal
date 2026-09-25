@@ -925,7 +925,7 @@ async def blocks(body: BlocksIn):
     Returns `{"blocks": [...], "watermark": ...}`. A block carries its span
     (`start`/`end`/`block_minutes`, epoch seconds — the unit `since_ts` is in), the two boundary
     reasons from the closed `blocks.REASONS` vocabulary, and the same analysis payload /analyze
-    publishes for a window: `workstreams`, `inventory`, `inventory_omitted`, `evidence`, `effort`,
+    publishes for a window: `projects`, `inventory`, `inventory_omitted`, `evidence`, `effort`,
     `dynamics`, `prior`. NO prompt ids: a block is (principal, session, span, reasons, facets),
     and the `covers` mapping that once carried them is deleted — see BlocksIn.
 
@@ -1402,19 +1402,19 @@ def install_vocabulary(body: VocabularyIn):
     return {"rejects": rejects}
 
 
-class WorkstreamsIn(BaseModel):
+class ProjectsIn(BaseModel):
     # The body key stays `projects`: a daemon and a sidecar ship on separate
     # cadences, and an older daemon posts `{"projects": [...]}`.
     projects: list[dict]
 
 
 @app.post("/projects")
-async def post_workstreams(body: WorkstreamsIn):
+async def post_projects(body: ProjectsIn):
     """Org project definitions for block attribution. A cache write, not
     inference — bypasses _dispatch for the same reason /vocabulary does.
     Embedding happens lazily on the first /attribute that needs vectors."""
     from app.analysis import attribution
-    h = attribution.set_workstreams(body.projects)
+    h = attribution.set_projects(body.projects)
     return {"count": len(body.projects), "hash": h}
 
 
@@ -1667,7 +1667,7 @@ def _verifier_manager():
         return wm
 
 
-def _verify_call(block_text, dims, workstream):
+def _verify_call(block_text, dims, project):
     """One verdict, via the dedicated verifier WorkerManager. The worker child is spawned
     lazily, on first call, by `_verifier_manager()`.
 
@@ -1679,7 +1679,7 @@ def _verify_call(block_text, dims, workstream):
     decision (AC-6)."""
     try:
         result = _verifier_manager().call({
-            "op": "verify", "block_text": block_text, "dims": dims or {}, "workstream": workstream,
+            "op": "verify", "block_text": block_text, "dims": dims or {}, "workstream": project,
         })
     except (WorkerTimeout, WorkerUnavailable, WorkerError):
         raise _VerifierUnavailable() from None
@@ -1700,8 +1700,8 @@ class _WorkerVerifier:
     executor thread already (called from `_attribute_blocking`), so blocking here blocks that
     thread, never the loop."""
 
-    def verify(self, block_text, dims, workstream):
-        return _verify_call(block_text, dims, workstream)
+    def verify(self, block_text, dims, project):
+        return _verify_call(block_text, dims, project)
 
 
 def _span_texts(path, start, end):
@@ -1774,10 +1774,10 @@ def _warm_encoder_async(child):
     something has to actually warm it or every sweep answers `pending` forever. This is that
     something, and it is not a second queue: it holds no block, no backlog and no state, and one
     thread runs at a time however many blocks arrive. The work it does is the work the next call
-    would otherwise pay first — `workstream_vectors` is memoised per project-list hash — so the
+    would otherwise pay first — `project_vectors` is memoised per project-list hash — so the
     spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller.
 
-    ⚠️ **THE SPAWN IS ASKED FOR, NEVER INFERRED FROM THE EMBEDDING.** `workstream_vectors` used to
+    ⚠️ **THE SPAWN IS ASKED FOR, NEVER INFERRED FROM THE EMBEDDING.** `project_vectors` used to
     be the whole of this function, and it brings the child up only as a SIDE EFFECT of having an
     encode to run — which it has exactly once per project list, because it is memoised on that
     list's hash. So the second time the child went down (`maybe_unload` kills it after ~5 idle
@@ -1795,7 +1795,7 @@ def _warm_encoder_async(child):
             # Independent of the memo below, and FIRST: a ready child is what the next sweep
             # needs, and it is needed even when every project doc is already embedded.
             child.warm()
-            attribution.workstream_vectors(_EncoderAdapter(child))
+            attribution.project_vectors(_EncoderAdapter(child))
         except Exception:      # noqa: BLE001 — a warm-up that failed is retried by the next sweep
             pass
 
@@ -2029,11 +2029,11 @@ async def attribute(body: AttributeIn):
                             detail="path is outside the configured transcript roots")
     from app.analysis import attribqueue, attribution, textembed
 
-    projects, _ = attribution.current_workstreams()
+    projects, _ = attribution.current_projects()
     if not projects:
         # Answered without opening anything: with nothing declared to match against, reading a
         # person's words would be reading them for no purpose.
-        return attribution.stated(attribution.STATUS_SKIPPED_NO_WORKSTREAMS)
+        return attribution.stated(attribution.STATUS_SKIPPED_NO_PROJECTS)
 
     # ⚠️ THE QUEUE IS CONSULTED BEFORE THE TRANSCRIPT IS OPENED, and the order is the point.
     # The daemon re-POSTs a `pending` block on every 45 s sweep, up to 24 of them, so a route
@@ -2220,7 +2220,7 @@ async def detect_pii(body: PiiIn):
 
 @app.post("/analyze")
 async def analyze(body: AnalyzeIn):
-    """Turn `span_minutes` of one transcript ending at `prompt_id` into the workstream +
+    """Turn `span_minutes` of one transcript ending at `prompt_id` into the project +
     inventory payload (see app.analysis.analyze.analyze_window). Coordinates in — a path and a
     prompt id — never text; the response itself carries no span/offset/text either (see
     test_analyze_response_carries_no_prompt_text).
@@ -2278,7 +2278,7 @@ async def analyze(body: AnalyzeIn):
         # the Go client's post() waits and retries through (sidecar/client.go: 503 -> wait +
         # retry with backoff, anything else -> ok=false), so this reads to the daemon as "not
         # ready yet, ask again" rather than as errAnalysisUnavailable, which would fail the
-        # workstreams facet and publish the profile as "partial" for a facet that was one
+        # projects facet and publish the profile as "partial" for a facet that was one
         # append away from succeeding. That is the same reasoning the enrich pipeline already
         # applies to a sidecar that is not ready: queue, never degrade.
         _count("analyze_not_ingested")
@@ -2289,7 +2289,7 @@ async def analyze(body: AnalyzeIn):
         # retrying can never help — whereas 503 is the one status the Go client's post() waits
         # and retries through, which would spin forever here. 410 falls into that client's
         # `default: return false, false` ("genuine error — do not spin forever"), so the
-        # workstreams facet fails and the profile publishes as `partial`. That is the honest
+        # projects facet fails and the profile publishes as `partial`. That is the honest
         # outcome for a facet whose inputs no longer exist, and it is the same idiom this
         # pipeline already uses for a pass that could not complete.
         #

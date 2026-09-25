@@ -2,7 +2,7 @@
 # check_vocabulary.sh — fails when a retired name comes back (AC-11 of
 # docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html).
 #
-# Signal names things the way Atlas does: a GROUP holds WORKSTREAMS, and the
+# Signal names things the way Atlas does: a GROUP holds PROJECTS, and the
 # repo/branch/model facets are DIMENSIONS. The denylist is the exact set of
 # names that were retired, so a hit is never a judgement call. A line may opt
 # out with the marker `vocab:keep` when it deliberately reads an OLD stored

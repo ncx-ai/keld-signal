@@ -1431,7 +1431,7 @@ func fakeAnalysisService(t *testing.T) (markerPath string, awaitPort func() int)
 // (/analyze, /match, /vocabulary), and GLiNER2 is one capability it loads lazily.
 // So deterministic mode starts the service and wires its window analyzer — it
 // just never asks for the model. Before this, wireEnrichment returned early
-// without a service, facetsFor(nil) was empty, the workstreams pass never
+// without a service, facetsFor(nil) was empty, the projects pass never
 // registered, and the mode published a single credential-derived facet.
 func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
@@ -1476,7 +1476,7 @@ func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 
 // TestDeterministicGateIsClosedUntilTheServiceIsUp pins the readiness gate to
 // service health rather than a trivially-true stub. A gate that always reported
-// ready would publish workstream-less profiles for every job that landed before
+// ready would publish project-less profiles for every job that landed before
 // the service finished starting — silently missing their dimensions. Worker
 // warmth is equally wrong here: the model never loads in this mode, so a warm
 // gate would hold every job forever.
@@ -1541,7 +1541,7 @@ func TestDeterministicGateIsClosedUntilTheServiceIsUp(t *testing.T) {
 // the sidecar tarball is fetched.
 //
 // With no binary, enrichment must instead run its other model-free facets
-// (credential detection) with the workstreams pass simply unregistered — the
+// (credential detection) with the projects pass simply unregistered — the
 // ordinary pipeline_status "partial" path, not a lower-fidelity substitute for
 // a facet. So: a trivially-true gate and a nil analyzer.
 func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
@@ -1567,7 +1567,7 @@ func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
 		t.Fatalf("deterministic mode must not wire a model, got %v", model)
 	}
 	if svc.Analyze != nil {
-		t.Fatal("with no service there is nothing to answer /analyze; the analyzer must be nil so the workstreams pass never registers")
+		t.Fatal("with no service there is nothing to answer /analyze; the analyzer must be nil so the projects pass never registers")
 	}
 	if svc.ScanPII != nil {
 		t.Fatal("with no service there is nothing to answer /pii; the scanner must be nil so sensitivity reports itself degraded rather than clean")
@@ -1692,7 +1692,7 @@ func TestDeterministicGateIsCachedNotOneHTTPCallPerRead(t *testing.T) {
 // user runs — still produces the non-inference service facets. Nothing else
 // did: the only auto-mode wiring test discards them and runs with the sidecar
 // deliberately absent (where empty is correct), so a refactor could return
-// nothing for auto, every claude_code user silently loses their workstream
+// nothing for auto, every claude_code user silently loses their project
 // dimensions and their PII detection, and the suite stays green.
 //
 // wireEnrichment's auto branch is a straight pass-through of what mlBackend
@@ -1725,7 +1725,7 @@ func TestMLBackendWiresTheServiceFacets(t *testing.T) {
 		t.Fatal("auto mode must wire a readiness gate")
 	}
 	if svc.Analyze == nil {
-		t.Fatal("auto mode must wire the window analyzer: the sidecar serves /analyze, so every claude_code job should get its workstream dimensions")
+		t.Fatal("auto mode must wire the window analyzer: the sidecar serves /analyze, so every claude_code job should get its project dimensions")
 	}
 	if svc.ScanPII == nil {
 		t.Fatal("auto mode must wire the PII scan: the sidecar serves /pii, and without it the sensitivity facet loses every entity type but credentials")

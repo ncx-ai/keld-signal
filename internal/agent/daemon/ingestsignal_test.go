@@ -61,7 +61,7 @@ func TestIngestSignalNeverBlocksTheWatcher(t *testing.T) {
 }
 
 // /analyze can only resolve a prompt id for a source the sidecar has a READER
-// for, so the workstreams pass is gated to DimensionsEligible sources.
+// for, so the projects pass is gated to DimensionsEligible sources.
 // (Codex joined that set on 2026-09-15; Gemini has not.) Ingesting a transcript whose windows
 // can never be served is pure cost — a whole-file parse and permanent store rows
 // for an answer nobody can ask for.

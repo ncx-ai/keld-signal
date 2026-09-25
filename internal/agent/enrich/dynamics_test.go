@@ -11,7 +11,7 @@ func b(v bool) *bool       { return &v }
 func f(v float64) *float64 { return &v }
 
 // The pass makes ONE /analyze call and publishes both of its halves: what the
-// window contains (workstreams) and how it is changing (dynamics). A second
+// window contains (projects) and how it is changing (dynamics). A second
 // call would double the cost of the facet for a block the first one already
 // computed.
 func TestDimensionsPassCarriesTheDynamics(t *testing.T) {
@@ -46,7 +46,7 @@ func TestDimensionsPassCarriesTheDynamics(t *testing.T) {
 
 // An analysis that produced no dynamics (an older sidecar, a window with no
 // series) must not put an empty object on the wire: absent and "we compared and
-// found nothing" are different facts, the same distinction the workstreams half
+// found nothing" are different facts, the same distinction the projects half
 // already draws.
 func TestDimensionsPassOmitsAbsentDynamics(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
@@ -66,7 +66,7 @@ func TestDimensionsPassOmitsAbsentDynamics(t *testing.T) {
 
 // End-to-end through the pipeline with NO Model at all — ml_backend
 // "deterministic". Dynamics ride the same model-free /analyze call the
-// workstreams facet does, so they must survive the mode that has no GLiNER2.
+// projects facet does, so they must survive the mode that has no GLiNER2.
 func TestRunPublishesDynamicsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),

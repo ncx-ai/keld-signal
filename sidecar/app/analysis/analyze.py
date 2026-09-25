@@ -1,4 +1,4 @@
-"""One window of a transcript, analysed into the workstream payload — as a QUERY, not a parse.
+"""One window of a transcript, analysed into the project payload — as a QUERY, not a parse.
 
 Takes COORDINATES, never text — the same rule as `spool.Pointer`. The window ENDS at the prompt
 and looks back, because the question a cost report asks is "what was this hour of work about",
@@ -39,7 +39,7 @@ answer, `/analyze` fails visibly and the caller retries.
 
 ## The effort block: two signals that are not references
 
-`workstreams`/`inventory` answer "what was this window about", and every value in them is a
+`projects`/`inventory` answer "what was this window about", and every value in them is a
 reference level. The `effort` block answers a different question — how much was AUTHORED and how
 fast the turns came — and neither answer is a reference, which is why it is a separate block
 rather than two more dimensions. Both come from material the reference levels structurally cannot
@@ -144,7 +144,7 @@ class StoreBehind(Exception):
 
 def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
                    sizer=None, end_ts=None, prior=False, resolved=None, block=False):
-    """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
+    """The `span_minutes` of work ending at `prompt_id` -> the project + inventory payload,
     served from the reference series.
 
     `end_ts` anchors the window at an INSTANT instead of at a prompt, and is what the tick uses
@@ -585,7 +585,7 @@ def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None, resolved=None):
     rows, pending, _n_lines = events_for_turns(turns, path, root, (), nlp, resolved=resolved)
     # `pending` is reconciled prose paths, not optional decoration: `file`/`dir`/`ext`/`lang`/
     # `component` rows are ONLY ever produced by reconcile() (see its module docstring), so
-    # skipping this step would leave the "language" workstream permanently unattributed.
+    # skipping this step would leave the "language" project permanently unattributed.
     recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
     # `rows`, not `rows + recon_rows`: a reconcile row copies its turn's timestamp, and the store
     # path excludes that slot (see `Store.turn_times`), so including it here would break the very

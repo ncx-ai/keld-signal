@@ -256,11 +256,11 @@ type Attributor struct {
 	// and a test driving drainOnce directly is likewise single-goroutine —
 	// so it needs no lock.
 	sweepOffset int
-	// workstreamsKnown / repostWorkstreams are the daemon's belief about the declared
+	// projectsKnown / repostProjects are the daemon's belief about the declared
 	// project list and the way to re-assert it — see WithProjects. Both nil in
 	// tests and in any caller that cannot answer.
-	workstreamsKnown  func() bool
-	repostWorkstreams func()
+	projectsKnown  func() bool
+	repostProjects func()
 	// emitter is optional (see WithEmitter). A quarantine emits through it,
 	// because a debuglog line on one machine is invisible to the fleet.
 	emitter *clientevents.Emitter
@@ -291,7 +291,7 @@ func New(st *Store, cl AttributeClient, pub blocks.Sender, facts blocks.Facts, a
 	return &Attributor{st: st, cl: cl, pub: pub, facts: facts, actor: actor, dig: dig, nudge: make(chan struct{}, 1)}
 }
 
-// WithWorkstreams wires the daemon's own belief about the declared project list
+// WithProjects wires the daemon's own belief about the declared project list
 // into the loop. Optional — an Attributor without it treats
 // `skipped:no_projects` as terminal, which is correct only for a caller that
 // genuinely cannot tell.
@@ -309,8 +309,8 @@ func New(st *Store, cl AttributeClient, pub blocks.Sender, facts blocks.Facts, a
 //
 // known reports whether the daemon believes projects are declared; repost asks
 // it to tell the sidecar again. Both may be nil independently.
-func (a *Attributor) WithWorkstreams(known func() bool, repost func()) *Attributor {
-	a.workstreamsKnown, a.repostWorkstreams = known, repost
+func (a *Attributor) WithProjects(known func() bool, repost func()) *Attributor {
+	a.projectsKnown, a.repostProjects = known, repost
 	return a
 }
 
@@ -347,7 +347,7 @@ func (a *Attributor) WithQuarantineHook(fn func(sessionID string, start float64)
 // The /attribute response also carries `concepts`, which are phrases lifted
 // from the block's own words; those ride the published row and must not enter
 // an observer that exists to feed a local record keyed by identifiers. The
-// same rule WorkstreamAttribution itself is held to one package over.
+// same rule ProjectAttribution itself is held to one package over.
 type Outcome struct {
 	SessionID string
 	Start     float64
@@ -357,9 +357,9 @@ type Outcome struct {
 	// already matched against the closed set (an unrecognised one is a
 	// genuine error and reaches retryOrQuarantine instead).
 	Status string
-	// WorkstreamID and Confidence are set only for enrich.WorkstreamsAttributed.
-	WorkstreamID string
-	Confidence   float64
+	// ProjectID and Confidence are set only for enrich.ProjectsAttributed.
+	ProjectID  string
+	Confidence float64
 }
 
 // WithOutcomeHook wires a nil-safe observer of every ANSWER the sidecar gives
@@ -388,14 +388,14 @@ func (a *Attributor) noteOutcome(j Job, status string, res sidecar.AttributeResu
 		return
 	}
 	o := Outcome{SessionID: j.SessionID, Start: j.Start, Status: status}
-	if status == enrich.WorkstreamsAttributed && len(res.Workstreams) > 0 {
+	if status == enrich.ProjectsAttributed && len(res.Projects) > 0 {
 		// The first entry is the winner: the sidecar ranks Projects by score
 		// and everything within MARGIN of the top is assigned, so index 0 is
 		// the top-scoring id. A second entry is a co-assignment, not a
 		// competitor to choose between — and choosing between them is exactly
 		// what this path must not do.
-		o.WorkstreamID = res.Workstreams[0].ID
-		o.Confidence = res.Workstreams[0].Confidence
+		o.ProjectID = res.Projects[0].ID
+		o.Confidence = res.Projects[0].Confidence
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -522,9 +522,9 @@ func (a *Attributor) sweepSlice(all []Job) []Job {
 // drainJob resolves one job's block, asks the sidecar to attribute it, and
 // acts on the CLOSED vocabulary of statuses enrich/attribution.go declares:
 //
-//   - WorkstreamsPending: re-spool UNCHANGED, no attempt consumed (the amended
+//   - ProjectsPending: re-spool UNCHANGED, no attempt consumed (the amended
 //     rule — see the package comment).
-//   - WorkstreamsDegradedWeights: the sidecar answered, but with its embedding
+//   - ProjectsDegradedWeights: the sidecar answered, but with its embedding
 //     weights unavailable — the SAME condition pending exists to protect
 //     against (weights mid-download), reached through a different status.
 //     Publish the degraded row EXACTLY ONCE (it states its own degradation;
@@ -533,7 +533,7 @@ func (a *Attributor) sweepSlice(all []Job) []Job {
 //     weights finish provisioning, without re-sending an identical row every
 //     interval for the whole download. An attempt is consumed only if the
 //     ONE publish itself fails, matching every other publish failure (I2).
-//   - WorkstreamsAttributed / WorkstreamsSkippedDisabled / WorkstreamsSkippedNone:
+//   - ProjectsAttributed / ProjectsSkippedDisabled / ProjectsSkippedNoProjects:
 //     terminal. Publish, then delete the job.
 //   - anything else: a status this side cannot recognise is a GENUINE ERROR,
 //     not a silent success — the sidecar is frozen and shipped separately, so
@@ -584,27 +584,27 @@ func (a *Attributor) drainJob(j Job) {
 		a.retryOrQuarantine(j, "sidecar /attribute call failed")
 		return
 	}
-	if res.Status == enrich.WorkstreamsSkippedNone && a.workstreamsKnown != nil && a.workstreamsKnown() {
+	if res.Status == enrich.ProjectsSkippedNoProjects && a.projectsKnown != nil && a.projectsKnown() {
 		// C4/I8: the daemon holds a project list, so this is a statement about
 		// the SIDECAR (restarted and lost its module state, or not told yet
 		// because the startup POST is still in flight) — never about the org.
 		// Hold and re-assert, rather than publish-and-delete, which is
 		// irreversible.
-		if a.repostWorkstreams != nil && !a.repostedThisSweep {
+		if a.repostProjects != nil && !a.repostedThisSweep {
 			a.repostedThisSweep = true
-			a.repostWorkstreams()
+			a.repostProjects()
 		}
 		a.hold(j, "skipped:no_projects while the daemon holds a project list")
 		return
 	}
 	switch res.Status {
-	case enrich.WorkstreamsPending:
+	case enrich.ProjectsPending:
 		// ⚠️ AMENDED RULE: pending does NOT consume an attempt. Re-spool j
 		// UNCHANGED (Attempts untouched) rather than the incremented copy
 		// retryOrQuarantine would write.
 		a.noteOutcome(j, res.Status, res)
 		a.hold(j, "pending")
-	case enrich.WorkstreamsDegradedWeights:
+	case enrich.ProjectsDegradedWeights:
 		// NB2: publish ONCE, marked by DegradedPublished, then hold
 		// silently on every later sweep — never re-send the identical row
 		// for the whole provisioning window.
@@ -630,7 +630,7 @@ func (a *Attributor) drainJob(j Job) {
 		// would make the record go stale rather than quiet.
 		a.noteOutcome(j, res.Status, res)
 		a.hold(j, "degraded:weights_unavailable")
-	case enrich.WorkstreamsAttributed, enrich.WorkstreamsSkippedDisabled, enrich.WorkstreamsSkippedNone:
+	case enrich.ProjectsAttributed, enrich.ProjectsSkippedDisabled, enrich.ProjectsSkippedNoProjects:
 		if err := a.republish(j, b, res); err != nil {
 			a.hold(j, "publish failed")
 			return
@@ -653,8 +653,8 @@ func (a *Attributor) drainJob(j Job) {
 // one-row batch. Shared by every branch of drainJob that has a terminal (or
 // degraded-but-statable) answer to publish.
 func (a *Attributor) republish(j Job, b enrich.BlockCharacterisation, res sidecar.AttributeResult) error {
-	row := publish.WithWorkstreams(publish.BuildBlock(b, a.actor, time.Now()),
-		res.Workstreams, res.Status, res.Attribution, res.Concepts)
+	row := publish.WithProjects(publish.BuildBlock(b, a.actor, time.Now()),
+		res.Projects, res.Status, res.Attribution, res.Concepts)
 	return a.pub.SendBlocks([]publish.BlockEnrichment{row})
 }
 
@@ -775,11 +775,11 @@ func closeEnough(a, b float64) bool {
 }
 
 // dimsFrom builds the /attribute call's dims argument from a block's own
-// already-computed workstream dimensions (repo, branch, ...) — the caller's
+// already-computed project dimensions (repo, branch, ...) — the caller's
 // own facts, passed through rather than re-derived, per the sidecar contract.
 //
 // ⚠️ THE STATUS IS PART OF THE VALUE AND READING ONE WITHOUT THE OTHER IS I6.
-// A workstream dimension publishes `value` alongside a `status` from
+// A project dimension publishes `value` alongside a `status` from
 // enrich.DimensionStatuses, and only "attributed" may be read as the window's
 // answer — enrich/types.go states that contract in as many words, and says a
 // consumer rendering `thin` identically to `attributed` is misreporting. This

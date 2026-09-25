@@ -30,15 +30,15 @@ func (f *fakeClient) Attribute(path, sessionID string, start, end float64, dims 
 	return f.res, f.ok
 }
 
-func successClient(workstreamID string) *fakeClient {
+func successClient(projectID string) *fakeClient {
 	return &fakeClient{ok: true, res: sidecar.AttributeResult{
-		Status:      enrich.WorkstreamsAttributed,
-		Workstreams: []enrich.WorkstreamAttribution{{ID: workstreamID, Confidence: 0.9, Source: "embedding"}},
+		Status:   enrich.ProjectsAttributed,
+		Projects: []enrich.ProjectAttribution{{ID: projectID, Confidence: 0.9, Source: "embedding"}},
 	}}
 }
 
 func pendingClient() *fakeClient {
-	return &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsPending}}
+	return &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsPending}}
 }
 
 func errorClient() *fakeClient {
@@ -175,7 +175,7 @@ func TestAttributionJobSurvivesRestart(t *testing.T) {
 			"this must publish BEFORE deleting, not the other way around")
 	}
 	row := sender.sent[0][0]
-	if row.WorkstreamsStatus != enrich.WorkstreamsAttributed || len(row.Workstreams) != 1 || row.Workstreams[0].ID != "proj_pay" {
+	if row.ProjectsStatus != enrich.ProjectsAttributed || len(row.Projects) != 1 || row.Projects[0].ID != "proj_pay" {
 		t.Fatalf("row = %+v", row)
 	}
 	if row.SessionID != "s1" {
@@ -341,19 +341,19 @@ func TestPublishFailureHoldsTheJobWithoutConsumingAnAttempt(t *testing.T) {
 // terminal: it must publish (carrying the status) and delete the job, never
 // retry — this is what stops a machine with no declared projects from
 // spinning on every block forever.
-func TestSkippedNoWorkstreamsIsTerminalNotRetried(t *testing.T) {
+func TestSkippedNoProjectsIsTerminalNotRetried(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	sender := &fakeSender{}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsSkippedNone}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
 	dig := digesterFor("s1", 1, 2)
 	a := New(st, cl, sender, nil, "actor@x", dig)
 	a.drainOnce(context.Background())
 
-	if len(sender.sent) != 1 || sender.sent[0][0].WorkstreamsStatus != enrich.WorkstreamsSkippedNone {
+	if len(sender.sent) != 1 || sender.sent[0][0].ProjectsStatus != enrich.ProjectsSkippedNoProjects {
 		t.Fatalf("expected one terminal publish, got %+v", sender.sent)
 	}
 	if left, _ := st.List(); len(left) != 0 {
@@ -376,7 +376,7 @@ func TestDegradedWeightsUnavailablePublishesAndHoldsWithoutConsumingAnAttempt(t 
 		t.Fatalf("Put: %v", err)
 	}
 	sender := &fakeSender{}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsDegradedWeights}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsDegradedWeights}}
 	dig := digesterFor("s1", 1, 2)
 	a := New(st, cl, sender, nil, "actor@x", dig)
 	ctx := context.Background()
@@ -406,8 +406,8 @@ func TestDegradedWeightsUnavailablePublishesAndHoldsWithoutConsumingAnAttempt(t 
 		t.Fatalf("published %d times across %d drains, want exactly 1 (publish once, then hold silently)",
 			len(sender.sent), MaxAttempts*3)
 	}
-	if sender.sent[0][0].WorkstreamsStatus != enrich.WorkstreamsDegradedWeights {
-		t.Fatalf("published status = %q, want %q", sender.sent[0][0].WorkstreamsStatus, enrich.WorkstreamsDegradedWeights)
+	if sender.sent[0][0].ProjectsStatus != enrich.ProjectsDegradedWeights {
+		t.Fatalf("published status = %q, want %q", sender.sent[0][0].ProjectsStatus, enrich.ProjectsDegradedWeights)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestDegradedThenAttributedStillPublishesTheTerminalRow(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	sender := &fakeSender{}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsDegradedWeights}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsDegradedWeights}}
 	dig := digesterFor("s1", 1, 2)
 	a := New(st, cl, sender, nil, "actor@x", dig)
 	ctx := context.Background()
@@ -432,15 +432,15 @@ func TestDegradedThenAttributedStillPublishesTheTerminalRow(t *testing.T) {
 	}
 
 	// Weights finish provisioning: the sidecar now answers attributed.
-	cl.res = sidecar.AttributeResult{Status: enrich.WorkstreamsAttributed,
-		Workstreams: []enrich.WorkstreamAttribution{{ID: "proj_pay", Confidence: 0.9, Source: "embedding"}}}
+	cl.res = sidecar.AttributeResult{Status: enrich.ProjectsAttributed,
+		Projects: []enrich.ProjectAttribution{{ID: "proj_pay", Confidence: 0.9, Source: "embedding"}}}
 	a.drainOnce(ctx)
 
 	if len(sender.sent) != 2 {
 		t.Fatalf("expected a second publish for the terminal answer, got %d total", len(sender.sent))
 	}
-	if sender.sent[1][0].WorkstreamsStatus != enrich.WorkstreamsAttributed {
-		t.Fatalf("second publish status = %q, want %q", sender.sent[1][0].WorkstreamsStatus, enrich.WorkstreamsAttributed)
+	if sender.sent[1][0].ProjectsStatus != enrich.ProjectsAttributed {
+		t.Fatalf("second publish status = %q, want %q", sender.sent[1][0].ProjectsStatus, enrich.ProjectsAttributed)
 	}
 	if left, _ := st.List(); len(left) != 0 {
 		t.Fatalf("job should be deleted once attributed, %d left", len(left))
@@ -626,7 +626,7 @@ func (c *recordingPendingClient) Attribute(path, sessionID string, start, end fl
 	c.mu.Lock()
 	c.seen[start] = true
 	c.mu.Unlock()
-	return sidecar.AttributeResult{Status: enrich.WorkstreamsPending}, true
+	return sidecar.AttributeResult{Status: enrich.ProjectsPending}, true
 }
 
 // NB3 (round 2 review): a job held indefinitely (pending, or degraded before
@@ -690,17 +690,17 @@ func TestEnabledMirrorsBlocksEnabledShape(t *testing.T) {
 // attributed to nothing and the job is DELETED, so nothing can ever repair it.
 // While the daemon believes projects are declared, the job must be HELD and the
 // list re-asserted instead.
-func TestSkippedNoWorkstreamsIsHeldWhileTheDaemonBelievesWorkstreamsExist(t *testing.T) {
+func TestSkippedNoProjectsIsHeldWhileTheDaemonBelievesProjectsExist(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	sender := &fakeSender{}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsSkippedNone}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
 	reposts := 0
 	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2)).
-		WithWorkstreams(func() bool { return true }, func() { reposts++ })
+		WithProjects(func() bool { return true }, func() { reposts++ })
 
 	// Driven well past MaxAttempts: a held job must never age into a quarantine.
 	for i := 0; i < MaxAttempts+2; i++ {
@@ -727,16 +727,16 @@ func TestSkippedNoWorkstreamsIsHeldWhileTheDaemonBelievesWorkstreamsExist(t *tes
 // The other side of the same switch: with NO project list known, the status is
 // the honest terminal answer it always was. Pins that the fix did not turn a
 // machine that genuinely declares nothing into one that spins forever.
-func TestSkippedNoWorkstreamsStaysTerminalWhenNoWorkstreamsAreKnown(t *testing.T) {
+func TestSkippedNoProjectsStaysTerminalWhenNoProjectsAreKnown(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	sender := &fakeSender{}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsSkippedNone}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
 	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2)).
-		WithWorkstreams(func() bool { return false }, func() { t.Fatal("nothing to re-post") })
+		WithProjects(func() bool { return false }, func() { t.Fatal("nothing to re-post") })
 	a.drainOnce(context.Background())
 
 	if len(sender.sent) != 1 {
@@ -847,7 +847,7 @@ func TestAnUnreadableTranscriptConsumesAnAttemptAndEventuallyQuarantines(t *test
 // sidecar that lost one list — so the re-post is collapsed to at most one per
 // sweep. Ungated, a backlog produced up to maxPerSweep (24) identical POSTs,
 // each a synchronous 30-second-budgeted call serialised inside the drain loop.
-func TestTheWorkstreamListIsRePostedAtMostOncePerSweep(t *testing.T) {
+func TestTheProjectListIsRePostedAtMostOncePerSweep(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	for i := 0; i < 5; i++ {
@@ -856,10 +856,10 @@ func TestTheWorkstreamListIsRePostedAtMostOncePerSweep(t *testing.T) {
 			t.Fatalf("Put: %v", err)
 		}
 	}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsSkippedNone}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
 	reposts := 0
 	a := New(st, cl, &fakeSender{}, nil, "actor@x", &multiBlockDigester{sessionID: "s1"}).
-		WithWorkstreams(func() bool { return true }, func() { reposts++ })
+		WithProjects(func() bool { return true }, func() { reposts++ })
 
 	a.drainOnce(context.Background())
 	if cl.calls != 5 {

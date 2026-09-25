@@ -15,7 +15,7 @@ import time
 from app.analysis import attribution
 from app.analysis import concepts as concepts_mod
 
-WORKSTREAMS = [
+PROJECTS = [
     {"id": "proj_pay", "title": "Payments", "team": "Eng",
      "description": "Stripe billing migration.", "repos": ["acme-billing"],
      "keywords": ["stripe"], "ticket_key": "PAY"},
@@ -31,14 +31,14 @@ class PayEncoder:
 
 
 class StubVerifier:
-    def verify(self, block_text, dims, workstream):
+    def verify(self, block_text, dims, project):
         return True, 0.01
 
 
 # --- the decision ---------------------------------------------------------------------------
 
 def test_attributed_full_path():               # AC-3
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(
         ["stripe webhook retries again"], {"repo": "acme-billing"},
         encoder=PayEncoder(), verifier_obj=StubVerifier())
@@ -50,7 +50,7 @@ def test_attributed_full_path():               # AC-3
 
 
 def test_weights_absent_is_degraded():         # AC-4 (AMENDED 2026-09-01)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(
         ["fix PAY-12 dunning"], {"repo": "acme-billing"}, encoder=None, verifier_obj=None)
     assert out["status"] == "degraded:weights_unavailable"
@@ -59,14 +59,14 @@ def test_weights_absent_is_degraded():         # AC-4 (AMENDED 2026-09-01)
     assert out["attribution"]["encoder_state"] == "absent"
 
 
-def test_no_workstreams_is_skipped():             # AC-1 status
-    attribution.set_workstreams([])
+def test_no_projects_is_skipped():             # AC-1 status
+    attribution.set_projects([])
     out = attribution.attribute_block(["anything"], {}, encoder=PayEncoder(), verifier_obj=None)
     assert out["status"] == "skipped:no_projects" and out["projects"] == []
 
 
 def test_source_labels():
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(
         ["stripe webhook retries again"], {}, encoder=PayEncoder(), verifier_obj=None)
     assert out["projects"][0]["source"] in ("embedding", "metadata", "verifier")
@@ -76,7 +76,7 @@ def test_a_span_with_no_text_in_either_stream_is_terminal_not_pending():
     """A closed block can hold no words at all. The encoder has nothing to embed and no later
     sweep can change that, so the answer is the benchmarked path's own empty answer — never
     `pending`, which would have the daemon retry a block that can never move."""
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block([], {"repo": "acme-billing"},
                                       encoder=PayEncoder(), verifier_obj=None)
     assert out["status"] == "attributed" and out["projects"] == []
@@ -90,7 +90,7 @@ def test_a_span_with_only_assistant_text_is_scored_not_terminal():
     2026-09-03 this was terminal-empty by construction — 24 of 25 such blocks on a real machine
     had assistant text and none could be attributed. Now the assistant stream is scored, and
     `concepts` receives NO vectors (there are no user words to lift phrases from)."""
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block([], {}, encoder=PayEncoder(), verifier_obj=None,
                                       asst_texts=["I migrated the stripe webhooks for you"])
     assert out["status"] == "attributed", out
@@ -99,9 +99,9 @@ def test_a_span_with_only_assistant_text_is_scored_not_terminal():
     assert out["attribution"]["centred"] is False and out["attribution"]["background_n"] == 0
 
 
-# Its own project list so the vector cache is COLD here: `workstream_vectors` memoises per content
+# Its own project list so the vector cache is COLD here: `project_vectors` memoises per content
 # hash, so a list another test already embedded would be scored against that test's encoder.
-MID_WORKSTREAMS = [{"id": "proj_mid", "title": "Ambiguity", "team": "Eng",
+MID_PROJECTS = [{"id": "proj_mid", "title": "Ambiguity", "team": "Eng",
                  "description": "Work that lands in the band.", "repos": [], "keywords": []}]
 
 
@@ -127,7 +127,7 @@ def test_verifier_absent_states_which_absence():   # AC-6
     """`opted_out` (the operator switched it off) and `unavailable` (it was needed and could
     not run) are different facts. An implementation reporting the first for both looks right
     on every other test here."""
-    attribution.set_workstreams(MID_WORKSTREAMS)
+    attribution.set_projects(MID_PROJECTS)
     opted = attribution.attribute_block(["ambiguous"], {}, encoder=MidEncoder(),
                                         verifier_obj=None)
     assert opted["attribution"]["verifier"] == "opted_out", opted["attribution"]
@@ -156,7 +156,7 @@ def test_the_answer_carries_no_text_OUTSIDE_concepts():
         `TOP_K` entries, never as a span and never as an offset.
 
     The third of those is why `concepts` sits beside `attribution` rather than inside it."""
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(["stripe webhook retries again"], {"repo": "acme-billing"},
                                       encoder=PayEncoder(), verifier_obj=StubVerifier())
     # The project side and the caller's dims: absolute, unchanged.
@@ -304,7 +304,7 @@ def test_the_route_is_confined_to_the_analyze_roots():
     the handler, before the projects check — so a machine with no projects still refuses."""
     m = _main()
     path = _transcript()
-    attribution.set_workstreams([])
+    attribution.set_projects([])
     os.environ["KELD_ANALYZE_ROOTS"] = os.path.join(_TMP, "elsewhere")
     try:
         _call(m, path=path, start=T0, end=T0 + 600)
@@ -313,11 +313,11 @@ def test_the_route_is_confined_to_the_analyze_roots():
         assert exc.status_code == 403, exc.status_code
 
 
-def test_no_workstreams_answers_without_opening_the_transcript():
+def test_no_projects_answers_without_opening_the_transcript():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams([])
+    attribution.set_projects([])
     out = _call(m, path=os.path.join(os.path.dirname(path), "does-not-exist.jsonl"),
                 start=T0, end=T0 + 600)
     assert out["status"] == "skipped:no_projects" and out["projects"] == []
@@ -335,7 +335,7 @@ def test_the_route_reads_both_streams_inside_the_span_and_adapts_the_real_encode
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     child = FakeChild()
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
@@ -374,7 +374,7 @@ def test_a_cold_encoder_answers_pending_and_warms_off_the_request():
     _with_roots(path)
     # A project list no other test has embedded, so the warm-up has real work to do: the vector
     # cache is per content hash and a warm one would make this test pass on nothing.
-    attribution.set_workstreams([dict(WORKSTREAMS[0], id="proj_cold", title="Cold Start")])
+    attribution.set_projects([dict(PROJECTS[0], id="proj_cold", title="Cold Start")])
     child = FakeChild(state="down")
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
@@ -392,11 +392,11 @@ def test_a_cold_encoder_answers_pending_and_warms_off_the_request():
     assert child.seen, "the cold path must bring the encoder up off the request"
 
 
-def test_a_down_child_is_warmed_even_when_every_workstream_doc_is_already_embedded():
+def test_a_down_child_is_warmed_even_when_every_project_doc_is_already_embedded():
     """⚠️ **THE LIVELOCK.** The test above deliberately uses a project list nothing has embedded,
     so the warm-up has real work to do — which means it never covered the state the sidecar spends
     almost all of its life in: the project vectors ARE cached, because they were cached the first
-    time a block arrived, and `workstream_vectors` is memoised on the list's hash.
+    time a block arrived, and `project_vectors` is memoised on the list's hash.
 
     In that state the old warm-up encoded nothing, so it spawned nothing, so `/attribute` answered
     `pending` on a child that nothing would ever start. The encoder had been killed for being idle
@@ -408,11 +408,11 @@ def test_a_down_child_is_warmed_even_when_every_workstream_doc_is_already_embedd
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     # Exactly the production state: the docs for THIS project list are already embedded — by an
     # earlier child, now killed for being idle — so the memo answers and no encode is reachable
     # through it.
-    attribution.workstream_vectors(m._EncoderAdapter(FakeChild()))
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))
     child = FakeChild(state="down")
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
@@ -437,10 +437,10 @@ def test_the_pending_loop_ends_after_one_sweep_rather_than_never():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     # Embedded by the child that has since been idle-killed: same vectors, so the scoring below
     # is the real comparison rather than two fakes talking past each other.
-    attribution.workstream_vectors(m._EncoderAdapter(FakeChild()))
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))
     child = FakeChild(state="down")
     DIMS = {"repo": "acme-billing"}                    # what the daemon sends with a real block
     was = m._text_source
@@ -476,8 +476,8 @@ def test_the_warm_up_spawns_through_the_REAL_encoder_not_only_the_fake():
 
     m = _main()
     _with_roots(_transcript())
-    attribution.set_workstreams(WORKSTREAMS)
-    attribution.workstream_vectors(m._EncoderAdapter(FakeChild()))     # the memo is warm
+    attribution.set_projects(PROJECTS)
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))     # the memo is warm
 
     class Q:
         def __init__(self, answers=None):
@@ -514,7 +514,7 @@ def test_an_encoder_that_cannot_answer_is_pending_not_a_wrong_answer():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     child = FakeChild(state="ready", status="degraded:encoder_unavailable")
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
@@ -535,7 +535,7 @@ def test_absent_weights_state_degraded_and_attribute_nothing():   # AC-4, amende
     path = _transcript()
     _with_roots(path)
     os.environ["KELD_TEXTEMBED_DIR"] = os.path.join(_TMP, "no-such-weights")
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     was = m._text_source
     m._text_source = lambda: FakeSource(FakeChild())
     try:
@@ -552,7 +552,7 @@ def test_the_encoder_being_switched_off_is_stated():   # AC-6
     path = _transcript()
     _with_roots(path)
     os.environ["KELD_TEXTEMBED"] = "0"
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     try:
         out = _call(m, path=path, start=T0, end=T0 + 600, dims={})
     finally:
@@ -560,7 +560,7 @@ def test_the_encoder_being_switched_off_is_stated():   # AC-6
     assert out["status"] == "skipped:disabled" and out["projects"] == [], out
 
 
-BAND_WORKSTREAMS = [{"id": "proj_band", "title": "Borderline", "team": "Eng",
+BAND_PROJECTS = [{"id": "proj_band", "title": "Borderline", "team": "Eng",
                   "description": "Work that lands in the band.", "repos": [], "keywords": []}]
 
 
@@ -586,7 +586,7 @@ class BandChild(FakeChild):
         return out, "ok"
 
 
-def test_the_verifier_is_called_once_per_borderline_workstream():   # AC-5
+def test_the_verifier_is_called_once_per_borderline_project():   # AC-5
     """The one genuine inference on this route. `_verify_call` is the seam through which every
     verdict rides its own dedicated worker child (`_WorkerVerifier` -> `_verifier_manager()` ->
     a `WorkerManager` distinct from GLiNER2's — see `worker.py`/`worker_manager.py`); stubbing
@@ -595,7 +595,7 @@ def test_the_verifier_is_called_once_per_borderline_workstream():   # AC-5
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(BAND_WORKSTREAMS)
+    attribution.set_projects(BAND_PROJECTS)
     # The verifier is OFF by default (2026-09-03); this test is ABOUT the verifier path, so it
     # opts in the way an operator would. Without this the route answers `opted_out` and
     # `_verify_call` is never reached — which would pass the "called once" check vacuously.
@@ -603,7 +603,7 @@ def test_the_verifier_is_called_once_per_borderline_workstream():   # AC-5
     calls = []
     was_source, was_verify = m._text_source, m._verify_call
     m._text_source = lambda: FakeSource(BandChild())
-    m._verify_call = lambda text, dims, workstream: (calls.append(workstream["id"]), (True, 0.02))[1]
+    m._verify_call = lambda text, dims, project: (calls.append(project["id"]), (True, 0.02))[1]
     # A file where the GGUF would be: `weights_path()` stats it, and `_verify_call` — the only
     # thing that would ever open it — is stubbed, so nothing loads a model here.
     os.environ["KELD_VERIFIER_GGUF"] = path
@@ -634,13 +634,13 @@ def test_a_verifier_that_cannot_load_degrades_and_says_so():   # AC-6
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(BAND_WORKSTREAMS)
+    attribution.set_projects(BAND_PROJECTS)
     was_source, was_verify = m._text_source, m._verify_call
     m._text_source = lambda: FakeSource(BandChild())
     os.environ["KELD_ATTRIBUTION_VERIFIER"] = "1"   # default is OFF; this test needs it wanted
     os.environ["KELD_VERIFIER_GGUF"] = path
 
-    def boom(text, dims, workstream):
+    def boom(text, dims, project):
         raise m._VerifierUnavailable()
 
     m._verify_call = boom
@@ -663,7 +663,7 @@ def test_an_unreadable_transcript_is_refused_rather_than_answered():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     was = m._text_source
     m._text_source = lambda: FakeSource(FakeChild())
     try:
@@ -707,7 +707,7 @@ def test_the_route_answers_pending_immediately_while_the_encoder_is_busy():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
 
     class NeverAnswers(FakeChild):
         def encode(self, texts, on_batch=None):
@@ -734,7 +734,7 @@ def test_re_asking_for_a_queued_block_does_not_read_the_transcript_again():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     was_source, was_span = m._text_source, m._span_texts
     reads = []
     m._text_source = lambda: FakeSource(FakeChild())
@@ -758,7 +758,7 @@ def test_the_stored_answer_is_returned_on_a_later_call_and_only_once():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     was = m._text_source
     m._text_source = lambda: FakeSource(FakeChild())
     try:
@@ -784,7 +784,7 @@ def test_the_worker_beats_once_per_batch_so_the_watchdog_can_see_it():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     child = FakeChild()
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
@@ -805,14 +805,14 @@ def test_the_terminal_statuses_are_still_answered_without_the_queue():
 
     # no projects declared
     _with_roots(path)
-    attribution.set_workstreams([])
+    attribution.set_projects([])
     out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
     assert out["status"] == "skipped:no_projects", out
     assert m._ATTRIB_QUEUE.stats()["waiting"] == 0, "a decidable block was queued"
 
     # the text encoder is switched off on this machine
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     was = m._text_source
     m._text_source = lambda: None
     try:
@@ -842,7 +842,7 @@ def test_a_quarantined_block_stops_being_pending():
     m = _main()
     path = _transcript()
     _with_roots(path)
-    attribution.set_workstreams(WORKSTREAMS)
+    attribution.set_projects(PROJECTS)
     q = m._ATTRIB_QUEUE
     was = m._text_source
     m._text_source = lambda: FakeSource(FakeChild())

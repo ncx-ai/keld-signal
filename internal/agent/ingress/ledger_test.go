@@ -37,7 +37,7 @@ func TestLedgerRouteReturnsContractShape(t *testing.T) {
 		CacheCreationTokens: 86736, RequestTokens: 41000, Requests: 12,
 		Model: "claude-opus-4-8", EstimateUSD: 1.84,
 	}, at)
-	store.Attribute(k, ledger.Attributed{WorkstreamID: "p_keld_signal", Method: ledger.MethodRepo}, ledger.ReasonNone, at)
+	store.Attribute(k, ledger.Attributed{ProjectID: "p_keld_signal", Method: ledger.MethodRepo}, ledger.ReasonNone, at)
 	store.Sent(k, at)
 	store.Failed(k, ledger.StageReceived, ledger.ReasonAtlasRejected, 401, at)
 	store.SetHealth(ledger.Health{Key: ledger.HealthDaemon, Status: ledger.StatusOK, Detail: "2.5.0", At: at})

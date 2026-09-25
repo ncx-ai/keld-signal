@@ -26,23 +26,23 @@ type Remote struct {
 	// auto-update target. A nil block means NO UPDATES; see release.go for why
 	// that is the strictest reading of the omitted-key rule in this file.
 	Release *Release `json:"agent_release"`
-	// Workstreams is the org's project-definition list for on-device block
+	// Projects is the org's project-definition list for on-device block
 	// attribution. A pointer so an absent key ("Atlas does not serve this
 	// yet") is distinct from an explicit empty list.
 	//
 	// ⚠️ **ATLAS SERVES THIS NOW, and this comment used to say it did not.**
 	// Verified against keld-atlas on 2026-09-04: `_org_settings` fills the key
 	// from `services/workstream_attribution.wire_projects`, which POOLS every
-	// authored workstream's VALUES into one flat list — deliberately, so
-	// attribution runs one competition rather than one per workstream. Two
+	// authored project's VALUES into one flat list — deliberately, so
+	// attribution runs one competition rather than one per project. Two
 	// consequences the shape does not announce:
-	//   - `Team` carries the WORKSTREAM'S NAME when a value has no owning team,
+	//   - `Team` carries the PROJECT'S NAME when a value has no owning team,
 	//     so it is the only way to recover which bucket a value belongs to.
 	//   - `Keywords` are the value's authored tags with their PREFIX STRIPPED:
 	//     an admin types `repository: acme/web` and this field receives
 	//     `acme/web`. A deterministic repo rule must therefore match by SHAPE,
 	//     never by a prefix that does not survive the wire.
-	// See internal/atlas.FromRemoteWorkstreams, which regroups them, and
+	// See internal/atlas.FromRemoteProjects, which regroups them, and
 	// docs/v3/contracts.md for what is still missing (a write path).
-	Workstreams *[]RemoteWorkstream `json:"projects"`
+	Projects *[]RemoteProject `json:"projects"`
 }

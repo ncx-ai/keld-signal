@@ -246,12 +246,12 @@ func TestCutPendingRejectsFreeTextReason(t *testing.T) {
 
 // --- Attribute --------------------------------------------------------------
 
-func TestAttributeOKShowsWorkstreamAndMethod(t *testing.T) {
+func TestAttributeOKShowsProjectAndMethod(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "s8", Start: 8000}
 	s.Cut(k, 8060, "idle", "budget", "claude_code", time.Now())
-	s.Attribute(k, Attributed{WorkstreamID: "p_keld_signal", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, time.Now())
 
 	snap, _ := s.Read(time.Time{}, 10)
 	cell := snap.Blocks[0].Cells["attributed"]
@@ -263,7 +263,7 @@ func TestAttributeOKShowsWorkstreamAndMethod(t *testing.T) {
 	}
 }
 
-func TestAttributeConflictShowsCompetingWorkstreams(t *testing.T) {
+func TestAttributeConflictShowsCompetingProjects(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "s9", Start: 9500}
@@ -284,7 +284,7 @@ func TestAttributeConflictShowsCompetingWorkstreams(t *testing.T) {
 	}
 }
 
-func TestAttributeNoRuleMatchedIsFailedWithNoWorkstream(t *testing.T) {
+func TestAttributeNoRuleMatchedIsFailedWithNoProject(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "s10", Start: 10000}

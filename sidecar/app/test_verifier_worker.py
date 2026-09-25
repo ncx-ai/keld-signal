@@ -250,7 +250,7 @@ def test_attribute_block_with_a_stubbed_verifier_never_imports_llama_cpp():
 
     projects = [{"id": "proj_pay", "title": "Payments", "team": "Eng",
                 "description": "Stripe billing.", "repos": [], "keywords": []}]
-    attribution.set_workstreams(projects)
+    attribution.set_projects(projects)
     out = attribution.attribute_block(["stripe webhook retries again"], {"repo": "acme-billing"},
                                       encoder=StubEncoder(), verifier_obj=StubVerifier())
     assert out["status"] == "attributed", out

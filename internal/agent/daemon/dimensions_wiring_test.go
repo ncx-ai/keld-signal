@@ -51,7 +51,7 @@ func TestProcessPublishesDimensionsFromTheAnalyzer(t *testing.T) {
 		t.Fatalf("want 1 publish, got %d", len(sent))
 	}
 	if sent[0].Dimensions["project"].Value != "keld-signal" {
-		t.Fatalf("workstreams not threaded into the published enrichment: %+v", sent[0].Dimensions)
+		t.Fatalf("projects not threaded into the published enrichment: %+v", sent[0].Dimensions)
 	}
 	if m.path != "/tmp/t.jsonl" || m.prompt != "p1" || m.span != enrich.DimensionSpanMinutes {
 		t.Errorf("job coordinates not threaded: path=%q prompt=%q span=%d", m.path, m.prompt, m.span)
@@ -67,7 +67,7 @@ func TestProcessPublishesDimensionsFromTheAnalyzer(t *testing.T) {
 }
 
 // ml_backend "deterministic": NO Model at all, the analysis service wired on its
-// own. Dynamics ride the same model-free /analyze call the workstreams facet
+// own. Dynamics ride the same model-free /analyze call the projects facet
 // does, so the mode that has no GLiNER2 must still publish them — asserted
 // through `process`, not inferred from the wiring.
 func TestProcessPublishesDynamicsWithNoModel(t *testing.T) {
@@ -115,7 +115,7 @@ func TestFacetsForRequiresTheCapability(t *testing.T) {
 }
 
 // A Codex job must not pay for a pass the analysis cannot serve: no sidecar
-// round-trip, no workstreams, and — critically, since ml_backend "auto" is what
+// round-trip, no projects, and — critically, since ml_backend "auto" is what
 // nearly every user runs — no downgrade of the published pipeline_status.
 func TestProcessSkipsDimensionsForGemini(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
@@ -133,7 +133,7 @@ func TestProcessSkipsDimensionsForGemini(t *testing.T) {
 		t.Errorf("analysis called for an unreadable source: path=%q", m.path)
 	}
 	if sent.Dimensions != nil {
-		t.Errorf("unexpected workstreams: %+v", sent.Dimensions)
+		t.Errorf("unexpected projects: %+v", sent.Dimensions)
 	}
 	if sent.PipelineStatus == "partial" {
 		t.Errorf("a pass that cannot serve this source must not downgrade it: status=%q versions=%v",

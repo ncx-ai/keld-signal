@@ -3,7 +3,7 @@ package publish
 import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 
 // AnalysisFacets is the deterministic window analysis in its WIRE shape: the
-// workstream dimensions, the dynamics, the effort block, all thirteen
+// project dimensions, the dynamics, the effort block, all thirteen
 // inventories, the cut-visibility map beside them, and the session prior.
 //
 // IT EXISTS SO TWO ROW TYPES CANNOT DRIFT, AND THAT IS ITS WHOLE JOB. A
@@ -81,7 +81,7 @@ type AnalysisFacets struct {
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
 	// Prior is the SESSION this span sat in — same rule and same meaning as the
 	// prompt row's (see Enrichment.Prior): a contrast reported beside
-	// `workstreams`, never a value supplied in its place.
+	// `projects`, never a value supplied in its place.
 	Prior map[string]enrich.Prior `json:"prior,omitempty"`
 }
 

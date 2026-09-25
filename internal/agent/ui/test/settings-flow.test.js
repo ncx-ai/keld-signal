@@ -6,7 +6,7 @@ import {
   configErrorText,
   localOnlyConfirmationText,
   startAtLoginProps,
-  workstreamRulesSummary,
+  projectRulesSummary,
   restartBarText,
   nextRestartStatus,
   RESTART_IDLE,
@@ -75,7 +75,7 @@ test("a network failure (status 0) still shows something actionable", () => {
   assert.ok(text.length > 0);
 });
 
-// --- localOnlyConfirmationText: the one sentence every /v1/workstreams mutation's
+// --- localOnlyConfirmationText: the one sentence every /v1/projects mutation's
 // local_only:true renders as. Must never imply the org learned anything. ---
 
 test("localOnlyConfirmationText says the change is local and points at Atlas for the org-wide edit", () => {
@@ -94,33 +94,33 @@ test("Start at login always renders unchecked, disabled, and says where it reall
   assert.equal(props.note, "in the desktop app");
 });
 
-// --- workstreamRulesSummary: the response's `rules`, never raw repos/keywords. ---
+// --- projectRulesSummary: the response's `rules`, never raw repos/keywords. ---
 
-test("workstreamRulesSummary reads `rules`, not `repos`, when the two disagree", () => {
+test("projectRulesSummary reads `rules`, not `repos`, when the two disagree", () => {
   // A project whose declared repos include something NOT in the matched
   // `rules` the daemon actually computed (e.g. a keyword that hasn't matched
   // any observed block yet) must summarise from `rules`, or the card would
   // show a candidate as if it were a real rule.
   const p = { repos: ["github.com/org/real-repo", "github.com/org/unmatched-candidate"], rules: ["github.com/org/real-repo"], ticket_key: "" };
-  const summary = workstreamRulesSummary(p);
+  const summary = projectRulesSummary(p);
   assert.match(summary, /real-repo/);
   assert.doesNotMatch(summary, /unmatched-candidate/);
 });
 
-test("workstreamRulesSummary appends the ticket key rule alongside repo rules", () => {
+test("projectRulesSummary appends the ticket key rule alongside repo rules", () => {
   const p = { repos: [], rules: ["github.com/org/a"], ticket_key: "KELD" };
-  const summary = workstreamRulesSummary(p);
+  const summary = projectRulesSummary(p);
   assert.match(summary, /repo github\.com\/org\/a/);
   assert.match(summary, /tickets KELD-xxx/);
 });
 
-test("workstreamRulesSummary says so plainly when a project has no rules at all", () => {
-  assert.equal(workstreamRulesSummary({ repos: [], rules: [], ticket_key: "" }), "no rules yet");
+test("projectRulesSummary says so plainly when a project has no rules at all", () => {
+  assert.equal(projectRulesSummary({ repos: [], rules: [], ticket_key: "" }), "no rules yet");
 });
 
-test("workstreamRulesSummary falls back to `repos` only for a payload that predates `rules`", () => {
+test("projectRulesSummary falls back to `repos` only for a payload that predates `rules`", () => {
   const p = { repos: ["github.com/org/a", "github.com/org/b"], ticket_key: "" };
-  assert.match(workstreamRulesSummary(p), /repo github\.com\/org\/a \+1/);
+  assert.match(projectRulesSummary(p), /repo github\.com\/org\/a \+1/);
 });
 
 // --- restart bar: restartBarText + nextRestartStatus, the full sequence. ---

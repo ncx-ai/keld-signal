@@ -383,7 +383,7 @@ func TestBuildPublishesNoSpeechAct(t *testing.T) {
 }
 
 // Build carries the effort block through to the wire. Named separately from the
-// dynamics/workstreams cases because it is a POINTER: a nil-vs-zeroed mistake
+// dynamics/projects cases because it is a POINTER: a nil-vs-zeroed mistake
 // here publishes `authored_bytes` absent and every count 0, which reads as "the
 // window authored nothing" rather than "nobody looked".
 func TestBuildCarriesTheEffortBlock(t *testing.T) {
@@ -452,7 +452,7 @@ func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 	}
 	// PLURAL on the wire, with counts and no shares: an inventory makes no
 	// dominance claim, which is the measured reason this is not an eighth
-	// workstream (coverage 0.185 as one; see enrich.Acts).
+	// project (coverage 0.185 as one; see enrich.Acts).
 	for _, want := range []string{`"physical_acts"`, `{"value":"read","n":41}`,
 		`{"value":"edit","n":12}`, `{"value":"run a service","n":2}`} {
 		if !strings.Contains(string(b), want) {
@@ -475,7 +475,7 @@ func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 
 // The SESSION PRIOR reaches the wire, and reaches it BESIDE the window's own
 // answer rather than inside it. This is the whole design expressed at the last
-// place it could be broken: a consumer reading this row sees `workstreams` with
+// place it could be broken: a consumer reading this row sees `projects` with
 // no `skill` — the window could not attribute one — and `prior.skill`
 // naming what the session was doing. The two must never be merged.
 func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
@@ -530,7 +530,7 @@ func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 
 // Absent, not an empty object. `"prior":{}` would read as "we looked at the
 // session and it said nothing", which is a different fact from a sidecar too old
-// to have looked — the same distinction workstreams, dynamics and physical_acts
+// to have looked — the same distinction projects, dynamics and physical_acts
 // already keep.
 func TestBuildOmitsAnEmptySessionPrior(t *testing.T) {
 	for name, p := range map[string]enrich.Profile{
@@ -549,7 +549,7 @@ func TestBuildOmitsAnEmptySessionPrior(t *testing.T) {
 }
 
 // Absent, not an empty list. `"physical_acts":[]` would read as "we analysed the
-// hour and it did nothing" — the same distinction the workstreams and dynamics
+// hour and it did nothing" — the same distinction the projects and dynamics
 // keys already keep.
 func TestBuildOmitsAnEmptyPhysicalActsInventory(t *testing.T) {
 	for name, p := range map[string]enrich.Profile{
@@ -730,7 +730,7 @@ func TestBuildOmitsTheLastFourInventoriesWhenEmpty(t *testing.T) {
 	}
 }
 
-// `repo` reaches the wire through `workstreams` with NO new field, because that
+// `repo` reaches the wire through `projects` with NO new field, because that
 // field is a map — which is the point of it being a series level rather than a
 // bespoke block. Pinned so a future "repo needs its own key" change has to
 // argue with an existing assertion, and because a map is exactly the shape whose

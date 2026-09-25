@@ -31,7 +31,7 @@ const binSeconds = 300
 // `corr_id`. A generated transcript that carried only `uuid` would be ingested,
 // would cut blocks, and would 404 on every `/analyze` lookup — the exact defect
 // AGENTS.md records as "8 of 8 prompts partial, and 0 of 1,627 stored
-// enrichments had ever carried a workstream". `blockgen`'s test suite pins the
+// enrichments had ever carried a project". `blockgen`'s test suite pins the
 // same property from the other side.
 func buildSession(rng *rand.Rand, c Corpus, repo Repo, cwd, branch, model, session string,
 	start, end time.Time) ([]string, Result) {

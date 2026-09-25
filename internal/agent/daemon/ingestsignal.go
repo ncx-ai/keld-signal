@@ -141,7 +141,7 @@ func (q *ingestQueue) stats() (int, int) {
 //
 // SCOPED TO THE SOURCES THE ANALYSIS CAN SERVE. /analyze cannot resolve a Codex
 // or a Gemini prompt id (they key prompts differently over differently-shaped
-// files — see enrich.DimensionsEligible), so the workstreams pass never asks
+// files — see enrich.DimensionsEligible), so the projects pass never asks
 // for a window on them. Ingesting their transcripts would buy a whole-file parse
 // and permanent store rows for a question nobody can ask. The gate is the SAME
 // predicate the pass is gated on, deliberately: extending the analysis to a new

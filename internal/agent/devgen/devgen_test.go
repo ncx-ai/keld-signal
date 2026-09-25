@@ -38,7 +38,7 @@ func TestGeneratedSessionCarriesPromptIDOnEveryHumanTurn(t *testing.T) {
 	// ingests and still cuts blocks, so the failure is invisible until every
 	// /analyze lookup 404s and every prompt publishes "partial" — the defect
 	// AGENTS.md records as 8 of 8 prompts partial with 0 of 1,627 enrichments
-	// ever carrying a workstream. Pinned here from the generator's side.
+	// ever carrying a project. Pinned here from the generator's side.
 	res, _ := genInto(t, Repo{Remote: "github.com/acme/web", Workspace: "web",
 		Language: "go", TicketPrefix: "ACME"})
 	body, err := os.ReadFile(res.Transcript)

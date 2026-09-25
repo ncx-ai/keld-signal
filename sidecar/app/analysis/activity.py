@@ -57,7 +57,7 @@ while this vocabulary divides on WHAT THE CHANGE MEANS. Implementing a feature a
 document are the same `Edit` call — one is `generate` ("draft, write, code, ideate"), the other
 `transform` ("rewrite, summarize, translate, reformat") — and no level distinguishes them, because
 the distinction is intent, not act. `vocab.py`'s "the physical act is what a reader needs" is true
-for the workstreams payload and false here. `review` collapses the same way: a reviewer reads 2-4
+for the projects payload and false here. `review` collapses the same way: a reviewer reads 2-4
 files, so 13 of 27 `review` windows fell below the floor as `thin`.
 
 Concede the entire generate/transform distinction — the one arguable labelling call — and the

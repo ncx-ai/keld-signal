@@ -12,7 +12,7 @@ import (
 )
 
 // fakeEmitter stands in for the client-events emitter WS-C2 owns. The detector
-// takes an interface precisely so this workstream can assert the event without
+// takes an interface precisely so this project can assert the event without
 // owning the transport.
 type fakeEmitter struct {
 	codes  []string

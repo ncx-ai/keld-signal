@@ -9,9 +9,9 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/pricing"
+	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
-	"github.com/ncx-ai/keld-signal/internal/agent/workstreams"
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
@@ -216,9 +216,9 @@ func epochOf(s string) (int64, bool) {
 }
 
 // dimsOf lifts the three dimensions the Projects pane groups on out of a
-// block's published workstreams. A dimension that did not reach `attributed` is
+// block's published projects. A dimension that did not reach `attributed` is
 // left empty: "only 'attributed' may be read as the window's answer" is the
-// workstreams contract's own rule, and a thin repo is not evidence to group a
+// projects contract's own rule, and a thin repo is not evidence to group a
 // person's work by.
 func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 	get := func(key string) string {
@@ -232,9 +232,9 @@ func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 		return l.Value
 	}
 	return ledger.Dims{
-		Repo:      get(workstreams.DimRepo),
-		Branch:    get(workstreams.DimBranch),
-		Workspace: get(workstreams.DimWorkspace),
+		Repo:      get(projects.DimRepo),
+		Branch:    get(projects.DimBranch),
+		Workspace: get(projects.DimWorkspace),
 	}
 }
 
@@ -292,18 +292,18 @@ func dominantModel(ws map[string]enrich.Labeled) string {
 // person can settle, and choosing one silently would put a confident number
 // against work that belongs to neither.
 func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, now time.Time) {
-	if v.workstreams == nil {
+	if v.projects == nil {
 		return
 	}
-	doc, err := v.workstreams.Load()
+	doc, err := v.projects.Load()
 	if err != nil {
-		// The projects document could not be read. That is not "no workstream" —
+		// The projects document could not be read. That is not "no project" —
 		// it is "we could not tell" — so nothing is recorded and the cell stays
 		// ABSENT, which the page renders as unknown rather than as unattributed.
 		return
 	}
 	// The candidate set is the local document's projects OVERLAID on the org's
-	// pooled workstream values, which are the vocabulary and arrive on the
+	// pooled project values, which are the vocabulary and arrive on the
 	// settings poll. The vector pass is nil here: this is the deterministic
 	// path, and a nil Vector is what makes "unattributed" mean "no rule
 	// matched" rather than "the encoder was not asked".
@@ -315,16 +315,16 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 	// MergeCandidates' own comment names. This is also the list the page's
 	// live pass uses (ingress.Attribution), so the recorded answer and the
 	// displayed one are computed over one candidate set rather than two.
-	var remote []workstreams.Workstream
-	if v.workstreams.RemoteWorkstreams != nil {
-		remote = workstreams.FromRemoteWorkstreams(v.workstreams.RemoteWorkstreams())
+	var remote []projects.Project
+	if v.projects.RemoteProjects != nil {
+		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
 	}
-	res := workstreams.Attribute(r.Dimensions, workstreams.MergeCandidates(doc.Workstreams, remote),
-		workstreams.GroupOffFunc(settings.Load()), nil)
+	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
+		projects.GroupOffFunc(settings.Load()), nil)
 	v.ledger.Attribute(k, ledger.Attributed{
-		WorkstreamID: res.WorkstreamID,
-		Method:       ledger.Method(res.Method),
-		Conflict:     res.Conflict,
+		ProjectID: res.ProjectID,
+		Method:    ledger.Method(res.Method),
+		Conflict:  res.Conflict,
 	}, ledger.Reason(res.Reason), now)
 }
 
@@ -359,7 +359,7 @@ func chainOnPublished(first, second func([]publish.BlockEnrichment, string)) fun
 
 // liveAttribution wraps the ledger's Reader so every block row GET /v1/ledger
 // serves gets its `attributed` cell from the SAME recomputation GET
-// /v1/workstreams does, instead of from the cell frozen at cut time.
+// /v1/projects does, instead of from the cell frozen at cut time.
 //
 // ⚠️ **WHY ON READ RATHER THAN A SWEEP THAT REWRITES CELLS.** Attribution ran
 // once, when the block was cut, and was never revisited: eleven blocks on a
@@ -385,7 +385,7 @@ type liveAttribution struct {
 	// (since, limit), and ledger.Store.BlocksSince applies an identical
 	// WHERE/ORDER BY/LIMIT, so the two row sets match block for block.
 	dims  func(since time.Time, limit int) ([]ledger.BlockRecord, error)
-	store *workstreams.Store
+	store *projects.Store
 	now   func() time.Time
 }
 
@@ -446,28 +446,28 @@ func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, erro
 // attributedCell builds the wire cell for one recomputed decision, in the
 // shape ledger.Store.Read produces for a recorded one — same keys, same
 // values — so no consumer needs to learn a second shape.
-func attributedCell(res workstreams.Result, at string) map[string]any {
-	if res.Reason == workstreams.ReasonNone && res.WorkstreamID != "" {
+func attributedCell(res projects.Result, at string) map[string]any {
+	if res.Reason == projects.ReasonNone && res.ProjectID != "" {
 		return map[string]any{
 			"status":     string(ledger.StatusOK),
 			"at":         at,
-			"project_id": res.WorkstreamID,
+			"project_id": res.ProjectID,
 			"method":     string(res.Method),
 		}
 	}
 	cell := map[string]any{
 		"status": string(ledger.StatusFailed),
 		"at":     at,
-		"reason": string(reasonOr(res.Reason, workstreams.ReasonNoRuleMatched)),
+		"reason": string(reasonOr(res.Reason, projects.ReasonNoRuleMatched)),
 	}
-	if res.Reason == workstreams.ReasonConflict && len(res.Conflict) > 0 {
+	if res.Reason == projects.ReasonConflict && len(res.Conflict) > 0 {
 		cell["conflict"] = append([]string(nil), res.Conflict...)
 	}
 	return cell
 }
 
-func reasonOr(r, fallback workstreams.Reason) workstreams.Reason {
-	if r == workstreams.ReasonNone {
+func reasonOr(r, fallback projects.Reason) projects.Reason {
+	if r == projects.ReasonNone {
 		return fallback
 	}
 	return r
@@ -486,13 +486,13 @@ func reasonOr(r, fallback workstreams.Reason) workstreams.Reason {
 func dimsOfRecord(r ledger.BlockRecord) map[string]enrich.Labeled {
 	dims := map[string]enrich.Labeled{}
 	if r.Repo != "" {
-		dims[workstreams.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.DimensionAttributed}
+		dims[projects.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.DimensionAttributed}
 	}
 	if r.Branch != "" {
-		dims[workstreams.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.DimensionAttributed}
+		dims[projects.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.DimensionAttributed}
 	}
 	if r.Workspace != "" {
-		dims[workstreams.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.DimensionAttributed}
+		dims[projects.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.DimensionAttributed}
 	}
 	return dims
 }
@@ -502,13 +502,13 @@ func dimsOfRecord(r ledger.BlockRecord) map[string]enrich.Labeled {
 // projects store wired there is nothing to recompute from and the bare ledger
 // is served unchanged.
 func (v *v3) ledgerReader() ledger.Reader {
-	if v == nil || v.ledger == nil || v.workstreams == nil {
+	if v == nil || v.ledger == nil || v.projects == nil {
 		return v.ledger
 	}
 	return liveAttribution{
 		inner: v.ledger,
 		dims:  v.ledger.BlocksSince,
-		store: v.workstreams,
+		store: v.projects,
 		now:   time.Now,
 	}
 }

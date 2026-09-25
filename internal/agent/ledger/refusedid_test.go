@@ -14,14 +14,14 @@ import (
 // ⚠️ **THE SILENCE IS WHY THE COLON DEFECT SURVIVED FOR DAYS.** Clamping is
 // right for a field that might carry junk out of a transcript; it is wrong for
 // one the daemon computed a microsecond earlier from its own project list. The
-// write succeeded, the row looked ordinary, the page said "no workstream", and
+// write succeeded, the row looked ordinary, the page said "no project", and
 // nothing anywhere disagreed. A line on disk is the difference between a defect
 // someone can find and one that has to be reasoned out from a ledger dump.
 //
 // Once, not per block: this ledger's `failOnce` exists because a per-row line
 // on a machine with 105 blocks is a flood, which is the shape operators filter
 // out — the same reasoning the block emitter's `routeGone` latch uses.
-func TestARefusedWorkstreamIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
+func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	setHome(t)
 	s := New()
 
@@ -29,7 +29,7 @@ func TestARefusedWorkstreamIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	// A shape the validator refuses, standing in for whatever the next
 	// unanticipated id looks like.
-	s.Attribute(k, Attributed{WorkstreamID: "keld/projects:x", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, Attributed{ProjectID: "keld/projects:x", Method: MethodRepo}, ReasonNone, time.Now())
 
 	b, err := os.ReadFile(paths.DebugLogPath())
 	if err != nil {
@@ -57,7 +57,7 @@ func TestARefusedWorkstreamIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 // every duplicated rule into an un-attributed block. It is the exact shape a
 // careless "make conflicts more thorough" change would break, and there is a
 // real project on this developer's machine listing its repo twice.
-func TestOneWorkstreamNamingARepoTwiceIsNotAConflict(t *testing.T) {
+func TestOneProjectNamingARepoTwiceIsNotAConflict(t *testing.T) {
 	setHome(t)
 	s := New()
 
@@ -67,7 +67,7 @@ func TestOneWorkstreamNamingARepoTwiceIsNotAConflict(t *testing.T) {
 	// no conflict list. The duplicate-rule case must reach the store looking
 	// exactly like this, never as a two-entry conflict naming the same project
 	// twice.
-	s.Attribute(k, Attributed{WorkstreamID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, Attributed{ProjectID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
 
 	cell := attributedCell(t, s, k)
 	if cell["project_id"] != atlasID {

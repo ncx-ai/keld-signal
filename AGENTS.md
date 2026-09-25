@@ -34,24 +34,29 @@ one already here.
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
-## Vocabulary — Signal says what Atlas says (since 2026-09-23)
+## Vocabulary — project, group, dimension (2026-09-23, amended 2026-09-25)
 
-A **group** (Atlas `WorkstreamGroup`, e.g. "Products") holds **workstreams** (e.g. "Atlas
-Platform"). The repo/branch/model/… facets `/analyze` counts are **dimensions**. Until
-2026-09-23 Signal called a group a "workstream", a workstream a "project", and the dimensions
-"workstreams" — three meanings for one word. Code, local routes (`/v1/workstreams`,
-`/v1/groups/{key}/off`), stored names (`state/workstreams.json`, `groups_off`,
-`KELD_WORKSTREAMS_FILE`) and the page now use the new words.
-`scripts/check_vocabulary.sh` fails CI on any retired name
+A **project** (e.g. "SDKs") is Signal's own bucket, defined in Signal. A **group** (e.g.
+"Products") holds projects. The repo/branch/model/… facets `/analyze` counts are
+**dimensions**. An **Atlas workstream** is Atlas's value; Signal receives the org's list but
+does not match or show it. Until 2026-09-23 Signal called a group a "workstream" and the
+dimensions "workstreams" too — three meanings for one word. The 2026-09-23 rename also
+called the project a "workstream"; that was reversed on 2026-09-25 (Revision 3 of the
+multi-group discovery) once Signal stopped matching Atlas's workstreams, so the two words now
+name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
 (`scripts/vocabulary-denylist.txt`).
 
 **Kept on purpose — the keep list:** Atlas wire keys `projects` (settings and block row),
 `projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
 `POST /projects` and its `projects` body key (version skew); the status value
 `skipped:no_projects`; the dimension named `project` (workspace basename); and anything about
-Claude Code's `~/.claude/projects` directories or a `.keld.toml` project. The old stored
-names are still READ: `projects.json` (migrated once, kept as `projects.json.pre-rename`),
-`workstreams_off`, `KELD_PROJECTS_FILE`.
+Claude Code's `~/.claude/projects` directories or a `.keld.toml` project.
+⚠️ **Stored names are exactly 3.0.6's, and must stay that way:** `state/projects.json`
+(version 1, groups under `workstreams`, each project's group under `workstream`),
+`workstreams_off` in agent-config.json and `KELD_PROJECTS_FILE`. Auto-update can roll a
+machine back to 3.0.6, which reads only those; a renamed file meant the rolled-back daemon
+found nothing, and whatever it saved was ignored after the next upgrade. Translate at
+`projects.Load`/`Save`, never by moving the file.
 
 ## Architecture
 
@@ -1864,8 +1869,8 @@ distinction between a pass that was skipped and one that was never wired.
 `sidecar/app/analysis/attribution.py`, `sidecar/app/verifier.py`) — which declared
 project a closed BLOCK belongs to, decided on device.** OFF by default
 (`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org declares
-projects (`settings.RemoteWorkstream`: id/title/description/team/repos/keywords/ticket key)
-via `KELD_WORKSTREAMS_FILE` (the pre-rename `KELD_PROJECTS_FILE` is still read) or the settings poll's `projects` key; the daemon pushes them
+projects (`settings.RemoteProject`: id/title/description/team/repos/keywords/ticket key)
+via `KELD_PROJECTS_FILE` or the settings poll's `projects` key; the daemon pushes them
 down with `POST /projects` and the block emitter's `OnPublished` hook schedules a durable
 job per published block. `POST /attribute` takes COORDINATES and the block's own
 already-computed dims and answers with project IDS, confidences, closed enums and integer
@@ -1935,7 +1940,7 @@ timings — no text, no span, no offset, in either direction.
 - **The two model downloads are gated on a KNOWN NON-EMPTY project list.** 4.2 GB fetched
   for an org that has declared nothing buys nothing — every `/attribute` answers
   `skipped:no_projects` without loading a model — and Atlas does not serve `projects` yet,
-  so that is currently every machine without `KELD_WORKSTREAMS_FILE`. The gate is read live per
+  so that is currently every machine without `KELD_PROJECTS_FILE`. The gate is read live per
   published block, so a list arriving on a later poll starts the fetch with no restart.
 - **⚠️ `skipped:no_projects` is NON-TERMINAL while the daemon holds a list, and the daemon
   re-posts after a sidecar respawn.** `attribution._projects` is module state in the sidecar
@@ -2263,7 +2268,7 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
-    workstreams/     groups and workstreams: the local document (workstreams.json),
+    projects/        groups and projects: the local document (projects.json),
                      the rule pass (Attribute), suggestions, the page's edits
     attrib/          the semantic attribution job (POST /attribute) per closed block
     update/          auto-update: Atlas pins a release; fetch, verify, swap by

@@ -32,7 +32,7 @@ import (
 // /attribute answers skipped:no_projects WITHOUT opening a transcript or
 // loading a model, so the 4.2 GB buys literally nothing — and since Atlas does
 // not serve `projects` yet, that is today every machine without
-// KELD_WORKSTREAMS_FILE. An org switching attribution on early would otherwise
+// KELD_PROJECTS_FILE. An org switching attribution on early would otherwise
 // pull both models onto its whole fleet for an answer that needs neither.
 //
 // `known` is read LIVE, per published block, never captured: a project list
@@ -72,7 +72,7 @@ func attribStoreDir() string { return filepath.Join(paths.SpoolDir(), "attrib") 
 func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.AttributeClient,
 	ingestEndpoint string, token func() string, actor string,
 	emitter *clientevents.Emitter, attribConfigured bool,
-	workstreamsKnown func() bool, repostWorkstreams func()) func(rows []publish.BlockEnrichment, path string) {
+	projectsKnown func() bool, repostProjects func()) func(rows []publish.BlockEnrichment, path string) {
 	if !attrib.Enabled(attribConfigured) || dig == nil || cl == nil || token == nil {
 		return nil
 	}
@@ -85,7 +85,7 @@ func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.Attribu
 	a := attrib.New(st, cl, pub,
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, dig).
-		WithWorkstreams(workstreamsKnown, repostWorkstreams).
+		WithProjects(projectsKnown, repostProjects).
 		WithEmitter(emitter).
 		// THE DELIVERY LEDGER's two seams for this pass (v3attrib.go), both
 		// package-level accessors rather than parameters so every existing

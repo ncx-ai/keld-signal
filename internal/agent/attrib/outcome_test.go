@@ -27,7 +27,7 @@ func collectOutcomes(a *Attributor) *[]Outcome {
 // A named project reaches the hook with its id and its confidence, and with
 // the job's own coordinates — nothing else. The hook is what a ledger writes
 // the `ok` vector cell from.
-func TestOutcomeHookReportsTheNamedWorkstreamAndItsConfidence(t *testing.T) {
+func TestOutcomeHookReportsTheNamedProjectAndItsConfidence(t *testing.T) {
 	st := NewStore(t.TempDir())
 	if err := st.Put(Job{SessionID: "s-ok", Path: "/tmp/x.jsonl", Start: 42, End: 102}); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -44,7 +44,7 @@ func TestOutcomeHookReportsTheNamedWorkstreamAndItsConfidence(t *testing.T) {
 	if o.SessionID != "s-ok" || o.Start != 42 {
 		t.Fatalf("outcome carried %+v, want the job's own coordinates", o)
 	}
-	if o.Status != enrich.WorkstreamsAttributed || o.WorkstreamID != "proj_pay" || o.Confidence != 0.9 {
+	if o.Status != enrich.ProjectsAttributed || o.ProjectID != "proj_pay" || o.Confidence != 0.9 {
 		t.Fatalf("outcome = %+v, want attributed/proj_pay/0.9", o)
 	}
 }
@@ -55,7 +55,7 @@ func TestOutcomeHookReportsTheNamedWorkstreamAndItsConfidence(t *testing.T) {
 // from a failure would show the encoder as broken for hours while it was
 // merely downloading.
 func TestOutcomeHookReportsHeldAnswersAsThemselves(t *testing.T) {
-	for _, status := range []string{enrich.WorkstreamsPending, enrich.WorkstreamsDegradedWeights} {
+	for _, status := range []string{enrich.ProjectsPending, enrich.ProjectsDegradedWeights} {
 		t.Run(status, func(t *testing.T) {
 			st := NewStore(t.TempDir())
 			if err := st.Put(Job{SessionID: "s-held", Path: "/tmp/x.jsonl", Start: 42, End: 102}); err != nil {
@@ -70,8 +70,8 @@ func TestOutcomeHookReportsHeldAnswersAsThemselves(t *testing.T) {
 			if len(*got) != 1 || (*got)[0].Status != status {
 				t.Fatalf("outcomes = %+v, want one %q", *got, status)
 			}
-			if (*got)[0].WorkstreamID != "" {
-				t.Fatalf("a held answer named no project; got %q", (*got)[0].WorkstreamID)
+			if (*got)[0].ProjectID != "" {
+				t.Fatalf("a held answer named no project; got %q", (*got)[0].ProjectID)
 			}
 		})
 	}
@@ -89,7 +89,7 @@ func TestOutcomeHookKeepsReportingAHeldAnswerOnEverySweep(t *testing.T) {
 	if err := st.Put(Job{SessionID: "s-degraded", Path: "/tmp/x.jsonl", Start: 42, End: 102}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.WorkstreamsDegradedWeights}}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsDegradedWeights}}
 	a := New(st, cl, &fakeSender{}, nil, "actor@x", digesterFor("s-degraded", 42, 102))
 	got := collectOutcomes(a)
 
@@ -147,7 +147,7 @@ func TestOutcomeHookIsSilentWhenThePublishFailed(t *testing.T) {
 
 	// The next sweep publishes, and only then is the outcome reported.
 	a.drainOnce(context.Background())
-	if len(*got) != 1 || (*got)[0].WorkstreamID != "proj_pay" {
+	if len(*got) != 1 || (*got)[0].ProjectID != "proj_pay" {
 		t.Fatalf("after a successful publish the outcome must be reported; got %+v", *got)
 	}
 }

@@ -5,9 +5,9 @@
 // Atlas switched on -> the republisher posts exactly those blocks") needs to
 // PUBLISH a block Atlas never saw, and the `blocks` table store.go owns does
 // not hold enough to rebuild the wire shape (publish.BlockEnrichment): it
-// keeps three workstream dims (repo/branch/workspace) for the Projects pane
+// keeps three project dims (repo/branch/workspace) for the Projects pane
 // and a handful of measured/attributed cells for the delivery page, never the
-// full eight-allocation/nine-inventory workstreams map, dynamics, effort or
+// full eight-allocation/nine-inventory projects map, dynamics, effort or
 // any of the other AnalysisFacets a real block carries. Re-deriving that from
 // the sidecar would mean asking it to re-characterise an already-closed span
 // — which the block emitter's own Digester is not shaped for (it advances a

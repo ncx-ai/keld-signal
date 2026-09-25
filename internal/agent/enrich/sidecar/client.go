@@ -565,7 +565,7 @@ type Dynamic struct {
 }
 
 // Analyze asks the sidecar to characterise the window ending at promptID
-// (deterministic workstream dimensions — no ML model). It sends COORDINATES,
+// (deterministic project dimensions — no ML model). It sends COORDINATES,
 // never prompt text — the same rule spool.Pointer follows for the enrichment
 // hook. ok=false on any failure, including a 404 (prompt id not found in the
 // transcript): that is a different fact than "resolved, zero dimensions" and
@@ -814,46 +814,46 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 
 // PROJECT ATTRIBUTION — which declared project a closed block belongs to,
 // decided on-device by the sidecar's own embedding/verifier matcher against
-// the org's declared settings.RemoteWorkstream list (never by sending message
+// the org's declared settings.RemoteProject list (never by sending message
 // text). See enrich/attribution.go for the wire shapes these two methods
 // exchange.
 
-// workstreamsReq is the whole of POST /projects: the org's declared project
-// list, unchanged from settings.RemoteWorkstream. Descriptions flow DOWN to the
+// projectsReq is the whole of POST /projects: the org's declared project
+// list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
 // device for the sidecar to embed; nothing here is derived from a prompt.
-type workstreamsReq struct {
-	Workstreams []settings.RemoteWorkstream `json:"projects"`
+type projectsReq struct {
+	Projects []settings.RemoteProject `json:"projects"`
 }
 
-// workstreamsResp is decoded but its fields are not read further than error
+// projectsResp is decoded but its fields are not read further than error
 // reporting: Count/Hash are the sidecar's own bookkeeping (how many projects
 // it now holds, and a fingerprint of the set), useful for a log line, not for
 // a caller decision.
-type workstreamsResp struct {
+type projectsResp struct {
 	Count int    `json:"count"`
 	Hash  string `json:"hash"`
 }
 
-// postWorkstreamsCallTimeout bounds ONE /projects call the same way
+// postProjectsCallTimeout bounds ONE /projects call the same way
 // attributeCallTimeout bounds one /attribute call — see that var's comment.
 // The daemon's caller (startup, and the settings poll loop) has no per-call
 // deadline of its own, so without a bound here an unreachable sidecar would
 // retry forever and could wedge the settings poll goroutine. A var, not a
 // const, so a test can shrink it.
-var postWorkstreamsCallTimeout = 30 * time.Second
+var postProjectsCallTimeout = 30 * time.Second
 
-// PostWorkstreams tells the sidecar which projects are currently declared, so
+// PostProjects tells the sidecar which projects are currently declared, so
 // /attribute has something to match a block against. The daemon calls this
-// once at startup (after resolving KELD_WORKSTREAMS_FILE / the remote settings
+// once at startup (after resolving KELD_PROJECTS_FILE / the remote settings
 // key) and again whenever the resolved list changes on a later settings poll
 // — never per block, since the declared set does not change per block.
-func (c *Client) PostWorkstreams(workstreams []settings.RemoteWorkstream) error {
+func (c *Client) PostProjects(projects []settings.RemoteProject) error {
 	cp := *c
-	ctx, cancel := context.WithTimeout(c.ctx, postWorkstreamsCallTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, postProjectsCallTimeout)
 	defer cancel()
 	cp.ctx = ctx
-	var r workstreamsResp
-	if !cp.post("/projects", workstreamsReq{Workstreams: workstreams}, &r) {
+	var r projectsResp
+	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
 		return fmt.Errorf("sidecar: POST /projects failed")
 	}
 	return nil
@@ -874,14 +874,14 @@ type attributeReq struct {
 // AttributeResult is the Go-side view of POST /attribute's response.
 //
 // Status is one of the closed vocabulary in enrich/attribution.go
-// (WorkstreamsAttributed, WorkstreamsPending, WorkstreamsSkippedDisabled,
-// WorkstreamsSkippedNone, WorkstreamsDegradedWeights). Projects/Attribution
+// (ProjectsAttributed, ProjectsPending, ProjectsSkippedDisabled,
+// ProjectsSkippedNoProjects, ProjectsDegradedWeights). Projects/Attribution
 // are populated only when Status is a terminal answer that named something —
 // an empty Projects with a terminal Status is a real "no project matched",
 // not an absence.
 type AttributeResult struct {
-	Status      string                         `json:"status"`
-	Workstreams []enrich.WorkstreamAttribution `json:"projects"`
+	Status   string                      `json:"status"`
+	Projects []enrich.ProjectAttribution `json:"projects"`
 	// Concepts is what the block was ABOUT — phrases lifted from its own words
 	// and ranked by the same encoder the attribution ran on (sidecar
 	// `analysis/concepts.py`). It rides THIS response rather than the block

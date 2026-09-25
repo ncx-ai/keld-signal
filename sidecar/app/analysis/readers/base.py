@@ -8,7 +8,7 @@ precisely how the uuid-only prompt index shipped green. The record is six edits 
 
 ⚠️ **THE RECORD IS NOT A NEUTER SHAPE AND THIS DOCSTRING WILL NOT PRETEND IT IS.** Its fields are
 what `levels.events_for_turns` consumes, and that function was written for Claude Code. It is
-neutral where it matters: Codex fills every field the workstream dimensions need except `branch`
+neutral where it matters: Codex fills every field the project dimensions need except `branch`
 and `skill`, which stay UNATTRIBUTED rather than faked (a rollout carries no branch field at all;
 inventing one from `git` commands is gap 3 on that page, deliberately deferred). A reader that
 cannot answer a field leaves it `None`, and `None` reaches the store as an absent row — never as

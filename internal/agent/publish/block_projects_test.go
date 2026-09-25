@@ -12,11 +12,11 @@ import (
 // AC-7: the wire carries projects + status + meta, and the meta is numbers
 // and enums only — assert the marshalled JSON has no field that could hold
 // message text (mirrors TestEnrichmentWireShapeCannotCarryAnalysisInternals).
-func TestBlockWireCarriesWorkstreams(t *testing.T) {
+func TestBlockWireCarriesProjects(t *testing.T) {
 	b := BlockEnrichment{SchemaVersion: enrich.SchemaVersion}
-	b = WithWorkstreams(b,
-		[]enrich.WorkstreamAttribution{{ID: "proj_pay", Confidence: 0.91, Source: "embedding"}},
-		enrich.WorkstreamsAttributed,
+	b = WithProjects(b,
+		[]enrich.ProjectAttribution{{ID: "proj_pay", Confidence: 0.91, Source: "embedding"}},
+		enrich.ProjectsAttributed,
 		&enrich.AttributionMeta{EmbedMS: 812, VerifyMS: 0, ConceptMS: 140,
 			EncoderState: "warm", Verifier: "not_needed"},
 		[]enrich.Concept{{Value: "dunning retry", Score: 0.71}})
@@ -67,7 +67,7 @@ func TestConceptBoundsAreTheOnesTheArgumentRestsOn(t *testing.T) {
 }
 
 // The struct must be structurally unable to carry text: every string field of
-// WorkstreamAttribution and AttributionMeta is an id or a closed enum. Guard by
+// ProjectAttribution and AttributionMeta is an id or a closed enum. Guard by
 // reflection so a future field addition trips this test.
 func TestAttributionShapeHoldsNoText(t *testing.T) {
 	// ⚠️ ConceptMS is an integer millisecond timing, admitted on the same footing
@@ -85,9 +85,9 @@ func TestAttributionShapeHoldsNoText(t *testing.T) {
 		"EmbedMS": true, "VerifyMS": true, "PairsVerified": true,
 		"EncoderState": true, "Verifier": true, "ModelVersions": true,
 		"Centred": true, "BackgroundN": true}
-	for _, name := range structFieldNames(enrich.WorkstreamAttribution{}) {
+	for _, name := range structFieldNames(enrich.ProjectAttribution{}) {
 		if !allowed[name] {
-			t.Fatalf("new field %q on WorkstreamAttribution — extend the allowlist only after a privacy review", name)
+			t.Fatalf("new field %q on ProjectAttribution — extend the allowlist only after a privacy review", name)
 		}
 	}
 	for _, name := range structFieldNames(enrich.AttributionMeta{}) {

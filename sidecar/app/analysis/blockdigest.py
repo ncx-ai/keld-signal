@@ -9,7 +9,7 @@ half -- what one block WAS -- and decides which blocks may be emitted at all.
 ## V2 IS A PATH, NOT A PARAMETER
 
 The block cutter was once bolted onto v1 as an additive `block` key on `/analyze`, an endpoint
-that still characterises a 60-MINUTE WINDOW ANCHORED TO A PROMPT. Every published workstream
+that still characterises a 60-MINUTE WINDOW ANCHORED TO A PROMPT. Every published project
 stayed v1 and the block rode along as metadata, which made a stepping stone look like a
 destination. That was reverted, and the rule that replaced it is the reason this file exists at
 all: **v2 lives in its own module, behind its own entry point (`POST /blocks`), and can be deleted

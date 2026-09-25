@@ -2,13 +2,13 @@ package enrich
 
 // Prior is the SESSION the window sat in, reported BESIDE the window's own
 // answer — the session as it stood before this window opened
-// (sidecar/app/analysis/prior.py). Profile.Workstreams says what this hour was
+// (sidecar/app/analysis/prior.py). Profile.Projects says what this hour was
 // about; this says what the day around it looked like, so a value sitting just
 // over the attribution floor is distinguishable from one that is the whole
 // story.
 //
 // CONTRAST, NEVER FALLBACK. It never supplies an answer the window did not have.
-// An unattributed window stays unattributed: the pass publishes no Workstreams
+// An unattributed window stays unattributed: the pass publishes no Projects
 // entry for that dimension and the Prior beside it changes nothing about that.
 // The rejected alternative — a thin window inheriting the session's value — buys
 // coverage by laundering "we do not know" into something confident, which is
@@ -42,7 +42,7 @@ package enrich
 // still held back. Which dimensions arrive is the sidecar's
 // decision (prior.ENABLED), forwarded here rather than restated — a second list
 // on this side is a second thing to drift, and the same reasoning already
-// governs Workstreams.
+// governs Projects.
 //
 // THE POINTERS ARE THE CONTRACT, for the reason they are on Dynamic. 45.1% of
 // windows are a session's FIRST and have no prior at all: their Status is
@@ -55,7 +55,7 @@ type Prior struct {
 	// Value is the session's dominant value at this dimension, under the SAME
 	// 0.50 share floor and evidence bar the window uses, or "" when the session
 	// had none. It is a reference level (a branch, a language, a skill) and is
-	// the same class of value Workstreams already publishes for this dimension:
+	// the same class of value Projects already publishes for this dimension:
 	// the sidecar derives the prior's vocabulary from its ALLOCATION list, so
 	// `named_terms` — the one level read from message text — can never occupy it.
 	Value string `json:"value,omitempty"`

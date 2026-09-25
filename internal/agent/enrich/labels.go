@@ -68,13 +68,13 @@ package enrich
 // TestEnrichmentWireShapeCannotCarryAnalysisInternals, which still forbids
 // `inventory` and `named_terms`).
 //
-// A LIST rather than an eighth workstream, and that is the measured part. Over
+// A LIST rather than an eighth project, and that is the measured part. Over
 // 1,022 windows (~/keld/refseries-context/act-artifact/RESULTS.md, commit
 // 6cf15eb) the level fails as an ALLOCATION dimension at coverage 0.185 against a
 // pre-registered 0.70 bar — but by the opposite route to every other refutation in
 // that series. It is not thin: it fires in 97.8% of windows at a median 34
 // observations, more than `output_type` (10) or `language` (9), both of which ship
-// as workstreams. Of the 81.5% unattributed, only 2.2 points is `absent` and 55.5
+// as projects. Of the 81.5% unattributed, only 2.2 points is `absent` and 55.5
 // is `no_majority`; the top act holds p50 0.403 and no floor recovers it (0.612
 // even at 0.30). The cause is physical — an hour reads AND searches AND edits AND
 // runs, p50 7 distinct acts per window — so asking which single act owns it is the
@@ -90,7 +90,7 @@ package enrich
 //
 // It is a CONTRAST AND NEVER A FALLBACK, and a consumer has to be told that in
 // the same breath as the field: `prior.language.value` is what the SESSION was,
-// never what this window was. A dimension missing from `workstreams` is still
+// never what this window was. A dimension missing from `projects` is still
 // missing — the prior does not fill it — because inheriting a session value into
 // a thin window launders "we do not know" into something confident, which is the
 // defect that made v9 remove `speech_act` (predicted `statement` 22 times, right
@@ -113,7 +113,7 @@ package enrich
 // existing changes meaning: every field of v12 publishes identically. Producer
 // strings move from `-v12` to `-v13`.
 //
-// v14 RENAMES the allocation dimension `workflow` to `skill`, in `workstreams`,
+// v14 RENAMES the allocation dimension `workflow` to `skill`, in `projects`,
 // in `dynamics` and in `prior` alike. No value, level or number changes: the
 // level behind the key has always been `skill` — the argument to a `Skill` tool
 // call (`superpowers:writing-plans`, `anthropic-skills:pptx`), written from
@@ -135,7 +135,7 @@ package enrich
 // v15 ADDS A FOURTH DIMENSION to the session prior: `output_type`, beside
 // `branch`, `language` and `skill`. No new field, no new vocabulary, no change
 // to any existing value — `prior` has always been a map keyed by dimension and
-// `output_type` has always published in `workstreams` beside it.
+// `output_type` has always published in `projects` beside it.
 //
 // IT BUMPS ANYWAY, because this number is the ONLY version an Atlas consumer
 // sees: the sidecar's own SCHEMA is decoded into sidecar.AnalyzeResult and never
@@ -154,7 +154,7 @@ package enrich
 // still NOT added (98.5% agreement, prior attributed on 24.3% of windows).
 //
 // The rule is untouched: CONTRAST, NEVER FALLBACK. A dimension missing from
-// `workstreams` is still missing. The sidecar's SCHEMA moves 9 -> 10 for the
+// `projects` is still missing. The sidecar's SCHEMA moves 9 -> 10 for the
 // same addition. Producer strings move from `-v14` to `-v15`.
 //
 // v16 ADDS THREE MORE INVENTORY dimensions to the published payload:
@@ -299,8 +299,8 @@ package enrich
 // `programs` closes) and a length bound, so a `sh -c "…"` script cannot arrive
 // as a verb.
 //
-// SECOND, the ALLOCATION dimension `repo` — Enrichment.workstreams["repo"],
-// which needs no Go-side field because `workstreams` is a map. It is the
+// SECOND, the ALLOCATION dimension `repo` — Enrichment.projects["repo"],
+// which needs no Go-side field because `projects` is a map. It is the
 // checkout's NORMALISED IDENTITY (`host/owner/repo`), resolved by the DAEMON from
 // .git/config and sent INTO the sidecar's `/analyze`, `/tick` and `/ingest`,
 // where it is written as a first-class series level and rolls up like any other.
@@ -347,11 +347,11 @@ package enrich
 // publishes identically. Sidecar SCHEMA moves 13 -> 14 alongside it. Producer
 // strings move `-v19` -> `-v20`.
 //
-// v21 PUBLISHES EVERY WORKSTREAM DIMENSION, ATTRIBUTED OR NOT, and states which
+// v21 PUBLISHES EVERY PROJECT DIMENSION, ATTRIBUTED OR NOT, and states which
 // it was. Labeled gains `evidence` (the observation count) and `status`
 // (DimensionStatuses — a new five-value closed vocabulary a consumer must know,
 // which is what makes this contract-affecting rather than cosmetic). Both are
-// omitempty and set only by the workstreams pass, so every ML facet's payload is
+// omitempty and set only by the projects pass, so every ML facet's payload is
 // byte-identical to v20.
 //
 // A dimension below the evidence floor used to be DELETED before publish, on
@@ -377,7 +377,7 @@ package enrich
 // `-v21`.
 //
 // v22: block rows may carry projects/projects_status/attribution — see
-// WorkstreamAttribution and AttributionMeta. All three are omitempty, so this
+// ProjectAttribution and AttributionMeta. All three are omitempty, so this
 // bump is not a vocabulary change for the eval to re-score: a machine with
 // attribution off still publishes byte-identical to v21.
 const SchemaVersion = 23
@@ -483,12 +483,12 @@ var AuthoredStatuses = []string{"attributed", "absent"}
 // prompt, this is a deterministic count of tool calls against a 22-value table,
 // and they share nothing but a rough English synonym.
 //
-// WHY AN INVENTORY AND NOT AN EIGHTH WORKSTREAM. Measured over 1,022 windows
+// WHY AN INVENTORY AND NOT AN EIGHTH PROJECT. Measured over 1,022 windows
 // (~/keld/refseries-context/act-artifact/RESULTS.md): as an allocation dimension
 // it reaches coverage 0.185 against a pre-registered 0.70 bar. Not for want of
 // evidence — the level fires in 97.8% of windows at a median 34 observations,
 // more than `output_type` (10) or `language` (9), both of which ship as
-// workstreams — but because an hour of agentic work is PLURAL: top-act share p50
+// projects — but because an hour of agentic work is PLURAL: top-act share p50
 // 0.403, p50 7 distinct acts per window, and coverage still only 0.612 at a 0.30
 // floor. Asking which single act owns an hour is the wrong question, in exactly
 // the way asking which single named term owns one is, and the sidecar's

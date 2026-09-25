@@ -31,7 +31,7 @@ func TestVectorCellIsAbsentFromTheWireWhenNothingAskedTheVectorPass(t *testing.T
 	k := BlockKey{Session: "s-off", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{WorkstreamID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
 
 	snap, err := s.Read(time.Time{}, 10)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestVectorFailureLeavesTheDeterministicCellByteIdentical(t *testing.T) {
 	k := BlockKey{Session: "s-44", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{WorkstreamID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
 
 	before := cellJSON(t, s, "attributed")
 
@@ -106,8 +106,8 @@ func TestBothPassesAgreeAndBothIdsAreStored(t *testing.T) {
 	k := BlockKey{Session: "s-agree", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{WorkstreamID: "p_signal", Method: MethodRepo}, ReasonNone, at)
-	s.Vector(k, VectorAttributed{WorkstreamID: "p_signal", Confidence: 0.82}, StatusOK, ReasonNone, at)
+	s.Attribute(k, Attributed{ProjectID: "p_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Vector(k, VectorAttributed{ProjectID: "p_signal", Confidence: 0.82}, StatusOK, ReasonNone, at)
 
 	det, vec := readCell(t, s, "attributed"), readCell(t, s, "vector")
 	if det["project_id"] != "p_signal" || det["method"] != string(MethodRepo) {
@@ -131,8 +131,8 @@ func TestBothPassesDisagreeAndNeitherIsOverwrittenOrResolved(t *testing.T) {
 	k := BlockKey{Session: "s-disagree", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{WorkstreamID: "p_signal", Method: MethodRepo}, ReasonNone, at)
-	s.Vector(k, VectorAttributed{WorkstreamID: "p_atlas", Confidence: 0.61}, StatusOK, ReasonNone, at)
+	s.Attribute(k, Attributed{ProjectID: "p_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Vector(k, VectorAttributed{ProjectID: "p_atlas", Confidence: 0.61}, StatusOK, ReasonNone, at)
 
 	det, vec := readCell(t, s, "attributed"), readCell(t, s, "vector")
 	if det["project_id"] != "p_signal" {
@@ -162,7 +162,7 @@ func TestTheTwoCellsAreIndependentInBothDirections(t *testing.T) {
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
 
 	s.Vector(k, VectorAttributed{}, StatusFailed, ReasonAttributeFailed, at)
-	s.Attribute(k, Attributed{WorkstreamID: "p_late", Method: MethodTicket}, ReasonNone, at.Add(time.Hour))
+	s.Attribute(k, Attributed{ProjectID: "p_late", Method: MethodTicket}, ReasonNone, at.Add(time.Hour))
 
 	det := readCell(t, s, "attributed")
 	if det["status"] != string(StatusOK) || det["project_id"] != "p_late" {
@@ -222,7 +222,7 @@ func TestTheTwoRecorderInterfacesShareNoMethod(t *testing.T) {
 // Attribute enforces: a second opinion that named nothing is not a second
 // opinion, and recording one would say the encoder chose a project while
 // naming none.
-func TestVectorRefusesAnOKCellWithNoWorkstreamID(t *testing.T) {
+func TestVectorRefusesAnOKCellWithNoProjectID(t *testing.T) {
 	setHome(t)
 	s := New()
 	k := BlockKey{Session: "s-empty", Start: 1000}
@@ -246,7 +246,7 @@ func TestVectorRefusesAnUnknownStatus(t *testing.T) {
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
 
-	s.Vector(k, VectorAttributed{WorkstreamID: "p_x"}, Status("probably"), ReasonNone, at)
+	s.Vector(k, VectorAttributed{ProjectID: "p_x"}, Status("probably"), ReasonNone, at)
 
 	if cell, ok := readCells(t, s)["vector"]; ok {
 		t.Fatalf("an unknown status must be refused; got %#v", cell)
@@ -264,7 +264,7 @@ func TestVectorClampsAnImpossibleConfidenceSoTheWireStaysMarshallable(t *testing
 	for i, conf := range []float64{nan, -1, 7} {
 		k := BlockKey{Session: "s-conf", Start: int64(1000 + i)}
 		s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-		s.Vector(k, VectorAttributed{WorkstreamID: "p_x", Confidence: conf}, StatusOK, ReasonNone, at)
+		s.Vector(k, VectorAttributed{ProjectID: "p_x", Confidence: conf}, StatusOK, ReasonNone, at)
 	}
 	snap, err := s.Read(time.Time{}, 10)
 	if err != nil {
@@ -339,7 +339,7 @@ INSERT INTO blocks(session, start, attributed_status, attributed_at, project_id,
 	// And the migration is idempotent: a second open runs the same ALTERs and
 	// must treat "duplicate column" as success rather than failing.
 	k := BlockKey{Session: "s-old", Start: 1000}
-	s.Vector(k, VectorAttributed{WorkstreamID: "p_new", Confidence: 0.5}, StatusOK, ReasonNone,
+	s.Vector(k, VectorAttributed{ProjectID: "p_new", Confidence: 0.5}, StatusOK, ReasonNone,
 		mustTime(t, "2026-09-08T09:00:00Z"))
 	again := New()
 	snap, err = again.Read(time.Time{}, 10)

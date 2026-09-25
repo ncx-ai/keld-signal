@@ -64,7 +64,7 @@ func TestT36_AtlasOffDialsNothingAcrossEveryWiredPath(t *testing.T) {
 	}
 
 	// 2) The Atlas client (settings poll's fetch path, block publish path,
-	// workstreams, code redemption all go through this one connector).
+	// projects, code redemption all go through this one connector).
 	atlasPub := publish.New("http://atlas.example.invalid/v1/enrichments", func() string { return "t" }, "actor")
 	atlasPub.HTTP = tripwire
 	sc := settings.NewClient("http://atlas.example.invalid/v1/enrichment-settings", func() string { return "t" }, 2*time.Second)

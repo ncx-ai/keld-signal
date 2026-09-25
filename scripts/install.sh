@@ -199,7 +199,7 @@ echo "  ✓ $(printf '%-26s' 'keld + keld-agent') → ${DEST}"
 #
 # This is not "the ML sidecar" any more and the distinction now matters. It is the
 # client-side ANALYSIS service: /analyze, /ingest, /blocks and /pii, which is what
-# turns transcripts into workstreams, dynamics and v2 blocks. GLiNER2 is one
+# turns transcripts into projects, dynamics and v2 blocks. GLiNER2 is one
 # capability it loads lazily, and a v2 install (ml_backend:"deterministic") never
 # asks for it — so no multi-gigabyte model is ever downloaded.
 #
@@ -214,7 +214,7 @@ if { [ "$os" = "linux" ] || [ "$os" = "darwin" ]; } && [ -f "${DEST}/keld-agent"
   sc_url="${dl_base}/${tag}/${sc_archive}"
   sc_fail() {
     echo "keld: analysis sidecar install failed — without it Keld can derive nothing from" >&2
-    echo "  your transcripts (no workstreams, no blocks, no PII scan). Aborting." >&2
+    echo "  your transcripts (no projects, no blocks, no PII scan). Aborting." >&2
     echo "  URL: ${sc_url}" >&2
     exit 1
   }

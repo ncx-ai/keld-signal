@@ -47,7 +47,7 @@ import (
 //     no field for it and widening the published enrichment contract is not
 //     this change's job. If Atlas needs to weight a dimension by how much of
 //     the window backs it, the right move is a dedicated wire type for
-//     workstreams rather than overloading Labeled.
+//     projects rather than overloading Labeled.
 //
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
@@ -70,7 +70,7 @@ import (
 //     map when nothing was cut (see enrich.WindowAnalysis.InventoryOmitted).
 //
 //   - The SESSION PRIOR block converts field-for-field (see convertPrior) into a
-//     map that is SEPARATE from Workstreams and never merged into it. That
+//     map that is SEPARATE from Projects and never merged into it. That
 //     separation is the design: the prior is reported alongside the window's own
 //     answer and never supplies one it lacked, so an unattributed window stays
 //     unattributed. The block's `clamped` flag is dropped — AnalyzeResult does
@@ -92,7 +92,7 @@ import (
 // it emits (see enrich.DimensionsExtractor), the same way every other pass
 // does, so attribution does not depend on which analyzer supplied the map.
 //
-//   - The WORKSTREAM dimensions carry `status` and `evidence` through onto the
+//   - The PROJECT dimensions carry `status` and `evidence` through onto the
 //     Labeled, and that is the whole of what makes an unattributed dimension
 //     publishable rather than deleted. It is the SAME VOCABULARY GATE as the two
 //     blocks above (enrich.KnownDimensionStatus, mirroring the sidecar's
@@ -107,7 +107,7 @@ import (
 // TWO WAYS A DIMENSION CAN SAY "no dominant value", and they come from different
 // sidecars:
 //
-//   - JSON null (a nil *Workstream) is what a sidecar OLDER than SCHEMA 16
+//   - JSON null (a nil *Project) is what a sidecar OLDER than SCHEMA 16
 //     sends, and it is still OMITTED. There is nothing else to do with it: that
 //     sidecar deleted the count before answering, so there is no evidence and no
 //     status to publish, and a zero Labeled would state an outcome of "" that
@@ -122,7 +122,7 @@ import (
 // An object with NO status at all is the third case and also comes from a
 // pre-16 sidecar, which emitted an object only for a dimension it had
 // attributed. It is read as "attributed" for exactly that reason. Defaulting it
-// to anything else — or dropping it — would blank every workstream on a machine
+// to anything else — or dropping it — would blank every project on a machine
 // whose frozen sidecar has not been updated, and those machines exist: the
 // sidecar ships separately and can sit in ~/.local/bin indefinitely.
 func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
@@ -221,23 +221,23 @@ func labeledDimension(w *Dimension) (enrich.Labeled, bool) {
 // unreadable status is a number a reader cannot place, since whether the session
 // was attributed at all is exactly what the status says.
 //
-// IT IS A SEPARATE MAP FROM Workstreams, AND THAT IS THE WHOLE DESIGN. The prior
+// IT IS A SEPARATE MAP FROM Projects, AND THAT IS THE WHOLE DESIGN. The prior
 // is a CONTRAST, never a fallback: it is reported alongside the window's own
 // answer and never supplies one the window lacked. Nothing here reads
-// res.Workstreams, so a dimension the window could not attribute cannot be
+// res.Projects, so a dimension the window could not attribute cannot be
 // filled in from the session by this function or by anything downstream of it —
 // structurally, not by a comment. Inheriting would launder "we do not know" into
 // something confident, which is the defect the sidecar's MIN_EVIDENCE exists to
 // prevent and which this project has paid for twice.
 //
 // The DIMENSION SET is the sidecar's decision, forwarded rather than restated
-// (the same rule Workstreams already follows). Which dimensions carry a contrast
+// (the same rule Projects already follows). Which dimensions carry a contrast
 // is an empirical result that HAS moved (`output_type` was added after the
 // first measurement; `tooling` is the one remaining candidate) — and a second
 // list on this side would be a second thing to drift.
 // It is safe to forward because the sidecar derives the prior's vocabulary from
 // its own ALLOCATION list, so a prior can only ever name a value that publishes
-// in `workstreams` beside it; `named_terms` is structurally not addable there.
+// in `projects` beside it; `named_terms` is structurally not addable there.
 //
 // Nil rather than an empty map when nothing survives — including when the whole
 // block is absent, which is what a sidecar too old to compute it sends: the pass

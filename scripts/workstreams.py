@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Emit the workstream payload the daemon WOULD publish, for every window of a real corpus.
+"""Emit the project payload the daemon WOULD publish, for every window of a real corpus.
 
 Built to answer the questions that decide the production build before any of it is written: which
-workstreams earn a place, what their buckets look like, and how large the honest unattributed row
+projects earn a place, what their buckets look like, and how large the honest unattributed row
 is. Nothing here infers — every value is a deterministic reference level, and a window with no
 dominant value is reported as unattributed rather than given a plausible one.
 
@@ -11,7 +11,7 @@ payload assembly all live in the package now (Counter-based, pandas-free) so the
 daemon share the same measured behaviour. Only the session/time windowing over the parquet events
 frame stays here — that frame is study-only.
 
-    workstreams.py --outdir /tmp/rs-v2 --out ~/keld/refseries-context/workstreams.ndjson
+    projects.py --outdir /tmp/rs-v2 --out ~/keld/refseries-context/projects.ndjson
 """
 import argparse, json, os, sys, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

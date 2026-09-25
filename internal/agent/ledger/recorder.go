@@ -89,7 +89,7 @@ type Measured struct {
 	EstimateUSD         float64 // 0 when no price table applies; the page shows "est." regardless
 }
 
-// Dims are the few workstream dimensions the PROJECTS pane needs to group
+// Dims are the few project dimensions the PROJECTS pane needs to group
 // unattributed blocks into suggestions: which repository, branch and workspace
 // a block belonged to.
 //
@@ -99,7 +99,7 @@ type Measured struct {
 // them, every restart would empty the Projects pane until new work arrived —
 // which is exactly the "the app is broken" reading the ledger exists to
 // prevent. They are identifiers of the class already published to Atlas as
-// workstream values (`repo`, `branch`), never text, a span or an offset, and
+// project values (`repo`, `branch`), never text, a span or an offset, and
 // they pass the same shape validation every other identifier here does.
 //
 // Only these three. The block payload carries eight allocation dimensions and
@@ -113,12 +113,12 @@ type Dims struct {
 
 // Attributed is the outcome of the DETERMINISTIC attribution pass for one
 // block — the rules a person declared, matched against the block's own
-// workstream dimensions. It is written by exactly one caller
+// project dimensions. It is written by exactly one caller
 // (daemon.attributeAndRecord) and read as the machine's answer.
 type Attributed struct {
-	WorkstreamID string
-	Method       Method
-	Conflict     []string // project ids when Reason == ReasonConflict
+	ProjectID string
+	Method    Method
+	Conflict  []string // project ids when Reason == ReasonConflict
 }
 
 // VectorAttributed is the VECTORISED pass's answer for the same block: a
@@ -132,8 +132,8 @@ type Attributed struct {
 // renders one of them as "the" project is making a decision this package has
 // refused to make for it.
 type VectorAttributed struct {
-	// WorkstreamID is the id the vector pass named. Set only alongside StatusOK.
-	WorkstreamID string
+	// ProjectID is the id the vector pass named. Set only alongside StatusOK.
+	ProjectID string
 	// Confidence is that pass's own score for the id, in [0,1]. It is stored
 	// because a second opinion at 0.42 and one at 0.91 are different second
 	// opinions, and nothing else on the row would say which this was.

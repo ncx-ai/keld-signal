@@ -10,7 +10,7 @@ function block(projectId, method) {
   };
 }
 
-const projects = { workstreams: [{ id: "p_x", title: "Keld Signal" }] };
+const projects = { projects: [{ id: "p_x", title: "Keld Signal" }] };
 
 test("an unattributed block (no rule matched) gets the distinct neutral, never a near-background blank", () => {
   const color = rhythmColorFor(block(""), projects);
@@ -24,7 +24,7 @@ test("a block whose attribution stage never ran ALSO gets the neutral, not a bla
 });
 
 test("a project id the projects list doesn't know about (unresolved) ALSO gets the neutral, not a real project's colour", () => {
-  const color = rhythmColorFor(block("p_unknown"), { workstreams: [] });
+  const color = rhythmColorFor(block("p_unknown"), { projects: [] });
   assert.equal(color, RHYTHM_UNATTRIBUTED_COLOR);
 });
 
@@ -48,5 +48,5 @@ test("every rhythm square carries a non-empty hover title naming the block's tim
 
 test("an unattributed block's title says so in plain words, never blank", () => {
   const title = rhythmTitleFor(block(""), projects);
-  assert.match(title, /no workstream/);
+  assert.match(title, /no project/);
 });

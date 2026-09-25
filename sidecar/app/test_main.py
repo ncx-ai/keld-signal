@@ -879,7 +879,7 @@ def test_a_window_the_store_cannot_answer_yet_is_503_not_404():
     """/analyze serves from the reference series, so "not ingested yet" is a real outcome and it
     must be TRANSIENT to the caller. 503 is the only status the Go client's post() waits and
     retries through; a 404 (a permanent "prompt not in this transcript") or a 500 would fail the
-    workstreams facet and publish the profile as "partial" for a window that was one append away
+    projects facet and publish the profile as "partial" for a window that was one append away
     from answerable.
 
     The condition is produced by the real mechanism rather than a stub: the transcript's last
@@ -910,7 +910,7 @@ def test_a_window_whose_evidence_was_pruned_is_410_not_503():
     """Retention's refusal, on the wire. It must NOT be the 503 above: 503 is the one status the
     Go client waits and retries through, and a pruned window is never coming back — retrying it
     would spin forever. 410 Gone falls into the client's `default: return false, false` ("genuine
-    error — do not spin forever"), so the workstreams facet publishes as `partial`, which is the
+    error — do not spin forever"), so the projects facet publishes as `partial`, which is the
     honest outcome for a window whose evidence no longer exists.
 
     Produced by the real mechanism: the store is ingested, then a prune is recorded that covers

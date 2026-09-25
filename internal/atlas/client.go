@@ -2,7 +2,7 @@
 //
 // Everything that talks to Keld Atlas goes through the Client interface here,
 // and the daemon constructs exactly one of two implementations from the
-// `send_to_atlas` setting: Live (the real publisher, settings poll, workstreams
+// `send_to_atlas` setting: Live (the real publisher, settings poll, projects
 // and code redemption) or Off (nothing, ever). That is what makes
 // "Signal runs with or without Atlas" a package boundary rather than a
 // scattering of `if enabled` checks — and it is what lets the local half be

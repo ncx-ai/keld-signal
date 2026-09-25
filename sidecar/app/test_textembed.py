@@ -339,7 +339,7 @@ def _ready_spawn():
 
 def test_warm_brings_a_down_child_up_with_nothing_to_encode():
     """⚠️ THE REGRESSION, AT ITS OWN LEVEL. The only warm path used to be
-    `attribution.workstream_vectors`, which spawns the child as a side effect of an encode it
+    `attribution.project_vectors`, which spawns the child as a side effect of an encode it
     memoises per project list — so once every project doc was embedded, nothing ever started the
     child again and every block answered `pending` forever (smoke agent, 2026-09-03: `spawns: 1`,
     `kills_idle: 1`, nine blocks held for two and a half hours). `warm` exists so the spawn is

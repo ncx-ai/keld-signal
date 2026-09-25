@@ -54,12 +54,12 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport },
-      testIgnore: /(not-running|devgen|map-workstream|integrations)\.spec\.ts$/,
+      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport },
-      testIgnore: /(not-running|devgen|map-workstream|integrations)\.spec\.ts$/,
+      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
     },
     {
       // The page with NO daemon behind it: a tiny static server serves the
@@ -93,9 +93,9 @@ export default defineConfig({
       // Folding a local project away consumes the local projects and
       // suggestions the Projects journey needs, so it runs after both browsers
       // have had theirs — the same reason "devgen" above is its own project.
-      name: "map-workstream",
+      name: "map-project",
       use: { ...devices["Desktop Chrome"], viewport },
-      testMatch: /map-workstream\.spec\.ts$/,
+      testMatch: /map-project\.spec\.ts$/,
       dependencies: ["chromium", "webkit", "not-running"],
     },
     {
@@ -119,7 +119,7 @@ export default defineConfig({
       name: "integrations-live",
       use: { ...devices["Desktop Chrome"], viewport },
       testMatch: /integrations\.spec\.ts$/,
-      dependencies: ["chromium", "webkit", "not-running", "devgen", "map-workstream"],
+      dependencies: ["chromium", "webkit", "not-running", "devgen", "map-project"],
     },
   ],
 });

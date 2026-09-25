@@ -677,7 +677,7 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
 # `digest`/`executive` used to derive from `characterize`'s OWN pandas frame -- a second
 # implementation of facts the shipped `analyze_window` payload already computes (effort/tempo was
 # the clearest case: two code paths free to drift on the exact same conclusion). Both now PROJECT
-# that payload instead: `doc` below is `analyze_window(...)`'s return value (workstreams,
+# that payload instead: `doc` below is `analyze_window(...)`'s return value (projects,
 # inventory, inventory_omitted, dynamics, prior, effort, evidence, schema, session, window_start,
 # window_end -- see sidecar/app/analysis/analyze.py), not a `characterize()` document. That is a
 # call-signature break for the two existing callers of the old shape, `context_value.py` and

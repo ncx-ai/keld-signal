@@ -73,7 +73,7 @@ func WithResolvedFacts(r ResolvedFacts) Option {
 	return func(c *runCfg) { c.resolved = r }
 }
 
-// WithDimensions enables the deterministic workstream pass, backed by fn (the
+// WithDimensions enables the deterministic project pass, backed by fn (the
 // daemon wires sidecar.Client.AnalyzeLabeled). Without it the pass does not run
 // at all — rather than run and fail — so callers with no analysis backend
 // (eval harness, localagent, tests) keep their previous facet set and are not
@@ -430,7 +430,7 @@ func labeledFrom(out map[string]any, key, producer string) Labeled {
 	return Labeled{Value: "", Confidence: 0, Producer: producer}
 }
 
-// dimensionsFrom reads the committed workstream pass output. An empty set
+// dimensionsFrom reads the committed project pass output. An empty set
 // (the analysis ran and found no dominant value anywhere) yields nil, so the
 // facet is omitted from the wire rather than published as an empty object.
 func dimensionsFrom(out map[string]any) map[string]Labeled {
@@ -522,7 +522,7 @@ func inventoryOmittedFrom(out map[string]any) map[string]int {
 }
 
 // priorFrom reads the SESSION PRIOR half of the same committed pass output. It
-// reads its OWN key and never `workstreams`, which is the structural half of
+// reads its OWN key and never `projects`, which is the structural half of
 // "contrast, never fallback": there is no code path by which a session value can
 // arrive in the window's dimension map. Empty yields nil, so a window whose
 // session said nothing publishes no key rather than an empty object that would

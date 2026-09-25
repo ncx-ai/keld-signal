@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Is the published `share` computed against the wrong denominator?
 
-Workstream attribution publishes `share` and `evidence` from EVENT COUNTS — how many tool calls
+Project attribution publishes `share` and `evidence` from EVENT COUNTS — how many tool calls
 touched a thing. The economic weight of a window is TOKENS, and it is already in every transcript
 line the parse decodes. This script measures whether that distinction changes the answer, because
 "the right denominator is sitting there unused" is an argument, not evidence: if the two agree

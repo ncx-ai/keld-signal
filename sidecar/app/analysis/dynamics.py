@@ -247,7 +247,7 @@ STATUSES = ("compared", "both_absent", "slice_absent", "baseline_absent",
 #                  agrees 100% of the time with zero disagreements publishes a constant, which
 #                  is exactly why `project` is absent from that list too.
 #
-# The digest still reports all four as allocation workstreams (`dimensions.payload`); only
+# The digest still reports all four as allocation projects (`dimensions.payload`); only
 # their DYNAMICS are dropped. Do not restore one without re-running `dist` — "it seems useful"
 # is what the 16 KB characterisation was built on, and it scored below emitting nothing.
 DROPPED_DIMENSIONS = ("project", "model", "tooling", "repo")

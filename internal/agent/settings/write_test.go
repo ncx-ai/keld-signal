@@ -101,8 +101,8 @@ func TestWriteV3SettingsGroupsOffNilBecomesEmptyList(t *testing.T) {
 	data, _ := os.ReadFile(paths.AgentConfigPath())
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal(data, &raw)
-	if string(raw["groups_off"]) != "[]" {
-		t.Fatalf("want an empty array, got %s", raw["groups_off"])
+	if string(raw["workstreams_off"]) != "[]" { // vocab:keep — 3.0.6's stored key
+		t.Fatalf("want an empty array, got %s", raw["workstreams_off"]) // vocab:keep
 	}
 }
 

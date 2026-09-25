@@ -170,7 +170,7 @@ test.describe("Generate block (developer)", () => {
       expect(topAfter).not.toBe(topBefore);
 
       // PROJECTS reflects it: the block's repository is listed there.
-      await signal.open("workstreams");
+      await signal.open("projects");
       await expect(page.getByText(repo, { exact: false }).first())
         .toBeVisible({ timeout: 30_000 });
 

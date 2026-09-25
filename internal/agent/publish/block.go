@@ -48,7 +48,7 @@ import (
 //
 //	source, correlation{session_id} | session_id, actor,
 //	window{start,end} | start/end, start_reason, end_reason,
-//	workstreams{}, dynamics{}, prior{}, effort{},
+//	projects{}, dynamics{}, prior{}, effort{},
 //	pipeline_status, extractor_versions, schema_version, ts
 //
 // ⚠️ NO `covers`. A block row used to carry the prompt episodes overlapping it;
@@ -85,7 +85,7 @@ type BlockEnrichment struct {
 	StartReason string `json:"start_reason"`
 	EndReason   string `json:"end_reason"`
 	// Projects, ProjectsStatus and Attribution are the on-device project
-	// attribution for this block (see enrich.WorkstreamAttribution). All three are
+	// attribution for this block (see enrich.ProjectAttribution). All three are
 	// omitempty so a block published by a machine with attribution switched off
 	// is byte-identical to the payload before this field existed — Atlas parses
 	// with extra="ignore" and stores the raw body, so a silent machine and an
@@ -95,7 +95,7 @@ type BlockEnrichment struct {
 	// long before attribution can run (it needs the block's own analysis as
 	// input), so BuildBlock's callers must not have to thread three fields they
 	// don't yet have through every existing call site.
-	// WorkstreamMatches is every project this block matched, each WITH THE RULES
+	// ProjectMatches is every project this block matched, each WITH THE RULES
 	// that matched it.
 	//
 	// ⚠️ **IT WAS `Entered` / `entered` UNTIL 2026-09-09.** The old name came
@@ -109,7 +109,7 @@ type BlockEnrichment struct {
 	// ⚠️ **IT IS NOT `Projects`, AND THE DIFFERENCE IS THE WHOLE FEATURE.**
 	// `Projects` is the semantic matcher's answer: Atlas value ids with
 	// confidences, averaging 4.9 ids per block on a real machine.
-	// `WorkstreamMatches` is the deterministic one — which projects hold a rule
+	// `ProjectMatches` is the deterministic one — which projects hold a rule
 	// this block actually matches — and it carries the LOCAL projects too,
 	// which nothing else on the wire has ever done.
 	//
@@ -122,10 +122,10 @@ type BlockEnrichment struct {
 	// title, so sending it would send the title in a thin disguise. Rules are a
 	// repository remote or a ticket key, both of which already cross as block
 	// dimensions.
-	WorkstreamMatches []WorkstreamMatch              `json:"project_matches"`
-	Workstreams       []enrich.WorkstreamAttribution `json:"projects,omitempty"`
-	WorkstreamsStatus string                         `json:"projects_status,omitempty"`
-	Attribution       *enrich.AttributionMeta        `json:"attribution,omitempty"`
+	ProjectMatches []ProjectMatch              `json:"project_matches"`
+	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
+	ProjectsStatus string                      `json:"projects_status,omitempty"`
+	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
 	// Concepts is what this block was ABOUT — see enrich.Concept, which carries
 	// the privacy argument, since this is the one field on a block row derived
 	// from message text that is not already covered by the named_terms decision.
@@ -136,7 +136,7 @@ type BlockEnrichment struct {
 	// attribution runs carries no concepts and is byte-identical to the payload
 	// before this field existed, exactly as Projects is.
 	Concepts []enrich.Concept `json:"concepts,omitempty"`
-	// AnalysisFacets is the deterministic analysis of this block: workstreams,
+	// AnalysisFacets is the deterministic analysis of this block: projects,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
 	// AnalysisFacets.
@@ -150,13 +150,13 @@ type BlockEnrichment struct {
 	TS                string            `json:"ts"`
 }
 
-// WorkstreamMatch is one project a block landed in, on the wire.
+// ProjectMatch is one project a block landed in, on the wire.
 //
-// Defined HERE rather than reused from internal/agent/workstreams, so the publish
+// Defined HERE rather than reused from internal/agent/projects, so the publish
 // layer does not depend on the decision layer: a wire shape and a matcher have
 // different reasons to change, and one importing the other makes the payload
 // hostage to a refactor of the rules.
-type WorkstreamMatch struct {
+type ProjectMatch struct {
 	// ID is the Atlas value id, EMPTY for a local project — its id is derived
 	// from its title, so sending it would send the title in a thin disguise.
 	ID string `json:"id,omitempty"`
@@ -205,7 +205,7 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 	}
 }
 
-// WithWorkstreams returns a copy of b with its project attribution set —
+// WithProjects returns a copy of b with its project attribution set —
 // Projects, ProjectsStatus, the pass's own AttributionMeta, and the Concepts
 // the same pass extracted.
 //
@@ -216,11 +216,11 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 // that turns attribution on after the block already published once), so every
 // existing BuildBlock caller must stay untouched. b is passed by value and
 // returned, not mutated, so a caller holding the original (e.g. to retry a
-// failed publish) is unaffected by a later WithWorkstreams call on the copy.
-func WithWorkstreams(b BlockEnrichment, ps []enrich.WorkstreamAttribution, status string,
+// failed publish) is unaffected by a later WithProjects call on the copy.
+func WithProjects(b BlockEnrichment, ps []enrich.ProjectAttribution, status string,
 	meta *enrich.AttributionMeta, concepts []enrich.Concept) BlockEnrichment {
-	b.Workstreams = ps
-	b.WorkstreamsStatus = status
+	b.Projects = ps
+	b.ProjectsStatus = status
 	b.Attribution = meta
 	b.Concepts = concepts
 	return b
@@ -244,7 +244,7 @@ func BlockCorrID(sessionID, start string) string {
 
 // blockExtractorVersions attributes a block row to the pass that produced it.
 // A block runs exactly one thing — the deterministic analysis — so the map has
-// one entry, and it is the SAME key and version a prompt row's workstreams
+// one entry, and it is the SAME key and version a prompt row's projects
 // carry, because it IS the same analysis over different bounds. A reader
 // comparing a block row against a prompt row must not have to learn a second
 // name for one producer; the row's KIND is already stated, once, in

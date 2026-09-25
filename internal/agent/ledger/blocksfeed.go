@@ -15,15 +15,15 @@ var errUnavailable = errors.New("ledger: database unavailable")
 // the projects feed to it would mean every future change to what the page shows
 // about delivery silently changes what attribution groups on.
 type BlockRecord struct {
-	Session      string
-	Start        int64
-	End          int64
-	Repo         string
-	Branch       string
-	Workspace    string
-	WorkstreamID string // "" when the block is unattributed — the ones that become suggestions
-	Tokens       int64  // the four consumed classes, summed
-	Minutes      float64
+	Session   string
+	Start     int64
+	End       int64
+	Repo      string
+	Branch    string
+	Workspace string
+	ProjectID string // "" when the block is unattributed — the ones that become suggestions
+	Tokens    int64  // the four consumed classes, summed
+	Minutes   float64
 }
 
 // BlocksSince returns every block whose START is at or after t.
@@ -60,7 +60,7 @@ func (s *Store) BlocksSince(t time.Time, limit int) ([]BlockRecord, error) {
 	for rows.Next() {
 		var r BlockRecord
 		if err := rows.Scan(&r.Session, &r.Start, &r.End, &r.Repo, &r.Branch,
-			&r.Workspace, &r.WorkstreamID, &r.Tokens); err != nil {
+			&r.Workspace, &r.ProjectID, &r.Tokens); err != nil {
 			return nil, err
 		}
 		if r.End > r.Start {

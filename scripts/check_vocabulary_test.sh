@@ -13,14 +13,14 @@ expect() { # expect <want-exit> <label>
 }
 printf 'package x\n\nvar _ = 1\n' > "$T/internal/x/a.go"
 expect 0 "a clean tree passes"
-printf 'package x\n\ntype RemoteProject struct{}\n' > "$T/internal/x/a.go"
+printf 'package x\n\ntype RemoteWorkstream struct{}\n' > "$T/internal/x/a.go"
 expect 1 "a retired Go identifier fails"
-printf 'package x\n\n// GET /v1/projects\n' > "$T/internal/x/a.go"
+printf 'package x\n\n// GET /v1/workstreams\n' > "$T/internal/x/a.go"
 expect 1 "a retired local route fails, even in a comment"
-printf 'package x\n\nconst old = "KELD_PROJECTS_FILE" // vocab:keep\n' > "$T/internal/x/a.go"
+printf 'package x\n\nconst old = "KELD_WORKSTREAMS_FILE" // vocab:keep\n' > "$T/internal/x/a.go"
 expect 0 "a line marked vocab:keep is exempt"
 printf '// vocab:keep-file\npackage x\n\nvar s = `{"workstreams_off": []}`\n' > "$T/internal/x/a.go"
 expect 0 "a file marked vocab:keep-file is exempt"
-printf 'export const x = "New project";\n' > "$T/internal/x/app.js"; rm -f "$T/internal/x/a.go"
+printf 'export const x = "New workstream";\n' > "$T/internal/x/app.js"; rm -f "$T/internal/x/a.go"
 expect 1 "retired page copy fails"
 exit $fail

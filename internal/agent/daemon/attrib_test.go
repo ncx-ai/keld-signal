@@ -75,9 +75,9 @@ func (fakeAttribClient) Attribute(path, sessionID string, start, end float64, di
 // would silently leave them nil and the path would never start.
 func TestTheAttributionCapabilitiesAreServiceFacetsOfTheRealClient(t *testing.T) {
 	var _ attributionClient = (*sidecar.Client)(nil)
-	var _ workstreamsPoster = (*sidecar.Client)(nil)
+	var _ projectsPoster = (*sidecar.Client)(nil)
 	var _ attrib.AttributeClient = (*sidecar.Client)(nil)
-	if f := facetsFor(nil, nil); f.Attribution != nil || f.PostWorkstreams != nil {
+	if f := facetsFor(nil, nil); f.Attribution != nil || f.PostProjects != nil {
 		t.Error("no client means no attribution capability")
 	}
 	c := sidecar.New("http://127.0.0.1:1", time.Second)
@@ -85,40 +85,40 @@ func TestTheAttributionCapabilitiesAreServiceFacetsOfTheRealClient(t *testing.T)
 	if f.Attribution == nil {
 		t.Error("the real client must advertise the attribution client")
 	}
-	if f.PostWorkstreams == nil {
-		t.Error("the real client must advertise PostWorkstreams")
+	if f.PostProjects == nil {
+		t.Error("the real client must advertise PostProjects")
 	}
 }
 
-// KELD_WORKSTREAMS_FILE wins over the remote settings key.
-func TestResolveWorkstreamsPrecedence(t *testing.T) {
+// KELD_PROJECTS_FILE wins over the remote settings key.
+func TestResolveProjectsPrecedence(t *testing.T) {
 	t.Run("env file wins", func(t *testing.T) {
 		dir := t.TempDir()
 		p := dir + "/projects.json"
 		if err := writeFile(p, `[{"id":"proj_env","title":"Env"}]`); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv(settings.EnvWorkstreamsFile, p)
-		remote := &settings.Remote{Workstreams: &[]settings.RemoteWorkstream{{ID: "proj_remote"}}}
-		got := resolveWorkstreams(remote)
+		t.Setenv(settings.EnvProjectsFile, p)
+		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
+		got := resolveProjects(remote)
 		if !got.ok || len(got.list) != 1 || got.list[0].ID != "proj_env" {
 			t.Fatalf("got %+v, want the env file's project", got)
 		}
 	})
 	t.Run("remote key when no env file", func(t *testing.T) {
-		t.Setenv(settings.EnvWorkstreamsFile, "")
-		remote := &settings.Remote{Workstreams: &[]settings.RemoteWorkstream{{ID: "proj_remote"}}}
-		got := resolveWorkstreams(remote)
+		t.Setenv(settings.EnvProjectsFile, "")
+		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
+		got := resolveProjects(remote)
 		if !got.ok || len(got.list) != 1 || got.list[0].ID != "proj_remote" {
 			t.Fatalf("got %+v, want the remote project", got)
 		}
 	})
 	t.Run("none when neither is set", func(t *testing.T) {
-		t.Setenv(settings.EnvWorkstreamsFile, "")
-		if got := resolveWorkstreams(nil); !got.ok || got.list != nil {
+		t.Setenv(settings.EnvProjectsFile, "")
+		if got := resolveProjects(nil); !got.ok || got.list != nil {
 			t.Fatalf("got %+v, want ok=true, list=nil", got)
 		}
-		if got := resolveWorkstreams(&settings.Remote{}); !got.ok || got.list != nil {
+		if got := resolveProjects(&settings.Remote{}); !got.ok || got.list != nil {
 			t.Fatalf("got %+v, want ok=true, list=nil (remote.Projects unset)", got)
 		}
 	})
@@ -127,9 +127,9 @@ func TestResolveWorkstreamsPrecedence(t *testing.T) {
 	// or a transient failure reads identically to a trustworthy empty and a
 	// caller has no way to refuse posting it.
 	t.Run("unreadable env file yields ok=false, not an empty-but-trustworthy list", func(t *testing.T) {
-		t.Setenv(settings.EnvWorkstreamsFile, "/does/not/exist.json")
-		remote := &settings.Remote{Workstreams: &[]settings.RemoteWorkstream{{ID: "proj_remote"}}}
-		got := resolveWorkstreams(remote)
+		t.Setenv(settings.EnvProjectsFile, "/does/not/exist.json")
+		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
+		got := resolveProjects(remote)
 		if got.ok {
 			t.Fatalf("got %+v, want ok=false — a read error is not a trustworthy answer", got)
 		}
@@ -139,20 +139,20 @@ func TestResolveWorkstreamsPrecedence(t *testing.T) {
 	})
 }
 
-func TestWorkstreamsChanged(t *testing.T) {
-	a := []settings.RemoteWorkstream{{ID: "p1"}}
-	b := []settings.RemoteWorkstream{{ID: "p1"}}
-	c := []settings.RemoteWorkstream{{ID: "p2"}}
-	if workstreamsChanged(a, b) {
+func TestProjectsChanged(t *testing.T) {
+	a := []settings.RemoteProject{{ID: "p1"}}
+	b := []settings.RemoteProject{{ID: "p1"}}
+	c := []settings.RemoteProject{{ID: "p2"}}
+	if projectsChanged(a, b) {
 		t.Fatal("identical lists must not read as changed")
 	}
-	if !workstreamsChanged(a, c) {
+	if !projectsChanged(a, c) {
 		t.Fatal("different lists must read as changed")
 	}
-	if !workstreamsChanged(nil, a) {
+	if !projectsChanged(nil, a) {
 		t.Fatal("nil -> non-nil must read as changed")
 	}
-	if workstreamsChanged(nil, nil) {
+	if projectsChanged(nil, nil) {
 		t.Fatal("nil -> nil must not read as changed")
 	}
 }
@@ -161,29 +161,29 @@ func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// C4: lastWorkstreams moved from a bare var to workstreamsState because it is now
+// C4: lastProjects moved from a bare var to projectsState because it is now
 // written by TWO goroutines — the initial startup POST (moved off the
 // synchronous path) and onRemote on the poll goroutine. This pins its two
 // contracts directly: concurrent access must not race, and a FAILED post
 // must leave the held value stale (never latch a failure as success).
-func TestWorkstreamsStateIsConcurrencySafe(t *testing.T) {
-	ps := &workstreamsState{}
+func TestProjectsStateIsConcurrencySafe(t *testing.T) {
+	ps := &projectsState{}
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 200; i++ {
-			ps.set([]settings.RemoteWorkstream{{ID: "from-goroutine-a"}})
+			ps.set([]settings.RemoteProject{{ID: "from-goroutine-a"}})
 		}
 		close(done)
 	}()
 	for i := 0; i < 200; i++ {
-		ps.changed([]settings.RemoteWorkstream{{ID: "from-main"}})
+		ps.changed([]settings.RemoteProject{{ID: "from-main"}})
 	}
 	<-done
 }
 
-func TestWorkstreamsStateSetOnlyOnSuccess(t *testing.T) {
-	ps := &workstreamsState{}
-	p := []settings.RemoteWorkstream{{ID: "proj_a"}}
+func TestProjectsStateSetOnlyOnSuccess(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_a"}}
 	if !ps.changed(p) {
 		t.Fatal("an empty state must read a non-nil list as changed")
 	}
@@ -201,35 +201,35 @@ func TestWorkstreamsStateSetOnlyOnSuccess(t *testing.T) {
 // NB1 (round 2 review): the startup POST must NEVER send an empty resolved
 // list — that emptiness is precisely what could clobber a real list the
 // concurrent settings poll already told the sidecar about.
-func TestMaybePostWorkstreamsAtStartupSkipsAnEmptyList(t *testing.T) {
-	ps := &workstreamsState{}
+func TestMaybePostProjectsAtStartupSkipsAnEmptyList(t *testing.T) {
+	ps := &projectsState{}
 	var calls int
-	post := func(p []settings.RemoteWorkstream) error {
+	post := func(p []settings.RemoteProject) error {
 		calls++
 		return nil
 	}
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{ok: true})
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{list: []settings.RemoteWorkstream{}, ok: true})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{ok: true})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: []settings.RemoteProject{}, ok: true})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an empty/nil list, want 0", calls)
 	}
 }
 
 // Finding 1 (round 3 review): an UNTRUSTWORTHY resolution (ok=false — a
-// transient KELD_WORKSTREAMS_FILE read error) must never be posted either, even
+// transient KELD_PROJECTS_FILE read error) must never be posted either, even
 // though a resolution can name a non-empty list — ok is checked before
 // content, not instead of the empty-list guard.
-func TestMaybePostWorkstreamsAtStartupSkipsAReadError(t *testing.T) {
-	ps := &workstreamsState{}
+func TestMaybePostProjectsAtStartupSkipsAReadError(t *testing.T) {
+	ps := &projectsState{}
 	var calls int
-	post := func(p []settings.RemoteWorkstream) error {
+	post := func(p []settings.RemoteProject) error {
 		calls++
 		return nil
 	}
 	// ok=false with a non-nil list would be a malformed resolution in
-	// practice (resolveWorkstreams never constructs one), but the gate must not
+	// practice (resolveProjects never constructs one), but the gate must not
 	// rely on that — it checks ok first, unconditionally.
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{list: []settings.RemoteWorkstream{{ID: "should-never-post"}}, ok: false})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: []settings.RemoteProject{{ID: "should-never-post"}}, ok: false})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an untrustworthy resolution, want 0", calls)
 	}
@@ -239,30 +239,30 @@ func TestMaybePostWorkstreamsAtStartupSkipsAReadError(t *testing.T) {
 // (matching what the startup goroutine itself resolved), the startup
 // goroutine's own POST must be skipped as redundant rather than re-sending
 // it — the re-check-before-POST guard.
-func TestMaybePostWorkstreamsAtStartupSkipsWhenAlreadyPosted(t *testing.T) {
-	ps := &workstreamsState{}
-	p := []settings.RemoteWorkstream{{ID: "proj_env"}}
+func TestMaybePostProjectsAtStartupSkipsWhenAlreadyPosted(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
 	ps.set(p) // simulate: the poll goroutine already posted this exact list
 	var calls int
-	post := func(got []settings.RemoteWorkstream) error {
+	post := func(got []settings.RemoteProject) error {
 		calls++
 		return nil
 	}
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{list: p, ok: true})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an already-current list, want 0 (redundant POST)", calls)
 	}
 }
 
-func TestMaybePostWorkstreamsAtStartupPostsAndRecordsOnSuccess(t *testing.T) {
-	ps := &workstreamsState{}
-	p := []settings.RemoteWorkstream{{ID: "proj_env"}}
-	var got []settings.RemoteWorkstream
-	post := func(v []settings.RemoteWorkstream) error {
+func TestMaybePostProjectsAtStartupPostsAndRecordsOnSuccess(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
+	var got []settings.RemoteProject
+	post := func(v []settings.RemoteProject) error {
 		got = v
 		return nil
 	}
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{list: p, ok: true})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if len(got) != 1 || got[0].ID != "proj_env" {
 		t.Fatalf("post received %+v, want %+v", got, p)
 	}
@@ -271,11 +271,11 @@ func TestMaybePostWorkstreamsAtStartupPostsAndRecordsOnSuccess(t *testing.T) {
 	}
 }
 
-func TestMaybePostWorkstreamsAtStartupDoesNotRecordOnFailure(t *testing.T) {
-	ps := &workstreamsState{}
-	p := []settings.RemoteWorkstream{{ID: "proj_env"}}
-	post := func(v []settings.RemoteWorkstream) error { return errors.New("sidecar unreachable") }
-	maybePostWorkstreamsAtStartup(post, ps, workstreamsResolution{list: p, ok: true})
+func TestMaybePostProjectsAtStartupDoesNotRecordOnFailure(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
+	post := func(v []settings.RemoteProject) error { return errors.New("sidecar unreachable") }
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if !ps.changed(p) {
 		t.Fatal("a failed post must not be recorded as current — a later attempt must still see it as changed")
 	}
@@ -283,7 +283,7 @@ func TestMaybePostWorkstreamsAtStartupDoesNotRecordOnFailure(t *testing.T) {
 
 // NB1's regression guard: run the startup helper and the poll helper
 // CONCURRENTLY, as real goroutines, with the startup side resolving an EMPTY
-// list (resolveWorkstreams(nil) — what every machine without KELD_WORKSTREAMS_FILE
+// list (resolveProjects(nil) — what every machine without KELD_PROJECTS_FILE
 // resolves to today, since Atlas does not yet serve `projects`) and the poll
 // side resolving a REAL one. Regardless of goroutine scheduling, the sidecar
 // (the fake `post` sink here) must never end up holding the empty list.
@@ -292,43 +292,43 @@ func TestMaybePostWorkstreamsAtStartupDoesNotRecordOnFailure(t *testing.T) {
 // "structurally impossible to lose" — that overclaims what THIS test proves.
 // For THIS specific construction (one side always empty, the other always
 // real), guard 1 alone (never post an empty list — pinned deterministically,
-// on its own, by TestMaybePostWorkstreamsAtStartupSkipsAnEmptyList) is what
+// on its own, by TestMaybePostProjectsAtStartupSkipsAnEmptyList) is what
 // makes the outcome deterministic: the startup goroutine never calls `post`
 // at all, so there is nothing left to race. Guard 2 (the changed()
 // re-check immediately before posting) is a separate, PROBABILISTIC
 // defense-in-depth for a narrower scenario this construction does not
 // exercise — two goroutines both resolving genuinely different NON-EMPTY
-// values (not reachable today, since resolveWorkstreams's env-file-wins
-// precedence makes the two call sites agree whenever KELD_WORKSTREAMS_FILE is
-// set — see postWorkstreamsIfKnownNonEmpty's doc comment). Running many
+// values (not reachable today, since resolveProjects's env-file-wins
+// precedence makes the two call sites agree whenever KELD_PROJECTS_FILE is
+// set — see postProjectsIfKnownNonEmpty's doc comment). Running many
 // concurrent iterations here is a real (not sleep-based) exercise of
 // goroutine scheduling and is worth keeping, but it does not itself prove
 // guard 2 is race-free; it corroborates guard 1's determinism repeatedly
 // rather than adding a second deterministic proof.
 func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
-	t.Setenv(settings.EnvWorkstreamsFile, "") // resolveWorkstreams(nil) must resolve empty, not to a leftover env file
+	t.Setenv(settings.EnvProjectsFile, "") // resolveProjects(nil) must resolve empty, not to a leftover env file
 	for iter := 0; iter < 50; iter++ {
-		state := &workstreamsState{}
+		state := &projectsState{}
 		var mu sync.Mutex
-		var posted []settings.RemoteWorkstream
-		post := func(p []settings.RemoteWorkstream) error {
+		var posted []settings.RemoteProject
+		post := func(p []settings.RemoteProject) error {
 			mu.Lock()
 			posted = p
 			mu.Unlock()
 			return nil
 		}
-		real := []settings.RemoteWorkstream{{ID: "proj_real"}}
-		remote := &settings.Remote{Workstreams: &real}
+		real := []settings.RemoteProject{{ID: "proj_real"}}
+		remote := &settings.Remote{Projects: &real}
 
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			maybePostWorkstreamsAtStartup(post, state, resolveWorkstreams(nil)) // empty: no KELD_WORKSTREAMS_FILE
+			maybePostProjectsAtStartup(post, state, resolveProjects(nil)) // empty: no KELD_PROJECTS_FILE
 		}()
 		go func() {
 			defer wg.Done()
-			postWorkstreamsOnChange(post, state, remote)
+			postProjectsOnChange(post, state, remote)
 		}()
 		wg.Wait()
 
@@ -347,42 +347,42 @@ func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
 // Finding 1 (round 3 review): the poll path had no empty-list guard at all
 // before this fix — byte-identical to the pre-NB1 inline code, which is
 // exactly why the reviewer asked for it anyway even though it isn't new
-// breakage. Mirrors TestMaybePostWorkstreamsAtStartupSkipsAnEmptyList for the
+// breakage. Mirrors TestMaybePostProjectsAtStartupSkipsAnEmptyList for the
 // poll half.
-func TestPostWorkstreamsOnChangeSkipsAnEmptyList(t *testing.T) {
-	t.Setenv(settings.EnvWorkstreamsFile, "")
-	ps := &workstreamsState{}
+func TestPostProjectsOnChangeSkipsAnEmptyList(t *testing.T) {
+	t.Setenv(settings.EnvProjectsFile, "")
+	ps := &projectsState{}
 	var calls int
-	post := func(p []settings.RemoteWorkstream) error {
+	post := func(p []settings.RemoteProject) error {
 		calls++
 		return nil
 	}
-	postWorkstreamsOnChange(post, ps, nil)
-	postWorkstreamsOnChange(post, ps, &settings.Remote{})
+	postProjectsOnChange(post, ps, nil)
+	postProjectsOnChange(post, ps, &settings.Remote{})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an empty/nil resolution, want 0", calls)
 	}
 }
 
-// Finding 1's named covering test: a TRANSIENT KELD_WORKSTREAMS_FILE read
+// Finding 1's named covering test: a TRANSIENT KELD_PROJECTS_FILE read
 // failure at POLL time must NOT clear a previously-known-good list — that is
 // precisely NB1's permanent-mis-attribution outcome, arriving through the
-// poll door instead of the startup door. Before workstreamsResolution.ok
+// poll door instead of the startup door. Before projectsResolution.ok
 // existed, a read error and "the file legitimately declares zero projects"
 // were the same value (nil) and this test would have failed: the read error
 // would have posted an empty list right over the good one.
-func TestPostWorkstreamsOnChangeDoesNotClearAGoodListOnAReadError(t *testing.T) {
-	ps := &workstreamsState{}
-	good := []settings.RemoteWorkstream{{ID: "proj_good"}}
+func TestPostProjectsOnChangeDoesNotClearAGoodListOnAReadError(t *testing.T) {
+	ps := &projectsState{}
+	good := []settings.RemoteProject{{ID: "proj_good"}}
 	ps.set(good) // simulate: a prior successful post already told the sidecar about a real list
 
-	t.Setenv(settings.EnvWorkstreamsFile, "/does/not/exist.json") // set but unreadable: a transient failure
+	t.Setenv(settings.EnvProjectsFile, "/does/not/exist.json") // set but unreadable: a transient failure
 	var calls int
-	post := func(p []settings.RemoteWorkstream) error {
+	post := func(p []settings.RemoteProject) error {
 		calls++
 		return nil
 	}
-	postWorkstreamsOnChange(post, ps, &settings.Remote{Workstreams: &[]settings.RemoteWorkstream{{ID: "proj_would_be_wrong_anyway"}}})
+	postProjectsOnChange(post, ps, &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_would_be_wrong_anyway"}}})
 
 	if calls != 0 {
 		t.Fatalf("post called %d times on a read error, want 0 — a transient failure must never reach the sidecar", calls)
@@ -391,6 +391,6 @@ func TestPostWorkstreamsOnChangeDoesNotClearAGoodListOnAReadError(t *testing.T) 
 	// never touched — so a later successful poll still tries to reconcile,
 	// rather than the read-error silently being treated as "nothing to do".
 	if ps.changed(good) {
-		t.Fatal("workstreamsState must be untouched by a read error — it still holds the previously-known-good list")
+		t.Fatal("projectsState must be untouched by a read error — it still holds the previously-known-good list")
 	}
 }

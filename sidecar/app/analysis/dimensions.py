@@ -1,7 +1,7 @@
 """The allocation + inventory payload: ask a window's rollup a fixed set of questions.
 
-Ported from `scripts/workstreams.py`, which discovered this shape against the real corpus before
-any of it was production code — which workstreams earn a place, and how large the honest
+Ported from `scripts/projects.py`, which discovered this shape against the real corpus before
+any of it was production code — which projects earn a place, and how large the honest
 unattributed row is. Nothing here infers: every value is a deterministic reference level, and a
 window with no dominant value is LABELLED unattributed rather than given a plausible one.
 
@@ -20,7 +20,7 @@ was impossible ("evidence is dropped on the way to the published enrichment").
 from app.analysis import SCHEMA
 from app.analysis.window import attribution
 
-# ALLOCATION workstreams: spend divides among them, so one value must own the window. The floor is
+# ALLOCATION projects: spend divides among them, so one value must own the window. The floor is
 # what makes "unattributed" honest — below it there is no dominant value and we say so rather than
 # picking the largest of several near-equals. 0.5 is deliberate: a bucket holding under half the
 # evidence is not what the hour was about.
@@ -234,7 +234,7 @@ PROVENANCE = {"repo": "known:daemon_git"}
 
 
 def payload(rl):
-    """rollup -> {"workstreams": {...}, "inventory": {...}}.
+    """rollup -> {"projects": {...}, "inventory": {...}}.
 
     EVERY ALLOCATION dimension is present and non-null, carrying `value`, `share`, `evidence`,
     `status` and `provenance`. `status` is `window.REASONS` — `attributed` is the only one a

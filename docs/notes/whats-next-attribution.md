@@ -10,7 +10,7 @@ Owner decisions recorded here so the next session starts from them, not from re-
   decision rule, verifier A/B + customer-layer metrics in the eval, smoke runbook, design notes.
   Passed its final whole-branch review after fix waves; merge-ready.
 - **keld-atlas `proto/projects`** (4 commits): the DIRTY prototype — `projects` on org settings
-  (migration 0084), served on `/v1/enrichment-settings`, admin PATCH, `/v1/workstreams/report`,
+  (migration 0084), served on `/v1/enrichment-settings`, admin PATCH, `/v1/projects/report`,
   Projects tab in Workstreams. Disposable by design.
 - **The loop ran end to end tonight**: daemon fetched the six demo projects FROM Atlas (no file
   override), real blocks flowed up (24 at last count, 16 attribution jobs still draining), the

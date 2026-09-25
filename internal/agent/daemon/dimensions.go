@@ -70,12 +70,12 @@ type attributionClient interface {
 	Attribute(path, sessionID string, start, end float64, dims map[string]string) (sidecar.AttributeResult, bool)
 }
 
-// workstreamsPoster is the capability behind POST /projects — telling the
+// projectsPoster is the capability behind POST /projects — telling the
 // sidecar which projects are currently declared. Separate from
 // attributionClient because it is called by the daemon directly (at startup
 // and on a settings-poll change), never by the attribution loop itself.
-type workstreamsPoster interface {
-	PostWorkstreams(projects []settings.RemoteWorkstream) error
+type projectsPoster interface {
+	PostProjects(projects []settings.RemoteProject) error
 }
 
 // transcriptIngester is the capability behind the watcher's ingest signal (the
@@ -98,7 +98,7 @@ type transcriptIngester interface {
 //
 // They travel as one value so the next non-model route does not add another
 // parameter to Worker, process and wireEnrichment. A zero value is the honest
-// "this run has no analysis service": the workstreams pass then never
+// "this run has no analysis service": the projects pass then never
 // registers, and sensitivity reports itself degraded (see
 // enrich.WithPIIScanner).
 type serviceFacets struct {
@@ -136,10 +136,10 @@ type serviceFacets struct {
 	// Nil when the service cannot provide it, which switches the attribution
 	// loop off rather than degrading it — the same rule Blocks/Tick follow.
 	Attribution attrib.AttributeClient
-	// PostWorkstreams tells the sidecar which projects are currently declared
+	// PostProjects tells the sidecar which projects are currently declared
 	// (POST /projects). Consumed by the daemon directly at startup and on a
 	// settings-poll change, never per job or per block.
-	PostWorkstreams func(projects []settings.RemoteWorkstream) error
+	PostProjects func(projects []settings.RemoteProject) error
 	// AwaitSidecarStop blocks (bounded) until the supervisor has finished
 	// stopping the sidecar and reaping its process group. It is consumed by no
 	// job at all — Run calls it once, after serve() returns, so the daemon does
@@ -154,7 +154,7 @@ type serviceFacets struct {
 	// ⚠️ IT EXISTS FOR STATE THE DAEMON PUSHES DOWN ONCE. A restart wipes the
 	// sidecar parent's module state, and the daemon's own record of having
 	// pushed survives it — so a pusher gated on "has anything changed?" never
-	// speaks again. The concrete case is PostWorkstreams: after a respawn every
+	// speaks again. The concrete case is PostProjects: after a respawn every
 	// /attribute answered `skipped:no_projects` until the DAEMON restarted.
 	// Anything else pushed down out-of-band (rather than riding each request,
 	// the way PIIRegions does) belongs on this hook too.
@@ -171,7 +171,7 @@ type serviceFacets struct {
 // client here just as "auto" derives them from the sidecar Model. That is why
 // wireEnrichment returns them as their own value and threads them to process,
 // rather than letting process rederive them from the Model (which would be nil,
-// and would silently drop every workstream and every PII finding).
+// and would silently drop every project and every PII finding).
 //
 // The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
 // *sidecar.Client copies, so the capabilities survive them and the requests are
@@ -206,8 +206,8 @@ func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 	if at, ok := m.(attributionClient); ok {
 		f.Attribution = at
 	}
-	if pp, ok := m.(workstreamsPoster); ok {
-		f.PostWorkstreams = pp.PostWorkstreams
+	if pp, ok := m.(projectsPoster); ok {
+		f.PostProjects = pp.PostProjects
 	}
 	return f
 }

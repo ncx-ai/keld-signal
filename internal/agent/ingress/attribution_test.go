@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
-	"github.com/ncx-ai/keld-signal/internal/agent/workstreams"
+	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 )
 
 // TestNewAttributionRefusesAnUnreadableDocumentRatherThanReadingItAsEmpty.
@@ -37,8 +37,8 @@ func TestNewAttributionOnAMissingDocumentIsAnHonestEmptyOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a missing document must not be an error: %v", err)
 	}
-	res := pass.Of(map[string]enrich.Labeled{workstreams.DimRepo: attributedDim("github.com/acme/web")})
-	if res.WorkstreamID != "" || res.Reason != workstreams.ReasonNoRuleMatched {
+	res := pass.Of(map[string]enrich.Labeled{projects.DimRepo: attributedDim("github.com/acme/web")})
+	if res.ProjectID != "" || res.Reason != projects.ReasonNoRuleMatched {
 		t.Fatalf("result = %#v, want no project / no_rule_matched", res)
 	}
 }
@@ -46,12 +46,12 @@ func TestNewAttributionOnAMissingDocumentIsAnHonestEmptyOne(t *testing.T) {
 // TestTheSameAttributionValueAnswersForEveryBlock pins the property the two
 // surfaces' agreement rests on: one Attribution, read once, gives one answer
 // per dims — so the pane and the Today rows cannot pick up different documents
-// or a different workstream-off list halfway through a page load.
+// or a different project-off list halfway through a page load.
 func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Save(workstreams.Document{
-		Version:     workstreams.CurrentVersion,
-		Workstreams: []workstreams.Workstream{{ID: "p1", Title: "One", Repos: []string{"github.com/acme/web"}}},
+	if err := s.Save(projects.Document{
+		Version:  projects.CurrentVersion,
+		Projects: []projects.Project{{ID: "p1", Title: "One", Repos: []string{"github.com/acme/web"}}},
 	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -60,16 +60,16 @@ func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 		t.Fatalf("NewAttribution: %v", err)
 	}
 
-	dims := map[string]enrich.Labeled{workstreams.DimRepo: attributedDim("github.com/acme/web")}
+	dims := map[string]enrich.Labeled{projects.DimRepo: attributedDim("github.com/acme/web")}
 	first := pass.Of(dims)
-	if first.WorkstreamID != "p1" {
+	if first.ProjectID != "p1" {
 		t.Fatalf("precondition: result = %#v, want p1", first)
 	}
 
 	// Changing the document underneath must not change THIS pass's answers —
 	// a single request renders one consistent picture, and the next request
 	// picks up the change.
-	if err := s.Save(workstreams.Document{Version: workstreams.CurrentVersion}); err != nil {
+	if err := s.Save(projects.Document{Version: projects.CurrentVersion}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if second := pass.Of(dims); !reflect.DeepEqual(second, first) {
@@ -79,7 +79,7 @@ func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttribution: %v", err)
 	}
-	if next.Of(dims).WorkstreamID != "" {
+	if next.Of(dims).ProjectID != "" {
 		t.Fatal("a fresh pass must see the edited document")
 	}
 }

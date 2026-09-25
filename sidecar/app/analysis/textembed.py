@@ -706,7 +706,7 @@ class Encoder:
         """Bring the child up WITHOUT an encode. `True` when it is ready to take one.
 
         ⚠️ **A WARM-UP MUST NOT DEPEND ON HAVING WORK TO DO, AND THAT IS THE WHOLE POINT OF THIS
-        METHOD.** The only warm path used to be `attribution.workstream_vectors`, whose encode is
+        METHOD.** The only warm path used to be `attribution.project_vectors`, whose encode is
         memoised per project-list hash — so it spawns the child exactly once per project list and
         never again. Pair that with `maybe_unload` killing an idle child (~5 min at this duty
         cycle) and the sidecar reaches a state it cannot leave: the child is down, `/attribute`

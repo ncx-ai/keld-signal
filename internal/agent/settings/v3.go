@@ -99,7 +99,7 @@ func validDevBlocks(m string) bool {
 	return false
 }
 
-// GroupOff reports whether a workstream key is excluded from attribution
+// GroupOff reports whether a project key is excluded from attribution
 // on this machine.
 func (s Settings) GroupOff(key string) bool {
 	for _, k := range s.GroupsOff {

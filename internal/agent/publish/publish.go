@@ -52,7 +52,7 @@ type Enrichment struct {
 	// Dynamics is how those dimensions are CHANGING: the recent slice of the
 	// window read against the longer baseline before it, keyed by dimension.
 	// Same /analyze call, same no-inference path, no text either — and, unlike
-	// the workstreams beside it, no reference-level VALUE at all: only the
+	// the projects beside it, no reference-level VALUE at all: only the
 	// closed status/reading vocabularies and the shares they were computed from
 	// (see enrich.Dynamic). Absent when the analysis compared nothing.
 	Dynamics map[string]enrich.Dynamic `json:"dynamics,omitempty"`
@@ -67,7 +67,7 @@ type Enrichment struct {
 	Effort *enrich.Effort `json:"effort,omitempty"`
 	// PhysicalActs is what the window physically DID: an inventory of acts with
 	// counts (see enrich.Act, and enrich.Acts for the closed vocabulary and the
-	// measurement that made this an inventory rather than an eighth workstream).
+	// measurement that made this an inventory rather than an eighth project).
 	// Same /analyze call as the three blocks above, same no-inference path.
 	//
 	// It is EIGHT of that call's `inventory` block's nine keys that now publish
@@ -157,12 +157,12 @@ type Enrichment struct {
 	// above, same no-inference path, no text.
 	//
 	// A CONTRAST, NEVER A FALLBACK, and that rule survives to the wire: a
-	// dimension missing from `workstreams` above stays missing here too. A
+	// dimension missing from `projects` above stays missing here too. A
 	// consumer must not read `prior.language.value` as the window's language —
-	// it is what the SESSION was, offered so that `workstreams.language` can be
+	// it is what the SESSION was, offered so that `projects.language` can be
 	// read as an excursion or as business as usual.
 	//
-	// Its values are reference levels of the same class `workstreams` already
+	// Its values are reference levels of the same class `projects` already
 	// publishes (a branch, a language, a skill), because the sidecar derives the
 	// prior's vocabulary from its own ALLOCATION list — `named_terms`, the one
 	// level read from message text, is structurally not addable to it.

@@ -30,7 +30,7 @@ inputs: `texts` is its user-role message contents (matching production's
 `_span_texts`, which is USER-stream only), `dims` is its `metadata` dict verbatim.
 
 ⚠️ **Field-name seam**: the experiment's project schema calls its ticket-prefix
-field `jira_key`; this codebase's is `ticket_key` (`settings.RemoteWorkstream`,
+field `jira_key`; this codebase's is `ticket_key` (`settings.RemoteProject`,
 `attribution.metadata_boost`). Renamed on load below, values unchanged — everything
 else (`id`/`title`/`team`/`description`/`repos`/`keywords`) matches as-is.
 
@@ -214,7 +214,7 @@ def _skip(msg):
     sys.exit(0)
 
 
-def _load_workstreams():
+def _load_projects():
     raw = json.loads(open(os.path.join(DATA_DIR, "projects.json")).read())
     out = []
     for p in raw:
@@ -353,9 +353,9 @@ def main():
 
     from app.analysis import attribution, textembed
 
-    workstreams = _load_workstreams()
+    projects = _load_projects()
     conversations = _load_conversations()
-    attribution.set_workstreams(workstreams)
+    attribution.set_projects(projects)
 
     encoder = _MemoEncoder(_EncoderAdapter(textembed.Encoder()))
     verifier_obj = verifier_mod.Verifier() if want_verifier else None
@@ -370,7 +370,7 @@ def main():
         attribution.score_block(_block_texts(conv), conv["metadata"], encoder, offsets,
                                 n_user=len(_user_texts(conv)), block_key=conv["id"])
     prime_s = time.time() - t_prime
-    keys = [attribution.Offsets.key(attribution.workstream_doc(p), st) for p in workstreams
+    keys = [attribution.Offsets.key(attribution.project_doc(p), st) for p in projects
             for st in (attribution.USER_STREAM, attribution.ASST_STREAM)] + \
            [attribution.Offsets.key(attribution.NULL_DOC, st)
             for st in (attribution.USER_STREAM, attribution.ASST_STREAM)]

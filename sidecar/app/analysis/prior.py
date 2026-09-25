@@ -11,7 +11,7 @@ windows over 500 frozen-corpus transcripts, commit b8a2ccf).
 
 The prior is reported ALONGSIDE the window's own answer and NEVER supplies one it lacked. An
 unattributed window stays unattributed: when the window has no value of its own, all three
-contrast measures are None and `workstreams` keeps its honest blank.
+contrast measures are None and `projects` keeps its honest blank.
 
 The rejected alternative -- a thin window inheriting the session's value -- buys coverage by
 laundering "we do not know" into something that looks confident. That is precisely the defect
@@ -119,7 +119,7 @@ ENABLED = ("branch", "language", "output_type", "skill")
 # so an INVENTORY level is structurally not addable here. `named_terms` (level `term`) is the one
 # level read from message TEXT and has held real person names; keeping the prior's vocabulary a
 # subset of ALLOCATION means the block can only ever carry values that already publish in
-# `workstreams` beside it, which is what makes forwarding it to Atlas no new class of data.
+# `projects` beside it, which is what makes forwarding it to Atlas no new class of data.
 PRIOR_DIMENSIONS = tuple((name, level, floor) for name, level, floor in dimensions.ALLOCATION
                          if name in ENABLED)
 
