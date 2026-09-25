@@ -34,6 +34,10 @@ import "strings"
 // record that it once held it, because the whole point is that it stopped
 // holding it. The work returns as a suggestion instead, which is the honest
 // outcome: nothing claims it, so it is unplaced again.
+//
+// ⚠️ **NOTHING CALLS THIS SINCE REVISION 2 (2026-09-25)**: Signal attributes only
+// to its own projects, so a poll must not trim them; kept for the separate
+// Atlas-import work.
 func Reconcile(d Document, remote []Project, groupOff func(key string) bool) (Document, []Removed, []Trimmed) {
 	covered := coveredRules(remote, groupOff)
 	if len(covered) == 0 {
