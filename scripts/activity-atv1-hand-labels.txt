@@ -1,0 +1,49 @@
+# Hand labels — `atv1` activity types. The SAME 150 windows as attempt four, seed 0.
+#
+# THIS HEADER — the rubric — IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN, and the labels are
+# committed before any arm is scored. Both orderings are provable from git, which is the only
+# thing that makes the numbers falsifiable. Pre-registration:
+# docs/superpowers/specs/2026-09-24-activity-atv1-preregistration.md (committed fde3297).
+#
+# Source: `~/keld/refseries-context/facets/activity-rerun-views.txt` — each window's TEXT ONLY.
+# User prompts + assistant prose, fenced code elided, every `tool_use` / `tool_result` /
+# `thinking` block dropped. No tool name, no program, no action, no count, no volume reaches the
+# labeller. The views are REUSED UNCHANGED from attempt four so the blind is the same blind.
+#
+# VOCABULARY — `keld-activity-types-v1.csv`, FIXED. 17 verbs x 11 contexts, 68 legal ids.
+# A label MUST be one of the 68. Format: `<index> <activity_type_id> [| <secondary id>]`.
+#
+# VERBS (the axis this corpus can test):
+#   text.create      net-new prose
+#   text.transform   rewrite/translate/reformat existing prose
+#   text.summarize   condense existing content
+#   transcribe       speech/image -> text
+#   classify         assign to categories
+#   extract          pull structured facts out
+#   research         gather/look up/investigate
+#   review           critique or check existing work for errors
+#   converse         interactive Q&A or brainstorming
+#   plan             decide an approach or sequence (context=none)
+#   code.write       author NEW code (context=none)
+#   code.edit        change EXISTING code (context=none)
+#   image/video/audio.create   media generation
+#   embed            vectorise (context=none)
+#   other            abstention (context=general)
+#
+# CONTEXTS: general legal media financial marketing medical scientific sales support operations none
+#
+# ⚠️ THIS CORPUS IS 100% SOFTWARE ENGINEERING. Essentially every context will be `general` or
+# `none`. NO CLAIM ABOUT THE CONTEXT AXIS MAY BE MADE FROM THESE LABELS. They exist to test the
+# VERB axis, and specifically whether the act->intent refutation transfers to code.write/code.edit.
+#
+# RULES, fixed before labelling:
+#  1. Label the WINDOW's dominant work, not its first turn.
+#  2. code.write vs code.edit: did the window mostly AUTHOR new code, or CHANGE code that existed?
+#     If the window is about code but is investigating rather than changing it, that is `research`.
+#  3. Writing a REPORT about code is `text.create.general`, not code.*. The artifact decides.
+#  4. `review` means checking existing work for ERRORS. Reading code to understand it is
+#     `research`. Judging whether a design is right is `review`.
+#  5. A secondary label is written ONLY where the window genuinely contains two comparable
+#     activities. Do not write one to hedge.
+#  6. `other.general` is abstention. Use it when no id fits, never as a tiebreak.
+#
