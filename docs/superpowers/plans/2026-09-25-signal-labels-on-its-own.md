@@ -1,7 +1,7 @@
 # Revision 2 — Signal labels on its own: implementation plan
 
 Discovery: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html` §Revision 2
-(signed off 2026-09-25). Branch: `feat/per-group-attribution` (PR B), worktree
+(signed off 2026-09-25). Branch: `feat/signal-only-workstreams`, stacked on `feat/per-group-attribution` (PR B, left as reviewed); worktree
 `.claude/worktrees/per-group`. Criteria: R2-AC-1 … R2-AC-7. Criteria do not move.
 
 ## Shape of the work
@@ -130,7 +130,7 @@ Docs (`AGENTS.md`, `docs/v3/contracts.md`, the discovery page) belong to the sup
 
 ## Supervisor: merge and verify
 
-- [ ] Merge each agent branch into `feat/per-group-attribution` as it lands; resolve nothing by
+- [ ] Merge each agent branch into `feat/signal-only-workstreams` as it lands; resolve nothing by
       guessing — send conflicts back to the owning agent.
 - [ ] As each R2-AC's named test passes **on the merged branch**, flip its Status pill to `DONE`
       with the evidence, commit, republish the discovery.
