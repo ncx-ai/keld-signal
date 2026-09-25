@@ -182,6 +182,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <ul>
   <li><strong>Coverage drops on org machines</strong> the moment this ships: blocks that only an Atlas workstream matched become unattributed on the page (the Today rows recompute live). They reappear as suggestions, which is where a person makes a Signal workstream for them.</li>
   <li><strong>Atlas's numbers do not move.</strong> Atlas already attributes from its own rules and the block's dimensions; neither changes.</li>
+  <li><strong>Atlas's matcher suggestions keep their input without Signal knowing Atlas's definitions.</strong> Each block's <span class="mono">project_matches</span> still lists the Signal workstreams it matched, each with its repos and ticket key (no name, no id). Atlas can compare a person's grouping with its own — "mine has A and B, theirs has A, B and C, so suggest C" — because only Atlas holds both sides. Today Atlas's suggestion code reads only entries carrying an Atlas id; reading these by shared repos is Atlas-side follow-up work. Existing "Same as" entries keep their Atlas id and keep feeding it as they do now.</li>
   <li><strong>Signal's local ids are built from titles</strong> (<span class="mono">p_</span> + slug), which is why they never go on the wire — <span class="mono">project_matches</span> already omits them, and that stays.</li>
 </ul>
 
