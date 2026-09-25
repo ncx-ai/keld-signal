@@ -28,39 +28,30 @@ func TestOneProjectNamingTheSameRepoTwiceAttributesRatherThanConflicts(t *testin
 	}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{p}, nil, nil)
+	res := Attribute(dims, []Project{p}, nil)
 
-	if res.Reason == ReasonConflict {
-		t.Fatalf("a project matching its own duplicated rule reported a conflict: %#v", res.Conflict)
+	if len(res.Projects) != 1 {
+		t.Fatalf("a project matching its own duplicated rule must be assigned ONCE: %+v", res.Projects)
 	}
-	if res.ProjectID != p.ID {
-		t.Fatalf("project = %q, want %q", res.ProjectID, p.ID)
+	if only(res).ProjectID != p.ID {
+		t.Fatalf("project = %q, want %q", only(res).ProjectID, p.ID)
 	}
-	if res.Method != MethodRepo {
-		t.Fatalf("method = %q, want %q", res.Method, MethodRepo)
-	}
-	if len(res.Conflict) != 0 {
-		t.Fatalf("a single match carried a conflict list: %v", res.Conflict)
+	if only(res).Method != MethodRepo {
+		t.Fatalf("method = %q, want %q", only(res).Method, MethodRepo)
 	}
 }
 
-// The other side of the same boundary: two DIFFERENT projects claiming one repo
-// is still a conflict, and still names both. Without this, "fixing" the test
-// above by dropping conflict detection entirely would go unnoticed.
-func TestTwoDifferentProjectsClaimingOneRepoIsStillAConflict(t *testing.T) {
+// The other side of the same boundary: two DIFFERENT projects claiming one
+// repo are two assignments, not one — the dedupe above is by project id,
+// never by rule, so it must not collapse distinct projects.
+func TestTwoDifferentProjectsClaimingOneRepoAreBothAssigned(t *testing.T) {
 	a := Project{ID: "keld_projects:a", Title: "A", Repos: []string{repoKeldSignal}, Group: "development"}
 	b := Project{ID: "keld_projects:b", Title: "B", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, []Project{a, b}, nil, nil)
+	res := Attribute(dims, []Project{a, b}, nil)
 
-	if res.Reason != ReasonConflict {
-		t.Fatalf("reason = %q, want conflict", res.Reason)
-	}
-	if len(res.Conflict) != 2 {
-		t.Fatalf("conflict = %v, want both claimants named", res.Conflict)
-	}
-	if res.ProjectID != "" {
-		t.Fatalf("a conflict silently chose %q", res.ProjectID)
+	if len(res.Projects) != 2 || res.Reason != ReasonNone {
+		t.Fatalf("both claimants must be assigned: %+v", res)
 	}
 }

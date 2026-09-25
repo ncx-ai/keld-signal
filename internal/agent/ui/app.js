@@ -233,26 +233,47 @@ export function projectTitle(projectId, catalog) {
   return match ? match.title : null;
 }
 
+/** Every project the ledger says a block landed in, as {id, method}, in the
+ *  order the rule pass assigned them — or null when attribution has not run
+ *  (the cell is absent). A block may land in several projects; the cell
+ *  carries them all. A row written before Revision 4 may still name a group
+ *  per entry; it is not read. */
+export function projectsOf(block) {
+  const attr = attributionOf(block);
+  if (!attr) return null;
+  const list = Array.isArray(attr.projects) ? attr.projects : [];
+  // An entry naming no id is not a project the block landed in; dropping it
+  // is what keeps an empty id from rendering as a blank name.
+  return list
+    .filter((w) => w && w.project_id)
+    .map((w) => ({ id: w.project_id, method: w.method || "" }));
+}
+
 /**
- * What the Today table's Project cell should show for one block, as data —
+ * What the Today table's project cell should show for one block, as data —
  * never an internal id. Four outcomes, and the renderer must not collapse
  * any two of them into the same look:
  *   - "unknown"    — attribution hasn't run yet (the cell itself is absent)
- *   - "none"       — it ran and no rule matched this block
- *   - "attributed" — a project matched; `text` is its TITLE, never its id
- *   - "unresolved" — the ledger names a project id GET /v1/projects doesn't
- *                    know about; `text` falls back to the raw id, but the
- *                    caller must style this like "unknown", not like a real
- *                    attributed project — showing an id at all here is
- *                    already the degraded case.
+ *   - "none"       — it ran and nothing matched this block
+ *   - "attributed" — at least one project matched; `items` holds every one,
+ *                    each by TITLE, and `text` joins them
+ *   - "unresolved" — every id the ledger names is one GET /v1/projects
+ *                    doesn't know; `text` falls back to the raw ids, styled
+ *                    like "unknown", never like a real attribution.
  */
 export function projectCellInfo(block, catalog) {
-  const attr = attributionOf(block);
-  if (!attr) return { kind: "unknown" };
-  if (!attr.project_id) return { kind: "none" };
-  const title = projectTitle(attr.project_id, catalog);
-  if (title) return { kind: "attributed", text: title, method: attr.method || "" };
-  return { kind: "unresolved", text: attr.project_id };
+  const list = projectsOf(block);
+  if (list === null) return { kind: "unknown" };
+  if (!list.length) return { kind: "none" };
+  const items = list.map((w) => {
+    const title = projectTitle(w.id, catalog);
+    return title
+      ? { kind: "attributed", text: title, method: w.method, id: w.id }
+      : { kind: "unresolved", text: w.id, id: w.id };
+  });
+  const known = items.filter((i) => i.kind === "attributed");
+  if (!known.length) return { kind: "unresolved", text: items.map((i) => i.text).join(", "), items };
+  return { kind: "attributed", text: known.map((i) => i.text).join(", "), method: known[0].method, items: known };
 }
 
 /** The rhythm strip's fill for one block: a stable-ish hash of the resolved
@@ -264,13 +285,14 @@ export const RHYTHM_PALETTE = ["var(--green)", "var(--sage)", "var(--indigo)", "
 export const RHYTHM_UNATTRIBUTED_COLOR = "var(--rule-strong)";
 
 export function rhythmColorFor(block, catalog) {
-  const attr = attributionOf(block);
-  if (!attr || !attr.project_id) return RHYTHM_UNATTRIBUTED_COLOR;
   const info = projectCellInfo(block, catalog);
   if (info.kind !== "attributed") return RHYTHM_UNATTRIBUTED_COLOR;
-  if (attr.method === "embedding") return "var(--indigo)";
+  // The FIRST project colours the square: a square is one colour, and the
+  // table row beside it names every project the block landed in.
+  const first = info.items[0];
+  if (first.method === "embedding") return "var(--indigo)";
   let h = 0;
-  for (const c of attr.project_id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  for (const c of first.id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return RHYTHM_PALETTE[h % RHYTHM_PALETTE.length];
 }
 
@@ -317,43 +339,31 @@ export function focusStats(blocks) {
   };
 }
 
-/** Two projects that both claim the same repo (or the same ticket key) among
- *  their rules conflict — computable from the projects list alone, with no
- *  extra field the contract doesn't already define. Hidden projects and
- *  projects in a switched-off workstream never conflict with anything. */
-export function findConflicts(projects, offGroups) {
-  const off = new Set(offGroups || []);
-  const live = projects.filter((p) => !p.hidden && !off.has(p.group));
-  const byRepo = new Map();
-  const byTicket = new Map();
-  for (const p of live) {
-    for (const r of p.repos || []) {
-      const key = r.toLowerCase();
-      const list = byRepo.get(key) ?? [];
-      list.push(p);
-      byRepo.set(key, list);
-    }
-    if (p.ticket_key) {
-      const key = p.ticket_key.toUpperCase();
-      const list = byTicket.get(key) ?? [];
-      list.push(p);
-      byTicket.set(key, list);
-    }
-  }
-  const conflicts = new Map(); // project id -> Set of other project ids
-  const addMutual = (list) => {
-    if (list.length < 2) return;
-    for (const p of list) {
-      const others = conflicts.get(p.id) ?? new Set();
-      for (const q of list) if (q.id !== p.id) others.add(q.id);
-      conflicts.set(p.id, others);
-    }
+/** GET /v1/projects' `totals`, indexed: projects by id. */
+export function totalsIndex(catalog) {
+  const t = (catalog && catalog.totals) || {};
+  const projects = new Map((t.projects || []).map((w) => [w.id, w]));
+  return { projects };
+}
+
+/** One total as a person reads it: blocks · time · est. spend. "" for none. */
+export function totalLine(total) {
+  if (!total || !total.blocks) return "";
+  const n = total.blocks;
+  return `${n} block${n === 1 ? "" : "s"} · ${formatMinutes(total.minutes || 0)} · ${formatEstUSD(total.usd || 0)}`;
+}
+
+/** What "Your projects" lists, in the catalog's order: every visible
+ *  project with its own total line, and apart from them the hidden ones, so
+ *  a person can bring one back. Each project counts a block it shares with
+ *  another in full — only the coverage tile counts a shared block once. */
+export function projectListing(catalog) {
+  const all = (catalog && catalog.projects) || [];
+  const totals = totalsIndex(catalog);
+  return {
+    visible: all.filter((p) => !p.hidden).map((project) => ({ project, total: totalLine(totals.projects.get(project.id)) })),
+    hidden: all.filter((p) => p.hidden),
   };
-  for (const list of byRepo.values()) addMutual(list);
-  for (const list of byTicket.values()) addMutual(list);
-  const out = {};
-  for (const [id, set] of conflicts) out[id] = [...set];
-  return out;
 }
 
 /** What a project card shows as "the rules": GET /v1/projects' own `rules`
@@ -373,44 +383,33 @@ export function projectRulesSummary(p) {
   return bits.join(" · ") || "no rules yet";
 }
 
-/** Every mutating /v1/projects (or /v1/projects) route answers
- *  `{local_only: true, atlas_editor_url: "..."}` (docs/v3/contracts.md's
- *  verified note: a machine cannot write to Atlas's vocabulary today). This
- *  is the ONE sentence the page ever shows for that fact — one function so
- *  two call sites cannot drift into saying it differently, and so neither
- *  can accidentally imply the org learned anything. */
+/** Every mutating /v1/projects route answers `{local_only: true, ...}`,
+ *  and this is the ONE sentence the page shows for it — one function so no
+ *  two call sites can drift into saying it differently, and so neither can
+ *  imply the org learned anything.
+ *
+ *  ⚠️ **IT USED TO END "To change it for everyone, edit the project in
+ *  Atlas", with an "Open the workstream in Atlas" link.** Revision 2 (Signal
+ *  labels on its own) made every project on this page the person's own
+ *  Signal project: there is no org copy of it to go and edit, so that
+ *  advice pointed at something that does not exist. The response's
+ *  `atlas_editor_url` is therefore not rendered. */
 export function localOnlyConfirmationText() {
-  return "Applied on this machine. To change it for everyone, edit the workstream in Atlas.";
+  return "Applied on this machine.";
 }
 
-/** Every project a suggestion's "Same as" picker may offer — every project
- *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
- *  internal/agent/ingress/projects.go's handleGetProjects already merges the
- *  local document with the org's pooled workstream values into one list, so
- *  "same as" is never limited to local projects. A hidden project is left
- *  out — placing a suggestion on one a person chose to hide would silently
- *  un-hide nothing and just confuse the coverage count. */
+/** Every project a "Same as" picker may offer: every one GET
+ *  /v1/projects returns, labelled by its title alone. Since Revision 2
+ *  that list is Signal's own projects only, and one a person placed with
+ *  "Same as" before it (stored with origin `atlas`) is theirs like any other —
+ *  so nothing here reads `origin`, and a stale one cannot bring back an
+ *  "in Atlas" label. A hidden project is left out — placing a suggestion on
+ *  one a person chose to hide would silently un-hide nothing and just confuse
+ *  the coverage count. */
 export function sameAsOptions(projects) {
   return (projects || [])
     .filter((p) => !p.hidden)
-    .map((p) => ({ id: p.id, label: p.origin === "atlas" ? `${p.title} · in Atlas` : p.title }));
-}
-
-/** The confirmation sentence after "same as" specifically — placing a
- *  suggestion onto an Atlas-origin project is a LOCAL OVERLAY (this
- *  machine's rule is added locally; the org's project itself is never
- *  written), so it needs its own sentence rather than
- *  localOnlyConfirmationText(): that one's "edit the workstream in Atlas"
- *  reads as an invitation to go change the org's copy, which is backwards
- *  for a project this machine did not create. Placing onto a LOCAL project
- *  (or "New project", which only ever creates one) keeps the general
- *  sentence — there IS no org copy to leave alone in that case, so the
- *  "edit it in Atlas" advice is the real next step. */
-export function sameAsConfirmationText(targetOrigin) {
-  if (targetOrigin === "atlas") {
-    return "Applied on this machine. The org's workstream is unchanged.";
-  }
-  return localOnlyConfirmationText();
+    .map((p) => ({ id: p.id, label: p.title }));
 }
 
 /** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
@@ -444,49 +443,6 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
-/** groupsForProjects is what "Your projects" iterates: the org's workstreams, plus
- *  one group for any project whose workstream is in none of them.
- *
- *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
- *  projects by looping over workstreams and drawing each one's members, so a
- *  project filed under a key that is in no list is never drawn at all. Measured
- *  on a real machine: two projects on disk, `"workstreams": null` from the API,
- *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
- *  them saw their suggestion disappear and nothing appear, which is
- *  indistinguishable from the suggestion having been thrown away.
- *
- *  That is the state of EVERY machine with Send to Atlas off, because the
- *  workstream list is pushed down by Atlas and nothing local seeded it.
- *
- *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
- *  second of two guards rather than the only one — deliberately, because the
- *  rule worth keeping is "the page never silently drops a project", not "that
- *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
- *  caller can decline to offer an org-level control on a bucket the org never
- *  declared.
- */
-export function groupsForProjects(groups, projects) {
-  const out = (groups || []).map((w) => ({ ...w, synthetic: false }));
-  const known = new Set(out.map((w) => w.key));
-  const extra = new Map();
-  for (const p of projects || []) {
-    if (p.hidden) continue;
-    const key = p.group || "development";
-    if (known.has(key) || extra.has(key)) continue;
-    extra.set(key, { key, name: groupDisplayName(key), off: false, synthetic: true });
-  }
-  return out.concat([...extra.values()]);
-}
-
-/** groupDisplayName turns a key into something a person reads. Mirrors the
- *  Go side's function of the same name so a locally-seeded workstream is
- *  labelled identically whether the page or the daemon named it. */
-export function groupDisplayName(key) {
-  const out = String(key || "").replace(/[_-]+/g, " ").trim();
-  if (!out) return String(key || "");
-  return out[0].toUpperCase() + out.slice(1);
-}
-
 export function validProjectTitle(title) {
   return String(title == null ? "" : title).trim();
 }
@@ -583,7 +539,9 @@ export const REASON_TEXT = {
   sidecar_behind: "The local analysis service is still catching up.",
   attribute_failed: "Couldn't work out a project for this block after several tries.",
   no_rule_matched: "No project rule matched this yet.",
-  conflict: "Two projects claim this — pick one in Projects.",
+  // Recorded before 2026-09-23, when a block matching two projects landed in
+  // neither. Nothing produces it now; an old row may still carry it.
+  conflict: "Matched more than one project (recorded before blocks could share).",
   no_tokens: "No usage was recorded in this block.",
   spooled: "Saved on this machine — will send once Atlas is reachable.",
   weights_unavailable: "Vector attribution needs a one-time download that hasn't finished.",
@@ -1279,8 +1237,8 @@ if (typeof document !== "undefined") {
     // DOM because `route()` re-renders the whole pane, so a value held only in
     // an input would be lost the moment anything else refreshed.
     naming: null,
-    // confirmations: rowKey -> {url}. Set after any /v1/projects (or
-    // /v1/groups) mutation whose response carries local_only — read by
+    // confirmations: rowKey -> true. Set after any /v1/projects mutation
+    // whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1496,7 +1454,12 @@ if (typeof document !== "undefined") {
 
       let projectCell;
       if (info.kind === "attributed") {
-        projectCell = el("span", {}, el("span", { class: "pill ok" }, info.text), " ", el("small", { style: "color:var(--muted)" }, info.method));
+        // Every project the block landed in, one pill each.
+        projectCell = el(
+          "span",
+          { class: "ws-pills" },
+          ...info.items.map((i) => el("span", { class: "ws-pill" }, el("span", { class: "pill ok" }, i.text), " ", el("small", { style: "color:var(--muted)" }, i.method)))
+        );
       } else if (info.kind === "none") {
         projectCell = el("span", { class: "pill wait" }, "no project");
       } else if (info.kind === "unresolved") {
@@ -1738,12 +1701,9 @@ if (typeof document !== "undefined") {
       root.appendChild(el("p", { class: "loading" }, "No project data yet."));
       return;
     }
-    const groups = catalog.groups || [];
-    const allProjects = catalog.projects || [];
     const suggestions = catalog.suggestions || [];
     const coverage = catalog.coverage || { attributed: 0, total: 0 };
-    const offKeys = groups.filter((w) => w.off).map((w) => w.key);
-    const conflicts = findConflicts(allProjects, offKeys);
+    const { visible, hidden } = projectListing(catalog);
 
     const leftOverBlocks = Math.max(0, (coverage.total || 0) - (coverage.attributed || 0));
     const pct = coverage.total ? Math.round((100 * coverage.attributed) / coverage.total) : 0;
@@ -1754,7 +1714,7 @@ if (typeof document !== "undefined") {
         { class: "tiles three" },
         el("div", { class: "tile" }, el("div", { class: "l" }, "Attributed"), el("div", { class: "v" }, `${pct}%`, el("small", {}, `${coverage.attributed || 0} of ${coverage.total || 0} focus blocks`))),
         el("div", { class: "tile" }, el("div", { class: "l" }, "Left over"), el("div", { class: "v", style: "color:var(--amber-strong)" }, `${leftOverBlocks} blocks`)),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Groups on"), el("div", { class: "v" }, `${groups.length - offKeys.length}`, el("small", {}, `of ${groups.length}`)))
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Projects"), el("div", { class: "v" }, `${visible.length}`, hidden.length ? el("small", {}, `${hidden.length} hidden`) : null))
       )
     );
 
@@ -1780,11 +1740,11 @@ if (typeof document !== "undefined") {
                     value: state.naming.title,
                     oninput: (e) => { state.naming.title = e.target.value; },
                     onkeydown: (e) => {
-                      if (e.key === "Enter") bundleSuggestion(s, groups, state.naming.title);
+                      if (e.key === "Enter") bundleSuggestion(s, state.naming.title);
                       if (e.key === "Escape") cancelNamingProject();
                     },
                   }),
-                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, groups, state.naming.title) }, "Create"),
+                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, state.naming.title) }, "Create"),
                   el("button", { class: "btn btn-quiet", onclick: cancelNamingProject }, "Cancel")
                 )
               : el(
@@ -1801,71 +1761,45 @@ if (typeof document !== "undefined") {
       }
     }
 
+    // ONE flat list (Revision 4). A block lands in every project that matches
+    // it, and each project's total counts it in full; only the Attributed tile
+    // above counts a shared block once.
     root.appendChild(el("div", { class: "section-label" }, "Your projects"));
-    for (const w of groupsForProjects(groups, allProjects)) {
-      const inThis = allProjects.filter((p) => p.group === w.key && !p.hidden);
-      const card = el(
+    const card = el("div", { class: "projects-card" });
+    if (!visible.length) card.appendChild(el("div", { class: "projects-empty" }, "No projects yet."));
+    for (const { project: p, total } of visible) {
+      const row = el(
         "div",
-        { class: "group-card" + (w.off ? " off" : "") },
-        el(
-          "div",
-          { class: "group-head" },
-          el("span", { class: "name" }, `${w.name}`),
-          // A synthetic group is this machine's own bucket, not one the org
-          // declared, so it offers no "counts for my work" switch: that flag is
-          // stored per workstream key and would appear to reset on reload,
-          // which is a control that lies about what it did.
-          w.synthetic
-            ? null
-            : el("label", {}, "counts for my work ", switchEl({
-                checked: !w.off,
-                onChange: (v) => setGroupOff(w.key, !v),
-              }))
-        )
+        { class: "project-row" },
+        el("div", { class: "row-title" }, p.title, el("small", {}, projectRulesSummary(p) + (total ? ` · ${total}` : ""))),
+        // Map-to is offered on EVERY project: since Revision 2 every project
+        // here is the person's own, and the daemon accepts it as a source.
+        mapProjectSelect(p),
+        // One pill for every row: they all live on this machine.
+        el("span", { class: "pill ok" }, "local")
       );
-      appendConfirmation(card, `group:${w.key}`);
-      if (w.off) {
-        card.appendChild(el("div", { class: "group-off-note" }, "Your work never lands here. Turn on if you work in this area."));
-      } else if (!inThis.length) {
-        card.appendChild(el("div", { class: "group-off-note" }, "No projects yet."));
-      } else {
-        for (const p of inThis) {
-          const conflictIds = conflicts[p.id] || [];
-          const row = el(
+      card.appendChild(row);
+      appendConfirmation(card, `project:${p.id}`);
+    }
+    root.appendChild(card);
+
+    // Hidden projects attribute nothing. They are listed so a person can
+    // bring one back — the only way back on this page.
+    if (hidden.length) {
+      root.appendChild(el("div", { class: "section-label" }, `Hidden · ${hidden.length}`));
+      const hcard = el("div", { class: "projects-card hidden-projects" });
+      for (const p of hidden) {
+        hcard.appendChild(
+          el(
             "div",
-            { class: "project-row" },
-            el(
-              "div",
-              { class: "row-title" },
-              p.title,
-              el("small", {}, projectRulesSummary(p))
-            ),
-            // ⚠️ **THE PICKER IS ON LOCAL PROJECTS ONLY.** An org project is not
-            // ours to fold away: its identity lives in Atlas, and removing the
-            // local overlay entry would drop the rules this machine added while
-            // leaving the org's value untouched — a deletion that looks like a
-            // move. The daemon refuses it too (projects.MapProjectTo); this is
-            // the half that keeps a person from being offered it.
-            // ⚠️ An EMPTY CELL, never `null`, for an org project. The row is a
-            // three-column grid; skipping the child entirely lets the pill fall
-            // into the picker's column, and the org cards' pills then sat 16px
-            // left of the local ones (measured 1871 against 1887) — a whole
-            // column of misalignment from an absent element.
-            p.origin === "atlas"
-              ? el("span", { class: "row-spacer", "aria-hidden": "true" })
-              : mapProjectSelect(p),
-            conflictIds.length
-              ? el("span", { class: "pill no" }, "conflict · pick one")
-              : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
-          );
-          card.appendChild(row);
-          if (conflictIds.length) {
-            card.appendChild(el("div", { class: "conflict-note" }, `Also claimed by: ${conflictIds.join(", ")}`));
-          }
-          appendConfirmation(card, `project:${p.id}`);
-        }
+            { class: "project-row hidden-project" },
+            el("div", { class: "row-title" }, p.title, el("small", {}, projectRulesSummary(p))),
+            el("button", { class: "btn", "aria-label": `Show ${p.title} again`, onclick: () => setProjectHidden(p, false) }, "Show again")
+          )
+        );
+        appendConfirmation(hcard, `project:${p.id}`);
       }
-      root.appendChild(card);
+      root.appendChild(hcard);
     }
   }
 
@@ -1879,42 +1813,23 @@ if (typeof document !== "undefined") {
   // this lane's own choice of "the affected row" — the daemon's response
   // names no row, only the fact — so the caller (which knows what it just
   // mutated) supplies it.
-  function noteLocalConfirmation(rowKey, resp, targetOrigin) {
-    if (resp && resp.local_only) {
-      state.confirmations.set(rowKey, { url: resp.atlas_editor_url || "", origin: targetOrigin || "" });
-    }
+  function noteLocalConfirmation(rowKey, resp) {
+    if (resp && resp.local_only) state.confirmations.set(rowKey, true);
   }
 
   // appendConfirmation renders noteLocalConfirmation's result under the row
   // it belongs to, once — a quiet line, never a claim the org learned
   // anything (localOnlyConfirmationText's own doc comment).
   function appendConfirmation(parent, rowKey) {
-    const c = state.confirmations.get(rowKey);
-    if (!c) return;
-    // ⚠️ The sentence depends on whose project was the target. Placing onto an
-    // ATLAS project is a local overlay, so it says the org's project is
-    // unchanged; "edit the workstream in Atlas" would read as an invitation to
-    // go change the org's copy, which is backwards. A local project has no org
-    // copy to leave alone, so the general advice is the real next step.
-    const atlasTarget = c.origin === "atlas";
-    parent.appendChild(
-      el(
-        "div",
-        { class: "local-note" },
-        sameAsConfirmationText(c.origin),
-        !atlasTarget && c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
-      )
-    );
+    if (!state.confirmations.get(rowKey)) return;
+    parent.appendChild(el("div", { class: "local-note" }, localOnlyConfirmationText()));
   }
 
   /** The "Same as" picker for one suggestion.
    *
    *  A <select> rather than the prompt() this replaced: a person cannot be
-   *  expected to type a project id, and the ids the org's values carry
-   *  ("keld_projects:signal") are not something anyone would guess. The
-   *  options come from sameAsOptions, which includes the org's own projects —
-   *  placing onto one is a LOCAL OVERLAY, so the confirmation says the org's
-   *  project is unchanged.
+   *  expected to type a project id. The options come from sameAsOptions:
+   *  this machine's own projects, by title.
    *
    *  It reads as a button until used ("Same as…") because it is an action,
    *  not a setting: the first option is a non-selectable label, and choosing a
@@ -1937,8 +1852,7 @@ if (typeof document !== "undefined") {
     return sel;
   }
 
-  /** mapProjectSelect folds a LOCAL project into another one — normally one of
-   *  the org's. The rules move with it and the local entry goes; see
+  /** mapProjectSelect folds one project into another. The rules move with it and the local entry goes; see
    *  projects.MapProjectTo for why keeping it beside its target would make
    *  every one of its blocks a conflict.
    *
@@ -1970,23 +1884,19 @@ if (typeof document !== "undefined") {
 
   async function mapProject(ws, target) {
     if (!target) return;
-    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
     const res = await sendJSON(`/v1/projects/${encodeURIComponent(ws.id)}/same-as`, "POST", { same_as: target });
     // The confirmation is placed on the TARGET row, because the source row is
     // about to stop existing — a note under a row that disappears is a note
     // nobody reads.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
     await loadAll();
     route();
   }
 
   async function placeSuggestion(suggestion, target) {
     if (!target) return;
-    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
     const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
-    // The sentence depends on WHOSE project it was: an Atlas-origin target gets
-    // "the org's project is unchanged", a local one gets the general advice.
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
     await loadAll();
     route();
   }
@@ -2030,7 +1940,7 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function bundleSuggestion(suggestion, groups, title) {
+  async function bundleSuggestion(suggestion, title) {
     // NEGATIVE 1: an empty name creates nothing and leaves the suggestion where
     // it was. Said out loud rather than silently ignored — silence here is the
     // exact defect this replaced.
@@ -2040,9 +1950,8 @@ if (typeof document !== "undefined") {
       route();
       return;
     }
-    const group = (groups[0] && groups[0].key) || "development";
     const res = await sendJSON("/v1/projects/bundle", "POST",
-      { title: name, group, suggestions: [suggestion.id] });
+      { title: name, suggestions: [suggestion.id] });
     if (res.ok && res.body && res.body.project && res.body.project.id) {
       noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
       state.naming = null;
@@ -2055,9 +1964,9 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function setGroupOff(key, off) {
-    const res = await sendJSON(`/v1/groups/${encodeURIComponent(key)}/off`, "PUT", { off });
-    if (res.ok) noteLocalConfirmation(`group:${key}`, res.body);
+  async function setProjectHidden(p, hidden) {
+    const res = await sendJSON(`/v1/projects/${encodeURIComponent(p.id)}/hide`, "POST", { hidden });
+    if (res.ok) noteLocalConfirmation(`project:${p.id}`, res.body);
     await loadAll();
     route();
   }
@@ -2213,7 +2122,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's groups. Off: nothing leaves this machine.")),
+        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks and the projects they matched. Off: nothing leaves this machine.")),
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),

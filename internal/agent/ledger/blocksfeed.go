@@ -15,15 +15,16 @@ var errUnavailable = errors.New("ledger: database unavailable")
 // the projects feed to it would mean every future change to what the page shows
 // about delivery silently changes what attribution groups on.
 type BlockRecord struct {
-	Session   string
-	Start     int64
-	End       int64
-	Repo      string
-	Branch    string
-	Workspace string
-	ProjectID string // "" when the block is unattributed — the ones that become suggestions
-	Tokens    int64  // the four consumed classes, summed
-	Minutes   float64
+	Session     string
+	Start       int64
+	End         int64
+	Repo        string
+	Branch      string
+	Workspace   string
+	ProjectID   string  // "" when the block is unattributed — the ones that become suggestions
+	Tokens      int64   // the four consumed classes, summed
+	EstimateUSD float64 // the measured cell's estimate; 0 when not measured
+	Minutes     float64
 }
 
 // BlocksSince returns every block whose START is at or after t.
@@ -46,7 +47,7 @@ func (s *Store) BlocksSince(t time.Time, limit int) ([]BlockRecord, error) {
 	}
 	rows, err := db.Query(`
 		SELECT session, start, COALESCE(end,0), dim_repo, dim_branch, dim_workspace,
-		       project_id, input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens
+		       project_id, input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, estimate_usd
 		FROM blocks
 		WHERE start >= ?
 		ORDER BY start DESC
@@ -60,7 +61,7 @@ func (s *Store) BlocksSince(t time.Time, limit int) ([]BlockRecord, error) {
 	for rows.Next() {
 		var r BlockRecord
 		if err := rows.Scan(&r.Session, &r.Start, &r.End, &r.Repo, &r.Branch,
-			&r.Workspace, &r.ProjectID, &r.Tokens); err != nil {
+			&r.Workspace, &r.ProjectID, &r.Tokens, &r.EstimateUSD); err != nil {
 			return nil, err
 		}
 		if r.End > r.Start {

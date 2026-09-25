@@ -143,7 +143,9 @@ the real `~/.keld` shows the same workstreams and groups (manual, screenshot).
 
 ### B3. Sidecar per-group decision (AC-3, AC-4, AC-5) — TDD
 - Daemon posts each workstream with `group` (= `GroupKey(team)`); `attribution.py` groups by
-  `group`, falling back to `team` verbatim when absent.
+  `group`. ⚠️ Amended during the build: a list with NO `group` key is one pooled competition
+  (today's decision), not grouped by `team` — the fixtures' pooled workstreams have different
+  teams, so a team fallback would silently change an older daemon's answers.
 - `score_block`: per group `top_G`, `cut_G = max(null_sim, top_G - MARGIN)`, assign every id
   with `s >= cut_G` when `top_G > null_sim`; borderline `|s - cut_G| < VERIFY_HALO`.
   Output sorted by confidence desc, then id. `model_versions.decision = "per-group-margin-v1"`.
@@ -161,8 +163,8 @@ the real `~/.keld` shows the same workstreams and groups (manual, screenshot).
 ### B5. Totals (AC-9) — TDD
 - `workstreams.Rollup(blocks []AttributedBlock) Totals`: per group distinct blocks
   (minutes, tokens, est. USD), per workstream its blocks in full, and `overlap` per group
-  (Σ workstreams − group). Source: ledger rule cells for the current week (same window as
-  `coverage`).
+  (Σ workstreams − group). Source (as shipped): the LIVE rule pass over the same blocks as
+  `coverage`, so totals, coverage and the Today rows agree by construction.
 - `GET /v1/workstreams` gains `totals: {groups:[{key, blocks, minutes, tokens, usd}],
   workstreams:[{id, group, blocks, minutes, tokens, usd}]}`.
 - Tests first: `TestRollupCountsGroupOnce` (X $5 in A+B, Y $5 in A → group $10, A $10, B $5,

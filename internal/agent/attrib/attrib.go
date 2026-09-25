@@ -357,7 +357,14 @@ type Outcome struct {
 	// already matched against the closed set (an unrecognised one is a
 	// genuine error and reaches retryOrQuarantine instead).
 	Status string
-	// ProjectID and Confidence are set only for enrich.ProjectsAttributed.
+	// Projects is every id the pass assigned, highest confidence first, set
+	// only for enrich.ProjectsAttributed.
+	Projects []OutcomeProject
+}
+
+// OutcomeProject is one id the vectorised pass assigned. (It carried a group,
+// filled by the daemon, until Revision 4, 2026-09-25.)
+type OutcomeProject struct {
 	ProjectID  string
 	Confidence float64
 }
@@ -388,14 +395,16 @@ func (a *Attributor) noteOutcome(j Job, status string, res sidecar.AttributeResu
 		return
 	}
 	o := Outcome{SessionID: j.SessionID, Start: j.Start, Status: status}
-	if status == enrich.ProjectsAttributed && len(res.Projects) > 0 {
-		// The first entry is the winner: the sidecar ranks Projects by score
-		// and everything within MARGIN of the top is assigned, so index 0 is
-		// the top-scoring id. A second entry is a co-assignment, not a
-		// competitor to choose between — and choosing between them is exactly
-		// what this path must not do.
-		o.ProjectID = res.Projects[0].ID
-		o.Confidence = res.Projects[0].Confidence
+	if status == enrich.ProjectsAttributed {
+		// EVERY assigned id, not index 0. This used to keep only the first,
+		// under the belief that the sidecar ranked its list by score — it
+		// iterated in declaration order, so "the winner" was whichever
+		// project happened to be declared first. Since 2026-09-23 a block
+		// may land in several projects, and each is a co-assignment, never a
+		// competitor to choose between.
+		for _, w := range res.Projects {
+			o.Projects = append(o.Projects, OutcomeProject{ProjectID: w.ID, Confidence: w.Confidence})
+		}
 	}
 	defer func() {
 		if r := recover(); r != nil {

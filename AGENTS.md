@@ -34,17 +34,24 @@ one already here.
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
-## Vocabulary — project, group, dimension (2026-09-23, amended 2026-09-25)
+## Vocabulary — project and dimension (2026-09-23, amended 2026-09-25)
 
-A **project** (e.g. "SDKs") is Signal's own bucket, defined in Signal. A **group** (e.g.
-"Products") holds projects. The repo/branch/model/… facets `/analyze` counts are
-**dimensions**. An **Atlas workstream** is Atlas's value; Signal receives the org's list but
-does not match or show it. Until 2026-09-23 Signal called a group a "workstream" and the
-dimensions "workstreams" too — three meanings for one word. The 2026-09-23 rename also
-called the project a "workstream"; that was reversed on 2026-09-25 (Revision 3 of the
-multi-group discovery) once Signal stopped matching Atlas's workstreams, so the two words now
-name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
-(`scripts/vocabulary-denylist.txt`).
+A **project** (e.g. "SDKs") is Signal's only bucket, defined in Signal, in one flat list. The
+repo/branch/model/… facets `/analyze` counts are **dimensions**. An **Atlas workstream** is
+Atlas's value; Signal receives the org's list but does not match or show it. Until 2026-09-23
+"workstream" meant three things here (a set of projects, the dimensions, and Atlas's value).
+The 2026-09-23 rename briefly called the project a "workstream" and the set a "group"; on
+2026-09-25 the project got its name back (Revision 3) and the set left the product (Revision 4).
+`projects.Group` remains only as the stored container 3.0.6 needs. `scripts/check_vocabulary.sh`
+fails CI on any retired name (`scripts/vocabulary-denylist.txt`).
+
+**Signal labels on its own (since 2026-09-25).** The rule pass, the Projects pane, its totals
+and `project_matches` see only the projects defined in Signal (`projects.Candidates`, the
+local document). The org's workstreams still arrive on the settings poll and are held, unread on
+those paths, and a poll no longer trims local rules an Atlas workstream covers. The model-based
+attribution pass still scores against the org's list (decided the same day; its answers are
+Atlas ids, and Signal's own ids are title-derived so cannot be published). Discovery:
+`docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html` → Revision 2.
 
 **Kept on purpose — the keep list:** Atlas wire keys `projects` (settings and block row),
 `projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
@@ -56,7 +63,11 @@ Claude Code's `~/.claude/projects` directories or a `.keld.toml` project.
 `workstreams_off` in agent-config.json and `KELD_PROJECTS_FILE`. Auto-update can roll a
 machine back to 3.0.6, which reads only those; a renamed file meant the rolled-back daemon
 found nothing, and whatever it saved was ignored after the next upgrade. Translate at
-`projects.Load`/`Save`, never by moving the file.
+`projects.Load`/`Save`, never by moving the file. ⚠️ **3.0.6 renders a project only under a
+group the file declares**, so `Save` writes every project under one (the person's existing
+groups are kept; with none, one internal `projects` group is added) even though the page
+has no groups. `workstreams_off` is never written any more: it is read once, on upgrade, to
+hide the projects of a group that was switched off, and left in place for a rollback.
 
 ## Architecture
 
@@ -1958,6 +1969,24 @@ timings — no text, no span, no offset, in either direction.
   genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
   skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
   invisible to the fleet.
+- ⚠️ **A BLOCK LANDS IN EVERY PROJECT THAT MATCHES IT (2026-09-23), AND SIGNAL HAS NO
+  GROUPS (2026-09-25).** One piece of work can legitimately belong to several projects, so
+  overlap is the model, not an error:
+  - the RULE pass (`projects.Attribute`) no longer refuses: two projects claiming one repo
+    both get the block, and `ReasonConflict` is never produced (the constant survives so an
+    old ledger row reads). There is no precedence and no order to maintain;
+  - TOTALS (`projects.Rollup`, `GET /v1/projects`' `totals`) are per project, each counting
+    every block it holds in full, while `coverage` counts a shared block once. Signal sends
+    every id it assigned; Atlas decides what to do with overlap on its own side.
+  ⚠️ **Groups were built and removed in the same week, on purpose.** On 2026-09-23 Signal
+  mirrored Atlas's groups and cut the model-based decision once PER GROUP; Revision 2 then
+  stopped Signal matching Atlas's workstreams, which left a group carrying only a heading,
+  group totals and a "counts for my work" switch, so Revision 4 (2026-09-25) removed them.
+  The sidecar is back to ONE pooled competition — the pre-2026-09-23 decision, byte for
+  byte — and the daemon posts no `group`. A group survives only as the stored container
+  3.0.6 needs (see Vocabulary); a project in a group that had been switched off was made
+  HIDDEN once, on upgrade, so it still counts for nothing.
+  Spec: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html`.
 - **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
   An absolute threshold conflated two questions and real-transcript evaluation showed it
   (2026-09-02, 21 real blocks: every block carries a per-block score offset, so one bar
@@ -2268,7 +2297,7 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
-    projects/        groups and projects: the local document (projects.json),
+    projects/        projects: the local document (projects.json),
                      the rule pass (Attribute), suggestions, the page's edits
     attrib/          the semantic attribution job (POST /attribute) per closed block
     update/          auto-update: Atlas pins a release; fetch, verify, swap by

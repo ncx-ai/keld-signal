@@ -24,7 +24,9 @@ test.describe("Projects", () => {
     await expect(page.getByText(/^\d+ of \d+ focus blocks$/)).toBeVisible();
     await expect(page.getByText(/^\d+%/)).toBeVisible();
     await expect(page.getByText("Left over", { exact: true })).toBeVisible();
-    await expect(page.getByText("Groups on", { exact: true })).toBeVisible();
+    // Revision 4: no group tile. Asserted here too, against the real daemon,
+    // because the page must not show one whatever the catalog carries.
+    await expect(page.getByText("Groups on", { exact: true })).toHaveCount(0);
 
     const heading = page.getByText(/^Suggested by your activity · \d+$/);
     await expect(heading).toBeVisible();
@@ -63,40 +65,14 @@ test.describe("Projects", () => {
     await expect(page.getByText(APPLIED).first()).toBeVisible();
     await expect(heading).toHaveText(`Suggested by your activity · ${before - 1}`);
 
-    // ⚠️ **AND IT IS VISIBLE WITH NO ORG WORKSTREAMS AT ALL, WHICH IS THE CASE
-    // THAT WAS BROKEN.** The pane draws projects by looping over workstreams,
-    // and that list is pushed down by Atlas — so on every machine with Send to
-    // Atlas off (this daemon included, and the default for anyone trying Signal
-    // locally) it was empty, the loop body never ran, and a freshly created
-    // project was invisible. Measured on a real machine: two projects on disk,
-    // "YOUR PROJECTS" followed by nothing. From the outside that is
-    // indistinguishable from the suggestion having been thrown away, which is
-    // exactly how it was reported.
-    //
-    // Asserted explicitly rather than left implicit: this suite ALWAYS runs with
-    // no workstreams, so without naming it a reader would not know the case is
-    // covered — and the earlier version of this test asserted `.group-card`
-    // while believing the fixture had org workstreams it never had.
-    // ⚠️ **EVERY WORKSTREAM HERE IS `origin: "local"`, AND THAT IS THE ASSERTION
-    // THAT MATTERS.** This suite always runs with Send to Atlas off, so the org
-    // has declared NONE — and the pane draws projects by looping over
-    // workstreams, so with an empty list a freshly created project was drawn
-    // nowhere at all. Measured on a real machine: two projects on disk, "YOUR
-    // PROJECTS" followed by nothing, which from the outside is indistinguishable
-    // from the suggestion having been thrown away. That is exactly how it was
-    // reported.
-    //
-    // Stated as "all local" rather than "was empty beforehand" on purpose: the
-    // emptiness is a property of the daemon at bring-up, not of this test's
-    // moment, and a serial suite that creates projects would make a
-    // before-assertion pass only when this test ran first — which is not a test.
-    // An org-declared workstream would show `origin: "atlas"`, so this still
-    // fails if the machine's own bucket is ever mislabelled as the org's.
-    const afterCreate = await readCatalog(page);
-    const origins = (afterCreate.groups || []).map((w: any) => w.origin);
-    expect(origins.length).toBeGreaterThan(0);
-    expect([...new Set(origins)]).toEqual(["local"]);
-
+    // ⚠️ **AND IT IS VISIBLE, WHICH IS THE CASE THAT WAS ONCE BROKEN.** The
+    // pane used to draw projects by looping over groups pushed down by Atlas,
+    // so on a machine with Send to Atlas off a new project was drawn nowhere:
+    // "YOUR PROJECTS" followed by nothing. Since Revision 4 the pane is one
+    // flat list with no groups at all, and this is the assertion that it
+    // stayed visible. (A catalog check that every group was `origin: "local"`
+    // stood here; groups leave the product, so it is gone rather than kept
+    // passing only against a backend that still has them.)
     // The new project sits under "Your projects" with the repository as its rule.
     //
     // ⚠️ Scoped to `.row-title`, not to the card. A project row now carries a
@@ -104,7 +80,7 @@ test.describe("Projects", () => {
     // projects' titles — and an <option> is HIDDEN, so a card-wide text match
     // resolved to one of those and failed `toBeVisible` on a page that was
     // rendering perfectly.
-    const yours = page.locator(".group-card .project-row .row-title");
+    const yours = page.locator(".projects-card .project-row .row-title");
     await expect(yours.getByText(firstValue).first()).toBeVisible();
     await expect(yours.getByText(`repo ${firstValue}`)).toBeVisible();
   });
@@ -141,21 +117,20 @@ test.describe("Projects", () => {
       // into the picker's grid column, putting every Atlas card's pill 16px
       // left of every local one.
       //
-      // Asserted per card rather than across the pane: cards are separate
-      // grids, and requiring one edge across all of them would be asserting
-      // something the design never promised.
+      // Asserted per card. Since Revision 4 there is one list card (plus a
+      // "Hidden" one when a project is hidden); the rows inside a card share
+      // one picker column and one pill edge.
       await signal.open("projects");
       const cards = await page.evaluate(() =>
-        [...document.querySelectorAll(".group-card")].map((card) => {
+        [...document.querySelectorAll(".projects-card:not(.hidden-projects)")].map((card, i) => {
           const cr = card.getBoundingClientRect();
           const rows = [...card.querySelectorAll(".project-row")];
           const r = (el: Element | null) => (el ? Math.round(el.getBoundingClientRect().right) : null);
           const l = (el: Element | null) => (el ? Math.round(el.getBoundingClientRect().left) : null);
           return {
-            name: card.querySelector(".name")?.textContent ?? "",
+            name: `card ${i}`,
             pickerLefts: [...new Set(rows.map((x) => l(x.querySelector("select"))).filter(Boolean))],
             pillRights: [...new Set(rows.map((x) => r(x.querySelector(".pill"))).filter(Boolean))],
-            switchRight: r(card.querySelector(".group-head .switch")),
             overflowing: [...card.querySelectorAll("*")]
               .filter((e) => e.getBoundingClientRect().right > cr.right + 0.5).length,
           };
@@ -166,10 +141,6 @@ test.describe("Projects", () => {
           .toBeLessThanOrEqual(1);
         expect(c.pillRights.length, `${c.name}: pills end at ${c.pillRights}`)
           .toBeLessThanOrEqual(1);
-        if (c.pillRights.length && c.switchRight !== null) {
-          // The header switch and the rows' pills share the card's content edge.
-          expect(c.pillRights[0], `${c.name}: pill edge vs switch edge`).toBe(c.switchRight);
-        }
         expect(c.overflowing, `${c.name}: children outside the card`).toBe(0);
       }
     });
@@ -179,7 +150,7 @@ test.describe("Projects", () => {
     const heading = page.getByText(/^Suggested by your activity · \d+$/);
     const before = Number(/\d+$/.exec((await heading.innerText()).trim())![0]);
     expect(before, "a suggestion left over to place").toBeGreaterThanOrEqual(1);
-    const projectRows = page.locator(".group-card .project-row");
+    const projectRows = page.locator(".projects-card:not(.hidden-projects) .project-row");
     expect(await projectRows.count(), "a project to place it in").toBeGreaterThanOrEqual(1);
     const rulesBefore = await projectRows.first().locator("small").innerText();
 
@@ -198,24 +169,8 @@ test.describe("Projects", () => {
     expect(rulesAfter).toMatch(/repo \S+ \+\d+/);
   });
 
-  test("switching a group off changes its row and the 'groups on' tile, and back", async ({ signal, page }) => {
-    await signal.open("projects");
-    // ⚠️ Read the tile's VALUE element and match its WHOLE text. The count and
-    // the "of N" caption are adjacent with no whitespace, so the value renders
-    // as "1of 1" — every word-boundary assertion around the digit fails, twice
-    // over: "Workstreams on1of 1" for the tile, "1of 1" for the value. Anchoring
-    // the whole string is unambiguous and says what a person reads.
-    const onTileValue = page.getByText("Groups on", { exact: true }).locator("..").locator(".value, .v").first();
-    await expect(onTileValue).toHaveText(/^1of \d+$/);
-
-    await signal.setSwitch(/^counts for my work/, false);
-    await expect(page.getByText("Your work never lands here.")).toBeVisible();
-    await expect(onTileValue).toHaveText(/^0of \d+$/);
-    await expect(page.getByText(APPLIED).first()).toBeVisible();
-
-    // Restore, so the next browser starts from the same place.
-    await signal.setSwitch(/^counts for my work/, true);
-    await expect(page.getByText("Your work never lands here.")).toHaveCount(0);
-    await expect(onTileValue).toHaveText(/^1of \d+$/);
-  });
+  // RETIRED (Revision 4): "switching a group off changes its row and the
+  // 'groups on' tile, and back". The switch and the tile left the page, and
+  // PUT /v1/groups/{key}/off is removed. flat-projects.spec.ts asserts their
+  // absence against a Revision 4 catalog.
 });

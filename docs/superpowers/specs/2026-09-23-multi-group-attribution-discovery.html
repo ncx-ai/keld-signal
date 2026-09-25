@@ -126,7 +126,7 @@ If this is wrong, the Signal page keeps telling people a valid setup is broken.
 The on-device semantic pass also keeps hiding work from every group but one.</p>
 
 <div class="meta">
-  <span class="chip chip-signed">Signed off — 2026-09-23</span>
+  <span class="chip chip-reviewed">Reviewed — 10/12 met, ship with follow-ups</span>
   <span>Opus 5.5 (1M context) — thinking: high</span>
   <span class="mono">2026-09-23</span>
 </div>
@@ -141,9 +141,257 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <dt>Semantic pass default</dt><dd class="mono">OFF · a developer toggle (KELD_ATTRIBUTION) · limits who a wrong decision can affect</dd>
 </dl>
 
+<section id="rev4" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r4" style="margin-top:18px">Revision 4 · Only projects, no groups <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Done · 8/8 · 2026-09-25</span></h2>
+<p class="lede">Decided 2026-09-25: Signal drops the container. There are only <strong>projects</strong>, in one flat list. Groups came from mirroring Atlas; Revision 2 stopped that, so a group now only carried a heading, group totals and the "counts for my work" switch. A block still lands in every project that matches it.</p>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Revisions 1–3</th><th>Revision 4</th></tr></thead>
+<tbody>
+  <tr><td>Projects page</td><td>projects under group headings; a group switcher; a "Groups on" tile; "counts for my work" per group</td><td><strong>one flat list of projects</strong>; none of the four</td></tr>
+  <tr><td>Totals</td><td>per group (a block once) and per project (in full)</td><td><strong>per project only</strong>, in full. The "attributed N of M blocks" line still counts a shared block once.</td></tr>
+  <tr><td>Rule pass</td><td>every matching project, in any group</td><td><strong>unchanged</strong>: every matching project</td></tr>
+  <tr><td>Model-based pass (off by default)</td><td>one competition per group</td><td><strong>one pooled competition</strong> — the decision before per-group, byte for byte. The sidecar already does this when no <span class="mono">group</span> is posted.</td></tr>
+  <tr><td>Local API</td><td><span class="mono">GET /v1/projects</span> has <span class="mono">groups</span>; <span class="mono">PUT /v1/groups/{key}/off</span></td><td>no <span class="mono">groups</span> key; the route is removed</td></tr>
+  <tr><td>Ledger cells</td><td><span class="mono">{project_id, group, method}</span></td><td><span class="mono">{project_id, method}</span>; old rows still read</td></tr>
+  <tr><td>Saved file</td><td>3.0.6's shape, with the person's groups</td><td>still 3.0.6's shape. Every project is written under <strong>one internal group</strong>, because 3.0.6 only renders a project under a group — without it a rolled-back machine would show nothing.</td></tr>
+  <tr><td>Wire to Atlas</td><td><span class="mono">projects</span>, <span class="mono">project_matches</span>, dimensions</td><td><strong>unchanged</strong></td></tr>
+  <tr><td>PR #47 (rename)</td><td>—</td><td><strong>unchanged</strong>: <span class="mono">Group</span> remains as the internal storage type only</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Decided: what happens to a switched-off group</h3>
+<ul>
+  <li>A project whose group was switched off becomes a <strong>hidden project</strong> on first load. It keeps attributing nothing, exactly as before, and the person can unhide it on the page. 3.0.6 honours <span class="mono">hidden</span> too.</li>
+  <li><span class="mono">workstreams_off</span> is left in agent-config.json, so a rollback to 3.0.6 still sees those groups as off.</li>
+  <li>The alternative — drop the switch and let those projects count again — changes numbers people chose to exclude, silently.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
+<tbody>
+  <tr id="r4-ac-1"><td class="mono">R4-AC-1</td><td>The Projects page shows one flat list: no group heading, switcher, "Groups on" tile or "counts for my work" toggle.</td><td>the page</td><td class="mono">node --test · ui/e2e</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">node 178/178 incl. flat-projects.test.js · ui/e2e/flat-projects.spec.ts · Playwright 134 passed on the merged branch · real page: no group wording</span></td></tr>
+  <tr id="r4-ac-2"><td class="mono">R4-AC-2</td><td><span class="mono">GET /v1/projects</span> returns <span class="mono">{projects, suggestions, coverage, totals}</span> with <span class="mono">totals = {projects: [...]}</span> and no <span class="mono">groups</span>; <span class="mono">PUT /v1/groups/{key}/off</span> answers 404.</td><td>local API</td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHasNoGroups</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestTheCatalogHasNoGroups PASS (6685c59a) · PUT /v1/groups/x/off → 404</span></td></tr>
+  <tr id="r4-ac-3"><td class="mono">R4-AC-3</td><td>A block matching two projects lands in both; each counts it in full; coverage counts it once.</td><td>catalog, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestASharedBlockCountsInEveryProjectAndOnceInCoverage</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestASharedBlockCountsInEveryProjectAndOnceInCoverage PASS</span></td></tr>
+  <tr id="r4-ac-4"><td class="mono">R4-AC-4</td><td>A project whose group was switched off is hidden after upgrade and attributes nothing; <span class="mono">workstreams_off</span> is left as it was.</td><td><span class="mono">projects.json</span>, agent-config.json</td><td class="mono">go test ./internal/agent/daemon/ -run TestAnOffGroupsProjectsBecomeHidden</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAnOffGroupsProjectsBecomeHidden PASS — incl. the group matched by name, and a second start that leaves the file's bytes and mtime unchanged</span></td></tr>
+  <tr id="r4-ac-5"><td class="mono">R4-AC-5</td><td>A home written by 3.0.6 is read in place, and after an edit the file still renders every visible project in 3.0.6 (each under a group the file declares).</td><td><span class="mono">projects.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestA306HomeIsReadAndWrittenInPlace</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestA306HomeIsReadAndWrittenInPlace PASS · TestANewProjectInAGrouplessHomeIsFiledUnderOneInternalGroup PASS</span></td></tr>
+  <tr id="r4-ac-6"><td class="mono">R4-AC-6</td><td>The model-based pass posts no <span class="mono">group</span> and decides as one pooled competition; its answers equal the pre-per-group rule.</td><td>sidecar <span class="mono">POST /projects</span>, <span class="mono">/attribute</span></td><td class="mono">sidecar test_attribution_scoring.py · go test ./internal/agent/enrich/sidecar/</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">Go: TestPostProjectsPostsNoGroup PASS · sidecar: test_decision_is_pooled_and_ignores_group PASS (13/13) · eval F1 0.811, torch venv</span></td></tr>
+  <tr id="r4-ac-7"><td class="mono">R4-AC-7</td><td>The wire to Atlas is byte-identical: the golden block row is unchanged.</td><td><span class="mono">POST /v1/signal/blocks</span></td><td class="mono">go test ./internal/agent/publish/ -run TestGoldenBlockIsTheCurrentWire</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestGoldenBlockIsTheCurrentWire PASS, no golden or scripts/testdata file changed</span></td></tr>
+  <tr id="r4-ac-8"><td class="mono">R4-AC-8</td><td>Every earlier criterion that does not name a group still passes; the group ones are marked retired below.</td><td>all suites</td><td class="mono">go test ./... · node --test · sidecar · Playwright · the real-daemon check</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">go 59 ok · node 178/178 · sidecar 60/60 · Playwright 134 passed · real-daemon check 12 of 12 · every commit builds on its own</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Retired by this revision</h3>
+<ul>
+  <li>Revision 1: the per-group model decision (AC-3, AC-4), group totals and the switcher (the group half of AC-8), the per-group eval arm (AC-10).</li>
+  <li>Revision 3: R3-AC-5 (groups keep their Revision 1 name) — groups leave the product; the storage type keeps the name.</li>
+</ul>
+
+<h3>Destructive change ledger (Revision 4)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Group headings, group totals and the switch leave the page</td><td>yes, revert</td><td>every machine; the groups stay in the file</td><td>R4-AC-1, R4-AC-5</td></tr>
+  <tr><td>Projects in a switched-off group are marked hidden</td><td>yes — per project, on the page</td><td>machines that switched a group off</td><td>R4-AC-4; the off-list is kept</td></tr>
+  <tr><td><span class="mono">PUT /v1/groups/{key}/off</span> removed</td><td>yes</td><td>the page only (embedded)</td><td>R4-AC-2</td></tr>
+  <tr><td>Model-based pass back to pooled</td><td>yes</td><td>machines with the pass on (developer-only)</td><td>R4-AC-6</td></tr>
+</tbody>
+</table>
+</div>
+<h3>Notes from building it</h3>
+<ul>
+  <li><strong>The page gained a "Hidden" list with "Show again".</strong> Without it, the projects hidden from a switched-off group could never be brought back — the page had no way to unhide.</li>
+  <li><strong>Save also declares any group a project names but the file lacks</strong> (an old "Same as" entry's), so every visible project renders in 3.0.6.</li>
+  <li><strong>Published projects stay highest-confidence first.</strong> The pooled revert briefly dropped that sort; the daemon reads the list as ranked, so it was restored.</li>
+  <li>A project also counts as switched off when its Atlas team name is on the off-list, as the old exclusion did.</li>
+</ul>
+</section>
+
+<section id="rev3" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r3" style="margin-top:18px">Revision 3 · A project is a project again <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Done · 6/6 · 2026-09-25</span></h2>
+<p class="lede">Decided 2026-09-25: Signal's own buckets are called <strong>projects</strong> again. Revision 2 stopped Signal matching Atlas's workstreams, so sharing the word would make people ask "which workstreams?". The other two renames stay. Every earlier criterion keeps holding under the new names.</p>
+
+<h3>Words, amended</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Thing</th><th>Before this work</th><th>Revision 1 said</th><th>Revision 3 says</th></tr></thead>
+<tbody>
+  <tr><td>Signal's bucket (e.g. "SDKs")</td><td>project</td><td>workstream</td><td><strong>project</strong> — back, and distinct from Atlas's workstreams</td></tr>
+  <tr><td>A set of buckets (e.g. "Products")</td><td>workstream</td><td>group</td><td><strong>group</strong> — unchanged from Revision 1</td></tr>
+  <tr><td>repo, branch, model… facets</td><td>workstreams</td><td>dimensions</td><td><strong>dimensions</strong> — unchanged from Revision 1</td></tr>
+  <tr><td>Atlas's value (e.g. "Atlas Platform")</td><td>project</td><td>workstream</td><td>an <strong>Atlas workstream</strong> — held, not shown (Revision 2)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Revision 1–2</th><th>Revision 3</th></tr></thead>
+<tbody>
+  <tr><td>Go package and types</td><td><span class="mono">internal/agent/workstreams</span>, <span class="mono">Workstream</span></td><td><span class="mono">internal/agent/projects</span>, <span class="mono">Project</span>; <span class="mono">Group</span> stays</td></tr>
+  <tr><td>Local routes and page</td><td><span class="mono">/v1/workstreams*</span>, <span class="mono">#/workstreams</span>, "Workstreams"</td><td><span class="mono">/v1/projects*</span>, <span class="mono">#/projects</span>, "Projects"; <span class="mono">/v1/groups/{key}/off</span> stays</td></tr>
+  <tr><td>Stored names on disk</td><td><span class="mono">workstreams.json</span> (migrated once), <span class="mono">groups_off</span>, <span class="mono">KELD_WORKSTREAMS_FILE</span></td><td><strong>exactly 3.0.6's</strong>: <span class="mono">projects.json</span> in its v1 shape, <span class="mono">workstreams_off</span>, <span class="mono">KELD_PROJECTS_FILE</span>. The one-time file move is deleted.</td></tr>
+  <tr><td>Ledger cells (local)</td><td><span class="mono">workstreams: [{workstream_id, group, method}]</span></td><td><span class="mono">projects: [{project_id, group, method}]</span> — an old row's single <span class="mono">project_id</span> still reads as a one-entry list</td></tr>
+  <tr><td>Wire to Atlas, sidecar route</td><td><span class="mono">projects</span>, <span class="mono">project_matches</span>, facet key <span class="mono">workstreams</span>, <span class="mono">POST /projects</span></td><td><strong>unchanged</strong> — byte-identical</td></tr>
+  <tr><td>Behaviour</td><td>per-group attribution, overlap, totals, Signal-only (R1, R2)</td><td><strong>unchanged</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Why stored names go back to 3.0.6's</h3>
+<ul>
+  <li><strong>A rollback must still find its data.</strong> Auto-update can roll a machine back to 3.0.6. The Revision 1 move renamed <span class="mono">projects.json</span> away, so 3.0.6 found nothing; whatever it saved then was ignored after the next upgrade.</li>
+  <li><strong>It already happened once, on a developer Mac.</strong> A test run did the move on the real home while it was empty (fixed: the daemon suite now runs under a throwaway home). A later dev build then read the empty file and hid two real projects.</li>
+  <li>Keeping 3.0.6's names means there is no move to get wrong. The cost: <span class="mono">workstreams_off</span> and the file's inner <span class="mono">workstreams</span> key still mean groups on disk. That stays on the keep list, invisible to people.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
+<tbody>
+  <tr id="r3-ac-1"><td class="mono">R3-AC-1</td><td>The code names Signal's bucket a project: <span class="mono">internal/agent/projects</span> exists with type <span class="mono">Project</span>, <span class="mono">internal/agent/workstreams</span> does not, and the vocabulary gate bans the Revision 1 names for it.</td><td><span class="mono">go list ./...</span>, the gate</td><td class="mono">scripts/check_vocabulary.sh · scripts/check_vocabulary_test.sh</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">internal/agent/projects (no internal/agent/workstreams) · type Project, type Group · check_vocabulary.sh clean · self-test 6/6</span></td></tr>
+  <tr id="r3-ac-2"><td class="mono">R3-AC-2</td><td><span class="mono">GET /v1/projects</span> returns <span class="mono">{groups, projects, suggestions, coverage, totals}</span>; <span class="mono">/v1/workstreams</span> answers 404; the page's nav and headings say "Projects" and never "workstream".</td><td>local routes, the page</td><td class="mono">go test ./internal/agent/ingress/ · node --test · ui/e2e</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestTheRoutesSayProject PASS (/v1/workstreams → 404) · test/project-words.test.js PASS · node 177/177 · Playwright 132 passed</span></td></tr>
+  <tr id="r3-ac-3"><td class="mono">R3-AC-3</td><td>A home written by 3.0.6 is read in place. After an edit from the page, the state dir holds <span class="mono">projects.json</span> in the shape 3.0.6's loader reads, no <span class="mono">workstreams.json</span> and no <span class="mono">.pre-rename</span> file; a group switched off is saved as <span class="mono">workstreams_off</span>.</td><td><span class="mono">~/.keld/state</span>, <span class="mono">agent-config.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestA306HomeIsReadAndWrittenInPlace</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestA306HomeIsReadAndWrittenInPlace PASS · real daemon: only projects.json in the state dir (R3-AC-3 line of the system check)</span></td></tr>
+  <tr id="r3-ac-4"><td class="mono">R3-AC-4</td><td>The wire is byte-identical: the golden block row is unchanged, and the sidecar project post keeps its route and body.</td><td><span class="mono">POST /v1/signal/blocks</span>, <span class="mono">POST /projects</span></td><td class="mono">go test ./internal/agent/publish/ -run TestGoldenBlockIsTheCurrentWire (golden file not regenerated) · go test ./internal/agent/enrich/sidecar/</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">golden sample files unchanged vs Revision 2 · every JSON tag in publish/ identical · TestGoldenBlockIsTheCurrentWire PASS · enrich/sidecar PASS</span></td></tr>
+  <tr id="r3-ac-5"><td class="mono">R3-AC-5</td><td>Groups and dimensions keep their Revision 1 names: <span class="mono">Group</span>, <span class="mono">/v1/groups/{key}/off</span>, <span class="mono">enrich</span> dimensions, the sidecar <span class="mono">dimensions</span> module.</td><td>code, routes</td><td class="mono">grep + go test ./internal/agent/ingress/ -run TestGroupOffRoute</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestGroupOffRouteWritesSettingsAndIsLocalOnly PASS · enrich dimensions + sidecar dimensions.py kept</span></td></tr>
+  <tr id="r3-ac-6"><td class="mono">R3-AC-6</td><td>Every Revision 1 and 2 criterion still passes, its named test renamed where it says "workstream".</td><td>all suites</td><td class="mono">go test ./... · node --test · sidecar scripts · full Playwright · the real-daemon Revision 2 check (7/7)</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">go 59 packages ok · node 177/177 · sidecar 60/60 · Playwright 132 passed · real-daemon check 8 of 8 · PR A and PR B each green on their own</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger (Revision 3)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Branch history rewritten: PR A gains a "project keeps its name" commit; PR B and Revision 2 are replayed onto it</td><td>yes — the old branches are kept as <span class="mono">backup/*</span></td><td>local only; nothing was pushed</td><td>each layer's diff is re-checked against its own criteria</td></tr>
+  <tr><td>The one-time <span class="mono">projects.json</span> → <span class="mono">workstreams.json</span> move is deleted</td><td>yes</td><td>only machines that ran a dev build of this work: a stray <span class="mono">workstreams.json</span> is left and ignored</td><td>R3-AC-3</td></tr>
+  <tr><td>Local routes and page hash rename again</td><td>yes</td><td>the page only; it is embedded in the daemon</td><td>R3-AC-2</td></tr>
+  <tr><td>New ledger JSON columns named for projects</td><td>yes</td><td>unreleased columns; a dev machine may hold unused <span class="mono">workstreams</span> columns</td><td>additive; old single <span class="mono">project_id</span> rows still read</td></tr>
+</tbody>
+</table>
+</div>
+<h3>How it was done, and what nearly went wrong</h3>
+<ul>
+  <li><strong>Every criterion above keeps its named test under the new word.</strong> A test called <span class="mono">…Workstream…</span> in Revisions 1–2 is now <span class="mono">…Project…</span> (e.g. <span class="mono">TestOnlySignalProjectsAttribute</span>), except where it means Atlas's (<span class="mono">TestAtlasWorkstreamsAreHeldNotUsed</span>).</li>
+  <li>The reversal was mechanical, then checked by hand. It flipped some words it should not have: comments about the dimensions ("the workstreams pass"), and <strong>the link to Atlas's editor, which briefly pointed at a <span class="mono">/projects</span> page</strong>. No test caught that; one does now (<span class="mono">TestTheAtlasEditorLinkIsAtlassWorkstreamsPage</span>).</li>
+  <li>It also turned a Revision 2 absence check into one for a phrase that never existed, so it could not fail. It checks Atlas's real wording again.</li>
+  <li>History: PR B and Revision 2 were replayed onto the new PR A, commit by commit. The old branches are kept as <span class="mono">backup/*-pre-rev3</span>.</li>
+</ul>
+</section>
+
+<section id="rev2" style="border:1px solid var(--enc);border-radius:6px;padding:4px 18px 14px;margin-top:28px;background:var(--panel)">
+<h2 id="r2" style="margin-top:18px">Revision 2 · Signal labels on its own <span class="chip chip-reviewed" style="vertical-align:middle;margin-left:8px">Reviewed — 7/7 met · 2026-09-25</span></h2>
+<p class="lede">Decided 2026-09-25: Signal attributes blocks to the workstreams people define <em>in Signal</em>. Atlas's rules and Atlas's workstreams stop shaping Signal's answer. AC-1 … AC-12 below are implemented and unchanged; this revision adds R2-AC-1 … R2-AC-7. Plan: <span class="mono">docs/superpowers/plans/2026-09-25-signal-labels-on-its-own.md</span>. Status shows DONE only once the named test passes on the merged branch.</p>
+
+<h3>What changes, what stays</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Area</th><th>Today (Revision 1)</th><th>Revision 2</th></tr></thead>
+<tbody>
+  <tr><td>Rule pass candidates</td><td>local workstreams + the org's Atlas workstreams (<span class="mono">MergeCandidates</span>, daemon/v3blocks.go:322, workstreammatches.go:59, ingress/workstreams.go:138)</td><td><strong>Signal workstreams only</strong> — every entry in the local <span class="mono">workstreams.json</span></td></tr>
+  <tr><td>Workstreams pane</td><td>shows Atlas workstreams ("✓ in Atlas") and groups derived from them (<span class="mono">withRemoteBuckets</span>)</td><td><strong>hidden</strong>: only Signal workstreams and Signal groups</td></tr>
+  <tr><td>"Same as" picker</td><td>offers Atlas workstreams (creates a local overlay)</td><td>offers Signal workstreams only</td></tr>
+  <tr><td>Importing Atlas workstreams</td><td>the settings poll delivers them; they are shown and matched</td><td><strong>kept</strong>: still received and held in memory, neither shown nor matched. How to use them again is separate work.</td></tr>
+  <tr><td>Reconcile (daemon/v3.go:138)</td><td>deletes or trims a local workstream whose rules an Atlas workstream covers</td><td><strong>stops</strong>. Otherwise hiding Atlas would silently delete people's own rules.</td></tr>
+  <tr><td>Existing "Same as" overlays</td><td>local entries carrying an Atlas id + title + the person's rules</td><td>they are local entries, so they stay: shown and attributed as Signal workstreams, rules intact. No migration.</td></tr>
+  <tr><td>Wire to Atlas</td><td><span class="mono">project_matches</span> lists local and Atlas matches</td><td>lists Signal workstreams only (an id only where the entry carries an Atlas id); dimensions unchanged. Atlas keeps running its own rules.</td></tr>
+  <tr><td>Per-group attribution, overlap, totals, the page</td><td>as built</td><td>unchanged</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Acceptance criteria</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th><th>Status</th></tr></thead>
+<tbody>
+  <tr id="r2-ac-1"><td class="mono">R2-AC-1</td><td>A block matching only an Atlas workstream's rule is unattributed; one matching a Signal workstream lands there as before.</td><td><span class="mono">workstreams.Attribute</span> via the daemon's recorded and live passes</td><td class="mono">go test ./internal/agent/daemon/ -run TestOnlySignalWorkstreamsAttribute</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestOnlySignalWorkstreamsAttribute PASS on the merged branch (6f5fcd82) — reads the stored ledger cell</span></td></tr>
+  <tr id="r2-ac-2"><td class="mono">R2-AC-2</td><td><span class="mono">GET /v1/workstreams</span> returns only Signal workstreams and Signal groups — no Atlas workstream, no group derived from one — and totals and coverage are computed over them.</td><td><span class="mono">GET /v1/workstreams</span></td><td class="mono">go test ./internal/agent/ingress/ -run TestTheCatalogHoldsOnlySignalWorkstreams</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestTheCatalogHoldsOnlySignalWorkstreams PASS on the merged branch (f041d07f)</span></td></tr>
+  <tr id="r2-ac-3"><td class="mono">R2-AC-3</td><td>The page shows no "in Atlas" row, and "Same as" offers only Signal workstreams.</td><td>Workstreams pane</td><td class="mono">node --test + ui/e2e (fixture with Atlas and Signal workstreams)</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">node --test 175/175 incl. signal-only.test.js · ui/e2e/signal-only.spec.ts · full Playwright 132 passed, 0 failed on the merged branch (495f9632) · no sideways scroll at 400 px</span></td></tr>
+  <tr id="r2-ac-4"><td class="mono">R2-AC-4</td><td>The org's workstreams are still received on the settings poll and held; nothing on the attribution or display path reads them.</td><td>daemon remote state</td><td class="mono">go test ./internal/agent/daemon/ -run TestAtlasWorkstreamsAreHeldNotUsed</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAtlasWorkstreamsAreHeldNotUsed PASS on the merged branch (6f5fcd82)</span></td></tr>
+  <tr id="r2-ac-5"><td class="mono">R2-AC-5</td><td>A Signal workstream whose repo an Atlas workstream also declares keeps that rule after a settings poll.</td><td>local <span class="mono">workstreams.json</span></td><td class="mono">go test ./internal/agent/daemon/ -run TestAPollNoLongerTrimsSignalRules</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAPollNoLongerTrimsSignalRules PASS on the merged branch (6f5fcd82) — before the fix the poll deleted the Signal workstream</span></td></tr>
+  <tr id="r2-ac-6"><td class="mono">R2-AC-6</td><td>An existing "Same as" overlay entry shows and attributes as a Signal workstream with its title and rules.</td><td><span class="mono">GET /v1/workstreams</span>, ledger</td><td class="mono">go test ./internal/agent/ingress/ -run TestAnOverlayIsASignalWorkstream</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestAnOverlayIsASignalWorkstream PASS on the merged branch (f041d07f)</span></td></tr>
+  <tr id="r2-ac-7"><td class="mono">R2-AC-7</td><td>A block row's <span class="mono">project_matches</span> names only Signal workstreams; the <span class="mono">workstreams</span> dimensions are byte-identical to Revision 1.</td><td><span class="mono">POST /v1/signal/blocks</span> body</td><td class="mono">go test ./internal/agent/daemon/ -run TestProjectMatchesAreSignalOnly</td><td><span class="pill p-met">DONE</span><br><span class="mono" style="font-size:11px">TestProjectMatchesAreSignalOnly PASS · publish/ TestGoldenBlockIsTheCurrentWire PASS, golden file unchanged (6f5fcd82)</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Consequences worth knowing</h3>
+<ul>
+  <li><strong>Coverage drops on org machines</strong> the moment this ships: blocks that only an Atlas workstream matched become unattributed on the page (the Today rows recompute live). They reappear as suggestions, which is where a person makes a Signal workstream for them.</li>
+  <li><strong>Atlas's numbers do not move.</strong> Atlas already attributes from its own rules and the block's dimensions; neither changes.</li>
+  <li><strong>Atlas's matcher suggestions keep their input without Signal knowing Atlas's definitions.</strong> Each block's <span class="mono">project_matches</span> still lists the Signal workstreams it matched, each with its repos and ticket key (no name, no id). Atlas can compare a person's grouping with its own — "mine has A and B, theirs has A, B and C, so suggest C" — because only Atlas holds both sides. Today Atlas's suggestion code reads only entries carrying an Atlas id; reading these by shared repos is Atlas-side follow-up work. Existing "Same as" entries keep their Atlas id and keep feeding it as they do now — until the person maps one onto another workstream, which removes the entry and its id with it (an overlay is now theirs to fold, like any Signal workstream). No new entry carries an Atlas id: "Same as" no longer offers Atlas workstreams.</li>
+  <li><strong>Signal's local ids are built from titles</strong> (<span class="mono">p_</span> + slug), which is why they never go on the wire — <span class="mono">project_matches</span> already omits them, and that stays.</li>
+</ul>
+
+<h3>Decision taken — 2026-09-25</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Question</th><th>Decided</th></tr></thead>
+<tbody>
+  <tr><td class="mono">Q1</td><td>The model-based pass (off by default, developer-only) scores against the <em>Atlas</em> list and publishes Atlas ids in <span class="mono">projects</span>. Does it switch to Signal workstreams in this revision?</td><td><strong>Agreed 2026-09-25: not in this revision</strong> — it stays on the Atlas list and fold it into the separate "how to use Atlas workstreams again" work. Switching it means its answers are Signal ids, which are title-derived and so could no longer be published; that is a wire decision, not a UI one.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger (Revision 2)</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Atlas workstreams leave the rule pass and the page</td><td>yes, revert</td><td>every machine paired with an org that declares workstreams</td><td>they are still received (R2-AC-4); nothing is deleted</td></tr>
+  <tr><td>Reconcile stops</td><td>yes, revert</td><td>local rules are no longer trimmed on a poll</td><td>R2-AC-5; nothing stored is removed by this change</td></tr>
+  <tr><td><span class="mono">project_matches</span> stops naming Atlas-only matches</td><td>yes</td><td>Atlas's matcher suggestions (the only reader)</td><td>Atlas attribution does not read it</td></tr>
+  <tr><td>An overlay can be mapped away <em>(declared after review, 2026-09-25)</em></td><td>no — the Atlas id goes with the entry</td><td>one entry, on the person's own action</td><td>the rules move to the target, so no block becomes unattributed; <span class="mono">TestAnOverlayCanBeMapped</span></td></tr>
+  <tr><td>Local <span class="mono">GET /v1/workstreams</span> reports an overlay as <span class="mono">origin: "user"</span> and a stored Atlas group as <span class="mono">"local"</span> <em>(declared after review)</em></td><td>yes</td><td>loopback route, the page only</td><td>relabelled on the view copy; the stored document is untouched (asserted)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="r2-review">Review Log (Revision 2)</h3>
+<p><strong>7/7 criteria met</strong> — ship with follow-ups. Graded by an independent reviewer agent against <span class="mono">feat/per-group-attribution...feat/signal-only-workstreams</span>; the named tests re-run by it.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#r2-ac-1">R2-AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/v3blocks.go:321 · TestOnlySignalWorkstreamsAttribute PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-2">R2-AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ingress/workstreams.go:145,301 · TestTheCatalogHoldsOnlySignalWorkstreams PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-3">R2-AC-3</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ui/app.js:431,1908,1911 · node --test 175/175 · Playwright 132 passed on the merged branch</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-4">R2-AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/v3.go:106-112 · TestAtlasWorkstreamsAreHeldNotUsed PASS · only remaining reader: v3attrib.go:203 (the Q1 semantic pass)</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-5">R2-AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">reconcileWithRemote deleted · TestAPollNoLongerTrimsSignalRules PASS (byte-equal document)</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-6">R2-AC-6</a></td><td><span class="pill p-met">MET</span></td><td class="mono">ingress/workstreams.go:334 · TestAnOverlayIsASignalWorkstream PASS</td></tr>
+  <tr><td class="mono"><a href="#r2-ac-7">R2-AC-7</a></td><td><span class="pill p-met">MET</span></td><td class="mono">daemon/workstreammatches.go:49 · TestProjectMatchesAreSignalOnly PASS · publish/ TestGoldenBlockIsTheCurrentWire PASS</td></tr>
+</tbody>
+</table>
+</div>
+<h3>System check — a real daemon against a mock Atlas</h3>
+<ul>
+  <li>A mock Atlas served two workstreams (one on the corpus's repo R1, one on R2); the local document held a Signal workstream on R1 and a "Same as" overlay on R2. 21 blocks, all published to the mock.</li>
+  <li><strong>Before the change: 1 of 7.</strong> R1 blocks landed on the Atlas workstream, a poll deleted the Signal workstream outright, the page said "in Atlas" six times.</li>
+  <li><strong>After: 7 of 7.</strong> No cell or published row names the Atlas-only id; the document is byte-identical after 9 polls; the page lists only Signal workstreams, with no Atlas wording.</li>
+</ul>
+<h3>Follow-ups from the review</h3>
+<ul>
+  <li><strong>Mapping an overlay away drops its Atlas id</strong> — now declared in the ledger above. A person's explicit action on their own workstream; accepted.</li>
+  <li>A group an older release stored as an Atlas group still shows, relabelled local. Nothing writes one any more; it is the person's document, not the Atlas list.</li>
+  <li>A heading reads off when its key <em>or</em> name is switched off, matching the rule the attribution pass already applies.</li>
+  <li>Dead code kept on purpose for the Atlas-import work: <span class="mono">Reconcile</span>, <span class="mono">MergeCandidates</span>, the <span class="mono">remote</span> branches of the same-as and map functions.</li>
+</ul>
+</section>
+
 <h2 id="s1">1 · Hypothesis &amp; scope</h2>
 
 <h3>Words: Signal adopts Atlas's, as part of this work</h3>
+<p><span class="pill p-partial">SUPERSEDED IN PART</span> Revision 3 (2026-09-25) calls Signal's bucket a <strong>project</strong> again; group and dimensions stand. See <a href="#rev3">Revision 3</a>.</p>
 <div class="wrap">
 <table>
 <thead><tr><th>Atlas says</th><th>Signal says today</th><th>Signal says after</th><th>Where it lives today</th></tr></thead>
@@ -312,7 +560,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <tr><td>On-disk document</td><td class="mono">state/projects.json {workstreams, projects}</td><td class="mono">state/workstreams.json {groups, workstreams}</td><td>read old if new absent; write new; keep old as <span class="mono">projects.json.pre-rename</span></td></tr>
   <tr><td>Operator config</td><td class="mono">agent-config.json workstreams_off</td><td class="mono">groups_off</td><td>old key still read; new key wins</td></tr>
   <tr><td>Env var</td><td class="mono">KELD_PROJECTS_FILE</td><td class="mono">KELD_WORKSTREAMS_FILE</td><td>old name still read, logs one deprecation line</td></tr>
-  <tr><td>Ledger JSON</td><td class="mono">project_id · vector_project_id columns</td><td class="mono">groups JSON with workstream_id</td><td>old columns kept and read (AC-7)</td></tr>
+  <tr><td>Ledger JSON</td><td class="mono">project_id · vector_project_id columns</td><td class="mono">cells carry a <span class="mono">workstreams</span> list with workstream_id + group; stored in the added JSON columns <span class="mono">workstreams</span> / <span class="mono">vector_workstreams</span> (as shipped)</td><td>old columns kept, still written with the first entry, and read (AC-7)</td></tr>
   <tr><td>Page copy</td><td>“Projects” tab · “Workstreams on” · “New project”</td><td>“Workstreams” tab · “Groups on” · “New workstream”</td><td>—</td></tr>
   <tr><td>Python internals</td><td class="mono">attribution.py _projects, project_vectors…</td><td class="mono">_workstreams, workstream_vectors…</td><td>—</td></tr>
 </tbody>
@@ -339,8 +587,8 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
   <li><strong>Group of a workstream:</strong> <span class="mono">Workstream.Group</span> (today <span class="mono">Project.Workstream</span>). Atlas values already get <span class="mono">GroupKey(team)</span>. Local workstreams use their local group. One with none joins an ungrouped bucket <span class="mono">""</span>.</li>
   <li><strong>Rule pass (step 2):</strong> <span class="mono">Attribute</span> returns <span class="mono">Result{Groups map[string]GroupResult}</span>. Each group lists every workstream id that matched, with its method. The per-group refusal is deleted; no tie-break exists.</li>
   <li><strong>Semantic pass (step 2):</strong> today's rule, run per group. <span class="mono">cut_G = max(null_sim, top_G − MARGIN)</span>; assign every id at or above it when <span class="mono">top_G &gt; null_sim</span>. The verifier halo is around <span class="mono">cut_G</span>.</li>
-  <li><strong>Totals (step 3):</strong> one Go helper, <span class="mono">workstreams.Rollup</span>, over the ledger's rule cells. Group = distinct blocks; workstream = its blocks in full. <span class="mono">GET /v1/workstreams</span> returns both for the current week, beside <span class="mono">coverage</span>.</li>
-  <li><strong>Sidecar input:</strong> each posted workstream carries <span class="mono">group</span>. Missing <span class="mono">group</span> falls back to <span class="mono">team</span>, verbatim. The posted list's hash changes once, so workstream documents re-embed once. Message vectors do not.</li>
+  <li><strong>Totals (step 3):</strong> one Go helper, <span class="mono">workstreams.Rollup</span>, over the <em>live</em> rule pass on the same blocks <span class="mono">coverage</span> uses — as shipped, so totals, coverage and the Today rows agree by construction (the page already recomputes those live). Group = distinct blocks; workstream = its blocks in full. <span class="mono">GET /v1/workstreams</span> returns both for the current week, beside <span class="mono">coverage</span>.</li>
+  <li><strong>Sidecar input:</strong> each posted workstream carries <span class="mono">group</span>. <strong>Amended during the build (2026-09-23):</strong> a list with no <span class="mono">group</span> key at all — an older daemon — is one pooled competition, today's decision, <em>not</em> grouped by <span class="mono">team</span>. The fixtures showed why: workstreams the old rule pooled have different teams, so falling back to <span class="mono">team</span> would have silently changed an older daemon's answers. The posted list's hash changes once, so workstream documents re-embed once. Message vectors do not.</li>
   <li><strong>Sidecar output:</strong> same shape. Sorted by confidence, fixing the order bug at <span class="mono">attrib.go:392</span>. The ledger keeps every id, not just index 0.</li>
   <li><strong>Wire to Atlas:</strong> same keys. Every assigned id. A new <span class="mono">model_versions.decision</span> marks the rule.</li>
   <li><strong>Ledger:</strong> the Go side maps each returned id to its group from the list it posted. An id missing from that list is recorded under <span class="mono">""</span>.</li>
@@ -725,6 +973,7 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
 <tbody>
   <tr><td>Signal: <span class="mono">conflict</span> retired; every match inside a group is assigned</td><td>yes, revert</td><td>blocks matching 2+ workstreams, forward only</td><td>the page labels overlap</td></tr>
+  <tr><td>Signal: a ticket rule now counts beside a repo rule (a repo match used to stop the ticket step), and the vector hook is asked per group the rules left empty. <strong>Declared after the review.</strong></td><td>yes, revert</td><td>blocks whose branch names a ticket key of a workstream other than the repo's</td><td>TestRepoAndTicketMatchesBothAssign pins it</td></tr>
   <tr><td>Semantic decision: pooled MARGIN → per-group top vs null</td><td>yes, code revert</td><td>machines with attribution on</td><td><span class="mono">model_versions.decision</span> marks every new row</td></tr>
   <tr><td>Wire <span class="mono">projects[]</span>: cut per group, sorted</td><td>yes</td><td>Atlas <span class="mono">raw</span> readers</td><td>Atlas collapses per group anyway; single-group output unchanged (AC-5)</td></tr>
   <tr><td>Ledger: two added columns</td><td>no — columns stay</td><td>local ledger.db</td><td>additive, defaults <span class="mono">''</span></td></tr>
@@ -770,7 +1019,43 @@ The on-device semantic pass also keeps hiding work from every group but one.</p>
 <h2 id="s9">9 · Review log</h2>
 <p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to
 match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
-<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+<p><strong>10/12 criteria met</strong> — ship with follow-ups. Graded by a read-only reviewer agent against <span class="mono">git diff main...feat/per-group-attribution</span>, 2026-09-23. No blockers.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#ac-1">AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/workstreams/attribute.go · TestAttributePerGroup PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-2">AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">TestSameGroupMatchesAreAllAssigned PASS · TestWorkstreamsCellAndLegacyRow PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-3">AC-3</a></td><td><span class="pill p-met">MET</span></td><td class="mono">sidecar/app/analysis/attribution.py _decide · test_attribution_scoring.py: 17 passed</td></tr>
+  <tr><td class="mono"><a href="#ac-4">AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">test_one_group_does_not_suppress_another (0.62 / 0.51 / null 0.45 → both assigned)</td></tr>
+  <tr><td class="mono"><a href="#ac-5">AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">test_single_group_is_todays_decision (&gt;20,000 cases vs the verbatim pooled rule) · eval: one group == pooled on 100/100 fixtures</td></tr>
+  <tr><td class="mono"><a href="#ac-6">AC-6</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">the named test was renamed by PR A (now TestBlockWireCarriesWorkstreams); TestAMultiGroupBlockKeepsEveryIDInOrder + TestGoldenBlockIsTheCurrentWire PASS · contract_test_atlas.sh NOT run (needs a live Atlas, which was out of bounds)</td></tr>
+  <tr><td class="mono"><a href="#ac-7">AC-7</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ledger/store.go · TestWorkstreamsCellAndLegacyRow PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-8">AC-8</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ui/app.js switcher · ui/e2e/groups.spec.ts · Playwright 122 passed, 1 skipped · screenshots at 1280 px and 400 px, no sideways scroll</td></tr>
+  <tr><td class="mono"><a href="#ac-9">AC-9</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/workstreams/rollup.go · TestRollupCountsGroupOnce + TestGetWorkstreamsReturnsTotalsCountingAGroupOnce PASS · real daemon: Products 1 block / shared 1, workstreams $5.37 each</td></tr>
+  <tr><td class="mono"><a href="#ac-10">AC-10</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">eval PASS f1=0.811 ≥ 0.79 · ids per block 1.21 pooled / 4.03 grouped by team · numbers were not yet in whats-next-attribution.md (recorded after the review, §10)</td></tr>
+  <tr><td class="mono"><a href="#ac-11">AC-11</a></td><td><span class="pill p-met">MET</span></td><td class="mono">scripts/check_vocabulary.sh clean · self-test 6/6 · wired in .github/workflows/ci.yml</td></tr>
+  <tr><td class="mono"><a href="#ac-12">AC-12</a></td><td><span class="pill p-met">MET</span></td><td class="mono">TestUpgradeFromPreRenameHome (fixture written by main's own Save) + TestTheLegacyWorkstreamsFileEnvIsStillRead PASS</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Findings, and what was done after the review</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Finding</th><th>Done</th></tr></thead>
+<tbody>
+  <tr><td><strong>Per group, the semantic pass lands a block in almost every group:</strong> 4.03 workstreams per block grouped by team, precision 0.253, recall 0.962. "Beats the null" rarely says no. This is gap #1, now measured.</td><td>Recorded in whats-next-attribution.md §10 with candidate fixes. Not fixed: it needs labelled multi-group blocks. Attribution stays off by default.</td></tr>
+  <tr><td>AC-10's numbers were not recorded.</td><td>Recorded (whats-next-attribution.md §10).</td></tr>
+  <tr><td>A legacy vector cell read <span class="mono">group: ""</span>, contrary to "resolved from the current document".</td><td>Fixed: the daemon's ledger reader fills it from the current candidates (TestAVectorCellWithNoGroupReadsTheCurrentGroup).</td></tr>
+  <tr><td>Undeclared behaviour change: a ticket rule now counts beside a repo rule, and the vector hook runs per group the rules left empty.</td><td>Declared in the destructive change ledger above.</td></tr>
+  <tr><td>The <span class="mono">user-max</span> rollback is no longer "exactly" pre-change for multi-group lists.</td><td>AGENTS.md now says precisely what it restores.</td></tr>
+  <tr><td>Totals use the live rule pass, not the ledger's recorded cells.</td><td>Kept deliberately (totals, coverage and the Today rows agree by construction); the page and plan now say so.</td></tr>
+  <tr><td>Stored column names differ from this page's wording.</td><td>Page updated to the shipped names.</td></tr>
+  <tr><td>The sidecar amendment (no <span class="mono">group</span> key = one pooled group).</td><td>Reviewer: visible on the page and plan, acceptable, pinned by test_missing_group_is_one_pooled_group.</td></tr>
+</tbody>
+</table>
+</div>
 
 <section class="qa">
 <h2 id="objections">Objections</h2>

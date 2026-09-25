@@ -14,49 +14,55 @@
   "window": {
     "start": "2026-09-01T10:00:00Z",
     "end": "2026-09-01T10:20:00Z",
-    "span_minutes": 20.0,
+    "span_minutes": 20,
     "evidence": 12,
     "start_reason": "session_start",
     "end_reason": "budget"
   },
   "start_reason": "session_start",
   "end_reason": "budget",
+  "project_matches": null,
   "projects": [
     {
-      "id": "proj_read_only_pay",
+      "id": "contract_products:pay",
       "confidence": 0.91,
       "source": "embedding"
     },
     {
-      "id": "proj_read_only_infra",
+      "id": "contract_features:infra",
       "confidence": 0.68,
-      "source": "metadata"
+      "source": "embedding"
     }
   ],
   "projects_status": "attributed",
   "attribution": {
     "embed_ms": 812,
-    "verify_ms": 145,
-    "pairs_verified": 2,
+    "verify_ms": 0,
+    "concept_ms": 140,
+    "pairs_verified": 0,
     "encoder_state": "warm",
-    "verifier": "used",
+    "verifier": "not_needed",
     "model_versions": {
-      "embedding": "qwen3-embedding-0.6b",
-      "verifier": "contract-test-verifier-v1"
-    }
+      "decision": "per-group-margin-v1",
+      "encoder": "qwen3-embedding-0.6b",
+      "scoring": "block-mean-centred-perstream-v1",
+      "verifier": "gemma-4-e2b-q4km"
+    },
+    "centred": true,
+    "background_n": 320
   },
   "workstreams": {
-    "repo": {
-      "value": "keld-signal",
-      "confidence": 1.0,
-      "evidence": 12,
-      "status": "attributed",
-      "producer": "workstreams"
-    },
     "branch": {
       "value": "read-only/contract-test",
       "confidence": 0.83,
       "evidence": 10,
+      "status": "attributed",
+      "producer": "workstreams"
+    },
+    "repo": {
+      "value": "keld-signal",
+      "confidence": 1,
+      "evidence": 12,
       "status": "attributed",
       "producer": "workstreams"
     }
@@ -65,6 +71,6 @@
   "extractor_versions": {
     "workstreams": "workstreams-v22"
   },
-  "schema_version": 22,
+  "schema_version": 23,
   "ts": "2026-09-01T10:20:05Z"
 }

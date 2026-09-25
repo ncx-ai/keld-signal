@@ -130,6 +130,34 @@ off the request path. Memory unchanged: messages are chunked before encoding.
 **Still true:** one person, three days, four engineering projects, LLM-labelled. The non-dev
 five were not in these arms and still need a gate before they score coding blocks.
 
+### 10. The per-group decision — measured 2026-09-23, and the calibration it now needs
+
+Since `per-group-margin-v1` the sidecar runs the rule of §8/§9 once PER GROUP
+(`attribution._decide`): each group's top must beat the null, and everything within MARGIN of
+that group's top is assigned. Measured with `KELD_ATTRIBUTION_EVAL=1
+app/test_attribution_quality.py` over the 100 fixtures (whole block, mean, centred over 263
+primed messages, no verifier; Qwen3-Embedding-0.6B from the HF cache; run under
+`embedding-experiment/.venv` — torch 2.13 / transformers 5.16.1 — because
+`~/.keld/sidecar-venv` on this machine carries no torch):
+
+| arm | ids per block | precision | recall | F1 |
+|---|---|---|---|---|
+| pooled — every project in one group (the shipped single-group case) | **1.21** | 0.760 | 0.868 | **0.811** |
+| every project in ONE posted group | 1.21 | identical to pooled on **100/100** fixtures | | |
+| grouped by the fixtures' 7 `team`s | **4.03** | 0.253 | 0.962 | 0.401 |
+
+- The single-group answer is unchanged (0.811, the §9 figure), and the per-group rule reproduces
+  the pooled one exactly — the property that let this ship without moving an org with one group.
+- ⚠️ **Per group, "beats the null" almost never says no.** With seven groups a block lands in four
+  of them. The gold labels are one owner per conversation, so precision against them is expected to
+  fall — but not by this much, and the reason is structural: the null is the only brake per group,
+  and a group's best candidate clears it on most messages. The "4.9 ids per block" in
+  `publish/block.go`'s comment was never re-measured; pooled measures 1.21 here.
+- **This is the calibration the discovery left open (gap #1), now with a number.** Candidates, to be
+  judged on LABELLED MULTI-GROUP real blocks rather than on these fixtures: a per-group margin ABOVE
+  the null (the top must beat it by δ, not by any amount), or a null per group. Attribution is off by
+  default (`KELD_ATTRIBUTION`), so no machine publishes this shape until someone turns it on.
+
 ## Smaller carried items
 
 - Threshold/MARGIN/VERIFY_HALO calibration on real anchored labels once voting exists

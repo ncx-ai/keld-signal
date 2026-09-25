@@ -19,7 +19,7 @@ New keys, all local, all optional, defined in `internal/agent/settings/settings.
 | `send_to_atlas` | bool | true (absent = on) | `KELD_ATLAS=0/1` | the connector is constructed or not |
 | `dev_blocks` | `""` \| `prompt` \| `bin` \| `minute` | `""` | `KELD_DEV_BLOCKS` | developer granularity; **refused unless `send_to_atlas` is false** |
 | `show_breaks` | bool | false | — | page preference |
-| `workstreams_off` | [string] | [] | — | group keys whose projects are excluded from attribution locally. 3.0.6's name, kept on purpose so a rollback keeps them off; the local `/v1/settings` route calls it `groups_off` |
+| `workstreams_off` | [string] | [] | — | 3.0.6's list of switched-off groups. Since 2026-09-25 (no groups) it is never written: it is read once on upgrade to HIDE those groups' projects, and left in place so a rollback to 3.0.6 keeps them off |
 
 Existing keys this build reads: `attribution` (vector attribution toggle, already sets
 `KELD_TEXTEMBED=1` for the sidecar), `blocks`.
@@ -45,7 +45,9 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
       "cells": {
         "cut":        {"status": "ok", "at": "…"},
         "measured":   {"status": "ok", "at": "…", "tokens": {"input": 2, "output": 277, "cache_read": 26915, "cache_creation": 86736, "request": 41000}, "requests": 12, "model": "claude-opus-4-8", "estimate_usd": 1.84},
-        "attributed": {"status": "ok", "at": "…", "project_id": "p_keld_signal", "method": "repo"},
+        "attributed": {"status": "ok", "at": "…", "projects": [
+          {"project_id": "p_atlas_platform", "method": "repo"},
+          {"project_id": "p_billing",        "method": "ticket"}]},
         "sent":       {"status": "ok", "at": "…"},
         "received":   {"status": "failed", "at": "…", "reason": "atlas_rejected", "http_status": 401}
       }
@@ -66,10 +68,13 @@ ordering rule above ("marking a stage twice never loses information"):
 - A cell that is currently `failed` but previously reached `ok` also carries `ok_at` (the
   earlier success's timestamp) — so a re-send that broke stays visible instead of looking
   like the stage never worked. Absent whenever the stage has never succeeded.
-- An `attributed` cell with `"reason":"conflict"` carries `conflict: [project_id, …]` — the
-  competing project ids — instead of `project_id`/`method` (which only appear on `"status":
-  "ok"`). This is `Attributed.Conflict` (recorder.go) reaching the wire; no other reason
-  publishes stage-specific detail.
+- ⚠️ **An `attributed` cell names EVERY project the block landed in (since 2026-09-23).**
+  `projects` is a list of `{project_id, group, method}`, in the order the rule pass
+  assigned them, and appears only on `"status": "ok"`. A block lands in every project
+  that matches it — in any group and inside one — so there is no conflict to report and
+  `"reason": "conflict"` is no longer produced. A row recorded before that still reads: its
+  single `project_id` comes back as a one-entry list with `group: ""`, and an old conflict
+  row still carries `conflict: [id, …]`.
 
 ### The `vector` cell — the second opinion, added 2026-09-08
 
@@ -78,13 +83,17 @@ against the block's dims. The **vectorised** pass (`attribution`, off by default
 SECOND OPINION on the same block and gets its own cell:
 
 ```json
-"vector": {"status": "ok", "at": "…", "project_id": "p_keld_atlas", "confidence": 0.61}
+"vector": {"status": "ok", "at": "…", "projects": [
+  {"project_id": "keld_projects:atlas_platform", "confidence": 0.62},
+  {"project_id": "keld_projects:billing",        "confidence": 0.51}]}
 ```
 
 `status` is `ok` (it named a project), `pending` (warming, or `"reason":
 "weights_unavailable"` while the encoder's weights are still downloading), `n/a` (nothing
 declared to match against) or `failed` (`"reason": "attribute_failed"` — the job was
-retried and given up on). `project_id` and `confidence` appear only on `ok`.
+retried and given up on). `projects` appears only on `ok` and holds EVERY id the pass
+assigned (it used to keep only the first, which was declaration order, not the top score).
+A row written between 2026-09-23 and 2026-09-25 may also carry a `group` per id; ignore it.
 
 Three rules, and each was paid for:
 
@@ -162,10 +171,11 @@ file touched. Refused with 409 while `send_to_atlas` is false.
 
 ## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
 
-⚠️ **Words since 2026-09-23 (amended 2026-09-25):** a GROUP holds PROJECTS. This file keeps
-3.0.6's stored names — the groups under `workstreams`, each project's group under
-`workstream` — so a machine auto-updated back to 3.0.6 reads exactly what it wrote. The code
-and the routes say group; `projects.Load`/`Save` translate. The one-time move to
+⚠️ **Since 2026-09-25 Signal has only PROJECTS, in one flat list — no groups on the page or
+in any route.** This file still keeps 3.0.6's stored shape — groups under `workstreams`, each
+project's group under `workstream` — because 3.0.6 renders a project only under a group the
+file declares; `Save` writes every project under one (the person's existing groups, or one
+internal `projects` group), so a machine auto-updated back to 3.0.6 shows everything. The one-time move to
 `workstreams.json` that the 2026-09-23 rename briefly shipped on dev builds is gone.
 
 The file is the **`KELD_PROJECTS_FILE` shape attribution already reads**, extended with
@@ -235,6 +245,16 @@ Read against `keld-atlas` on this machine, not assumed:
      "atlas"` and its own `repos`; those rules are unioned with the value's own keywords at
      read time, and they never leave the machine. The earlier "one Atlas route" ask is
      withdrawn, not postponed.
+   - ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** Signal attributes blocks only
+     to the projects defined in Signal — the entries of the local `projects.json`. The
+     org's workstreams still arrive on the settings poll and are held, but the rule pass, the
+     page, `totals`/`coverage` and `project_matches` no longer read them, and nothing
+     reconciles local entries against them any more (a poll used to trim or delete a local
+     project whose rules an Atlas one covered). An overlay made by "same as" before this
+     is a local entry, so it stays: `GET /v1/projects` reports it as `origin: "user"` (a
+     group stored as `"atlas"` reads `"local"`), while the stored entry keeps its Atlas id so
+     `project_matches` still names it. The model-based pass is unchanged and still scores
+     against the org's list; how imported Atlas workstreams are used again is separate work.
 
 `repos` ARE the rules (one `repo:` rule per entry, full remote `host/org/name`, lowercase);
 `ticket_key` is the second rule kind (a Jira-style prefix, e.g. `KELD`). Everything else
@@ -245,12 +265,11 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/projects` | — | `{groups, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
-| `POST /v1/projects/bundle` | `{"title","group","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
+| `GET /v1/projects` | — | `{projects, suggestions, coverage, totals}`; `totals` = `{projects: [{id, blocks, minutes, tokens, usd}]}` over the same blocks as `coverage` — a project counts each of its blocks in full, so projects sharing a block can add up to more than `coverage`, which counts it once; where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `POST /v1/projects/bundle` | `{"title","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
 | `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
 | `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
-| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `workstreams_off` (3.0.6's key) |
 
 Every one of these edits is local to this machine. The response carries
 `{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so
@@ -260,8 +279,10 @@ Suggestion ids are **stable**: `sha1(kind + ":" + value)[:12]`, so a description
 against a suggestion survives, and a split repo comes back with the id it had.
 
 Attribution order (deterministic pass, `internal/agent/projects`):
-1. block `repo` dim ∈ some non-hidden project's `repos` whose workstream is not off → that
-   project, method `repo`. Two matches → `conflict`, NOT the first.
+Candidates are the local document's projects only (`projects.Candidates`, since
+2026-09-25). Per group, every match is assigned (since 2026-09-23) — no conflict:
+1. block `repo` dim ∈ a non-hidden project's `repos` whose group is not off → that
+   project, method `repo`.
 2. else block branch carries a ticket key matching a project's `ticket_key` → method `ticket`.
 3. else (vector toggle on) → the encoder path, method `embedding`.
 4. else unattributed → grouped into a suggestion by repo, then ticket key, then workspace.

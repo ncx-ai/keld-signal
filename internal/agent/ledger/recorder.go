@@ -111,33 +111,50 @@ type Dims struct {
 	Workspace string
 }
 
+// AttributedProject is one project the deterministic pass put a block in:
+// which, and by which rule. (It also carried a group until Revision 4,
+// 2026-09-25; Signal has only projects now.)
+type AttributedProject struct {
+	ProjectID string
+	Method    Method
+}
+
 // Attributed is the outcome of the DETERMINISTIC attribution pass for one
 // block — the rules a person declared, matched against the block's own
 // workstream dimensions. It is written by exactly one caller
 // (daemon.attributeAndRecord) and read as the machine's answer.
+//
+// ⚠️ **A LIST, AND IT USED TO BE ONE ID.** Since 2026-09-23 a block lands in
+// every project that matches it — overlap is the model, not a conflict to
+// refuse (projects.Result). A row written
+// before that holds a single project_id and reads back as a one-entry list.
 type Attributed struct {
+	Projects []AttributedProject
+}
+
+// VectorProject is one id the vectorised pass named, with the pass's own
+// confidence for it.
+type VectorProject struct {
 	ProjectID string
-	Method    Method
-	Conflict  []string // project ids when Reason == ReasonConflict
+	// Confidence is that pass's own score for the id, in [0,1]. It is stored
+	// because a second opinion at 0.42 and one at 0.91 are different second
+	// opinions, and nothing else on the row would say which this was.
+	Confidence float64
 }
 
 // VectorAttributed is the VECTORISED pass's answer for the same block: a
 // second opinion, decided on device by the encoder, and stored in its own cell
 // beside the deterministic one rather than in place of it.
 //
-// ⚠️ **THE TWO ARE NEVER RECONCILED HERE, AND THAT IS DELIBERATE.** Both ids
-// are stored; nothing in this package picks a winner when they differ, because
-// choosing one needs data from a machine running both passes and no such data
-// exists yet. Representing the disagreement IS the feature. A reader that
-// renders one of them as "the" project is making a decision this package has
-// refused to make for it.
+// ⚠️ **THE TWO ARE NEVER RECONCILED HERE, AND THAT IS DELIBERATE.** Both
+// answers are stored; nothing in this package picks a winner when they
+// differ, because choosing one needs data from a machine running both passes
+// and no such data exists yet. Representing the disagreement IS the feature.
+// A reader that renders one of them as "the" answer is making a decision this
+// package has refused to make for it.
 type VectorAttributed struct {
-	// ProjectID is the id the vector pass named. Set only alongside StatusOK.
-	ProjectID string
-	// Confidence is that pass's own score for the id, in [0,1]. It is stored
-	// because a second opinion at 0.42 and one at 0.91 are different second
-	// opinions, and nothing else on the row would say which this was.
-	Confidence float64
+	// Projects is every id the pass named. Set only alongside StatusOK.
+	Projects []VectorProject
 }
 
 // VectorRecorder is how — and the ONLY way — the vectorised attribution pass

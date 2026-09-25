@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -17,13 +17,14 @@ import (
 // handful of ids and strings, never anything resembling prompt text.
 const maxProjectsBody = 1 << 20 // 1 MiB
 
-// ProjectsRoute registers the six /v1/projects and /v1/projects routes
+// ProjectsRoute registers the six /v1/projects routes
 // docs/v3/contracts.md's "Projects" section specifies, behind auth. s is the
 // only dependency: the file-backed Document store, plus its two OPTIONAL
 // getters (Blocks, RemoteProjects) the daemon wiring may set later. Neither
 // being set degrades gracefully to an honest empty (no blocks/values known
 // yet), never an error — see their doc comments in
-// internal/agent/projects/model.go.
+// internal/agent/projects/model.go. Since Revision 2 (2026-09-25) nothing
+// in this file reads RemoteProjects: see candidatesFor.
 //
 // ⚠️ Named ProjectsRoute, not Route: this file lives in package ingress
 // (every file in a directory shares one package), which already declares
@@ -38,9 +39,14 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // route a machine's ingest token can write a project or a tag through — the
 // admin editor is a user-session-gated route this daemon cannot call. So none
 // of these handlers make an outbound call, and this file does not import
-// internal/atlas at all. Every response from bundle/rules/hide/place/
-// workstream-off carries `{"local_only": true, "atlas_editor_url": …}` so the
-// page can say plainly that the change has not reached the org.
+// internal/atlas at all. Every response from bundle/rules/hide/place/same-as
+// carries `{"local_only": true, "atlas_editor_url": …}` so the page can say
+// plainly that the change has not reached the org.
+//
+// ⚠️ **`PUT /v1/groups/{key}/off` IS GONE (Revision 4, 2026-09-25)** and
+// answers 404: Signal has only projects, so there is no group to switch. A
+// group a person had switched off became hidden projects on the first start of
+// this build (daemon.hideProjectsInOffGroups); hiding is per project, here.
 func ProjectsRoute(s *projects.Store) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
 		mux.Handle("GET /v1/projects", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,18 +61,15 @@ func ProjectsRoute(s *projects.Store) Route {
 		mux.Handle("POST /v1/projects/{id}/hide", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleHide(w, r, s)
 		})))
-		// Fold a LOCAL project into another (normally one of the org's). The
-		// rules move with it and the local entry goes — see
-		// projects.MapProjectTo for why keeping it would make every one of its
-		// blocks a conflict.
+		// Fold one Signal project into another Signal project (never an
+		// Atlas-only id since Revision 2 — see handleProjectSameAs). The
+		// rules move with it and the source entry goes — see
+		// projects.MapProjectTo for why.
 		mux.Handle("POST /v1/projects/{id}/same-as", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleProjectSameAs(w, r, s)
 		})))
 		mux.Handle("POST /v1/projects/place", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlePlace(w, r, s)
-		})))
-		mux.Handle("PUT /v1/groups/{key}/off", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleGroupOff(w, r)
 		})))
 	})
 }
@@ -121,36 +124,27 @@ func startOfWeek(t time.Time) time.Time {
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// groupOffFunc resolves the AUTHORITATIVE exclusion predicate — reading
-// agent-config.json fresh per request, since a request may arrive right
-// after a PUT /v1/groups/{key}/off changed it. "call it, don't
-// reimplement" — internal/agent/settings/v3.go's WorkstreamOff.
-func groupOffFunc() func(string) bool {
-	return settings.Load().GroupOff
-}
-
-// candidatesFor is every project Attribute/Suggest may consider: this
-// machine's own declared Document.Projects plus, when the daemon wiring has
-// supplied one, the org's pooled workstream values converted via
-// projects.FromRemoteProjects. A nil RemoteProjects getter contributes
-// nothing — an honest "not known yet", never an error.
-func candidatesFor(s *projects.Store, d projects.Document) []projects.Project {
-	return projects.MergeCandidates(d.Projects, remoteCandidates(s))
-}
-
-// remoteCandidates is the org's values as attribution candidates, or nil when
-// the daemon wiring has supplied no getter (Atlas off, or never polled).
-func remoteCandidates(s *projects.Store) []projects.Project {
-	if s.RemoteProjects == nil {
-		return nil
-	}
-	return projects.FromRemoteProjects(s.RemoteProjects())
+// candidatesFor is every project Attribute/Suggest may consider: the ones
+// defined in Signal — the local document, overlays included — and nothing
+// else.
+//
+// ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** This used to
+// merge in the org's pooled values from the settings poll
+// (Store.RemoteProjects, via FromRemoteProjects + MergeCandidates). It
+// is the ONE seam the live pass (Attribution), the page's catalog, the totals
+// (projects.Rollup) and the coverage count all go through, so switching it
+// is what makes all four Signal-only at once — and keeps them from answering
+// differently. The Store is still taken because the org's list is still HELD
+// on it; nothing on this path reads it.
+func candidatesFor(_ *projects.Store, d projects.Document) []projects.Project {
+	return projects.Candidates(d)
 }
 
 // Attribution is ONE live recomputation of the deterministic attribution
 // pass, held open across as many blocks as a caller has: the projects
-// document, the org's pooled values, and the workstream-off predicate, each
-// read exactly once and then applied.
+// document, read exactly once and then applied. (Until Revision 4 it also held
+// a group-off predicate read from agent-config.json; hidden is now the only
+// exclusion, and it lives in the document.)
 //
 // ⚠️ **IT EXISTS SO THE TWO SURFACES CANNOT ANSWER DIFFERENTLY.** Attribution
 // used to run once, at cut time, and the stored cell was never revisited — so
@@ -171,11 +165,8 @@ type Attribution struct {
 	// Document is the local projects file as it was read.
 	Document projects.Document
 	// Candidates is what Attribute may consider: the local document's
-	// projects merged with the org's pooled values.
+	// projects (see candidatesFor — never the org's list).
 	Candidates []projects.Project
-	// Off is the authoritative workstream-exclusion predicate, read from
-	// agent-config.json at the same instant.
-	Off func(string) bool
 }
 
 // NewAttribution reads everything one pass needs, once.
@@ -187,7 +178,6 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 	return Attribution{
 		Document:   d,
 		Candidates: candidatesFor(s, d),
-		Off:        groupOffFunc(),
 	}, nil
 }
 
@@ -196,7 +186,41 @@ func NewAttribution(s *projects.Store) (Attribution, error) {
 // Vector is what makes "unattributed" mean "no rule matched" rather than
 // "the encoder was not asked".
 func (a Attribution) Of(dims map[string]enrich.Labeled) projects.Result {
-	return projects.Attribute(dims, a.Candidates, a.Off, nil)
+	return projects.Attribute(dims, a.Candidates, nil)
+}
+
+// AttributedCell is one decision as the ledger's `attributed` cell — the
+// shape ledger.Store.Read produces for a recorded one, same keys and values —
+// so the Today rows' live cell (daemon's liveAttribution) and a recorded cell
+// need no second reader. It lives beside Of so the live pass and the cell it
+// is shown as are defined in one place.
+//
+// ⚠️ An entry is `{project_id, method}` — no `group` since Revision 4
+// (2026-09-25). A block that landed in several projects names every one.
+func AttributedCell(res projects.Result, at string) map[string]any {
+	if res.Reason == projects.ReasonNone && res.Attributed() {
+		list := make([]map[string]any, 0, len(res.Projects))
+		for _, a := range res.Projects {
+			list = append(list, map[string]any{
+				"project_id": a.ProjectID,
+				"method":     string(a.Method),
+			})
+		}
+		return map[string]any{
+			"status":   string(ledger.StatusOK),
+			"at":       at,
+			"projects": list,
+		}
+	}
+	reason := res.Reason
+	if reason == projects.ReasonNone {
+		reason = projects.ReasonNoRuleMatched
+	}
+	return map[string]any{
+		"status": string(ledger.StatusFailed),
+		"at":     at,
+		"reason": string(reason),
+	}
 }
 
 // currentSuggestions recomputes the suggestion list exactly as GET
@@ -212,10 +236,10 @@ func currentSuggestions(s *projects.Store, d projects.Document) ([]projects.Sugg
 	if err != nil {
 		return nil, err
 	}
-	pass := Attribution{Document: d, Candidates: candidatesFor(s, d), Off: groupOffFunc()}
+	pass := Attribution{Document: d, Candidates: candidatesFor(s, d)}
 	var unattributed []projects.UnattributedBlock
 	for _, b := range blocks {
-		if pass.Of(b.Dims).ProjectID == "" {
+		if !pass.Of(b.Dims).Attributed() {
 			unattributed = append(unattributed, projects.UnattributedBlock{
 				Dims: b.Dims, Minutes: b.Minutes, Tokens: b.Tokens,
 			})
@@ -234,18 +258,13 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		writeError(w, http.StatusInternalServerError, "store_unreadable")
 		return
 	}
-	d, off, candidates := pass.Document, pass.Off, pass.Candidates
-
-	groups := make([]projects.Group, len(d.Groups))
-	for i, ws := range d.Groups {
-		ws.Off = off(ws.Key)
-		groups[i] = ws
-	}
+	candidates := pass.Candidates
 
 	since := startOfWeek(time.Now())
 	attributed, total := 0, 0
 	var suggestions []projects.Suggestion
 	var observed []string
+	var rollup []projects.RollupBlock
 
 	if s.Blocks != nil {
 		blocks, err := s.Blocks.SinceWeekStart()
@@ -258,8 +277,11 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		for _, b := range blocks {
 			total++
 			res := pass.Of(b.Dims)
-			if res.ProjectID != "" {
+			if res.Attributed() {
 				attributed++
+				rollup = append(rollup, projects.RollupBlock{
+					Minutes: b.Minutes, Tokens: b.Tokens, USD: b.USD, Result: res,
+				})
 				continue
 			}
 			unattributed = append(unattributed, projects.UnattributedBlock{
@@ -269,21 +291,35 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		suggestions = projects.Suggest(unattributed)
 	}
 
-	// ⚠️ **THE ORG'S VALUES ARE PROJECTS ON THIS PAGE, NOT ONLY CANDIDATES.**
-	// This used to return d.Projects — the LOCAL document — while attributing
-	// against candidatesFor(), which merges the org's pooled workstream values
-	// from the settings poll. So a machine paired with an org that had declared
-	// eight projects showed "Your projects: none" while silently attributing
-	// blocks to them. Found by the D8 end-to-end against the real dev Atlas:
-	// projects=0 with eight values on the wire. The page's "Your projects · from
-	// Atlas" section exists to show exactly these, so they are returned, and the
-	// buckets they belong to (their `team`, which carries the workstream's name
-	// on the wire) are added to `workstreams` when the local document does not
-	// already name them.
+	// ⚠️ **THE ORG'S VALUES ARE NO LONGER ON THIS PAGE — A DELIBERATE
+	// REVERSAL (Revision 2, 2026-09-25).** This block used to say the
+	// opposite: the D8 end-to-end found a paired machine showing "Your
+	// projects: none" while silently attributing blocks to the org's eight
+	// values, and the fix was to list those values here under "from Atlas"
+	// headings derived from their teams. The rule that fix rested on still
+	// holds — the page lists exactly what attribution considers — but what
+	// attribution considers changed: Signal now attributes only to projects
+	// defined in Signal (candidatesFor), so the catalog is the local document
+	// and nothing else. The org's list is still received and held; it reaches
+	// neither the rules nor this page.
+	//
+	// The catalog never says "atlas": an overlay ("Same as" onto an Atlas
+	// value, made before that revision) is a Signal project now and is
+	// reported as "user" (projectViews), on the view COPY only — the stored
+	// origin is what keeps the overlay's Atlas id flowing into project_matches.
+	//
+	// ⚠️ **FOUR KEYS, AND `groups` IS NOT ONE OF THEM (Revision 4,
+	// 2026-09-25).** Signal has only projects, in one flat list: no group
+	// headings, no group totals, and no `group` on a project view (Project's
+	// Group is `json:"-"`). The groups still in projects.json are 3.0.6's
+	// storage, kept so a rollback renders; nothing here reads them.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"groups":      withRemoteBuckets(groups, candidates, off),
 		"projects":    projectViews(candidates, observed),
 		"suggestions": suggestions,
+		// The same blocks and the same live pass as `coverage`: a project
+		// counts each of its blocks in full (projects.Rollup), while coverage
+		// counts a block once however many projects it landed in.
+		"totals": projects.Rollup(rollup),
 		"coverage": map[string]any{
 			"attributed": attributed,
 			"total":      total,
@@ -308,6 +344,11 @@ type projectView struct {
 func projectViews(ps []projects.Project, observed []string) []projectView {
 	out := make([]projectView, len(ps))
 	for i, p := range ps {
+		// An overlay is reported as the person's own (see handleGetProjects'
+		// ⚠️ block). p is a copy; the stored document is untouched.
+		if p.Origin == projects.OriginAtlas {
+			p.Origin = projects.OriginUser
+		}
 		out[i] = projectView{Project: p, Rules: projects.Rules(p, observed)}
 	}
 	return out
@@ -339,9 +380,13 @@ func observedRepos(blocks []projects.BlockSummary) []string {
 }
 
 func handleBundle(w http.ResponseWriter, r *http.Request, s *projects.Store) {
+	// ⚠️ No `group` since Revision 4 (2026-09-25): a new project is not
+	// filed anywhere by the request. A body that still sends one is not
+	// refused — an older page open in a tab must not fail to create a project —
+	// but the key is not read. Save files the project under the document's
+	// default group (projects.toStored).
 	var body struct {
 		Title       string   `json:"title"`
-		Group       string   `json:"group"`
 		Suggestions []string `json:"suggestions"`
 	}
 	if !decodeJSONBody(w, r, &body) {
@@ -365,7 +410,7 @@ func handleBundle(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 
 	var created projects.Project
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
-		next, p, err := projects.Bundle(d, body.Title, body.Group, body.Suggestions, suggestions)
+		next, p, err := projects.Bundle(d, body.Title, body.Suggestions, suggestions)
 		created = p
 		return next, err
 	})
@@ -462,12 +507,14 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 		writeError(w, http.StatusInternalServerError, "blocks_unreadable")
 		return
 	}
-	off := groupOffFunc()
-
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
-		// An Atlas value may be the target: the merge lives in a local overlay
-		// and nothing is sent to Atlas (decided 2026-09-05).
-		return projects.PlaceSameAsWithRemote(d, remoteCandidates(s), body.Suggestion, body.SameAs, suggestions, off)
+		// ⚠️ nil for the org's list (Revision 2, 2026-09-25): the target must
+		// be a project Signal holds. Before it, an Atlas-only id was
+		// accepted and an overlay laid down for it (decided 2026-09-05) — the
+		// path by which an org value came to attribute. It is closed here, at
+		// the caller, so PlaceSameAsWithRemote stays intact for the separate
+		// "use Atlas workstreams again" work. An Atlas-only id now answers 404.
+		return projects.PlaceSameAsWithRemote(d, nil, body.Suggestion, body.SameAs, suggestions)
 	})
 	if err != nil {
 		switch {
@@ -475,8 +522,6 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 			writeError(w, http.StatusBadRequest, "unknown_suggestion")
 		case errors.Is(err, projects.ErrProjectNotFound):
 			writeError(w, http.StatusNotFound, "project_not_found")
-		case errors.Is(err, projects.ErrGroupOff):
-			writeError(w, http.StatusConflict, "group_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
 		}
@@ -500,88 +545,19 @@ func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Sto
 		writeError(w, http.StatusBadRequest, "id_and_same_as_required")
 		return
 	}
-	off := groupOffFunc()
 	_, err := s.Update(func(d projects.Document) (projects.Document, error) {
-		// An Atlas value may be the target: the merge lives in a local overlay
-		// and nothing is sent to Atlas (decided 2026-09-05).
-		return projects.MapProjectTo(d, remoteCandidates(s), id, body.SameAs, off)
+		// nil for the org's list, for the reason handlePlace gives: only a
+		// project Signal holds may be the target (Revision 2, 2026-09-25).
+		return projects.MapProjectTo(d, nil, id, body.SameAs)
 	})
 	if err != nil {
 		switch {
 		case errors.Is(err, projects.ErrProjectNotFound):
 			writeError(w, http.StatusNotFound, "project_not_found")
-		case errors.Is(err, projects.ErrGroupOff):
-			writeError(w, http.StatusConflict, "group_off")
 		default:
 			writeError(w, http.StatusInternalServerError, "store_write_failed")
 		}
 		return
 	}
 	writeJSON(w, http.StatusOK, localOnly(nil))
-}
-
-func handleGroupOff(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-	var body struct {
-		Off bool `json:"off"`
-	}
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	if strings.TrimSpace(key) == "" {
-		writeError(w, http.StatusBadRequest, "key_required")
-		return
-	}
-	if err := projects.SetGroupOff(key, body.Off); err != nil {
-		writeError(w, http.StatusInternalServerError, "settings_write_failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, localOnly(nil))
-}
-
-// withRemoteBuckets appends a workstream entry for every bucket the org's
-// values belong to that the local document does not already declare, so the
-// page can group "Your projects · from Atlas" under the org's own names. A
-// remote project's bucket is its Team when its Workstream is empty — that is
-// where wire_projects puts the workstream's name (docs/v3/contracts.md).
-func withRemoteBuckets(local []projects.Group, candidates []projects.Project, off func(string) bool) []projects.Group {
-	// Seeded with KEYS only. It used to hold lower-cased keys AND names, so a
-	// bucket could be skipped because some other bucket's NAME collided with
-	// this one's key — a membership test about two different things.
-	seen := map[string]bool{}
-	for _, ws := range local {
-		seen[strings.ToLower(ws.Key)] = true
-		seen[projects.GroupKey(ws.Name)] = true
-	}
-	out := append([]projects.Group(nil), local...)
-	for _, p := range candidates {
-		if p.Origin != projects.OriginAtlas {
-			continue
-		}
-		// The NAME is the human label Atlas serves (its `team`); the KEY is
-		// that name normalised. They are two different things and were being
-		// conflated: `p.Workstream` now HOLDS the key (see
-		// projects.FromRemoteProjects), so using it as the name would print
-		// "keld-projects" as a heading, and using the name as the key would
-		// group nothing.
-		name := p.Team
-		if name == "" {
-			name = p.Group
-		}
-		key := projects.GroupKey(name)
-		if p.Group != "" {
-			key = p.Group
-		}
-		if name == "" || key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, projects.Group{
-			Key:    key,
-			Name:   name,
-			Origin: "atlas",
-			Off:    off(name),
-		})
-	}
-	return out
 }

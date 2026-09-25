@@ -44,7 +44,7 @@ func TestOutcomeHookReportsTheNamedProjectAndItsConfidence(t *testing.T) {
 	if o.SessionID != "s-ok" || o.Start != 42 {
 		t.Fatalf("outcome carried %+v, want the job's own coordinates", o)
 	}
-	if o.Status != enrich.ProjectsAttributed || o.ProjectID != "proj_pay" || o.Confidence != 0.9 {
+	if o.Status != enrich.ProjectsAttributed || firstID(o) != "proj_pay" || firstConf(o) != 0.9 {
 		t.Fatalf("outcome = %+v, want attributed/proj_pay/0.9", o)
 	}
 }
@@ -70,8 +70,8 @@ func TestOutcomeHookReportsHeldAnswersAsThemselves(t *testing.T) {
 			if len(*got) != 1 || (*got)[0].Status != status {
 				t.Fatalf("outcomes = %+v, want one %q", *got, status)
 			}
-			if (*got)[0].ProjectID != "" {
-				t.Fatalf("a held answer named no project; got %q", (*got)[0].ProjectID)
+			if firstID((*got)[0]) != "" {
+				t.Fatalf("a held answer named no project; got %q", firstID((*got)[0]))
 			}
 		})
 	}
@@ -147,7 +147,7 @@ func TestOutcomeHookIsSilentWhenThePublishFailed(t *testing.T) {
 
 	// The next sweep publishes, and only then is the outcome reported.
 	a.drainOnce(context.Background())
-	if len(*got) != 1 || (*got)[0].ProjectID != "proj_pay" {
+	if len(*got) != 1 || firstID((*got)[0]) != "proj_pay" {
 		t.Fatalf("after a successful publish the outcome must be reported; got %+v", *got)
 	}
 }
@@ -183,4 +183,19 @@ func TestAPanickingOutcomeHookDoesNotBreakTheSweep(t *testing.T) {
 	if jobs, _ := st.List(); len(jobs) != 0 {
 		t.Fatalf("the sweep must have completed and deleted the published job; %d left", len(jobs))
 	}
+}
+
+// firstID is the first id an Outcome names, or "".
+func firstID(o Outcome) string {
+	if len(o.Projects) == 0 {
+		return ""
+	}
+	return o.Projects[0].ProjectID
+}
+
+func firstConf(o Outcome) float64 {
+	if len(o.Projects) == 0 {
+		return 0
+	}
+	return o.Projects[0].Confidence
 }

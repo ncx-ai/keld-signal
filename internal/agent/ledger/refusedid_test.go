@@ -29,7 +29,7 @@ func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	s.Cut(k, 1788601200, "idle", "budget", "claude_code", time.Now())
 	// A shape the validator refuses, standing in for whatever the next
 	// unanticipated id looks like.
-	s.Attribute(k, Attributed{ProjectID: "keld/projects:x", Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one("keld/projects:x", MethodRepo), ReasonNone, time.Now())
 
 	b, err := os.ReadFile(paths.DebugLogPath())
 	if err != nil {
@@ -67,11 +67,11 @@ func TestOneProjectNamingARepoTwiceIsNotAConflict(t *testing.T) {
 	// no conflict list. The duplicate-rule case must reach the store looking
 	// exactly like this, never as a two-entry conflict naming the same project
 	// twice.
-	s.Attribute(k, Attributed{ProjectID: atlasID, Method: MethodRepo}, ReasonNone, time.Now())
+	s.Attribute(k, one(atlasID, MethodRepo), ReasonNone, time.Now())
 
 	cell := attributedCell(t, s, k)
-	if cell["project_id"] != atlasID {
-		t.Fatalf("project_id = %v, want %q", cell["project_id"], atlasID)
+	if firstOf(cell, "project_id") != atlasID {
+		t.Fatalf("project_id = %v, want %q", firstOf(cell, "project_id"), atlasID)
 	}
 	if cell["status"] != string(StatusOK) {
 		t.Fatalf("status = %v, want ok — a duplicated rule must not read as a failure", cell["status"])

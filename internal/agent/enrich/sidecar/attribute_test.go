@@ -39,6 +39,40 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 	}
 }
 
+// R4-AC-6 (Go half). Signal has no groups since Revision 4, so the model-based
+// pass is ONE pooled competition again — and the sidecar already decides that
+// way whenever no `group` is posted. So no posted project may carry the key at
+// all: not empty, not derived from `team`, absent. The org's own fields still
+// ride unchanged.
+func TestPostProjectsPostsNoGroup(t *testing.T) {
+	var got struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(map[string]any{"count": 2, "hash": "abc"})
+	}))
+	defer srv.Close()
+	list := []settings.RemoteProject{
+		{ID: "products:atlas", Title: "Atlas", Team: "Products"},
+		{ID: "q3:launch", Title: "Launch", Team: "Q3 Initiatives"},
+	}
+	if err := New(srv.URL, 5*time.Second).PostProjects(list); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Projects) != 2 {
+		t.Fatalf("posted = %+v", got.Projects)
+	}
+	for _, p := range got.Projects {
+		if _, ok := p["group"]; ok {
+			t.Fatalf("a posted project must carry no group key (one pooled competition): %+v", p)
+		}
+	}
+	if got.Projects[1]["team"] != "Q3 Initiatives" {
+		t.Fatalf("the org's own fields must ride unchanged: %+v", got.Projects[1])
+	}
+}
+
 func TestPostProjectsFailsOnTransportError(t *testing.T) {
 	old := postProjectsCallTimeout
 	postProjectsCallTimeout = 300 * time.Millisecond

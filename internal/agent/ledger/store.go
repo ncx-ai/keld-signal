@@ -16,6 +16,7 @@ package ledger
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -420,6 +421,13 @@ func (s *Store) open() (*sql.DB, error) {
 		`ALTER TABLE blocks ADD COLUMN vector_ok_at TEXT`,
 		`ALTER TABLE blocks ADD COLUMN vector_project_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE blocks ADD COLUMN vector_confidence REAL NOT NULL DEFAULT 0`,
+		// The two list columns (2026-09-23): every project a block landed
+		// in, as JSON. project_id / vector_project_id are still written with
+		// the first entry so an older binary reading this file shows something
+		// true, and a row with an empty list reads through them as a one-entry
+		// list.
+		`ALTER TABLE blocks ADD COLUMN projects TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE blocks ADD COLUMN vector_projects TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(alter); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
@@ -641,6 +649,20 @@ func (s *Store) Measure(k BlockKey, m Measured, at time.Time) {
 	})
 }
 
+// storedProject is one entry of the `projects` / `vector_projects`
+// JSON columns — and, keyed the same, one entry of a cell's `projects` list.
+//
+// ⚠️ **NO `group` (Revision 4, 2026-09-25).** Rows written by Revisions 1–3
+// carry one in these columns; decoding into this struct simply ignores it,
+// so those rows still read — as `{project_id, method}` like every new one.
+// The columns themselves are unchanged: history is additive here and nothing
+// is dropped or rewritten.
+type storedProject struct {
+	ProjectID  string   `json:"project_id"`
+	Method     string   `json:"method,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+}
+
 func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	k, ok := s.sanitizeKey(k)
 	if !ok {
@@ -652,64 +674,53 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	// because this id was computed by the daemon a microsecond earlier from its
 	// own project list. A silent clamp is exactly why the missing colon above
 	// went unnoticed for days while the page said "no project" — the write
-	// succeeded, the row looked ordinary, and nothing anywhere disagreed.
-	rawProject := a.ProjectID
-	a.ProjectID = validProjectID(a.ProjectID)
-	if rawProject != "" && a.ProjectID == "" {
-		s.logFailure("Attribute", fmt.Errorf(
-			"project id refused by shape (%d chars); the attribution was computed and could not be stored", len(rawProject)))
-	}
-	a.Method = validMethod(a.Method)
-	var conflict []string
-	for _, c := range a.Conflict {
-		valid := validProjectID(c)
-		if valid == "" {
-			// Same reasoning one level down: a conflict a person cannot act on
-			// because its ids were dropped is the defect this file already
-			// warns about in Attributed's doc comment.
+	// succeeded, the row looked ordinary, and nothing anywhere disagreed. One
+	// refused id drops ALONE: the others the block landed in are still true.
+	var list []storedProject
+	for _, w := range a.Projects {
+		id := validProjectID(w.ProjectID)
+		if id == "" {
 			s.logFailure("Attribute", fmt.Errorf(
-				"conflicting project id refused by shape (%d chars); the conflict cannot name it", len(c)))
+				"project id refused by shape (%d chars); that attribution was computed and could not be stored", len(w.ProjectID)))
 			continue
 		}
-		conflict = append(conflict, valid)
+		list = append(list, storedProject{ProjectID: id, Method: string(validMethod(w.Method))})
 	}
 	status := StatusOK
 	if r != ReasonNone {
 		status = StatusFailed
 	}
 	// ⚠️ **AN ATTRIBUTION THAT NAMED NOTHING IS NOT AN ATTRIBUTION.** The
-	// matcher cannot produce this pairing — every one of its returns with an
-	// empty project id carries a reason — so reaching here means the id was
-	// lost between deciding and storing, which is precisely the defect above.
-	// Six rows on a real machine were in this state. Refusing the write turns
-	// the next occurrence into a visible failure instead of a quiet "no
-	// project", and it is why this is an invariant rather than a comment.
-	if status == StatusOK && a.ProjectID == "" {
+	// matcher cannot produce this pairing — every one of its returns with no
+	// project carries a reason — so reaching here means the ids were lost
+	// between deciding and storing, which is precisely the defect above. Six
+	// rows on a real machine were in this state. Refusing the write turns the
+	// next occurrence into a visible failure instead of a quiet "no project".
+	if status == StatusOK && len(list) == 0 {
 		s.logFailure("Attribute", fmt.Errorf(
-			"refusing to record an attribution with no project id and no reason; the id was lost before storage"))
+			"refusing to record an attribution with no project id and no reason; the ids were lost before storage"))
 		return
 	}
-	conflictStr := strings.Join(conflict, ",")
+	listJSON := ""
+	if len(list) > 0 {
+		b, err := json.Marshal(list)
+		if err != nil {
+			s.logFailure("Attribute", err)
+			return
+		}
+		listJSON = string(b)
+	}
 
 	s.tx("Attribute", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
 			return err
 		}
-		switch {
-		case status == StatusOK:
+		if status == StatusOK {
+			// project_id/method carry the FIRST entry for an older binary reading
+			// this file; the list is the answer.
 			if _, err := txn.Exec(
-				`UPDATE blocks SET project_id=?, method=?, conflict='' WHERE session=? AND start=?`,
-				a.ProjectID, string(a.Method), k.Session, k.Start,
-			); err != nil {
-				return err
-			}
-		case r == ReasonConflict:
-			// Conflict is the one failure whose detail (the competing
-			// project ids) is worth publishing — see Attributed's doc
-			// comment in recorder.go.
-			if _, err := txn.Exec(
-				`UPDATE blocks SET conflict=? WHERE session=? AND start=?`,
-				conflictStr, k.Session, k.Start,
+				`UPDATE blocks SET projects=?, project_id=?, method=?, conflict='' WHERE session=? AND start=?`,
+				listJSON, list[0].ProjectID, list[0].Method, k.Session, k.Start,
 			); err != nil {
 				return err
 			}
@@ -758,11 +769,24 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 	// Reported, not silently clamped — Attribute's own reasoning one method up:
 	// this id was computed from the daemon's project list microseconds earlier,
 	// so a shape failure is a wiring defect, not junk from a transcript.
-	rawProject := a.ProjectID
-	a.ProjectID = validProjectID(a.ProjectID)
-	if rawProject != "" && a.ProjectID == "" {
-		s.logFailure("Vector", fmt.Errorf(
-			"vector project id refused by shape (%d chars); the second opinion was computed and could not be stored", len(rawProject)))
+	var list []storedProject
+	for _, w := range a.Projects {
+		id := validProjectID(w.ProjectID)
+		if id == "" {
+			s.logFailure("Vector", fmt.Errorf(
+				"vector project id refused by shape (%d chars); that second opinion was computed and could not be stored", len(w.ProjectID)))
+			continue
+		}
+		// A confidence outside [0,1] is not a confidence. Written as 0 rather
+		// than stored verbatim, and the comparison is deliberately positive
+		// (`>= 0 && <= 1`) so a NaN — which fails every comparison — lands here
+		// too: a NaN reaching the column would make the whole /v1/ledger
+		// response unmarshallable, taking the page down over one bad float.
+		conf := w.Confidence
+		if !(conf >= 0 && conf <= 1) {
+			conf = 0
+		}
+		list = append(list, storedProject{ProjectID: id, Confidence: &conf})
 	}
 	// ⚠️ **A SECOND OPINION THAT NAMED NOTHING IS NOT A SECOND OPINION**, and
 	// the same invariant Attribute enforces applies here for the same reason: a
@@ -770,19 +794,19 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 	// naming none, which is worse than the honest absence. The sidecar answers
 	// `attributed` only with at least one project, so reaching this means the
 	// id was lost between deciding and storing.
-	if status == StatusOK && a.ProjectID == "" {
+	if status == StatusOK && len(list) == 0 {
 		s.logFailure("Vector", fmt.Errorf(
-			"refusing to record a vector attribution with no project id; the id was lost before storage"))
+			"refusing to record a vector attribution with no project id; the ids were lost before storage"))
 		return
 	}
-	// A confidence outside [0,1] is not a confidence. Written as 0 rather than
-	// stored verbatim, and note the comparison is deliberately positive
-	// (`>= 0 && <= 1`) so a NaN — which fails every comparison — lands here
-	// too: a NaN reaching the column would make the whole /v1/ledger response
-	// unmarshallable, taking the page down over one bad float.
-	conf := a.Confidence
-	if !(conf >= 0 && conf <= 1) {
-		conf = 0
+	listJSON := ""
+	if len(list) > 0 {
+		b, err := json.Marshal(list)
+		if err != nil {
+			s.logFailure("Vector", err)
+			return
+		}
+		listJSON = string(b)
 	}
 	atStr := at.UTC().Format(time.RFC3339)
 	reason := ""
@@ -798,8 +822,8 @@ func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, 
 		}
 		if status == StatusOK {
 			if _, err := txn.Exec(
-				`UPDATE blocks SET vector_project_id=?, vector_confidence=? WHERE session=? AND start=?`,
-				a.ProjectID, conf, k.Session, k.Start,
+				`UPDATE blocks SET vector_projects=?, vector_project_id=?, vector_confidence=? WHERE session=? AND start=?`,
+				listJSON, list[0].ProjectID, *list[0].Confidence, k.Session, k.Start,
 			); err != nil {
 				return err
 			}
@@ -967,8 +991,8 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		       measured_status, measured_at, measured_reason, measured_http_status, measured_ok_at,
 		       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, request_tokens, requests, model, estimate_usd,
 		       attributed_status, attributed_at, attributed_reason, attributed_http_status, attributed_ok_at,
-		       project_id, method, conflict,
-		       vector_status, vector_at, vector_reason, vector_ok_at, vector_project_id, vector_confidence,
+		       project_id, method, conflict, projects,
+		       vector_status, vector_at, vector_reason, vector_ok_at, vector_project_id, vector_confidence, vector_projects,
 		       sent_status, sent_at, sent_reason, sent_http_status, sent_ok_at,
 		       received_status, received_at, received_reason, received_http_status, received_ok_at
 		FROM blocks
@@ -998,10 +1022,10 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 
 			attrStatus, attrAt, attrReason, attrOkAt sql.NullString
 			attrHTTP                                 sql.NullInt64
-			projectID, method, conflict              string
+			projectID, method, conflict, wsJSON      string
 
 			vecStatus, vecAt, vecReason, vecOkAt sql.NullString
-			vecProjectID                         string
+			vecProjectID, vecWSJSON              string
 			vecConfidence                        float64
 
 			sentStatus, sentAt, sentReason, sentOkAt sql.NullString
@@ -1016,8 +1040,8 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 			&measStatus, &measAt, &measReason, &measHTTP, &measOkAt,
 			&inputT, &outputT, &cacheReadT, &cacheCreateT, &requestT, &requests, &model, &estimateUSD,
 			&attrStatus, &attrAt, &attrReason, &attrHTTP, &attrOkAt,
-			&projectID, &method, &conflict,
-			&vecStatus, &vecAt, &vecReason, &vecOkAt, &vecProjectID, &vecConfidence,
+			&projectID, &method, &conflict, &wsJSON,
+			&vecStatus, &vecAt, &vecReason, &vecOkAt, &vecProjectID, &vecConfidence, &vecWSJSON,
 			&sentStatus, &sentAt, &sentReason, &sentHTTP, &sentOkAt,
 			&recvStatus, &recvAt, &recvReason, &recvHTTP, &recvOkAt,
 		); err != nil {
@@ -1053,8 +1077,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		if cell := buildCell(attrStatus, attrAt, attrReason, attrHTTP, attrOkAt); cell != nil {
 			switch {
 			case attrStatus.String == string(StatusOK):
-				cell["project_id"] = projectID
-				cell["method"] = method
+				cell["projects"] = projectsCell(wsJSON, storedProject{ProjectID: projectID, Method: method})
 			case attrReason.String == string(ReasonConflict) && conflict != "":
 				cell["conflict"] = strings.Split(conflict, ",")
 			}
@@ -1071,9 +1094,9 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		// confidence. Never-asked and asked-and-failed are different facts and
 		// this is where that distinction is actually made.
 		if cell := buildCell(vecStatus, vecAt, vecReason, sql.NullInt64{}, vecOkAt); cell != nil {
-			if vecProjectID != "" {
-				cell["project_id"] = vecProjectID
-				cell["confidence"] = vecConfidence
+			if vecProjectID != "" || vecWSJSON != "" {
+				conf := vecConfidence
+				cell["projects"] = projectsCell(vecWSJSON, storedProject{ProjectID: vecProjectID, Confidence: &conf})
 			}
 			// ⚠️ **NO `agrees` FLAG, AND THE ABSENCE IS DELIBERATE TWICE
 			// OVER.** Agreement is already fully represented: both ids are on
@@ -1102,6 +1125,34 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		return snap, err
 	}
 	return snap, nil
+}
+
+// projectsCell turns a stored list column into the cell's `projects`
+// list: `{project_id, method}` or `{project_id, confidence}`. An empty column
+// is a row written before the list existed: it reads as the one entry its
+// single-id columns hold (legacy) — and as nothing when those are empty too.
+// A row that stored a `group` per entry (Revisions 1–3) reads without it. An unreadable column is treated the
+// same way rather than failing the whole route over one row.
+func projectsCell(stored string, legacy storedProject) []map[string]any {
+	var list []storedProject
+	if stored != "" {
+		_ = json.Unmarshal([]byte(stored), &list)
+	}
+	if len(list) == 0 && legacy.ProjectID != "" {
+		list = []storedProject{legacy}
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, w := range list {
+		e := map[string]any{"project_id": w.ProjectID}
+		if w.Method != "" {
+			e["method"] = w.Method
+		}
+		if w.Confidence != nil {
+			e["confidence"] = *w.Confidence
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // buildCell returns nil when the stage was never marked (its status column
