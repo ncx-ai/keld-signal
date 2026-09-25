@@ -100,7 +100,41 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # ⚠️ DRY RUNS ONLY, AND THE GATE IS THE WHOLE SAFETY ARGUMENT. Freezing the
+      # sidecar is 17.6 of the Windows leg's 27 minutes, and a change that only
+      # touches the wizard rebuilds a ~190 MB Python bundle byte-for-byte
+      # identical to the last one. Caching it takes the leg to roughly 8 minutes.
+      #
+      # A cached BUILD OUTPUT is also exactly how this project shipped a stale
+      # sidecar once before — a 2.3.0 daemon against an Aug 11 sidecar, ~3 weeks
+      # of missing blocks, with `keld signal doctor` reporting no problems
+      # throughout (see AGENTS.md). So the cache is kept off the shipping path
+      # entirely rather than made clever:
+      #
+      #   IS_RELEASE != 'true'  — a release always freezes fresh.
+      #   TAG == ''             — and so does any run that STAMPS a version,
+      #                           because build-freeze.sh bakes KELD_VERSION into
+      #                           dist/keld-agent-sidecar/VERSION. Without this
+      #                           second condition a repair run (release_tag set,
+      #                           publish_release false) would restore a
+      #                           `dev`-stamped tree while claiming a tag.
+      #
+      # Both conditions together mean a cache entry can only ever hold a
+      # dev-stamped sidecar, which is the only thing a dry run can produce.
+      # The key covers everything the freeze reads: the whole sidecar tree, the
+      # OS, and the obfuscation setting.
+      - name: Restore frozen sidecar (dry runs only)
+        id: sidecar-cache
+        if: env.IS_RELEASE != 'true' && env.TAG == ''
+        uses: actions/cache@v4
+        with:
+          path: dist/keld-agent-sidecar
+          key: sidecar-freeze-${{ runner.os }}-${{ matrix.goarch }}-py312-obf0-${{ hashFiles('sidecar/**') }}
+
       - name: Freeze sidecar (obfuscated)
+        # Skipped only on a genuine hit. On a release the cache step never ran,
+        # so this is empty and the freeze happens — the safe default.
+        if: steps.sidecar-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           # ⚠️ OBFUSCATION IS OFF, DELIBERATELY AND TEMPORARILY. PyArmor's free
