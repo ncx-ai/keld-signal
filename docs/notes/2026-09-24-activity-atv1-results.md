@@ -1428,3 +1428,46 @@ from `acknowledge` to `synthesize`; on both labelled sets it is **exactly neutra
 so "15.9% moved" is not "15.9% moved correctly" — those turns fit the written definition of
 `synthesize` better, which is a judgement. It is kept because it costs nothing on the data
 that does have labels and closes a real observed hole; it is not evidence of improvement.
+
+### 2026-09-28 — DECIDED: an inline program is `author_code` whatever it does
+
+Repo owner, closing the one axis the second labeller diverged on: **keep `author_code`.**
+
+**The reason is asymmetric cost, not taxonomy.** What a router substitutes is the capability
+to WRITE the program, not the purpose the program serves. The disputed population is 398
+requests (29.6% of `author_code`, 4.9% of all): median 416 chars, only 13% under 200. The
+median one builds an `httpx` POST and probes the response body for leaked provider strings;
+the p90 one does PIL column segmentation with a nested bbox scan. A cheap model that gets
+that Python wrong costs **a whole additional request** to debug, at 113k–200k input tokens;
+over-provisioning costs only the price delta on one request. Input dominates cost, so the
+retry is far more expensive than the over-provision.
+
+**The number this settles.** Under the adopted convention the 6 disputed requests are not
+classifier errors, so **macro F1 0.920 / accuracy 0.925 is the figure consistent with the
+taxonomy as decided**, and 0.815 is what the rejected convention would have produced. The
+inter-labeller κ of 0.885 stands either way and is the evidence that the vocabulary is
+reliable; what it exposed was an ambiguity in the *definition text*, which this decision
+closes. The definition now states the convention explicitly so a future labeller does not
+re-diverge.
+
+⚠️ **A COMPLEXITY THRESHOLD WAS PROPOSED AND DELIBERATELY NOT BUILT.** Splitting the class on
+program length would also catch the 13% that are genuinely trivial. The owner scoped
+complexity instead as a **separate, finer-grain analysis for choosing WHICH code model**,
+layered on top of this class rather than folded into its boundary. Do not make `author_code`
+conditional on size: that re-opens a decision taken deliberately and collapses two dimensions
+that were separated on purpose.
+
+#### State of the classifier, all threats closed
+
+| check | result |
+|---|---|
+| holdout, independent sample | acc **0.925**, macro F1 **0.920** |
+| inter-labeller reliability | κ **0.885** (72/80 raw) |
+| cross-person residual | john **1.7%**, owner **1.6%**, same rules |
+| tool-free negative control | **passes** — zero tool-derived classes on 11,575 turns |
+| `operate` composition | 92% positive match, 1 request unaccounted |
+| cost concentration | `retrieve` **32–42%** of modelled cost, F1 0.92–1.00 |
+
+Open, and now the only things open: a **third** person's corpus (the owner's 1.6% is fitted
+to the owner's residual as john's 2.8% was to john's), and the complexity dimension above,
+which is new work rather than a threat.

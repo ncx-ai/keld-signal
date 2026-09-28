@@ -118,6 +118,27 @@ def canonical(c):
 # command carrying a 600-char body is not. The threshold is the message, never the command.
 COMMIT_MSG=re.compile(r"git\s+commit\b[^\n]*?-(?:m|F)\s*(?:-|\"|'|\$\()", re.S)
 PR_BODY   =re.compile(r"gh\s+(?:pr|issue|release)\s+\w+[^\n]*--(?:body|notes)|gh\s+pr\s+comment", re.S)
+# ⚠️ DECIDED 2026-09-28 (repo owner): AN INLINE PROGRAM IS `author_code` WHATEVER IT DOES,
+# INCLUDING ONE THAT ONLY READS AND PRINTS. An independent second labeller, given the class
+# definitions and nothing else, arrived unprompted at the opposite convention -- "a script that
+# only reads and prints -> retrieve" -- and that single axis was 6 of the 8 disagreements
+# between us, worth 0.100 of macro F1. It is a real ambiguity in the definition, now closed.
+#
+# THE REASON IS ASYMMETRIC COST, not taxonomy. What routing substitutes is the capability to
+# WRITE the program, not the purpose it serves. The disputed population is 398 requests
+# (29.6% of author_code, 4.9% of all): median 416 chars, only 13% under 200 -- the median one
+# builds an httpx POST and probes the response body, the p90 one does PIL column segmentation.
+# A cheap model that gets that Python wrong costs a WHOLE ADDITIONAL REQUEST to debug, at a
+# 113k-200k token input; over-provisioning costs only the price delta on one request. Since
+# input dominates cost, the retry is far more expensive than the over-provision.
+#
+# ⚠️ A COMPLEXITY THRESHOLD WAS PROPOSED HERE AND DELIBERATELY NOT BUILT. Splitting the
+# class on program length would also catch the 13% that are genuinely trivial -- but the owner
+# scoped complexity as a SEPARATE, FINER-GRAIN analysis for choosing WHICH code model, layered
+# on top of this class rather than folded into its boundary. Do not "fix" this by making
+# author_code conditional on size: that re-opens a decision that was taken deliberately, and
+# collapses two dimensions that were separated on purpose.
+
 # An inline interpreter program, in every form that appears in this corpus: -c, -e, and the
 # heredoc-to-stdin forms `python3 - <<PY` / `python3 << EOF` (which `-c` matching missed).
 CODE_CMD  =re.compile(r"(python3?\s+-c\s+['\"]|node\s+-e\s+['\"]|perl\s+-e\s|ruby\s+-e\s"
