@@ -189,12 +189,12 @@ func TestADedupedProjectStillAttributes(t *testing.T) {
 	}})
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
-	res := Attribute(dims, got, nil, nil)
+	res := Attribute(dims, got, nil)
 
-	if res.ProjectID != "keld_projects:signal_on_device_client" {
-		t.Fatalf("project = %q, want the deduped project to still match", res.ProjectID)
+	if only(res).ProjectID != "keld_projects:signal_on_device_client" {
+		t.Fatalf("project = %q, want the deduped project to still match", only(res).ProjectID)
 	}
-	if res.Reason == ReasonConflict {
-		t.Fatalf("deduping produced a conflict: %v", res.Conflict)
+	if len(res.Projects) != 1 {
+		t.Fatalf("deduping must leave one assignment: %+v", res.Projects)
 	}
 }

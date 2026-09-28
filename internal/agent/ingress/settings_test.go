@@ -79,9 +79,6 @@ func TestGetSettingsReturnsDefaultsAndEmptyReadonly(t *testing.T) {
 	if v.ShowBreaks {
 		t.Fatal("show_breaks defaults to false")
 	}
-	if len(v.GroupsOff) != 0 {
-		t.Fatalf("want an empty (never nil) list, got %v", v.GroupsOff)
-	}
 	if v.Attribution {
 		t.Fatal("attribution defaults to false")
 	}
@@ -346,5 +343,40 @@ func TestPutSettingsAttributionWritesFileAndWouldGateTheEncoder(t *testing.T) {
 	// anything.
 	if !attrib.Enabled(after.Attribution) {
 		t.Fatal("attrib.Enabled must read the newly-written value as on")
+	}
+}
+
+// Revision 4: Signal has no groups, so `groups_off` is neither reported nor
+// written — and the stored list (3.0.6's key) is left exactly as it was, even
+// by a PUT that names the old key, so a rollback still sees those groups off.
+func TestSettingsCarryNoGroupsOffAndLeaveTheStoredListAlone(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"workstreams_off": ["marketing"]}`+"\n"), 0o600); err != nil { // vocab:keep
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(DiscardHandler("s3cret", SettingsRoute(nil)))
+	defer srv.Close()
+
+	var got map[string]any
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &got)
+	if _, ok := got["groups_off"]; ok {
+		t.Fatalf("GET /v1/settings must not carry groups_off: %v", got)
+	}
+
+	res := doJSON(t, http.MethodPut, srv.URL+"/v1/settings", map[string]any{
+		"show_breaks": true, "groups_off": []string{"development"},
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT = %d", res.StatusCode)
+	}
+	res.Body.Close()
+	if s := settings.Load(); len(s.GroupsOff) != 1 || s.GroupsOff[0] != "marketing" || !s.ShowBreaks {
+		t.Fatalf("the stored off-list must be untouched and show_breaks written: %+v", s)
+	}
+	b, _ := os.ReadFile(paths.AgentConfigPath())
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(b, &raw)
+	if _, ok := raw["groups_off"]; ok {
+		t.Fatalf("groups_off must never be written: %s", b)
 	}
 }

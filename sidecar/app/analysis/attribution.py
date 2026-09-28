@@ -502,6 +502,14 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None)
         boost = metadata_boost(p, dims, texts)
         scores[p["id"]] = round(sims[p["id"]] + boost, 4)
     borderline, assigned = [], []
+    # ⚠️ ONE POOLED COMPETITION over every project, and a posted `group` key is
+    # IGNORED. From 2026-09-23 to 2026-09-25 this ran once per group (a block could
+    # land in one project per group), stamped `model_versions.decision`, and sorted
+    # the published list by confidence. All three were removed when Signal dropped
+    # groups (Revision 4, R4-AC-6): with no groups there is no second competition
+    # to protect, and the pooled rule is the one every measured number here was
+    # taken under. A 09-23 daemon still posts `group`; nothing reads it, so its
+    # answers — and the row — are byte-identical to the pre-09-23 decision.
     if encoder_used and scores:
         top = max(scores.values())
         cut = max(null_sim, top - MARGIN)
@@ -748,6 +756,11 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
             # A value no producer can emit is worse than an absent one.
             final.append({"id": pid, "confidence": scores[pid],
                           "source": "verifier" if pid in overrides else "embedding"})
+    # Highest confidence first, then id. The list is a SET of co-assignments, but
+    # the daemon reads it as ranked (attrib.Outcome: "highest confidence first"),
+    # and declaration order is what it once mistook for a ranking. Kept through
+    # Revision 4: this is not a group feature.
+    final.sort(key=lambda p: (-p["confidence"], p["id"]))
 
     if verifier_obj is not None:
         verifier_state = "used" if pairs else "not_needed"

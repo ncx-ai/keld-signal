@@ -21,7 +21,7 @@ func TestTheRoutesSayProject(t *testing.T) {
 		t.Fatalf("GET /v1/projects = %d", res.StatusCode)
 	}
 	body := decodeBody(t, res)
-	for _, k := range []string{"groups", "projects", "suggestions", "coverage"} {
+	for _, k := range []string{"projects", "suggestions", "coverage", "totals"} {
 		if _, ok := body[k]; !ok {
 			t.Fatalf("GET /v1/projects has no %q: %+v", k, body)
 		}

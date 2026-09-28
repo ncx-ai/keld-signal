@@ -11,7 +11,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/pricing"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
-	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
@@ -284,13 +283,13 @@ func dominantModel(ws map[string]enrich.Labeled) string {
 }
 
 // attributeAndRecord runs the DETERMINISTIC attribution pass for one block and
-// records its outcome — including, deliberately, the outcomes that are not a
-// project: no rule matched, or two projects claim the same one.
+// records its outcome — including, deliberately, the outcome that is not a
+// project: no rule matched.
 //
-// ⚠️ **A conflict is recorded as a conflict, never resolved by picking first.**
-// Two projects tagged with the same repository is a configuration error only a
-// person can settle, and choosing one silently would put a confident number
-// against work that belongs to neither.
+// ⚠️ **Two projects claiming one block is not a conflict any more.** It used
+// to be recorded as one and attributed to neither; since 2026-09-23 the block
+// lands in every project that matches it, and each project counts it in full
+// (projects.Rollup).
 func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, now time.Time) {
 	if v.projects == nil {
 		return
@@ -302,30 +301,28 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 		// ABSENT, which the page renders as unknown rather than as unattributed.
 		return
 	}
-	// The candidate set is the local document's projects OVERLAID on the org's
-	// pooled workstream values, which are the vocabulary and arrive on the
-	// settings poll. The vector pass is nil here: this is the deterministic
-	// path, and a nil Vector is what makes "unattributed" mean "no rule
-	// matched" rather than "the encoder was not asked".
+	// The candidate set is the projects defined IN SIGNAL — the local
+	// document, overlays included — and nothing from the settings poll. The
+	// vector pass is nil here: this is the deterministic path, and a nil Vector
+	// is what makes "unattributed" mean "no rule matched" rather than "the
+	// encoder was not asked".
 	//
-	// ⚠️ **MergeCandidates, not a plain append.** A local overlay carrying
-	// rules a person added to an ORG value shares that value's id, so
-	// concatenating the two lists hands Attribute the same id twice and it
-	// reports the block as CONFLICTING WITH ITSELF — the exact failure
-	// MergeCandidates' own comment names. This is also the list the page's
-	// live pass uses (ingress.Attribution), so the recorded answer and the
-	// displayed one are computed over one candidate set rather than two.
-	var remote []projects.Project
-	if v.projects.RemoteProjects != nil {
-		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
-	}
-	res := projects.Attribute(r.Dimensions, projects.MergeCandidates(doc.Projects, remote),
-		projects.GroupOffFunc(settings.Load()), nil)
-	v.ledger.Attribute(k, ledger.Attributed{
-		ProjectID: res.ProjectID,
-		Method:    ledger.Method(res.Method),
-		Conflict:  res.Conflict,
-	}, ledger.Reason(res.Reason), now)
+	// ⚠️ **THE ORG'S LIST IS NOT READ HERE, AND UNTIL REVISION 2 (2026-09-25)
+	// IT WAS.** This merged the org's Atlas workstreams in as candidates, so an
+	// Atlas rule could claim a block on this machine. Signal now labels on its
+	// own: the org's list is still received and held (Store.RemoteProjects)
+	// but a block matching only an Atlas rule records no_rule_matched, and it
+	// comes back as a suggestion — where a person makes a Signal project for
+	// it. Atlas still runs its own rules over the same dimensions, so its
+	// numbers do not move. projects.Candidates is the ONE definition the page's
+	// live pass (ingress) and project_matches use too, so the recorded answer
+	// and the displayed one cannot be computed over two different sets.
+	//
+	// ⚠️ Hidden is the only exclusion (Revision 4, 2026-09-25); there is no
+	// group-off read here any more. A switched-off group's projects were
+	// turned hidden at daemon start (hideProjectsInOffGroups).
+	res := projects.Attribute(r.Dimensions, projects.Candidates(doc), nil)
+	v.ledger.Attribute(k, ledger.Attributed{Projects: ledgerProjects(res)}, ledger.Reason(res.Reason), now)
 }
 
 // chainOnPublished runs two OnPublished hooks in order, tolerating a nil first
@@ -438,39 +435,20 @@ func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, erro
 		if b.Cells == nil {
 			b.Cells = map[string]map[string]any{}
 		}
-		b.Cells[string(ledger.StageAttributed)] = attributedCell(pass.Of(d), at)
+		b.Cells[string(ledger.StageAttributed)] = ingress.AttributedCell(pass.Of(d), at)
 	}
 	return snap, nil
 }
 
-// attributedCell builds the wire cell for one recomputed decision, in the
-// shape ledger.Store.Read produces for a recorded one — same keys, same
-// values — so no consumer needs to learn a second shape.
-func attributedCell(res projects.Result, at string) map[string]any {
-	if res.Reason == projects.ReasonNone && res.ProjectID != "" {
-		return map[string]any{
-			"status":     string(ledger.StatusOK),
-			"at":         at,
-			"project_id": res.ProjectID,
-			"method":     string(res.Method),
-		}
+// ledgerProjects is a rule-pass result as the ledger records it.
+func ledgerProjects(res projects.Result) []ledger.AttributedProject {
+	out := make([]ledger.AttributedProject, 0, len(res.Projects))
+	for _, a := range res.Projects {
+		out = append(out, ledger.AttributedProject{
+			ProjectID: a.ProjectID, Method: ledger.Method(a.Method),
+		})
 	}
-	cell := map[string]any{
-		"status": string(ledger.StatusFailed),
-		"at":     at,
-		"reason": string(reasonOr(res.Reason, projects.ReasonNoRuleMatched)),
-	}
-	if res.Reason == projects.ReasonConflict && len(res.Conflict) > 0 {
-		cell["conflict"] = append([]string(nil), res.Conflict...)
-	}
-	return cell
-}
-
-func reasonOr(r, fallback projects.Reason) projects.Reason {
-	if r == projects.ReasonNone {
-		return fallback
-	}
-	return r
+	return out
 }
 
 // dimsOfRecord turns one stored block row into the dims map the attribution

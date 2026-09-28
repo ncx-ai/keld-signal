@@ -271,6 +271,87 @@ def test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly():
     finally:
         attribution.SCORING = saved
 
+# --- The decision is ONE pooled competition (R4-AC-6, 2026-09-25) ----------------
+#
+# A per-group decision ran here from 2026-09-23 to 2026-09-25 and was removed when
+# Signal dropped groups (Revision 4). These pin the rule it replaced and that now
+# stands again: one competition over every project, and a posted `group` key —
+# from a daemon built in that window — changes nothing.
+
+def _pooled_decision(scores, null_sim):
+    """The pre-2026-09-23 decision, verbatim and written independently of the
+    module: ONE competition over every project. The oracle the tests compare
+    against."""
+    borderline, assigned = [], []
+    top = max(scores.values())
+    cut = max(null_sim, top - attribution.MARGIN)
+    for pid, s in scores.items():
+        if abs(s - cut) < attribution.VERIFY_HALO:
+            borderline.append(pid)
+        if s >= cut and top > null_sim:
+            assigned.append(pid)
+    return borderline, assigned
+
+
+def _with_groups(tag, groups):
+    """_geom_projects, each project carrying the `group` key a 09-23 daemon posted
+    (None = no key at all, the shape every other daemon posts)."""
+    out = _geom_projects(tag)
+    for p in out:
+        if groups is not None:
+            p["group"] = groups[p["id"]]
+    return out
+
+
+def test_decision_is_pooled_and_ignores_group():   # R4-AC-6
+    # Geometries that put the runner-up on every side of the pooled cut: suppressed
+    # by the winner although it beats the null (the case per-group assigned and
+    # pooled does not), below the null, within MARGIN, borderline, and the null winning.
+    geometries = [
+        [0.62, 0.51, 0.45, 0.3912],   # pooled cut 0.54: ui beats null yet is dropped
+        [0.62, 0.41, 0.45, 0.4950],   # ui below the null
+        [0.70, 0.66, 0.0, 0.2728],    # both within MARGIN
+        [0.60, 0.49, 0.0, 0.6324],    # ui borderline
+        [0.30, 0.10, 0.90, 0.2915],   # the null wins
+    ]
+    group_maps = [None,
+                  {"proj_pay": "one", "proj_ui": "one"},
+                  {"proj_pay": "products", "proj_ui": "features"}]
+    for gi, vec in enumerate(geometries):
+        answers = []
+        for mi, groups in enumerate(group_maps):
+            attribution.set_projects(_with_groups(f"pooled-{gi}-{mi}", groups))
+            scores, borderline, assigned, used, _tv, _c = attribution.score_block(
+                ["work"], {}, encoder=GeomEncoder(vec))
+            assert used
+            want = _pooled_decision(scores, vec[2])   # unit vectors: null sim == component 3
+            assert (borderline, assigned) == want, (vec, groups, scores, borderline, assigned, want)
+            answers.append((scores, borderline, assigned))
+        assert answers[0] == answers[1] == answers[2], (vec, answers)
+    # The case that separated the two rules, stated outright: pooled, ui is dropped.
+    attribution.set_projects(_with_groups("pooled-suppress",
+                                          {"proj_pay": "products", "proj_ui": "features"}))
+    _s, _b, assigned, _u, _tv, _c = attribution.score_block(
+        ["work"], {}, encoder=GeomEncoder([0.62, 0.51, 0.45, 0.3912]))
+    assert assigned == ["proj_pay"], assigned
+
+
+def test_the_row_is_the_pre_per_group_shape():   # R4-AC-6
+    # No `decision` stamp in model_versions, as before 2026-09-23. The published
+    # projects come HIGHEST CONFIDENCE FIRST — not the declaration order the
+    # pooled rule produces: the daemon reads the list as ranked (attrib.Outcome,
+    # "highest confidence first"), and declaration order is what it once took
+    # for a ranking. That sort is not a group feature, so it survived Revision 4.
+    assert set(attribution.MODEL_VERSIONS) == {"encoder", "verifier", "null_doc", "scoring"}, \
+        attribution.MODEL_VERSIONS
+    attribution.set_projects(_with_groups("row-shape",
+                                          {"proj_pay": "products", "proj_ui": "features"}))
+    # ui scores higher than pay and is declared second; both within MARGIN.
+    out = attribution.attribute_block(["work"], {}, GeomEncoder([0.66, 0.70, 0.0, 0.2728]), None)
+    assert [p["id"] for p in out["projects"]] == ["proj_ui", "proj_pay"], out["projects"]
+    assert "decision" not in out["attribution"]["model_versions"], out["attribution"]
+
+
 if __name__ == "__main__":
     test_metadata_boost_model_free()
     test_embedding_ranking_assigns_the_winner()
@@ -283,4 +364,6 @@ if __name__ == "__main__":
     test_each_stream_is_centred_against_its_own_baseline()
     test_a_retried_block_is_folded_into_the_baseline_once()
     test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly()
-    print("test_attribution_scoring: 11 passed")
+    test_decision_is_pooled_and_ignores_group()
+    test_the_row_is_the_pre_per_group_shape()
+    print("test_attribution_scoring: 13 passed")

@@ -53,8 +53,7 @@ type Match struct {
 // the case an admin most needs to see. Reconcile should have made that
 // impossible for a local/org pair, and if it ever reappears this is what
 // carries the evidence rather than swallowing it.
-func MatchesFor(dims map[string]enrich.Labeled, candidates []Project,
-	groupOff func(key string) bool) []Match {
+func MatchesFor(dims map[string]enrich.Labeled, candidates []Project) []Match {
 	repo, hasRepo := attributedValue(dims, DimRepo)
 	ticket, hasTicket := "", false
 	if branch, ok := attributedValue(dims, DimBranch); ok {
@@ -65,7 +64,7 @@ func MatchesFor(dims map[string]enrich.Labeled, candidates []Project,
 	}
 	var out []Match
 	for _, p := range candidates {
-		if p.Hidden || projectGroupOff(p, groupOff) {
+		if p.Hidden {
 			continue
 		}
 		matched := false

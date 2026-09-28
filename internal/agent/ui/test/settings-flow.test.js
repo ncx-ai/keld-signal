@@ -78,10 +78,12 @@ test("a network failure (status 0) still shows something actionable", () => {
 // --- localOnlyConfirmationText: the one sentence every /v1/projects mutation's
 // local_only:true renders as. Must never imply the org learned anything. ---
 
-test("localOnlyConfirmationText says the change is local and points at Atlas for the org-wide edit", () => {
+// Since Revision 2 it no longer points at Atlas for an org-wide edit: every
+// project is this machine's own, so there is no org copy to edit
+// (test/signal-only.test.js pins the exact sentence).
+test("localOnlyConfirmationText says the change is local and never implies the org learned it", () => {
   const text = localOnlyConfirmationText();
   assert.match(text, /Applied on this machine/);
-  assert.match(text, /Atlas/);
   assert.doesNotMatch(text, /synced|published|sent to Atlas|the org (now )?knows/i);
 });
 

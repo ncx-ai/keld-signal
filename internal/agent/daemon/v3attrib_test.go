@@ -60,10 +60,7 @@ func seedDeterministicAnswer(t *testing.T, v *v3) ledger.BlockKey {
 	k := ledger.BlockKey{Session: testSession, Start: testStart}
 	at := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
 	v.ledger.Cut(k, testStart+1200, "idle", "budget", "claude_code", at)
-	v.ledger.Attribute(k, ledger.Attributed{
-		ProjectID: "p_keld_signal",
-		Method:    ledger.MethodRepo,
-	}, ledger.ReasonNone, at)
+	v.ledger.Attribute(k, ledger.Attributed{Projects: []ledger.AttributedProject{{ProjectID: "p_keld_signal", Method: ledger.MethodRepo}}}, ledger.ReasonNone, at)
 	return k
 }
 
@@ -102,7 +99,7 @@ func TestQuarantinedVectorJobLeavesTheDeterministicProjectIntact(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatalf("the vector pass quarantining changed the DETERMINISTIC cell:\n before %s\n  after %s", before, after)
 	}
-	if cells["attributed"]["project_id"] != "p_keld_signal" {
+	if firstWS(cells["attributed"], "project_id") != "p_keld_signal" {
 		t.Fatalf("the row must still name its project; attributed = %#v", cells["attributed"])
 	}
 	// And the failure is not lost — it is recorded where it belongs.
@@ -121,17 +118,17 @@ func TestVectorAgreeingWithTheRuleLeavesBothAnswersReadable(t *testing.T) {
 
 	v.vectorLedger().recordOutcome(attrib.Outcome{
 		SessionID: testSession, Start: float64(testStart),
-		Status: enrich.ProjectsAttributed, ProjectID: "p_keld_signal", Confidence: 0.88,
+		Status: enrich.ProjectsAttributed, Projects: []attrib.OutcomeProject{{ProjectID: "p_keld_signal", Confidence: 0.88}},
 	})
 
 	cells := storedCells(t, v)
-	if cells["attributed"]["project_id"] != "p_keld_signal" ||
-		cells["attributed"]["method"] != string(ledger.MethodRepo) {
+	if firstWS(cells["attributed"], "project_id") != "p_keld_signal" ||
+		firstWS(cells["attributed"], "method") != string(ledger.MethodRepo) {
 		t.Fatalf("deterministic cell = %#v", cells["attributed"])
 	}
 	if cells["vector"]["status"] != string(ledger.StatusOK) ||
-		cells["vector"]["project_id"] != "p_keld_signal" ||
-		cells["vector"]["confidence"] != 0.88 {
+		firstWS(cells["vector"], "project_id") != "p_keld_signal" ||
+		firstWS(cells["vector"], "confidence") != 0.88 {
 		t.Fatalf("vector cell = %#v", cells["vector"])
 	}
 }
@@ -146,17 +143,17 @@ func TestVectorDisagreeingWithTheRuleStoresBothAndResolvesNeither(t *testing.T) 
 
 	v.vectorLedger().recordOutcome(attrib.Outcome{
 		SessionID: testSession, Start: float64(testStart),
-		Status: enrich.ProjectsAttributed, ProjectID: "p_something_else", Confidence: 0.55,
+		Status: enrich.ProjectsAttributed, Projects: []attrib.OutcomeProject{{ProjectID: "p_something_else", Confidence: 0.55}},
 	})
 
 	cells := storedCells(t, v)
-	if cells["attributed"]["project_id"] != "p_keld_signal" {
+	if firstWS(cells["attributed"], "project_id") != "p_keld_signal" {
 		t.Fatalf("the deterministic answer must survive a disagreement; got %#v", cells["attributed"])
 	}
-	if cells["vector"]["project_id"] != "p_something_else" {
+	if firstWS(cells["vector"], "project_id") != "p_something_else" {
 		t.Fatalf("the vector answer must survive a disagreement; got %#v", cells["vector"])
 	}
-	if cells["attributed"]["project_id"] == cells["vector"]["project_id"] {
+	if firstWS(cells["attributed"], "project_id") == firstWS(cells["vector"], "project_id") {
 		t.Fatal("this test is meant to exercise a genuine disagreement")
 	}
 }
@@ -181,7 +178,7 @@ func TestEachVectorOutcomeStatesWhatTheEncoderActuallyDid(t *testing.T) {
 			seedDeterministicAnswer(t, v)
 			v.vectorLedger().recordOutcome(attrib.Outcome{
 				SessionID: testSession, Start: float64(testStart),
-				Status: tc.status, ProjectID: "p_keld_signal", Confidence: 0.7,
+				Status: tc.status, Projects: []attrib.OutcomeProject{{ProjectID: "p_keld_signal", Confidence: 0.7}},
 			})
 			cell := storedCells(t, v)["vector"]
 			if cell == nil {
@@ -293,7 +290,7 @@ func TestTogglingTheVectorPassOnThenOffLeavesTheDeterministicAnswerUnchanged(t *
 	for _, o := range []attrib.Outcome{
 		{Status: enrich.ProjectsPending},
 		{Status: enrich.ProjectsDegradedWeights},
-		{Status: enrich.ProjectsAttributed, ProjectID: "p_other", Confidence: 0.5},
+		{Status: enrich.ProjectsAttributed, Projects: []attrib.OutcomeProject{{ProjectID: "p_other", Confidence: 0.5}}},
 	} {
 		o.SessionID, o.Start = testSession, float64(testStart)
 		vl.recordOutcome(o)
@@ -305,7 +302,7 @@ func TestTogglingTheVectorPassOnThenOffLeavesTheDeterministicAnswerUnchanged(t *
 	setAttribOutcomeHandler(nil)
 	noteAttributionQuarantine(testSession, float64(testStart))
 	noteAttributionOutcome(attrib.Outcome{
-		SessionID: testSession, Start: float64(testStart), Status: enrich.ProjectsAttributed, ProjectID: "p_nope",
+		SessionID: testSession, Start: float64(testStart), Status: enrich.ProjectsAttributed, Projects: []attrib.OutcomeProject{{ProjectID: "p_nope"}},
 	})
 
 	cells := storedCells(t, v)
@@ -321,7 +318,7 @@ func TestTogglingTheVectorPassOnThenOffLeavesTheDeterministicAnswerUnchanged(t *
 	if cells["vector"]["status"] != string(ledger.StatusFailed) {
 		t.Fatalf("an unwired hook wrote to the vector cell; got %#v", cells["vector"])
 	}
-	if cells["vector"]["project_id"] != "p_other" {
+	if firstWS(cells["vector"], "project_id") != "p_other" {
 		t.Fatalf("the id from the last real answer must survive; got %#v", cells["vector"])
 	}
 }

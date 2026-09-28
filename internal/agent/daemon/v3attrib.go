@@ -160,9 +160,13 @@ func (l vectorLedger) recordQuarantine(sessionID string, start float64) {
 func (l vectorLedger) recordOutcome(o attrib.Outcome) {
 	switch o.Status {
 	case enrich.ProjectsAttributed:
-		l.write(o.SessionID, o.Start,
-			ledger.VectorAttributed{ProjectID: o.ProjectID, Confidence: o.Confidence},
-			ledger.StatusOK, ledger.ReasonNone)
+		var a ledger.VectorAttributed
+		for _, w := range o.Projects {
+			a.Projects = append(a.Projects, ledger.VectorProject{
+				ProjectID: w.ProjectID, Confidence: w.Confidence,
+			})
+		}
+		l.write(o.SessionID, o.Start, a, ledger.StatusOK, ledger.ReasonNone)
 	case enrich.ProjectsPending:
 		l.write(o.SessionID, o.Start, ledger.VectorAttributed{},
 			ledger.StatusPending, ledger.ReasonNone)

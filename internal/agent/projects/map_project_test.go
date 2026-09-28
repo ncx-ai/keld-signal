@@ -30,7 +30,7 @@ func TestTheStoryTheRulesMoveAndTheLocalEntryGoes(t *testing.T) {
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
 
-	next, err := MapProjectTo(d, orgValues(), "p_signal", "keld_projects:signal", noneOff)
+	next, err := MapProjectTo(d, orgValues(), "p_signal", "keld_projects:signal")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
@@ -61,26 +61,27 @@ func TestNEGATIVEBlocksKeepAttributingAfterTheMove(t *testing.T) {
 		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
 	}
 
-	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), noneOff, nil)
-	if got.ProjectID != "p_signal" {
-		t.Fatalf("before the move, attributed to %q", got.ProjectID)
+	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), nil)
+	if only(got).ProjectID != "p_signal" {
+		t.Fatalf("before the move, attributed to %q", only(got).ProjectID)
 	}
 
-	after, err := MapProjectTo(before, orgValues(), "p_signal", "keld_projects:signal", noneOff)
+	after, err := MapProjectTo(before, orgValues(), "p_signal", "keld_projects:signal")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
-	got = Attribute(dims, MergeCandidates(after.Projects, orgValues()), noneOff, nil)
-	if got.ProjectID != "keld_projects:signal" {
+	got = Attribute(dims, MergeCandidates(after.Projects, orgValues()), nil)
+	if only(got).ProjectID != "keld_projects:signal" {
 		t.Fatalf("after the move, attributed to %q (reason %q) — the block fell out",
-			got.ProjectID, got.Reason)
+			only(got).ProjectID, got.Reason)
 	}
 }
 
-func TestNEGATIVEKeepingBothWouldConflictWhichIsWhyOneIsRemoved(t *testing.T) {
+func TestNEGATIVEKeepingBothWouldDoubleCountWhichIsWhyOneIsRemoved(t *testing.T) {
 	// The reason the local entry is deleted rather than kept as a reference,
 	// asserted rather than argued: two visible projects sharing a repo rule
-	// attribute to NEITHER.
+	// BOTH get the block (overlap is allowed since 2026-09-23), so a local copy
+	// of an org project's rule would count the block twice.
 	both := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 		{ID: "keld_projects:signal", Title: "Signal On-Device Client",
@@ -88,26 +89,38 @@ func TestNEGATIVEKeepingBothWouldConflictWhichIsWhyOneIsRemoved(t *testing.T) {
 	}}
 	got := Attribute(map[string]enrich.Labeled{
 		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
-	}, both.Projects, noneOff, nil)
-	if got.Reason != ReasonConflict {
-		t.Fatalf("reason = %q, want %q — if this ever stops being a conflict, "+
-			"keeping the local entry as a reference becomes viable and MapProjectTo's "+
-			"deletion should be revisited", got.Reason, ReasonConflict)
+	}, both.Projects, nil)
+	if len(got.Projects) != 2 {
+		t.Fatalf("assigned = %+v, want both — if a shared rule ever stops assigning "+
+			"both, keeping the local entry as a reference becomes viable and "+
+			"MapProjectTo's deletion should be revisited", got.Projects)
 	}
 }
 
-func TestNEGATIVEAnOrgProjectCannotBeFoldedAway(t *testing.T) {
-	// Its identity lives in Atlas. Removing the local overlay would drop the
-	// rules this machine added while leaving the org's value untouched — a
-	// deletion that looks like a move.
+func TestAnOverlayCanBeMapped(t *testing.T) {
+	// Revision 2 (2026-09-25): an overlay made with "Same as" is the person's
+	// own Signal project — shown and attributed like any other — so it can be
+	// folded into another one like any other. It used to be refused as "an org
+	// project, not ours to fold away"; with Atlas workstreams off the page, that
+	// refusal left the person no way to merge it at all.
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		{ID: "keld_projects:signal", Title: "Signal", Origin: OriginAtlas,
 			Repos: []string{"github.com/ncx-ai/keld-signal"}},
-		localProject("p_other", "other"),
+		localProject("p_other", "other", "github.com/acme/other"),
 	}}
-	_, err := MapProjectTo(d, orgValues(), "keld_projects:signal", "p_other", noneOff)
-	if !errors.Is(err, ErrProjectNotFound) {
-		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	next, err := MapProjectTo(d, nil, "keld_projects:signal", "p_other")
+	if err != nil {
+		t.Fatalf("MapProjectTo(overlay onto a local project): %v", err)
+	}
+	if _, still := findProject(next, "keld_projects:signal"); still {
+		t.Fatal("the overlay survived the map — two projects would share its rule")
+	}
+	i, ok := findProject(next, "p_other")
+	if !ok {
+		t.Fatal("the target went missing")
+	}
+	if got := next.Projects[i].Repos; len(got) != 2 || !containsFold(got, "github.com/ncx-ai/keld-signal") {
+		t.Fatalf("the overlay's rule did not move onto the target: %v", got)
 	}
 }
 
@@ -117,7 +130,7 @@ func TestNEGATIVEMappingOntoItselfIsRefused(t *testing.T) {
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
-	if _, err := MapProjectTo(d, nil, "p_signal", "p_signal", noneOff); !errors.Is(err, ErrProjectNotFound) {
+	if _, err := MapProjectTo(d, nil, "p_signal", "p_signal"); !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
 }
@@ -127,7 +140,7 @@ func TestMappingOntoAnotherLocalProjectMergesRules(t *testing.T) {
 		localProject("p_a", "A", "github.com/acme/a"),
 		localProject("p_b", "B", "github.com/acme/b"),
 	}}
-	next, err := MapProjectTo(d, nil, "p_a", "p_b", noneOff)
+	next, err := MapProjectTo(d, nil, "p_a", "p_b")
 	if err != nil {
 		t.Fatalf("MapProjectTo: %v", err)
 	}
@@ -144,7 +157,7 @@ func TestNEGATIVEAnUnknownTargetChangesNothing(t *testing.T) {
 	d := Document{Version: CurrentVersion, Projects: []Project{
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
-	next, err := MapProjectTo(d, orgValues(), "p_signal", "nope", noneOff)
+	next, err := MapProjectTo(d, orgValues(), "p_signal", "nope")
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
