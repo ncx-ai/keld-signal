@@ -781,9 +781,18 @@ fieldset:disabled { opacity: .55; }
 .ov-key.line { width: 14px; height: 0; border-top: 1.5px solid var(--ink); border-radius: 0; }
 
 .ov-hist { border-top: 1px solid var(--rule); padding-top: 14px; }
-.ov-hbody { display: grid; gap: 4px; margin-top: 10px; overflow-x: auto; }
-.ov-hrow, .ov-hhours { display: grid; grid-template-columns: 58px minmax(480px, 1fr); gap: 10px; align-items: center; }
-.ov-hlabel { font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; }
+/* A contribution grid, as GitHub draws one: the gap between rows is the gap
+   between cells, so a week reads as one block of squares. The day label is
+   zero-height so it can never make its row taller than the cells in it. The
+   cells keep a legible minimum and scroll inside the section on a narrow
+   screen rather than shrinking to dots. */
+.ov-hbody { display: grid; gap: 2px; margin-top: 10px; overflow-x: auto; }
+.ov-hrow, .ov-hhours { display: grid; grid-template-columns: 58px minmax(720px, 1fr); gap: 10px; align-items: center; }
+.ov-hhours { margin-top: 4px; }
+.ov-hlabel {
+  height: 0; display: flex; align-items: center; justify-content: flex-end; overflow: visible;
+  font-size: 9.5px; line-height: 1; color: var(--muted); white-space: nowrap;
+}
 .ov-hcells { display: grid; grid-template-columns: repeat(72, minmax(0, 1fr)); gap: 2px; }
 .ov-cell { aspect-ratio: 1; max-width: 100%; border-radius: 2px; background: var(--ov-empty); }
 .ov-hrow.not-loaded .ov-hcells { background: var(--ov-not-loaded); }
