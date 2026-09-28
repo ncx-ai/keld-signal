@@ -5,7 +5,6 @@ package service
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"strings"
 )
@@ -40,7 +39,7 @@ func InstallAt(exe string) error {
 	// went nowhere either. The only evidence anywhere was `schtasks /Query`
 	// reporting no such task. schtasks explains itself perfectly well
 	// ("ERROR: Access is denied."); the defect was never asking it.
-	if out, err := exec.Command("schtasks", "/Create", "/F",
+	if out, err := command("schtasks", "/Create", "/F",
 		"/TN", taskName, "/XML", xmlPath,
 	).CombinedOutput(); err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
@@ -50,8 +49,8 @@ func InstallAt(exe string) error {
 	}
 	// Run it now (don't wait for next logon), restarting any running instance so a
 	// REINSTALL picks up the newly-installed binary.
-	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
-	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
+	_ = command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
+	return command("schtasks", "/Run", "/TN", taskName).Run()
 }
 
 // writeTaskXML writes the registration document to a temp file and returns its
@@ -91,24 +90,24 @@ func taskUser() string {
 }
 
 func Uninstall() error {
-	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
-	return exec.Command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
+	_ = command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
+	return command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
 }
 
 // Start runs the scheduled task now.
-func Start() error { return exec.Command("schtasks", "/Run", "/TN", taskName).Run() }
+func Start() error { return command("schtasks", "/Run", "/TN", taskName).Run() }
 
 // Stop ends the running task instance.
-func Stop() error { return exec.Command("schtasks", "/End", "/TN", taskName).Run() }
+func Stop() error { return command("schtasks", "/End", "/TN", taskName).Run() }
 
 // Restart ends then re-runs the task (picks up a newly-installed binary).
 func Restart() error {
-	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run()
-	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
+	_ = command("schtasks", "/End", "/TN", taskName).Run()
+	return command("schtasks", "/Run", "/TN", taskName).Run()
 }
 
 func Status() (string, error) {
-	out, err := exec.Command("schtasks", "/Query", "/TN", taskName).CombinedOutput()
+	out, err := command("schtasks", "/Query", "/TN", taskName).CombinedOutput()
 	if err != nil {
 		return "not installed", nil
 	}

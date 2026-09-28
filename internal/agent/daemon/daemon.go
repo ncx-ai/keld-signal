@@ -946,12 +946,22 @@ func Run(ctx context.Context) error {
 	// and the event envelope already stamps os/arch/version on every event
 	// (clientevents.Corr, above), so this adds only what the envelope lacks.
 	hw := hardware.Collect()
-	emitter.EmitExempt("agent.hardware", clientevents.SevInfo, map[string]any{
+	hwFields := map[string]any{
 		"cpu_model":     hw.CPUModel,
 		"logical_cores": hw.LogicalCores,
 		"mem_total_gb":  hw.MemTotalGB,
 		"os_version":    hw.OSVersion,
-	})
+	}
+	// ⚠️ WINDOWS ONLY, AND OMITTED RATHER THAN EMPTY EVERYWHERE ELSE. A blank
+	// `smart_app_control` on every Mac would be indistinguishable from a Windows
+	// machine whose state could not be read, and the whole point of the field is
+	// to count the Windows machines that refuse to run unsigned binaries. An
+	// absent key means "not a Windows machine"; a present one always carries a
+	// real answer, including "unknown".
+	if hw.SmartAppControl != "" {
+		hwFields["smart_app_control"] = hw.SmartAppControl
+	}
+	emitter.EmitExempt("agent.hardware", clientevents.SevInfo, hwFields)
 
 	// Decide once, at startup, whether enrichment runs at all (ml_backend is a
 	// local, startup-only setting — never re-read at runtime, see

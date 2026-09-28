@@ -23,29 +23,64 @@ test -f "$cmd" || fail "missing onboard.cmd"
 # flags it had never looked at.
 run_block="$(sed -n '/^\[Run\]/,/^\[Code\]/p' "$iss" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}')"
 
-# 1. Registration must ALWAYS happen. Behind `postinstall` it is a tickbox the
-#    user can clear, and `skipifsilent` skips it outright — an MDM /SILENT push
-#    would install the files and register nothing, silently.
+# 1. ⚠️ REGISTRATION MUST ALWAYS HAPPEN, AND IT NO LONGER LIVES IN [Run].
+#    It moved into CurStepChanged/ssPostInstall because `Flags: runhidden` hides
+#    a window without stopping Windows allocating a console, and that console
+#    appeared on a real install ("it pops a terminal window open twice"). Only
+#    keld-wizard-host can pass CREATE_NO_WINDOW, so the call goes through it.
+#
+#    ⚠️ THE MOVE IMMEDIATELY BROKE THE INVARIANT THIS GUARD EXISTS FOR, which is
+#    why it is rewritten rather than deleted. ssPostInstall returns early when
+#    the wizard page did not pair, so registering there put the agent behind
+#    `Paired` — and on an MDM /SILENT push the page never runs, Paired is always
+#    false, and the machine would have installed the files and registered
+#    NOTHING, silently. Exactly the failure the original wording describes.
 # ⚠️ MATCH ENTRY LINES ONLY. The comments in [Run] name `keld-agent.exe` and
 # `runhidden` while explaining why they are the way they are, so an unscoped grep
 # matches the PROSE — and deleting the real entry still passed. Found by testing
-# this guard against a deliberately broken file rather than trusting it.
+# this guard against a deliberately broken file rather than trusting it. Still
+# needed below, for onboard.cmd.
 entries="$(printf '%s\n' "$run_block" | grep '^Filename:' || true)"
-reg_line="$(printf '%s\n' "$entries" | grep -F 'keld-agent.exe' || true)"
-[ -n "$reg_line" ] || fail "no [Run] entry registers the agent; a silent install would register nothing"
-printf '%s\n' "$reg_line" | grep -q 'postinstall' && \
-  fail "agent registration is behind 'postinstall' — a user can untick it and a /SILENT push skips it"
-printf '%s\n' "$reg_line" | grep -q 'skipifsilent' && \
-  fail "agent registration is 'skipifsilent' — MDM pushes would register nothing"
 
-# 1b. Registration must say --headless OUT LOUD. `runhidden` hides the window but
-#     leaves the child a real console, so stdout is a terminal and keld-agent's TTY
-#     probe answers TRUE here — it ran `keld login` invisibly and then blocked
-#     forever on `keld signal setup`'s [Y/n], wedging the installer until someone
-#     killed the process by hand. Inferring "no human" from the absence of a
-#     terminal does not work on Windows; the intent has to be stated.
-printf '%s\n' "$reg_line" | grep -q -- '--headless' || \
-  fail "agent registration omits --headless — install would prompt inside a hidden console and hang"
+# ⚠️ Match the CALL, not its arguments. Keying this on "install --headless"
+# made 1b unreachable: dropping the flag also emptied this variable, so the
+# missing-registration error fired instead and the flag guard could never
+# report. Found by checking that each guard fails for ITS OWN reason.
+reg_call="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss" \
+            | grep -F 'keld-agent.exe' | grep -F 'install' || true)"
+[ -n "$reg_call" ] || \
+  fail "nothing in ssPostInstall registers the agent; a silent install would register nothing"
+
+# 1a. It must NOT sit inside the `if Paired then` block. Checked structurally:
+#     the registration has to appear AFTER that block has closed.
+body="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss")"
+# ⚠️ `|| true` ON EVERY ONE. Under `set -euo pipefail` a command substitution
+# whose grep matches nothing kills this script SILENTLY — exit 1, no message, no
+# indication which check died. That is strictly worse than a failed assertion,
+# because it looks like a crash rather than a finding, and it is what happened
+# the first time these were tested against a file with the registration removed.
+paired_ln="$(printf '%s\n' "$body" | grep -n 'if Paired then' | head -1 | cut -d: -f1 || true)"
+reg_ln="$(printf '%s\n' "$body" | grep -n 'install --headless' | head -1 | cut -d: -f1 || true)"
+close_ln="$(printf '%s\n' "$body" | grep -n '^  end;$' | tail -1 | cut -d: -f1 || true)"
+if [ -n "$paired_ln" ] && [ -n "$reg_ln" ] && [ -n "$close_ln" ]; then
+  [ "$reg_ln" -gt "$close_ln" ] || \
+    fail "agent registration is inside the 'if Paired' block - a /SILENT push (page never runs, Paired false) would register nothing"
+fi
+
+# 1b. Registration must say --headless OUT LOUD. Hiding a window does not take
+#     the console away, so keld-agent's TTY probe answered TRUE and it took its
+#     INTERACTIVE branch: `keld login` invisibly, then `keld signal setup`
+#     blocking forever on a [Y/n] against a stdin no human could reach, wedging
+#     the installer until someone killed the child by hand. Running through
+#     keld-wizard-host removes the console entirely, which makes the flag's job
+#     easier rather than unnecessary - state the intent, do not infer it.
+printf '%s\n' "$reg_call" | grep -q -- '--headless' || \
+  fail "agent registration omits --headless - install would prompt where nobody can answer and hang"
+
+# 1c. And it must go through RunQuiet, not a bare Exec: that is the only path
+#     that passes CREATE_NO_WINDOW.
+printf '%s\n' "$reg_call" | grep -q 'RunQuiet' || \
+  fail "agent registration does not use RunQuiet - Inno's SW_HIDE leaves the console allocated and it shows"
 
 # 2. Onboarding must be VISIBLE. runhidden here is what made every Windows
 #    machine idle forever: an interactive login in a window nobody could see.
@@ -157,4 +192,261 @@ grep -qF 'install --code' "$cmd" || fail "onboard.cmd never redeems a setup code
 grep -qF 'install --login --yes' "$cmd" || fail "onboard.cmd has no browser-login fallback"
 grep -qF 'ingest_token'   "$cmd" || fail "onboard.cmd claims success without checking hook.json"
 
-echo "PASS: windows installer registers unconditionally, onboards visibly, adds PATH without asking, hides the file firehose, uninstalls cleanly, and claims success from observed state"
+# ── The wizard page ──────────────────────────────────────────────────────────
+
+# 5. ⚠️ INNO READS A SCRIPT AS UTF-8 ONLY WHEN IT HAS A BOM. Without one it falls
+#    back to the system codepage and every non-ASCII character in a DISPLAYED
+#    string becomes mojibake — no error, no warning, nothing in the compile
+#    output. Measured on the first real run of the page, which read
+#      Connected â€" dg@keld.co Â· Keld
+#    where an em-dash and a middot should have been.
+bom="$(head -c 3 "$iss" | od -An -tx1 | tr -d ' \n')"
+[ "$bom" = "efbbbf" ] || \
+  fail "keld-agent.iss has no UTF-8 BOM - every non-ASCII string renders as mojibake"
+
+# 6. The page runs BEFORE the payload is installed, so it drives copies extracted
+#    to {tmp}. Without a dontcopy entry it drives paths that do not exist, and
+#    every step fails to start.
+grep -q 'Source: "keld.exe";.*Flags: dontcopy' "$iss" || \
+  fail "keld.exe is not staged dontcopy - the wizard page would have nothing to drive"
+grep -q 'Source: "keld-wizard-host.exe";.*Flags: dontcopy' "$iss" || \
+  fail "keld-wizard-host.exe is not staged dontcopy - the page could not run anything"
+grep -q 'ExtractTemporaryFile' "$iss" || \
+  fail "no ExtractTemporaryFile - a dontcopy file is not on disk until it is extracted"
+
+# 7. The helper is required by the page AND installed, so CI must stage it too.
+grep -q 'Source: "keld-wizard-host.exe";.*DestDir' "$iss" || \
+  fail "keld-wizard-host.exe is not installed to {app}"
+
+# 8. ⚠️ Without --bin-path every tool hook pins {tmp}\keld.exe, a path that stops
+#    existing when the wizard closes. The config looks right; the hook never runs.
+code_block="$(sed -n '/^\[Code\]/,$p' "$iss")"
+printf '%s\n' "$code_block" | grep -q -- '--bin-path' || \
+  fail "ssPostInstall omits --bin-path - every tool hook would pin a temp path"
+
+# 9. The console fallback must no longer fire on the success path, and must still
+#    exist for /SILENT and for a [Code] failure.
+printf '%s\n' "$onb_line" | grep -q 'Check:' || \
+  fail "onboard.cmd is unconditional - a console would open after a successful wizard"
+
+# 10. ⚠️ A `Source:` the BUILD never produces is a compile error, and the two
+#     build paths are NOT the same path. installers.yml stages keld.exe /
+#     keld-agent.exe / keld-wizard-host.exe from the GoReleaser archive on a
+#     release, and rebuilds them natively on a workflow_dispatch DRY RUN. The
+#     helper was added to the release path and to .goreleaser.yaml but not to the
+#     dry-run branch, so the only way to exercise this workflow without cutting a
+#     release failed on a Copy-Item the release path would have satisfied —
+#     i.e. the rehearsal broke while the performance worked, which is the worst
+#     ordering there is. Guard #7 above proves the .iss wants the binary; this
+#     proves both halves of CI actually produce it.
+wf="$d/../../.github/workflows/installers.yml"
+test -f "$wf" || fail "cannot find installers.yml - this guard would pass vacuously"
+stage_step="$(sed -n '/name: Stage keld\/keld-agent binaries/,/^      - name: /p' "$wf")"
+printf '%s\n' "$stage_step" | grep -q 'cmd/keld-wizard-host' || \
+  fail "installers.yml never builds cmd/keld-wizard-host on the dry-run path - a workflow_dispatch run cannot package Windows"
+grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
+  fail ".goreleaser.yaml does not build keld-wizard-host - the RELEASE path would stage a binary the archive lacks"
+# The archive it rides must be the one the workflow unzips (keld_windows_amd64.zip),
+# so the id has to appear in an archive's `ids:` list, not merely under `builds:`.
+awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
+  fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
+
+# 9a. ⚠️ THE RESTART MANAGER MUST STAY OFF, AND SOMETHING MUST STOP THE AGENT
+#     INSTEAD. Inno defaults to CloseApplications=yes (a modal listing processes
+#     to close, which reads as an error on every upgrade) and
+#     RestartApplications=yes — which RELAUNCHES the console-subsystem daemon
+#     from a GUI installer, giving it a fresh console window, outside the
+#     scheduled task and without --hide-console.
+grep -q '^CloseApplications=no'   "$iss" || \
+  fail "CloseApplications is not disabled - every upgrade shows a Restart Manager modal that reads as an error"
+grep -q '^RestartApplications=no' "$iss" || \
+  fail "RestartApplications is not disabled - Inno relaunches keld-agent.exe itself, with a console window and outside the task"
+grep -q 'function PrepareToInstall' "$iss" || \
+  fail "nothing stops the running agent before files are replaced; with CloseApplications=no the upgrade would fail on locked binaries"
+prep="$(sed -n '/function PrepareToInstall/,/^end;/p' "$iss")"
+printf '%s\n' "$prep" | grep -q 'taskkill' || fail "PrepareToInstall does not stop the agent processes"
+
+# 9a-2. ⚠️ AN UPGRADE MUST PICK UP THE SIGNED UNINSTALLER. Inno keeps an existing
+#       unins000.exe — it only writes one when it is missing or older, and both
+#       come from the same Inno version. Measured: v11 replaced every binary in
+#       {app} and left unins000.exe untouched and NotSigned, while CI had proved
+#       the stub inside keld-setup.exe WAS signed. So every machine that upgraded
+#       keeps an uninstaller SAC will refuse.
+grep -q 'procedure RemoveStaleUninstaller' "$iss" || \
+  fail "nothing removes the stale uninstaller; an upgraded machine keeps the unsigned one and cannot uninstall"
+stale="$(sed -n '/procedure RemoveStaleUninstaller/,/^end;/p' "$iss")"
+# ⚠️ The .dat claims the slot. Deleting it would orphan the log and strand every
+#    file recorded in it, so the procedure must read it and must NOT delete it.
+printf '%s\n' "$stale" | grep -q 'unins000.dat' || \
+  fail "RemoveStaleUninstaller ignores unins000.dat - without that check the slot may not be ours to reuse"
+printf '%s\n' "$stale" | grep -q "DeleteFile(Dat)" && \
+  fail "RemoveStaleUninstaller deletes the uninstall LOG - that orphans every file it records"
+# And the outcome must be verified, since reusing the slot is an assumption.
+grep -q '{uninstallexe}' "$iss" || \
+  fail "nothing confirms an uninstaller exists after install; a wrong slot guess would be silent until someone uninstalls"
+# Both helpers are console programs launched from a GUI installer.
+[ "$(printf '%s\n' "$prep" | grep -c 'SW_HIDE')" -ge 2 ] || \
+  fail "PrepareToInstall runs schtasks/taskkill without SW_HIDE - each pops a console window"
+
+# 9b. ⚠️ THE CONSOLE FALLBACK MUST NOT AUTO-RUN. `postinstall` entries are TICKED
+#     BY DEFAULT, so on any install that did not end paired, closing the
+#     installer launched onboard.cmd and left a blank console sitting on the
+#     desktop waiting for input — on a product whose whole Windows story is that
+#     no terminal ever appears. `unchecked` keeps the fallback reachable while
+#     making it a deliberate choice.
+printf '%s\n' "$onb_line" | grep -q 'unchecked' || \
+  fail "onboard.cmd is a ticked-by-default postinstall action - it will open a console at every unpaired install"
+
+# 9c. ⚠️ THE APPROVAL PANEL BELONGS TO THE SIGN-IN RUN ONLY, AND WITHOUT THAT
+#     SCOPE IT COMES BACK OVER THE NEXT STEP. DrainRun evaluates its "show the
+#     panel" condition for EVERY event of EVERY run. EvApprovalURL is cleared
+#     only when a sign-in STARTS, and HideApproval resets ApprovalShown to False
+#     — so after a successful sign-in both halves were true again and the first
+#     `tool` event of the NEXT run launched a second WebView2 re-navigating to
+#     the sign-in page, behind the tool checkboxes. Reported as the checklist
+#     drawn "on top of the old sign in page"; the page underneath was live.
+show_cond="$(printf '%s\n' "$code" | grep -n 'ShowApproval(EvApprovalURL)' -B4 || true)"
+printf '%s\n' "$show_cond" | grep -q 'Mode = RunSignIn' || \
+  fail "the approval panel is shown without checking Mode - it will relaunch over the tools step"
+# And the URL must be retired once used: a spent device code cannot be approved,
+# so any later reader (the browser fallback, a retry) would send someone nowhere.
+after_login="$(sed -n '/^procedure AfterLogin/,/^end;/p' "$iss" || true)"
+[ -n "$after_login" ] || fail "cannot find procedure AfterLogin - this guard would pass vacuously"
+printf '%s\n' "$after_login" | grep -qF "EvApprovalURL :=" || \
+  fail "AfterLogin does not clear EvApprovalURL - a spent approval URL stays live for later readers"
+
+# 10a. ⚠️ ONLY A KNOWN FAILURE MAY FALL BACK TO A BROWSER. DrainPanel used to end
+#      in an unconditional else, so ANY panel status the script did not
+#      recognise tore down a working embed and launched a browser. Adding one
+#      diagnostic event to the helper was enough to trigger it: the sign-in form
+#      rendered, the next event arrived, and a browser window replaced it.
+#      The helper and this script ship together but are edited separately, so an
+#      unrecognised status means "newer helper", never "the embed failed".
+drain="$(sed -n '/^procedure DrainPanel/,/^end;/p' "$iss")"
+printf '%s\n' "$drain" | grep -q "Status <> 'no_runtime'" || \
+  fail "DrainPanel falls back to a browser on ANY unrecognised status - one new diagnostic event would eject a working embed"
+printf '%s\n' "$drain" | grep -q 'ShellExec' || \
+  fail "DrainPanel no longer has a browser fallback at all - the no-WebView2 case would leave a blank rectangle"
+
+# 10b. ⚠️ THE WEB PANEL MUST BE VISIBLE BEFORE THE HELPER EMBEDS INTO IT.
+#      StartPanel hands WebPanel.Handle to the helper, which creates a WebView2
+#      controller as a child of that window. A controller created under a HIDDEN
+#      parent NEVER STARTS RENDERING, and showing the parent afterwards does not
+#      notify it — so the page loads, its JavaScript runs (proved by
+#      atlas.keld.co bytes in the WebView2 code cache) and nothing is painted.
+#      Shipped in 31cafa0 and reported as "this used to work".
+approval="$(sed -n '/^procedure ShowApproval/,/^end;/p' "$iss")"
+printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := True' || \
+  fail "ShowApproval does not make WebPanel visible - a WebView2 embedded into a hidden window renders nothing, ever"
+# and the order matters: visible FIRST, then hand the handle over.
+vis_ln="$(printf '%s\n' "$approval" | grep -n 'WebPanel.Visible := True' | head -1 | cut -d: -f1)"
+start_ln="$(printf '%s\n' "$approval" | grep -n 'StartPanel(' | head -1 | cut -d: -f1)"
+if [ -n "$vis_ln" ] && [ -n "$start_ln" ] && [ "$vis_ln" -gt "$start_ln" ]; then
+  fail "WebPanel is shown AFTER StartPanel - the controller is still created under a hidden window"
+fi
+printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := False' && \
+  fail "ShowApproval still hides WebPanel; that is the line that made the sign-in page render nothing"
+
+# 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
+#     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
+#     LOADS, so an installer signed over an unsigned payload installs fine and
+#     is refused the moment keld.exe starts — the exact failure measured on a
+#     real machine. Reordered, every step still "passes" and the product is
+#     dead on the machines this exists for, which is why it is pinned by LINE
+#     ORDER rather than by presence.
+ln_payload="$(grep -n 'name: Sign the Windows payload'   "$wf" | cut -d: -f1)"
+ln_iscc="$(   grep -n 'name: Package Windows installer'  "$wf" | cut -d: -f1)"
+ln_setup="$(  grep -n 'name: Sign the Windows installer' "$wf" | cut -d: -f1)"
+for v in ln_payload ln_iscc ln_setup; do
+  [ -n "${!v}" ] || fail "installers.yml has no step for $v - the Windows signing chain is incomplete"
+done
+[ "$ln_payload" -lt "$ln_iscc" ] || \
+  fail "the payload is signed AFTER iscc - the installer would carry unsigned binaries and SAC refuses them at load"
+[ "$ln_setup" -gt "$ln_iscc" ] || \
+  fail "keld-setup.exe is signed BEFORE iscc builds it - that step can only be signing a stale or absent file"
+
+# 12. Vendor signatures must not be swept away: the action is handed an explicit
+#     catalog, never a recursive folder sweep. 78 of the payload's 188 PE
+#     binaries arrive signed by their own vendors, and re-signing replaces an
+#     attestation we cannot recreate with one we have no standing to make.
+grep -q 'files-catalog:' "$wf" || \
+  fail "installers.yml does not hand the signing action a catalog"
+grep -q 'files-folder-recurse:' "$wf" && \
+  fail "installers.yml sweeps a folder recursively - that re-signs vendor-signed binaries; use the catalog"
+grep -q 'CatalogOut' "$wf" || fail "nothing generates the signing catalog"
+grep -q 'VerifyCatalog' "$wf" || \
+  fail "nothing verifies the catalog after signing - a signer that exits 0 having skipped a file would ship"
+
+# 13. Timestamping. Artifact Signing certificates are short-lived and rotated by
+#     the service, so an untimestamped signature stops validating within weeks of
+#     shipping. Both signing steps must carry it.
+[ "$(grep -c 'timestamp-rfc3161:' "$wf")" -eq 2 ] || \
+  fail "expected both signing steps to set timestamp-rfc3161; short-lived certs make this mandatory, not optional"
+
+# 13a. ⚠️ THE UNINSTALLER MUST BE SIGNED DURING THE COMPILE — nothing before or
+#      after can reach it. Inno extracts unins000.exe on the target machine at
+#      install time, so an unsigned one is refused on exactly the machines
+#      installing was refused on, leaving people unable to remove the product.
+#      Only Inno can sign it, and only via a COMMAND LINE, which is why this one
+#      path uses the signtool dlib rather than the signing Action.
+grep -q 'SignedUninstaller=yes' "$iss" || \
+  fail "SignedUninstaller is gone - the uninstaller would ship unsigned and be blocked on SAC machines"
+grep -q 'name: Prepare the uninstaller signer' "$wf" || \
+  fail "nothing builds the uninstaller signing command; SignedUninstaller would have no SignTool and iscc HALTS"
+prep_sign="$(sed -n '/name: Prepare the uninstaller signer/,/name: Package Windows installer/p' "$wf")"
+printf '%s\n' "$prep_sign" | grep -q 'Azure.CodeSigning.Dlib.dll' || \
+  fail "the uninstaller signer does not use the Trusted Signing dlib"
+printf '%s\n' "$prep_sign" | grep -q 'timestamp.acs.microsoft.com' || \
+  fail "the uninstaller signature is not timestamped - short-lived certs make it invalid within weeks"
+# ⚠️ `$f` is INNO's placeholder for the file being signed; without it signtool
+# gets no file and every signature fails, which HALTS the compile.
+printf '%s\n' "$prep_sign" | grep -q 'dmdf' || \
+  fail "no /dmdf metadata file - the dlib cannot resolve the account or certificate profile"
+# And the compile must PROVE it happened rather than trust the directive.
+pkg_step="$(sed -n '/name: Package Windows installer/,/name: Sign the Windows installer/p' "$wf")"
+# ⚠️ The check must key on the ARTIFACT (uninst.e32), not on a log phrase. Inno
+#    never prints "Signing uninstaller"; it runs the tool and names the file. The
+#    first version guessed the wording and failed a build whose uninstaller had
+#    been signed correctly — a false negative on the one thing being verified.
+printf '%s\n' "$pkg_step" | grep -qF 'uninst\.e32' || \
+  fail "the build does not verify the uninstaller stub (uninst.e32) was signed"
+printf '%s\n' "$pkg_step" | grep -q 'Skeldsign' || \
+  fail "iscc is not given the keldsign SignTool; SignedUninstaller would halt the compile"
+# ⚠️ THE SIGNTOOL DLIB AUTHENTICATES FROM THE ENVIRONMENT, unlike the Action,
+#    which takes the same credentials as inputs. Without these the dlib walks
+#    DefaultAzureCredential all the way to InteractiveBrowserCredential and
+#    BLOCKS waiting for a browser that cannot exist on a runner - measured at two
+#    hours with no output before the run was cancelled.
+printf '%s\n' "$pkg_step" | grep -q 'AZURE_CLIENT_SECRET' || \
+  fail "the iscc step has no AZURE_* credentials; the uninstaller signer would hang on interactive auth"
+printf '%s\n' "$pkg_step" | grep -q 'timeout-minutes' || \
+  fail "the iscc step has no timeout; a blocking signing call would burn the whole job"
+# ⚠️ MATCH THE LIST ENTRY, NOT THE PROSE. The comment beside this setting names
+#    InteractiveBrowserCredential while explaining why it is excluded, so an
+#    unscoped grep matched the explanation and passed with the setting deleted —
+#    the same way guard #1 once matched the [Run] comments. Found by checking
+#    that it fails.
+printf '%s\n' "$prep_sign" | grep -qF "'InteractiveBrowserCredential'," || \
+  fail "the signing metadata does not exclude InteractiveBrowserCredential - a missing credential hangs instead of failing"
+
+# 13b. ⚠️ THE ACTION'S `files:` INPUT REQUIRES AN ABSOLUTE PATH AND REFUSES A
+#      RELATIVE ONE ("The file path '...' is not rooted." — measured, run
+#      36144191695, which signed all 111 payload binaries and then failed on the
+#      installer). `files-catalog` is the opposite: its path may be relative and
+#      its ENTRIES are relative to it. The two inputs disagree, so copying the
+#      shape from one to the other is exactly the mistake that shipped.
+awk '/files:/ && !/files-catalog:/ && !/files-folder/' "$wf" | grep -q 'github.workspace' || \
+  fail "the signing action's files: input is not rooted at github.workspace - the action refuses a relative path"
+
+# 14. ⚠️ A RELEASE MAY NOT SHIP UNSIGNED. Degrading to a warning is correct for
+#     a fork or a dry run — those are MEANT to produce non-distributable output
+#     — and wrong for a release, where it means a rotated-out client secret
+#     silently ships an installer Smart App Control refuses, discovered by a
+#     customer rather than by CI. Same hard gate macOS makes for notarization.
+sign_step="$(sed -n '/name: Enumerate Windows binaries/,/name: Sign the Windows payload/p' "$wf")"
+printf '%s\n' "$sign_step" | grep -q 'IS_RELEASE' || \
+  fail "the Windows signing gate does not consult IS_RELEASE - an unsigned RELEASE would build and upload"
+printf '%s\n' "$sign_step" | grep -qi 'throw .*UNSIGNED release' || \
+  fail "an unsigned release is not refused - macOS hard-gates notarization and Windows must match"
+
+echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, signs the payload before iscc and the installer after without trampling vendor signatures, and claims success from observed state"

@@ -10,6 +10,18 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
+// redirectHome points os.UserHomeDir at dir for the duration of the test.
+// Setting HOME alone is not enough: os.UserHomeDir consults $HOME only on
+// unix and reads %USERPROFILE% on Windows. A test that sets only HOME still
+// resolves GeminiAdapter.ConfigPath (and the .env beside it) to the real
+// ~/.gemini of whoever runs the test on Windows -- writing into it, and
+// failing because the temp .gemini directory it meant to use is never made.
+func redirectHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 // buildManifestWithFakeTool writes a manifest and config file for a fake tool
 // and returns the manifest and the config file path.
 func buildManifestWithFakeTool(t *testing.T, home, toolName string) (*config.Manifest, string) {
@@ -145,7 +157,7 @@ func TestRunUninstallClearsManifestWhenEmpty(t *testing.T) {
 // .env is stripped back down to just GEMINI_API_KEY on disk.
 func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	redirectHome(t, home)
 	t.Setenv("KELD_HOME", t.TempDir())
 
 	a := &tools.GeminiAdapter{}
@@ -220,7 +232,7 @@ func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 // path must delete the file rather than leave an empty husk behind.
 func TestRunUninstallDeletesFreshlyCreatedGeminiEnvFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	redirectHome(t, home)
 	t.Setenv("KELD_HOME", t.TempDir())
 
 	a := &tools.GeminiAdapter{}

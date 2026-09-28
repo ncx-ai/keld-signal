@@ -1316,6 +1316,23 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   forever. The Inno `[Code]` wizard page an older doc described **never existed**,
   and nothing here is verified on Windows.
   Full entries: **`docs/architecture/packaging-and-installers.md`**.
+- **Windows code signing is THREE passes, and the order is load-bearing.**
+  Windows 11 ships Smart App Control on by default and SAC evaluates a binary **as
+  it LOADS**, so a signed `keld-setup.exe` installing an unsigned `keld.exe` buys
+  nothing — the install succeeds and the product is refused the moment it starts.
+  The loose payload is signed BEFORE `iscc`, the uninstaller DURING the compile,
+  the installer AFTER. All three use Azure Artifact Signing as `CN=Keld Inc`;
+  there is no PFX and never will be.
+  ⚠️ The payload signer is handed a **catalog**, never a recursive folder sweep —
+  78 of 188 PE binaries arrive signed by their own vendors, and re-signing
+  replaces attestations we have no standing to make. Verification re-reads that
+  catalog, **never a fresh scan**, which would find every file Valid and could
+  never report a gap.
+  ⚠️ The uninstaller can only be signed by Inno, which needs a **command line** —
+  so that one path uses the signtool dlib rather than the signing Action, and
+  `PrepareToInstall` deletes a stale `unins000.exe` because Inno otherwise keeps
+  an existing one forever and an upgraded machine could never be uninstalled.
+  Full entry: **`docs/windows-code-signing.md`**.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.

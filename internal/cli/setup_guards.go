@@ -7,6 +7,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"github.com/ncx-ai/keld-signal/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/winproc"
 )
 
 // The post-write verification, MOVED to internal/telemetry and aliased here so
@@ -63,6 +64,11 @@ func newerKeldOnPATH(current string) (path, ver string) {
 // unknown.
 func keldVersionOf(bin string) string {
 	cmd := exec.Command(bin, "--version")
+	// ⚠️ NO CONSOLE WINDOW. `keld signal setup` runs this once per keld found on
+	// PATH, and the Windows installer drives setup from a process with no console
+	// of its own — so each probe popped a black window mid-install. See
+	// internal/winproc.
+	winproc.Hide(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
