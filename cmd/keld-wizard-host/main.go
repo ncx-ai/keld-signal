@@ -78,6 +78,9 @@ func parseArgs(argv []string) (options, error) {
 		case "--run":
 			o.Mode = "run"
 			o.Exe, err = next()
+		case "--spawn":
+			o.Mode = "spawn"
+			o.Exe, err = next()
 		case "--events-dir":
 			o.EventsDir, err = next()
 		case "--sentinel":
@@ -122,6 +125,10 @@ func validate(o options) error {
 		}
 		if o.EventsDir == "" {
 			return fmt.Errorf("--run needs --events-dir")
+		}
+	case "spawn":
+		if o.Exe == "" {
+			return fmt.Errorf("--spawn needs an executable")
 		}
 	case "clipboard":
 		if o.EventsDir == "" {
@@ -185,6 +192,8 @@ func main() {
 		os.Exit(relay(o))
 	case "panel":
 		os.Exit(panel(o))
+	case "spawn":
+		os.Exit(spawnHidden(o))
 	case "clipboard":
 		os.Exit(reportClipboard(o))
 	}

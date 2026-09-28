@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/xml"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf16"
 )
@@ -46,7 +48,7 @@ const taskXMLTemplate = `<?xml version="1.0" encoding="UTF-16"?>
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>%[1]s</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>%[1]s</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings>
-  <Actions Context="Author"><Exec><Command>%[2]s</Command><Arguments>run --hide-console</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>%[2]s</Command><Arguments>%[3]s</Arguments></Exec></Actions>
 </Task>
 `
 
@@ -57,7 +59,38 @@ const taskXMLTemplate = `<?xml version="1.0" encoding="UTF-16"?>
 // unescaped `&` makes the document malformed, and schtasks then rejects the whole
 // registration with a parse error that names nothing useful.
 func taskXMLFor(user, exe string) string {
-	return fmt.Sprintf(taskXMLTemplate, xmlEscape(user), xmlEscape(exe))
+	command, args := taskAction(exe)
+	return fmt.Sprintf(taskXMLTemplate, xmlEscape(user), xmlEscape(command), xmlEscape(args))
+}
+
+// launcherName is the windowsgui helper that can start a console program with
+// no console at all.
+const launcherName = "keld-wizard-host.exe"
+
+// taskAction decides what Task Scheduler actually launches.
+//
+// ⚠️ **POINTING THE TASK STRAIGHT AT keld-agent.exe COSTS A CONSOLE FLICKER AT
+// EVERY LOGON, AND NOTHING IN keld-agent CAN PREVENT IT.** The task runs with
+// LogonType InteractiveToken, so TASK SCHEDULER calls CreateProcess — and
+// Windows gives a console binary a console WINDOW before any of our code runs.
+// `--hide-console` then detaches with FreeConsole, and that teardown is the
+// flicker. CREATE_NO_WINDOW cannot help because we are not the caller.
+//
+// keld-wizard-host is built -H windowsgui and starts its child with
+// CREATE_NO_WINDOW, so routing the task through it means no console is ever
+// created. It waits for the daemon (so the task's process IS the daemon's
+// lifetime) and holds a kill-on-close job the child inherits, so `schtasks /End`
+// still stops everything.
+//
+// ⚠️ IT FALLS BACK TO THE DIRECT COMMAND IF THE HELPER IS ABSENT. This is the
+// service-start path: a machine that somehow lacks the helper must still get a
+// daemon, flicker and all. A cosmetic fix must never be able to mean "no agent".
+func taskAction(exe string) (command, args string) {
+	launcher := filepath.Join(filepath.Dir(exe), launcherName)
+	if st, err := os.Stat(launcher); err == nil && !st.IsDir() {
+		return launcher, `--spawn "` + exe + `" -- run --hide-console`
+	}
+	return exe, "run --hide-console"
 }
 
 func xmlEscape(s string) string {

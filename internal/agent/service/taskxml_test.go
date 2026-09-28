@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/xml"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -95,5 +97,54 @@ func TestTheTaskTellsTheDaemonToDetachFromItsConsole(t *testing.T) {
 	got := taskXMLFor("u", `C:\keld-agent.exe`)
 	if !strings.Contains(got, "<Arguments>run --hide-console</Arguments>") {
 		t.Fatalf("the task does not pass --hide-console; a console window would open at every logon:\n%s", got)
+	}
+}
+
+// ⚠️ THE TASK MUST GO THROUGH THE windowsgui LAUNCHER WHEN ONE IS INSTALLED.
+//
+// Pointing Task Scheduler straight at keld-agent.exe costs a console flicker at
+// EVERY LOGON and nothing in keld-agent can prevent it: the task runs with
+// LogonType InteractiveToken, so Task Scheduler calls CreateProcess and Windows
+// gives a console binary a console WINDOW before any of our code runs.
+// `--hide-console` then tears it down, and that teardown is the flicker.
+// CREATE_NO_WINDOW cannot help, because we are not the caller.
+func TestTaskRoutesThroughTheLauncherWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "keld-agent.exe")
+	if err := os.WriteFile(agent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(dir, launcherName)
+	if err := os.WriteFile(launcher, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := taskXMLFor("u", agent)
+	if !strings.Contains(got, xmlEscape(launcher)) {
+		t.Errorf("task does not run the launcher; the daemon would flicker a console at every logon\n%s", got)
+	}
+	if !strings.Contains(got, "--spawn") {
+		t.Error("launcher is invoked without --spawn")
+	}
+	// The daemon's own flag must survive the indirection.
+	if !strings.Contains(got, "run --hide-console") {
+		t.Error("the daemon no longer gets --hide-console through the launcher")
+	}
+}
+
+// ⚠️ AND IT MUST FALL BACK. This is the service-start path: a machine without
+// the helper must still get a daemon, flicker and all. A cosmetic fix must never
+// be able to mean "no agent".
+func TestTaskFallsBackToTheAgentWhenNoLauncher(t *testing.T) {
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "keld-agent.exe")
+	if err := os.WriteFile(agent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := taskXMLFor("u", agent)
+	if strings.Contains(got, "--spawn") {
+		t.Error("task references the launcher even though none is installed")
+	}
+	if !strings.Contains(got, "<Arguments>run --hide-console</Arguments>") {
+		t.Errorf("fallback does not run the agent directly\n%s", got)
 	}
 }
