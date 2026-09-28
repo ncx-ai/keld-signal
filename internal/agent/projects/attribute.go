@@ -2,7 +2,6 @@ package projects
 
 import (
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -48,14 +47,46 @@ const (
 	ReasonWeightsUnavailable Reason = "weights_unavailable"
 )
 
-// Result is one block's attribution decision.
-type Result struct {
+// Assigned is one project a block landed in, and by which rule.
+//
+// ⚠️ **IT CARRIED A GROUP UNTIL REVISION 4 (2026-09-25).** Signal has only
+// projects now, in one flat list, so there is nothing to say which group a
+// match was in — and the per-group bookkeeping that read it (group totals, a
+// per-group vector competition) is gone with it.
+type Assigned struct {
 	ProjectID string
 	Method    Method
-	Reason    Reason
-	// Conflict holds every matching project id, sorted, when Reason ==
-	// ReasonConflict — NEVER just the first one silently chosen.
-	Conflict []string
+}
+
+// Result is one block's attribution decision: EVERY project it landed in, in
+// candidate order.
+//
+// ⚠️ **OVERLAP IS ALLOWED, AND THAT REVERSES A RULE.** Until 2026-09-23 two
+// visible projects claiming one repository was ReasonConflict: the matcher
+// refused to choose and the block landed in NEITHER, which the page reported
+// as "pick one". Since then overlap is information, not an error: a block
+// lands in every project that matches it, each project's total counts it in
+// full (Rollup), and coverage counts it once. So nothing here picks, orders or
+// refuses. ReasonConflict is kept only so a ledger row written before the
+// change still reads. Revision 4 (2026-09-25) removed the groups this used to
+// be stated per; the rule itself is unchanged.
+type Result struct {
+	Projects []Assigned
+	// Reason is ReasonNone whenever anything was assigned; otherwise why not
+	// (ReasonNoRuleMatched, or the vector pass's own ReasonWeightsUnavailable).
+	Reason Reason
+}
+
+// Attributed reports whether the block landed in any project.
+func (r Result) Attributed() bool { return len(r.Projects) > 0 }
+
+// IDs returns the assigned project ids, in assignment order.
+func (r Result) IDs() []string {
+	out := make([]string, 0, len(r.Projects))
+	for _, a := range r.Projects {
+		out = append(out, a.ProjectID)
+	}
+	return out
 }
 
 // Vector is step 3 of the attribution order: an injectable, optional
@@ -64,8 +95,8 @@ type Result struct {
 // A caller wires a real implementation only when the org's vector-attribution
 // toggle is on; Attribute falls through to unattributed when Vector is nil.
 type Vector interface {
-	// Attribute is handed the block's dims and the visible (non-hidden,
-	// workstream-on) candidate projects, and returns the pass's own final
+	// Attribute is handed the block's dims and the visible (non-hidden)
+	// candidate projects, and returns the pass's own final
 	// Result for this block — including a weights-unavailable Reason if the
 	// encoder could not run, since only the implementation knows that.
 	Attribute(dims map[string]enrich.Labeled, candidates []Project) Result
@@ -305,51 +336,39 @@ func ticketKeyIn(branch string) (string, bool) {
 	return strings.ToUpper(m[1]), true
 }
 
-// projectGroupOff reports whether p's bucket is switched off, checking
-// BOTH Workstream (a local project's key) and Team (an Atlas value's
-// workstream-name proxy — see Project's doc comment), because the wire gives
-// no way to tell which spelling an operator's groups_off entry used.
-func projectGroupOff(p Project, groupOff func(key string) bool) bool {
-	if groupOff == nil {
-		return false
-	}
-	if p.Group != "" && groupOff(p.Group) {
-		return true
-	}
-	if p.Team != "" && groupOff(p.Team) {
-		return true
-	}
-	return false
+// Candidates is every project the rule pass may attribute to: the local
+// document's, and nothing from the settings poll.
+//
+// ⚠️ **SIGNAL LABELS ON ITS OWN (Revision 2, 2026-09-25).** This used to be
+// MergeCandidates(d.Projects, the org's values), so an Atlas workstream's
+// rule could claim a block and an Atlas workstream showed on the page. Signal
+// now attributes only to what people define in Signal; the org's list is still
+// received and held (Store.RemoteProjects) and nothing on the rule, page or
+// project_matches path reads it. An overlay a person made with "Same as" is a
+// local entry, so it is here. Every rule-pass caller goes through this one
+// function so the recorded pass, the page and the wire cannot disagree.
+func Candidates(d Document) []Project {
+	return append([]Project(nil), d.Projects...)
 }
 
 // Visible returns the projects Attribute (and a same-as picker) may ever
-// consider: not hidden, and not in a workstream switched off.
-func Visible(candidates []Project, groupOff func(key string) bool) []Project {
+// consider: every one that is not hidden.
+//
+// ⚠️ **HIDDEN IS THE ONLY EXCLUSION SINCE REVISION 4 (2026-09-25).** A project
+// used to be excluded too when its GROUP was switched off (agent-config.json's
+// `workstreams_off`). Groups left the product, and so did that switch: on // vocab:keep
+// daemon start a project whose group was off becomes a hidden project instead
+// (daemon.hideProjectsInOffGroups), so what it excluded stays excluded and
+// the person can see and undo it per project.
+func Visible(candidates []Project) []Project {
 	out := make([]Project, 0, len(candidates))
 	for _, p := range candidates {
-		if p.Hidden || projectGroupOff(p, groupOff) {
+		if p.Hidden {
 			continue
 		}
 		out = append(out, p)
 	}
 	return out
-}
-
-func conflictIDs(matches []Project) []string {
-	ids := make([]string, 0, len(matches))
-	for _, p := range matches {
-		ids = append(ids, p.ID)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-// GroupOffFunc adapts settings.Settings.GroupOff to the
-// func(string) bool this package's helpers take, so a caller does not have to
-// write the closure itself. "call it, don't reimplement" — see
-// internal/agent/settings/v3.go.
-func GroupOffFunc(s settings.Settings) func(string) bool {
-	return s.GroupOff
 }
 
 // FromRemoteProjects converts the org's pooled project VALUES — as they
@@ -363,9 +382,8 @@ func GroupOffFunc(s settings.Settings) func(string) bool {
 // from Keywords BY SHAPE (RepoLike), never a "repo:" prefix, because Atlas
 // strips authored-tag prefixes before the daemon ever sees them. Team carries
 // the value's workstream NAME when it has no owning team of its own (Atlas
-// does not distinguish the two on the wire), which is why it rides straight
-// into Project.Team rather than Workstream — see Project's doc comment and
-// projectGroupOff.
+// does not distinguish the two on the wire), and rides straight into
+// Project.Team.
 // NOTE: this is the ONLY converter from settings.RemoteProject. internal/atlas
 // used to carry a second one (grouping into its own Workstream/Value types for
 // a consumer that never materialised); it was removed on 2026-09-10 as dead.
@@ -480,25 +498,11 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 			Title:       v.Title,
 			Description: v.Description,
 			Team:        v.Team,
-			// ⚠️ **THE BUCKET KEY IS SET HERE, AND IT USED TO BE LEFT EMPTY.**
-			// Atlas serves a value's bucket in `team` (see docs/v3/contracts.md:
-			// team carries the WORKSTREAM'S NAME when a value has no owning
-			// team), and nothing turned that into the key the Projects pane
-			// groups by. The pane groups projects by `workstream` and draws one
-			// card per workstream, so twenty org projects arrived with an empty
-			// key, matched no card, and every Atlas workstream read "No projects
-			// yet." while its projects were listed nowhere at all.
-			//
-			// Measured against the local Atlas: 20 projects and 4 workstreams
-			// fetched, attribution at 91% — and all four cards empty.
-			//
-			// The rule that prevents the next one: a project and its card derive
-			// the key from the SAME function. GroupKey is that function, and
-			// withRemoteBuckets now calls it too, so the two cannot disagree.
-			// `team` is the ONLY bucket Atlas serves (settings.RemoteProject has
-			// no workstream field); docs/v3/contracts.md records that it carries
-			// the workstream's name when a value has no owning team.
-			Group:     GroupKey(v.Team),
+			// ⚠️ No group key is set, and until Revision 4 (2026-09-25) one was
+			// (from `team`), so the Projects pane could file the value under a
+			// heading. There are no headings any more; a project carries a
+			// group only in storage (see Project.Group), and Save files one
+			// with none under the document's default group.
 			Repos:     repos,
 			Keywords:  keywords,
 			TicketKey: v.TicketKey,
@@ -508,72 +512,81 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 	return out
 }
 
-// GroupKey is the ONE normalisation from a project's display name to
-// its key: lowercased, spaces to hyphens. Exported because the bucket list and
-// the projects inside it must derive it identically — deriving it in two places
-// is what made twenty projects invisible.
-func GroupKey(name string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
+// Attribute decides which projects a block lands in, per the rules each
+// project declares:
+//
+//  1. every visible project (not hidden) whose repository rules
+//     (EffectiveRepos) match the block's attributed `repo` dimension → method
+//     `repo`;
+//  2. every other visible project whose TicketKey matches a ticket key in the
+//     block's `branch` dimension → method `ticket`;
+//  3. when NO rule matched and vector is non-nil, vector is asked, handed
+//     every visible project, and its answer is the block's (method
+//     `embedding`, or ReasonWeightsUnavailable if it could not run);
+//  4. nothing landed → ReasonNoRuleMatched.
+//
+// Every match counts (see Result). A project matching by both rules is
+// assigned once, by repo.
+//
+// ⚠️ **STEP 3 IS ONE POOLED COMPETITION AGAIN (Revision 4, 2026-09-25).**
+// From 2026-09-23 the vector pass was asked once per GROUP the rules had left
+// empty, so a block could take a rule match in one group and an embedding
+// match in another. With no groups there is one pool, and "the groups the
+// rules left empty" is either every project or none — which is exactly the
+// decision before per-group attribution: the rules decide when they can, the
+// vector pass only when they cannot.
+func Attribute(dims map[string]enrich.Labeled, candidates []Project, vector Vector) Result {
+	visible := Visible(candidates)
+	repo, hasRepo := attributedValue(dims, DimRepo)
+	ticket, hasTicket := "", false
+	if branch, ok := attributedValue(dims, DimBranch); ok {
+		ticket, hasTicket = ticketKeyIn(branch)
+	}
+
+	var out Result
+	seen := map[string]bool{}
+	for _, w := range visible {
+		m := ruleMethod(w, repo, hasRepo, ticket, hasTicket)
+		if m == MethodNone || seen[w.ID] {
+			continue
+		}
+		seen[w.ID] = true
+		out.Projects = append(out.Projects, Assigned{ProjectID: w.ID, Method: m})
+	}
+
+	if !out.Attributed() && vector != nil && len(visible) > 0 {
+		vr := vector.Attribute(dims, visible)
+		for _, a := range vr.Projects {
+			if seen[a.ProjectID] {
+				continue
+			}
+			seen[a.ProjectID] = true
+			out.Projects = append(out.Projects, a)
+		}
+		if !out.Attributed() {
+			out.Reason = vr.Reason
+		}
+	}
+
+	if !out.Attributed() && out.Reason == ReasonNone {
+		out.Reason = ReasonNoRuleMatched
+	}
+	return out
 }
 
-// Attribute implements the four-step order docs/v3/contracts.md specifies,
-// exactly:
-//
-//  1. block `repo` dim ∈ some non-hidden, workstream-on project's repos
-//     (EffectiveRepos: declared Repos plus RepoLike Keywords) → that project,
-//     method `repo`. Two matches → Reason ReasonConflict, listing every
-//     matching id (sorted), NEVER silently the first.
-//  2. else block `branch` dim carries a ticket key matching a project's
-//     TicketKey → method `ticket`. Same conflict rule.
-//  3. else, when vector is non-nil, its own pass decides (method `embedding`,
-//     or ReasonWeightsUnavailable if it could not run).
-//  4. else unattributed (ReasonNoRuleMatched).
-//
-// groupOff may be nil (treated as "nothing is off") — production wiring
-// passes settings.Load().ProjectOff (GroupOffFunc).
-func Attribute(dims map[string]enrich.Labeled, candidates []Project, groupOff func(key string) bool, vector Vector) Result {
-	visible := Visible(candidates, groupOff)
-
-	if repo, ok := attributedValue(dims, DimRepo); ok {
-		var matches []Project
-		for _, p := range visible {
-			for _, r := range EffectiveRepos(p) {
-				if matchRepoRule(r, repo) {
-					matches = append(matches, p)
-					break
-				}
-			}
-		}
-		if len(matches) == 1 {
-			return Result{ProjectID: matches[0].ID, Method: MethodRepo}
-		}
-		if len(matches) > 1 {
-			return Result{Reason: ReasonConflict, Conflict: conflictIDs(matches)}
-		}
-	}
-
-	if branch, ok := attributedValue(dims, DimBranch); ok {
-		if key, ok := ticketKeyIn(branch); ok {
-			var matches []Project
-			for _, p := range visible {
-				if p.TicketKey != "" && strings.EqualFold(p.TicketKey, key) {
-					matches = append(matches, p)
-				}
-			}
-			if len(matches) == 1 {
-				return Result{ProjectID: matches[0].ID, Method: MethodTicket}
-			}
-			if len(matches) > 1 {
-				return Result{Reason: ReasonConflict, Conflict: conflictIDs(matches)}
+// ruleMethod is the rule by which w matches the block, or MethodNone.
+func ruleMethod(w Project, repo string, hasRepo bool, ticket string, hasTicket bool) Method {
+	if hasRepo {
+		for _, r := range EffectiveRepos(w) {
+			if matchRepoRule(r, repo) {
+				return MethodRepo
 			}
 		}
 	}
-
-	if vector != nil {
-		return vector.Attribute(dims, visible)
+	if hasTicket && w.TicketKey != "" && strings.EqualFold(w.TicketKey, ticket) {
+		return MethodTicket
 	}
-
-	return Result{Reason: ReasonNoRuleMatched}
+	return MethodNone
 }
 
 // MergeCandidates is THE OVERLAY: the org's values from the settings poll with
@@ -609,9 +622,6 @@ func MergeCandidates(local, remote []Project) []Project {
 				r.TicketKey = o.TicketKey
 			}
 			r.Hidden = o.Hidden
-			if r.Group == "" {
-				r.Group = o.Group
-			}
 		}
 		out = append(out, r)
 	}

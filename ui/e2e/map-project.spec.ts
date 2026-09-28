@@ -1,7 +1,8 @@
 import { test, expect } from "./support/fixtures";
 
 /**
- * Mapping a LOCAL project onto another — normally one of the org's.
+ * Mapping one project onto another (every project on the page is this
+ * machine's own since Revision 2).
  *
  * ⚠️ **ITS OWN FILE AND ITS OWN PROJECT, BECAUSE IT CONSUMES SHARED STATE.**
  * These tests fold local projects away, and the Projects journey before them
@@ -38,8 +39,7 @@ test.describe("Map a local project", () => {
       // block is attributed by a RULE and the rule moves with it.
       await signal.open("projects");
       const before = await readCatalog(page);
-      const local = (before.projects || []).filter(
-        (p: any) => p.origin !== "atlas" && (p.repos || []).length > 0);
+      const local = (before.projects || []).filter((p: any) => (p.repos || []).length > 0);
       test.skip(local.length < 2, "needs two local projects with rules to map between");
 
       const src = local[0];
@@ -71,15 +71,10 @@ test.describe("Map a local project", () => {
         .toHaveCount(0);
     });
 
-  test('NEGATIVE: an Atlas project offers no "Same as" — it is not ours to fold away',
-    async ({ signal, page }) => {
-      await signal.open("projects");
-      const d = await readCatalog(page);
-      const org = (d.projects || []).filter((p: any) => p.origin === "atlas");
-      test.skip(org.length === 0, "no org projects on this daemon (Send to Atlas is off)");
-      for (const p of org.slice(0, 3)) {
-        await expect(page.getByLabel(`Map ${p.title} onto another project`))
-          .toHaveCount(0);
-      }
-    });
+  // RETIRED (Revision 2): 'NEGATIVE: an Atlas project offers no "Same as" — it
+  // is not ours to fold away'. Its premise is gone: the catalog lists only
+  // Signal's own projects, and one placed with "Same as" before Revision 2
+  // (stored with origin "atlas") is the person's like any other, so Map-to is
+  // offered on every row. signal-only.spec.ts asserts that, including for an
+  // entry still handed to the page as origin "atlas".
 });

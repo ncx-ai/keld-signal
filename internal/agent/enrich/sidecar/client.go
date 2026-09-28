@@ -821,6 +821,16 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 // projectsReq is the whole of POST /projects: the org's declared project
 // list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
 // device for the sidecar to embed; nothing here is derived from a prompt.
+//
+// ⚠️ **NO `group` KEY, AND THE FIELD IS GONE RATHER THAN EMPTIED (Revision 4,
+// 2026-09-25).** From 2026-09-23 each project was posted with the group it
+// competed in (`settings.GroupKeyOf` of its `team`) and the sidecar cut its
+// decision once per group. Signal has only projects now, so the decision is
+// ONE pooled competition — which the sidecar already makes whenever no
+// `group` is posted (an older daemon's list), byte for byte the decision
+// before per-group attribution. `omitempty` would not have been enough: the
+// value was always set, from `team`. So the posted element is the org's
+// definition and nothing else.
 type projectsReq struct {
 	Projects []settings.RemoteProject `json:"projects"`
 }
@@ -853,7 +863,8 @@ func (c *Client) PostProjects(projects []settings.RemoteProject) error {
 	defer cancel()
 	cp.ctx = ctx
 	var r projectsResp
-	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
+	req := projectsReq{Projects: append([]settings.RemoteProject{}, projects...)}
+	if !cp.post("/projects", req, &r) {
 		return fmt.Errorf("sidecar: POST /projects failed")
 	}
 	return nil

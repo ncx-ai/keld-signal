@@ -31,7 +31,7 @@ func TestVectorCellIsAbsentFromTheWireWhenNothingAskedTheVectorPass(t *testing.T
 	k := BlockKey{Session: "s-off", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Attribute(k, one("p_keld_signal", MethodRepo), ReasonNone, at)
 
 	snap, err := s.Read(time.Time{}, 10)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestVectorFailureLeavesTheDeterministicCellByteIdentical(t *testing.T) {
 	k := BlockKey{Session: "s-44", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{ProjectID: "p_keld_signal", Method: MethodRepo}, ReasonNone, at)
+	s.Attribute(k, one("p_keld_signal", MethodRepo), ReasonNone, at)
 
 	before := cellJSON(t, s, "attributed")
 
@@ -106,18 +106,18 @@ func TestBothPassesAgreeAndBothIdsAreStored(t *testing.T) {
 	k := BlockKey{Session: "s-agree", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{ProjectID: "p_signal", Method: MethodRepo}, ReasonNone, at)
-	s.Vector(k, VectorAttributed{ProjectID: "p_signal", Confidence: 0.82}, StatusOK, ReasonNone, at)
+	s.Attribute(k, one("p_signal", MethodRepo), ReasonNone, at)
+	s.Vector(k, vone("p_signal", 0.82), StatusOK, ReasonNone, at)
 
 	det, vec := readCell(t, s, "attributed"), readCell(t, s, "vector")
-	if det["project_id"] != "p_signal" || det["method"] != string(MethodRepo) {
+	if firstOf(det, "project_id") != "p_signal" || firstOf(det, "method") != string(MethodRepo) {
 		t.Fatalf("deterministic cell = %#v", det)
 	}
-	if vec["status"] != string(StatusOK) || vec["project_id"] != "p_signal" {
+	if vec["status"] != string(StatusOK) || firstOf(vec, "project_id") != "p_signal" {
 		t.Fatalf("vector cell = %#v", vec)
 	}
-	if got, ok := vec["confidence"].(float64); !ok || got != 0.82 {
-		t.Fatalf("vector confidence = %#v, want 0.82", vec["confidence"])
+	if got, ok := firstOf(vec, "confidence").(float64); !ok || got != 0.82 {
+		t.Fatalf("vector confidence = %#v, want 0.82", firstOf(vec, "confidence"))
 	}
 }
 
@@ -131,14 +131,14 @@ func TestBothPassesDisagreeAndNeitherIsOverwrittenOrResolved(t *testing.T) {
 	k := BlockKey{Session: "s-disagree", Start: 1000}
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-	s.Attribute(k, Attributed{ProjectID: "p_signal", Method: MethodRepo}, ReasonNone, at)
-	s.Vector(k, VectorAttributed{ProjectID: "p_atlas", Confidence: 0.61}, StatusOK, ReasonNone, at)
+	s.Attribute(k, one("p_signal", MethodRepo), ReasonNone, at)
+	s.Vector(k, vone("p_atlas", 0.61), StatusOK, ReasonNone, at)
 
 	det, vec := readCell(t, s, "attributed"), readCell(t, s, "vector")
-	if det["project_id"] != "p_signal" {
+	if firstOf(det, "project_id") != "p_signal" {
 		t.Fatalf("the deterministic id must survive a disagreeing vector answer; got %#v", det)
 	}
-	if vec["project_id"] != "p_atlas" {
+	if firstOf(vec, "project_id") != "p_atlas" {
 		t.Fatalf("the vector id must survive a disagreeing deterministic answer; got %#v", vec)
 	}
 	// The disagreement is representable — a reader can see the two ids differ
@@ -162,10 +162,10 @@ func TestTheTwoCellsAreIndependentInBothDirections(t *testing.T) {
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
 
 	s.Vector(k, VectorAttributed{}, StatusFailed, ReasonAttributeFailed, at)
-	s.Attribute(k, Attributed{ProjectID: "p_late", Method: MethodTicket}, ReasonNone, at.Add(time.Hour))
+	s.Attribute(k, one("p_late", MethodTicket), ReasonNone, at.Add(time.Hour))
 
 	det := readCell(t, s, "attributed")
-	if det["status"] != string(StatusOK) || det["project_id"] != "p_late" {
+	if det["status"] != string(StatusOK) || firstOf(det, "project_id") != "p_late" {
 		t.Fatalf("a prior vector failure must not affect a later deterministic answer; got %#v", det)
 	}
 	vec := readCell(t, s, "vector")
@@ -229,7 +229,7 @@ func TestVectorRefusesAnOKCellWithNoProjectID(t *testing.T) {
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
 
-	s.Vector(k, VectorAttributed{Confidence: 0.9}, StatusOK, ReasonNone, at)
+	s.Vector(k, vone("", 0.9), StatusOK, ReasonNone, at)
 
 	if cell, ok := readCells(t, s)["vector"]; ok {
 		t.Fatalf("an ok vector cell with no project id must be refused, not stored; got %#v", cell)
@@ -246,7 +246,7 @@ func TestVectorRefusesAnUnknownStatus(t *testing.T) {
 	at := mustTime(t, "2026-09-08T09:00:00Z")
 	s.Cut(k, 2000, "idle", "budget", "claude_code", at)
 
-	s.Vector(k, VectorAttributed{ProjectID: "p_x"}, Status("probably"), ReasonNone, at)
+	s.Vector(k, vone("p_x", 0), Status("probably"), ReasonNone, at)
 
 	if cell, ok := readCells(t, s)["vector"]; ok {
 		t.Fatalf("an unknown status must be refused; got %#v", cell)
@@ -264,7 +264,7 @@ func TestVectorClampsAnImpossibleConfidenceSoTheWireStaysMarshallable(t *testing
 	for i, conf := range []float64{nan, -1, 7} {
 		k := BlockKey{Session: "s-conf", Start: int64(1000 + i)}
 		s.Cut(k, 2000, "idle", "budget", "claude_code", at)
-		s.Vector(k, VectorAttributed{ProjectID: "p_x", Confidence: conf}, StatusOK, ReasonNone, at)
+		s.Vector(k, vone("p_x", conf), StatusOK, ReasonNone, at)
 	}
 	snap, err := s.Read(time.Time{}, 10)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestVectorClampsAnImpossibleConfidenceSoTheWireStaysMarshallable(t *testing
 		t.Fatalf("an out-of-range confidence made the snapshot unmarshallable: %v", err)
 	}
 	for _, b := range snap.Blocks {
-		if got := b.Cells["vector"]["confidence"]; got != float64(0) {
+		if got := firstOf(b.Cells["vector"], "confidence"); got != float64(0) {
 			t.Fatalf("confidence = %#v, want 0 for an impossible input", got)
 		}
 	}
@@ -329,7 +329,7 @@ INSERT INTO blocks(session, start, attributed_status, attributed_at, project_id,
 	if err != nil {
 		t.Fatalf("a pre-vector ledger must still open and read: %v", err)
 	}
-	if len(snap.Blocks) != 1 || snap.Blocks[0].Cells["attributed"]["project_id"] != "p_old" {
+	if len(snap.Blocks) != 1 || firstOf(snap.Blocks[0].Cells["attributed"], "project_id") != "p_old" {
 		t.Fatalf("the old row must survive the migration intact; got %#v", snap.Blocks)
 	}
 	if cell, ok := snap.Blocks[0].Cells["vector"]; ok {
@@ -339,17 +339,17 @@ INSERT INTO blocks(session, start, attributed_status, attributed_at, project_id,
 	// And the migration is idempotent: a second open runs the same ALTERs and
 	// must treat "duplicate column" as success rather than failing.
 	k := BlockKey{Session: "s-old", Start: 1000}
-	s.Vector(k, VectorAttributed{ProjectID: "p_new", Confidence: 0.5}, StatusOK, ReasonNone,
+	s.Vector(k, vone("p_new", 0.5), StatusOK, ReasonNone,
 		mustTime(t, "2026-09-08T09:00:00Z"))
 	again := New()
 	snap, err = again.Read(time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	if snap.Blocks[0].Cells["vector"]["project_id"] != "p_new" {
+	if firstOf(snap.Blocks[0].Cells["vector"], "project_id") != "p_new" {
 		t.Fatalf("the migrated column must be writable and readable; got %#v", snap.Blocks[0].Cells["vector"])
 	}
-	if snap.Blocks[0].Cells["attributed"]["project_id"] != "p_old" {
+	if firstOf(snap.Blocks[0].Cells["attributed"], "project_id") != "p_old" {
 		t.Fatalf("the migration must not disturb the deterministic answer; got %#v", snap.Blocks[0].Cells["attributed"])
 	}
 }

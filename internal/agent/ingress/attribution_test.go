@@ -38,7 +38,7 @@ func TestNewAttributionOnAMissingDocumentIsAnHonestEmptyOne(t *testing.T) {
 		t.Fatalf("a missing document must not be an error: %v", err)
 	}
 	res := pass.Of(map[string]enrich.Labeled{projects.DimRepo: attributedDim("github.com/acme/web")})
-	if res.ProjectID != "" || res.Reason != projects.ReasonNoRuleMatched {
+	if res.Attributed() || res.Reason != projects.ReasonNoRuleMatched {
 		t.Fatalf("result = %#v, want no project / no_rule_matched", res)
 	}
 }
@@ -62,7 +62,7 @@ func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 
 	dims := map[string]enrich.Labeled{projects.DimRepo: attributedDim("github.com/acme/web")}
 	first := pass.Of(dims)
-	if first.ProjectID != "p1" {
+	if ids := first.IDs(); len(ids) != 1 || ids[0] != "p1" {
 		t.Fatalf("precondition: result = %#v, want p1", first)
 	}
 
@@ -79,7 +79,7 @@ func TestTheSameAttributionValueAnswersForEveryBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttribution: %v", err)
 	}
-	if next.Of(dims).ProjectID != "" {
+	if next.Of(dims).Attributed() {
 		t.Fatal("a fresh pass must see the edited document")
 	}
 }
