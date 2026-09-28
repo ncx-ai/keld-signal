@@ -115,6 +115,20 @@ Three rules, and each was paid for:
   machine running both passes, which will not exist until this ships. A consumer that
   renders one of them as "the" project is making that decision on evidence nobody has.
 
+### `dims` — the block's repository and branch, added 2026-09-28
+
+```json
+"dims": {"repo": "github.com/ncx-ai/keld-signal", "branch": "main"}
+```
+
+The values `Observe` already stores for the Projects pane (`dim_repo`, `dim_branch`),
+now read back so the Overview can split work by repository. Each key is present only
+when a value is stored, and `dims` itself is **absent** when neither is — a Codex
+block, or a row cut before its dims arrived. Absent means "no repository recorded",
+never an empty string to be shown. The workspace dim is not served: nothing on the
+page reads it. Loopback only; the same identifiers already published to Atlas as
+dimension values. Spec: `docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html`.
+
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).
 

@@ -474,3 +474,25 @@ func TestDimsQueryFailureIsUnknownNotNoProject(t *testing.T) {
 		}
 	}
 }
+
+// TestServedLedgerCarriesTheBlockRepo pins the route the page actually reads:
+// live attribution rewrites the attributed cell and nothing else, so the
+// repository the Overview's "By repo" split needs survives it.
+func TestServedLedgerCarriesTheBlockRepo(t *testing.T) {
+	v := liveFixture(t)
+	k := cutBlock(t, v, "sess-dims", 30, "github.com/ncx-ai/keld-signal")
+
+	snap, err := v.ledgerReader().Read(time.Time{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range snap.Blocks {
+		if b.Key.Session == k.Session && b.Key.Start == k.Start {
+			if b.Dims == nil || b.Dims.Repo != "github.com/ncx-ai/keld-signal" {
+				t.Fatalf("served block lost its repo: %#v", b.Dims)
+			}
+			return
+		}
+	}
+	t.Fatal("block not served")
+}
