@@ -125,7 +125,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <p class="lede">Settles how the 2C Overview lands on Signal's page without touching anything else. If this is wrong, the page shows ranged numbers the ledger cannot back.</p>
 
 <div class="meta">
-  <span class="chip chip-signed">Signed off — 2026-09-28</span>
+  <span class="chip chip-reviewed">Reviewed — 2026-09-28</span>
   <span>Opus 5.5 (1M context) — thinking: high</span>
   <span class="mono">2026-09-28 · revision 2</span>
 </div>
@@ -222,7 +222,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
 <tbody>
   <tr><td><span class="mono">dims</span> on <span class="mono">/v1/ledger</span></td><td><span class="pill p-extend">extend</span></td><td>By repo, and hover-by-repo on two tiles, have no other source. The data is stored already.</td></tr>
-  <tr><td>Overview's own ledger fetch</td><td><span class="pill p-reuse">reuse</span></td><td>Same route, a different <span class="mono">since</span>. Kept apart from <span class="mono">loadAll</span>'s today fetch so Focus blocks is untouched. Skipped when the range is Today.</td></tr>
+  <tr><td>Overview's own ledger fetch</td><td><span class="pill p-reuse">reuse</span></td><td>Same route, a different <span class="mono">since</span>. Kept apart from <span class="mono">loadAll</span>'s today fetch so Focus blocks is untouched. <em>Amended after review:</em> it runs for Today too, rather than being skipped — see section 9.</td></tr>
   <tr><td><span class="mono">rangeWindow</span>, <span class="mono">rangeLedgerURL</span>, <span class="mono">overviewStats</span>, <span class="mono">topN</span>, <span class="mono">volumeSeries</span>, <span class="mono">slotGrid</span></td><td><span class="pill p-new">new</span></td><td>Pure exported functions in <span class="mono">app.js</span>, the <span class="mono">focusStats</span> pattern, tested under <span class="mono">node --test</span>.</td></tr>
   <tr><td><span class="mono">renderOverview</span> + <span class="mono">.ov-*</span> CSS</td><td><span class="pill p-new">new</span></td><td>New rules only, appended to <span class="mono">app.css</span> under a prefix, so no existing rule moves.</td></tr>
   <tr><td>Split palette: 3 categorical + other + none</td><td><span class="pill p-new">new</span></td><td>CSS tokens taken from the 2C file (<span class="mono">#4E9A6B</span>, <span class="mono">#E0A458</span>, <span class="mono">#6E8FC9</span>).</td></tr>
@@ -276,7 +276,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <text x="158" y="44" text-anchor="middle" class="small">since</text>
   <rect x="176" y="30" width="130" height="44" rx="4" class="b-new"/>
   <text x="241" y="50" text-anchor="middle" class="txt">Overview fetch</text>
-  <text x="241" y="66" text-anchor="middle" class="small">skipped for Today</text>
+  <text x="241" y="66" text-anchor="middle" class="small">every range, limit 2000</text>
   <rect x="176" y="96" width="130" height="44" rx="4" class="b-plain"/>
   <text x="241" y="116" text-anchor="middle" class="txt">loadAll</text>
   <text x="241" y="132" text-anchor="middle" class="small">today fetch, unchanged</text>
@@ -535,7 +535,35 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 
 <h2 id="s9">9 · Review log</h2>
 <p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
-<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+<p><strong>7/11 criteria met</strong> — ship with follow-ups. Graded by an independent reviewer agent against commits <span class="mono">98cfb4d8</span>…<span class="mono">57b88375</span>. Verdicts below are as graded; they were not edited after the fixes.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#ac-1">AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">index.html:18-23 · app.js paneForHash · pane-routing.test.js · overview.spec.ts:9</td></tr>
+  <tr><td class="mono"><a href="#ac-2">AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">no hunk in renderToday / loadAll · today-window.test.js unchanged</td></tr>
+  <tr><td class="mono"><a href="#ac-3">AC-3</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">range.test.js · overview.spec.ts · a past Custom range beyond the cap read "Nothing captured" under the truncation note</td></tr>
+  <tr><td class="mono"><a href="#ac-4">AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">overviewStats · overview-stats.test.js · overview.spec.ts hover</td></tr>
+  <tr><td class="mono"><a href="#ac-5">AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">volumeSeries · volume-series.test.js</td></tr>
+  <tr><td class="mono"><a href="#ac-6">AC-6</a></td><td><span class="pill p-met">MET</span></td><td class="mono">rawCategory "several" · volume-series.test.js</td></tr>
+  <tr><td class="mono"><a href="#ac-7">AC-7</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">slot-grid.test.js · under the Tokens split the histogram legend reads "active time", the chart's reads cached / fresh</td></tr>
+  <tr><td class="mono"><a href="#ac-8">AC-8</a></td><td><span class="pill p-met">MET</span></td><td class="mono">wire.go · store.go · dims_wire_test.go · v3liveattrib_test.go · contracts.md</td></tr>
+  <tr><td class="mono"><a href="#ac-9">AC-9</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">empty + offline-with-no-cache asserted · the cached-range branch was unasserted</td></tr>
+  <tr><td class="mono"><a href="#ac-10">AC-10</a></td><td><span class="pill p-met">MET</span></td><td class="mono">app.css additive only · no hunk in other panes · baseline drift predates the branch</td></tr>
+  <tr><td class="mono"><a href="#ac-11">AC-11</a></td><td><span class="pill p-unver">NOT VERIFIABLE</span></td><td class="mono">reviewer ran node 274/274, vocab, ledger + daemon Go · not Playwright or go test ./...</td></tr>
+</tbody>
+</table>
+</div>
+<h3>After the review — commit <span class="mono">8b316b3f</span></h3>
+<ul>
+  <li><strong>AC-3 gap fixed.</strong> A capped answer with nothing in the range now says "This range could not be loaded". e2e: <span class="mono">overview.spec.ts</span> "a past range the row cap never reached…".</li>
+  <li><strong>AC-9 gap fixed.</strong> The cached-range branch is now asserted: <span class="mono">overview.spec.ts</span> "when Signal stops answering…".</li>
+  <li><strong>AC-7 left as built — needs Gabriel.</strong> A 20-minute cell cannot be "cached" or "fresh"; it is time, not tokens. The honest legend under Tokens is "active time". Proposal: amend AC-7 to "matches the chart's under the three categorical splits".</li>
+  <li><strong>AC-11:</strong> author-run after the fixes — node 274/274, <span class="mono">go test ./...</span> green, Playwright full suite 191/191 before the fixes, then 26/26 for the Overview + visual specs after.</li>
+  <li><strong>Deviation, declared:</strong> the Overview fetches for Today too; it is not skipped. The design text above is amended in place and marked so. No criterion depended on it.</li>
+  <li><strong>Notes kept, not changed:</strong> the Overview refreshes on the page's existing 30 s poll while open; a "not attributed yet" bucket exists beside "no project" (absent is never failed); up to 2,000 blocks are cached in <span class="mono">localStorage</span>, and a quota failure simply drops the cache.</li>
+  <li><strong>Found on real data, fixed:</strong> a month read "6707.2M" tokens; the Overview now says "6.7B" (<span class="mono">57b88375</span>).</li>
+</ul>
 
 <section class="qa">
 <h2 id="objections">Objections</h2>
@@ -543,7 +571,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <dt>Why touch Go at all for one page?</dt>
   <dd>Fair — nearly all of this is page work. By repo has no other source, though. The column is already stored; the change is one SELECT and one optional field.</dd>
   <dt>Why two ledger fetches instead of one?</dt>
-  <dd>One would be simpler code. Two means Focus blocks cannot change by accident, which is the scope. It costs ~90 ms, and none at all when the range is Today.</dd>
+  <dd>One would be simpler code. Two means Focus blocks cannot change by accident, which is the scope. It costs ~90 ms per load (amended after review: it is not skipped for Today).</dd>
   <dt>Won't "By project" look mostly empty?</dt>
   <dd>Yes, on this Mac: 59% of blocks have no project. Hiding that bucket would overstate attribution. The honest bar shrinks as projects get defined.</dd>
   <dt>Is 1m safe against the 2000-row cap?</dt>
