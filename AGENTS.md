@@ -69,6 +69,13 @@ groups are kept; with none, one internal `projects` group is added) even though 
 has no groups. `workstreams_off` is never written any more: it is read once, on upgrade, to
 hide the projects of a group that was switched off, and left in place for a rollback.
 
+**Where the detail lives.** This file states the rules and the invariants. The
+measurements, studies and incident post-mortems that produced them live in
+`docs/architecture/`, one file per subsystem, each with a dated provenance header
+— see *Design docs* at the end for the index. **Read the linked file before
+changing one of those areas.** (Split out 2026-09-28, verbatim; nothing was
+deleted.)
+
 ## Architecture
 
 ```mermaid
@@ -94,192 +101,63 @@ flowchart LR
 - **Telemetry (push):** AI tools POST OTLP to the daemon's loopback telemetry
   proxy (`internal/agent/teleproxy`, fixed port **14318**, `KELD_TELEMETRY_PORT`
   to move it), which forwards to Atlas with the daemon's own token.
-  ⚠️ **This bullet used to read "the hook posts usage telemetry straight to
-  Atlas. No daemon involvement", and the change is the whole point rather than a
-  refactor.** A tool reads its configuration ONCE, at startup, and keeps the
-  credential in memory — so when the org's ingest token rotated, every running
-  tool went on posting the old one and its telemetry was rejected until a human
-  restarted the editor. Measured on a real machine: `tool_events` froze for 40
-  minutes while `keld signal doctor` reported no problems, **correctly** — every
-  fact it can reach was right, and the stale copy lived inside a process it
-  cannot inspect. The hook cannot detect it either: a Claude Code child process
-  sees **no `OTEL_*` variables at all**, because Claude Code applies its `env`
-  block to its own OTEL SDK and exports nothing. So detection was impossible and
-  remediation could only ever be "ask the human to restart"; the fix is to stop
-  handing the tool a credential. `keld signal setup` writes the loopback address
-  and a **stable local secret**, generated once and never rotated — unlike
-  `Info.Secret`, regenerated every daemon start, which would rebuild the bug one
-  layer down and fire it daily. The token the daemon attaches is read **per
-  request**, so a rotation mid-flight is picked up.
-  ⚠️ **THAT SECRET NOW HAS ITS OWN FILE (`~/.keld/telemetry-secret`, 0600), AND
-  IT USED TO LIVE INSIDE `agent.json` — WHICH COST AN OUTAGE.** Measured
-  2026-09-18 on the maintainer's machine: `agent.json` held `26908e20…` while
-  `~/.codex/config.toml` and `~/.claude/settings.json` both held `a5629e92…`,
-  written at 17:34 by a `keld` 3.0.0-rc.3 still on PATH at
-  `/usr/local/keld/keld`. A probe POST to the running proxy with the tools'
-  token returned **401**: Codex's telemetry was dead, and Claude Code survived
-  only because its running process still held the older, correct value in memory
-  — it would have broken on its next restart. `agent.json` is rewritten by
-  several writers and the value was protected only by a preservation rule inside
-  `agentcfg.Write`, i.e. by every writer remembering to route through it. The
-  file is now the SOURCE OF TRUTH and `agentcfg.EnsureTelemetrySecrets` resolves
-  it; the value is still **mirrored into `agent.json`** (write-through) so an
-  older binary on the same machine reads the same secret rather than minting a
-  second one. ⚠️ **Migration ADOPTS, never mints**: on a machine upgrading from
-  the old layout the value in `agent.json` is moved into the file, because
-  generating a fresh one there 401s every already-configured tool at once, which
-  IS the incident. The file is deliberately **not** under `state/`, which
-  `keld signal uninstall` removes wholesale.
-  ⚠️ **A deliberate rotation is survivable rather than an outage.** The file is
-  a small JSON object (`{secret, previous, rotated_at}`; a bare-string file is
-  still read as the secret) and `teleproxy` accepts the retired value for
-  `KELD_TELEMETRY_SECRET_GRACE` (default **24h**) after the rotation instant, in
-  **all three credential shapes** — a grace honoured for Claude Code and Codex
-  but not for Gemini breaks one of a person's tools for reasons they cannot see.
-  An empty previous, or one with no recorded instant, authenticates nothing:
-  `ConstantTimeCompare("", "")` is 1, so that guard is what keeps the route from
-  failing open. Nothing in the product rotates on its own.
-  ⚠️ **AND `keld signal setup` NOW REFUSES TWICE RATHER THAN REPORTING SUCCESS
-  ONTO A BROKEN MACHINE.** (1) After writing the tool configs it POSTs one empty
-  OTLP batch (`{"resourceLogs":[]}`) to the running proxy with the credential it
-  just wrote; a **401 restores the backups and exits non-zero**, because leaving
-  the rejected value in place is leaving the machine in the state the probe just
-  proved broken. **No daemon listening is NOT a failure** — `keld-agent install`
-  starts the service after setup runs and the macOS wizard onboards before the
-  daemon exists, so it says "could not verify (daemon not running)" and carries
-  on. (2) If another `keld` on PATH reports a **newer** version it refuses before
-  reading or writing anything and names the path — the incident's cause rather
-  than its symptom, since the mismatched secret was written by the older of two
-  installs. It reuses `keldPATHBinaries()`, doctor's own shadowed-binary
-  detection; `version.Newer` orders pre-releases (`3.0.0-rc.3 < 3.0.0`) and
-  answers **unknown** for `dev` or anything unparseable, so a source build never
-  accuses anyone.
-  ⚠️ **AND THE DAEMON NOW REPAIRS ITS OWN BLOCK RATHER THAN REPORTING IT
-  BROKEN.** In that same incident the daemon could see BOTH values the whole
-  time — the live secret in its own file and the stale one in
-  `~/.codex/config.toml` and `~/.claude/settings.json` — and did nothing,
-  because the integrations detector never edits a config the manifest already
-  records. That refusal is right for the PERSON'S OWN telemetry section and
-  wrong for keld's own block, which keld wrote and owns; it generalises the
-  exception `HookCommandBroken` already made. The detector compares the VALUES
-  inside keld's markers (`integrations/drift.go`: Codex's marker block, Claude
-  Code's two `env` keys, Gemini's `otlpEndpoint`) against what the adapter
-  would write now, **never a hash of the file** — the tools rewrite their own
-  configs (Codex's `hooks.state` at session start, Claude Code's settings.json
-  unprompted, both measured the same day), so a whole-file comparison would
-  rewrite a healthy config every time one of them did. Drift outside the
-  markers, and a conflict in the person's own section, are left alone and keep
-  the pane's Set up path. The rewrite goes through `ApplyEntry` — the one
-  write path, with the backup and the `configured_at` stamp — is bounded to
-  one attempt per tool per daemon run by `attempted`, and ⚠️ **refuses
-  unless the running proxy CONFIRMS the credential it is about to write**
-  (`telemetry.ProbeSecret`, shared with setup's own post-write probe): writing
-  a value the daemon itself rejects would replace a broken config with a
-  differently broken one. That refusal HOLDS rather than quarantines — the
-  next poll repairs once the proxy answers. What it did is SAID: the
-  `integration.configured` event carries a closed `reason`
-  (`first_setup`/`hook_command`/`telemetry_drift`), one log line per repair
-  rather than per poll, and the row publishes `repaired` with the sentence the
-  pane prints — because `broken` with no explanation is what that row said for
-  the whole incident.
-  ⚠️ **The proxy accepts that secret in THREE shapes, because the tools do not
-  agree on one**: `x-keld-ingest-token` (Claude Code, Codex), `?token=` in the
-  URL (Gemini — its OTLP SDK cannot send a custom header at all), and
-  `x-keld-telemetry-secret`. Assuming a single shape 401'd all three tools live
-  while the entire Go suite passed, because the tests used the name the proxy
-  chose rather than the ones `telemetry.ClaudeEnv`/`CodexBlockBody`/
-  `GeminiTelemetry` emit. Widening where the credential may appear does not
-  widen what is accepted.
-  ⚠️ **THE PROXY FORWARDS ONLY WHILE `tool_otlp` IS ON, READ PER REQUEST — AND
-  UNTIL 2026-09-21 IT DID NOT, WHICH DOUBLE-COUNTED EVERY RUNNING TOOL THE DAY
-  THE SWITCH WENT OFF.** A tool reads its telemetry config once, at startup, so
-  one configured before the switch went off keeps posting OTLP here from
-  memory for the rest of its session; the transcript mirror is on for exactly
-  that tool (`promptlog.SourcesFor` is the complement of the switch); and Atlas
-  keys a mirrored row (`request_id`) and a tool-sent row
-  (`session.id:event.sequence`) differently, so both landed and both were
-  priced. The PR that shipped the switch said the complement rule "enforces"
-  that the two lanes never both run for one tool — true of what keld WRITES
-  into configs, false of what a running tool still SENDS. `Proxy.Forwarding`
-  now reads the switch where the bytes arrive: off, an authenticated export is
-  answered 202 (the tool must not retry), never forwarded, never recorded as a
-  forward (the pane's otel lane must not read "arrived" off bytes that went
-  nowhere), counted in `DiscardedSwitchOff`, and announced once per source per
-  run as `telemetry.otlp_discarded`. Nothing is lost that the mirror does not
-  already carry. Pinned by `teleproxy/forwarding_test.go`, including that a
-  Proxy constructed with no hook still forwards — every existing test does.
-  ⚠️ **THE TEXT GATE OVER-MATCHED `prompt.id` AND SILENTLY BROKE EVERY
-  CORRELATION.** `teleproxy.textKey` matched an attribute key by SHAPE —
-  `strings.Contains(k, "prompt")` and seven siblings — and its comment said "a
-  key it over-matches costs one dropped attribute". That was wrong about the
-  most important attribute on the wire: Claude Code sends `prompt.id` on every
-  record, and Atlas joins `Enrichment.corr_id` to `ToolEvent.prompt_id`. So the
-  proxy blanked the one field relating a block to the telemetry it describes,
-  and the failure was invisible in the way a dropped attribute is not — rows
-  arrived, attributed, counted, and joined to nothing. Measured on the dev
-  Atlas: of one proxied session's 1,107 events, **0** had a non-empty
-  `prompt_id`, while unproxied seed rows kept theirs; after the fix, 10 of 10.
-  Reported as "blocks show up but the activity panel is empty", which is that
-  join returning nothing. The rule is now two-sided — match a text word, then
-  subtract the identifier/measurement SUFFIXES (`.id`, `_id`, `_length`,
-  `_tokens`, …) — and both halves are load-bearing: drop the first and text
-  leaks, drop the second and correlation dies. An unanticipated shape still
-  fails CLOSED, toward privacy. Pinned by `striptext_identity_test.go` against a
-  **real captured Claude Code payload**, because the original gate shipped
-  green: `prompt.id` was in no fixture, so nothing could see the cost.
-  ⚠️ **`keld signal setup` now SAYS to restart the tools, and never used to.**
-  The reasoning was written in that package twice and printed zero times. A tool
-  reads its telemetry config once at startup, so one already running keeps
-  posting wherever it was pointed when it launched; nothing on the machine can
-  detect or fix that from outside. Measured: a session started before setup ran
-  emitted **0** telemetry events over 11 hours while its blocks published
-  normally — blocks are read from the transcript by the daemon and never depend
-  on the tool's config, so the visible half of the product stayed healthy and
-  hid the silent half. The `done` event carries `restart_required` so an
-  installer's UI can say it too.
-  ⚠️ **And doctor now asks PER SESSION, because the machine-wide check cannot.**
-  `localagent.TelemetryState` asks whether telemetry has arrived AT ALL since the
-  credential was written, so on a machine running two editors — one started
-  before setup, one after — the second vouches for the first and doctor reports
-  "No problems found", correctly and uselessly. `SessionTelemetryState` compares
-  the sessions whose transcripts are being written NOW against
-  `teleproxy.SessionsOnDisk()`, a bounded (64, oldest-evicted) record of which
-  tool session ids the proxy has forwarded for. Session ids are IDENTIFIERS —
-  the same class already published as `corr_id`; no text, span or offset is read.
-  Three refusals keep it from lying: an **empty record is "not tracked yet"**,
-  never "nothing is arriving" (on upgrade the state file has a `last_forward` and
-  no sessions, and reporting then would call every running tool broken the day it
-  shipped); `agent-*.jsonl` **subagent transcripts are excluded** (they share
-  their parent's OTEL session id and are **620 of 671** files here, so including
-  them means hundreds of false findings); and the session's start instant is read
-  by DECODING lines for a top-level `timestamp`, never by pattern-matching the
-  first one — Claude Code opens a transcript with untimestamped `custom-title` /
-  `mode` / `file-history-snapshot` records, the same trap `capture.scan`
-  documents. Scoped to `claude_code`: Cowork's egress is blocked by design and
-  Codex/Gemini transcript names are not their OTLP session ids. The record is
-  LOADED at proxy construction, not started empty — otherwise a daemon restart
-  makes every session look untracked, and the first forward then writes that
-  empty map back, erasing the history rather than merely not reading it.
-  ⚠️ **And `teleproxy`'s tests now isolate `KELD_HOME` in a `TestMain`, because
-  they were writing the developer's real `~/.keld`.** `New()` resolves
-  `StatePath()` at construction and every successful forward persists, while most
-  tests there pass `t.TempDir()` only for the SPOOL — so the spool was isolated
-  and the state file was not. Running `go test ./...` on a live machine
-  overwrote its telemetry record, erased the per-session history, and silently
-  turned this very check inconclusive. A test that mutates the machine it runs on
-  is a worse defect than the one it checks for.
-  ⚠️ **Telemetry now depends on the daemon**, where it did not before. Paid for
-  with a bounded spool under `spool/telemetry` and not hoped away; a machine
-  whose daemon never starts collects nothing, and `keld signal doctor` is the
-  detector — which can only exist AFTER this path, since pre-proxy the client
-  kept no record of tool telemetry at all. Delivery is confirmed from the
-  RESPONSE, not the status code: captive portals answer **200 with an HTML login
-  page**, and a status-only check would delete the batch. A drain **stops on a
-  REJECTION** (401/403 — every remaining batch would be told the same thing),
-  **ends the sweep on UNAVAILABLE** (net/5xx — never a re-onboard, nothing is
-  wrong with the credential), and **continues past a REFUSED payload** (4xx —
-  or one bad batch blocks every good one behind it). See
-  `docs/superpowers/specs/2026-08-27-telemetry-loopback-proxy-design.md`.
+  **No tool ever holds an Atlas credential.** `keld signal setup` writes the
+  loopback address plus a **stable local secret**, generated once and never
+  rotated on its own; the daemon attaches the org token itself, read **per
+  request**, so a mid-flight rotation is picked up. A tool reads its config once
+  at startup, which is why the credential must not live there — and why `keld
+  signal setup` **says to restart the tools** and the `done` event carries
+  `restart_required`.
+  ⚠️ **The secret's source of truth is its own file, `~/.keld/telemetry-secret`
+  (0600)**, resolved by `agentcfg.EnsureTelemetrySecrets` and mirrored
+  write-through into `agent.json` for older binaries. Living only inside
+  `agent.json` (rewritten by several writers) cost an outage on 2026-09-18.
+  **Migration ADOPTS, never mints** — a fresh value 401s every configured tool at
+  once. Not under `state/` (uninstall removes that wholesale). A deliberate
+  rotation keeps the retired value valid for `KELD_TELEMETRY_SECRET_GRACE` (24h)
+  in **all three** credential shapes; an empty previous authenticates nothing.
+  ⚠️ **`keld signal setup` refuses rather than reporting success onto a broken
+  machine:** it probes the running proxy with the credential it just wrote and a
+  **401 restores the backups and exits non-zero** (no daemon listening is *not*
+  a failure), and it refuses up front if a **newer** `keld` is on PATH.
+  ⚠️ **The daemon repairs keld's OWN block** in a tool config when the values
+  inside keld's markers drift (`integrations/drift.go`) — comparing VALUES, never
+  a whole-file hash (the tools rewrite their own configs), never touching the
+  person's own section, one attempt per tool per run through `ApplyEntry`, and
+  **only if the running proxy confirms the credential it is about to write**
+  (`telemetry.ProbeSecret`); the repair is SAID (`reason`, `repaired`).
+  ⚠️ **The proxy accepts that secret in THREE shapes** — `x-keld-ingest-token`
+  (Claude Code, Codex), a `/t/<token>` PATH SEGMENT (Gemini, whose OTLP SDK
+  cannot send a custom header and breaks a `?token=` query — the query form is
+  still ACCEPTED for configs written by older releases), and
+  `x-keld-telemetry-secret`. Assuming one 401s all three tools while the Go suite
+  stays green.
+  ⚠️ **The proxy forwards only while the tool's `tool_otlp` switch is ON, read
+  per request** (`Proxy.Forwarding`): a running tool keeps posting from memory
+  after the switch goes off while the transcript mirror covers it, so forwarding
+  both double-counted every running tool. Off, an authenticated export is
+  answered 202, never forwarded, never recorded as a forward, and counted.
+  ⚠️ **`teleproxy.textKey` is TWO-SIDED and both halves are load-bearing:** match
+  a text word, then subtract the identifier/measurement suffixes (`.id`, `_id`,
+  `_length`, `_tokens`, …). Drop the first and text leaks; drop the second and
+  `prompt.id` is blanked, which silently kills every `Enrichment.corr_id` ↔
+  `ToolEvent.prompt_id` join. An unanticipated shape fails **CLOSED**. Pinned by
+  `striptext_identity_test.go` against a real captured payload — keep it real.
+  **Doctor asks PER SESSION** (`localagent.SessionTelemetryState`), because the
+  machine-wide check lets one healthy editor vouch for a broken one. Three
+  refusals keep it honest: an empty record is *not tracked yet*, `agent-*.jsonl`
+  subagent transcripts are excluded, and a session's start instant is read by
+  DECODING lines for a top-level `timestamp`, never by taking the first one.
+  ⚠️ `teleproxy`'s tests isolate `KELD_HOME` in a `TestMain` — `New()` resolves
+  `StatePath()` at construction, so without it `go test ./...` overwrites the
+  developer's real `~/.keld` telemetry record.
+  Telemetry **depends on the daemon**; a bounded spool under `spool/telemetry`
+  pays for that. Delivery is confirmed from the **RESPONSE**, never the status
+  code (captive portals answer 200 with an HTML login page). A drain **stops on a
+  REJECTION** (401/403), **ends the sweep on UNAVAILABLE** (net/5xx), and
+  **continues past a REFUSED payload** (4xx).
+  Why each of those exists, with the measurements: **`docs/architecture/telemetry-proxy-and-capture.md`**.
+  Spec: `docs/superpowers/specs/2026-08-27-telemetry-loopback-proxy-design.md`.
 - **Enrichment (local):** the hook fire-and-forgets a *pointer* (transcript path
   + prompt id — **never text**) to the daemon's loopback `/enrich`. The daemon's
   background worker resolves the text on-device, runs the enrichment pipeline,
@@ -312,48 +190,21 @@ never read as overload. Delivery is durable: the hook writes a
 prompt *pointer* (never text) to the on-disk `spool` when the daemon is
 unreachable, and the daemon drains it on startup + a periodic sweep.
 
-**An unconfigured agent IDLES, it does not fail.** The service is routinely
-registered *before* onboarding runs (the documented macOS pkg order), so a
-missing `~/.keld/hook.json` is a normal startup state, not a crash. `Run` waits
-on `daemon.awaitConfig` (re-reads hook.json every `KELD_CONFIG_POLL`, default
-5s; announces the wait once, not per poll) and starts the instant `keld signal
-setup` writes the token — no restart needed. Returning an error here instead
-cost a tester **69 launchd spawns in 12 minutes**, because the plist's
-`KeepAlive` was an unconditional `<true/>`. That is now the
-`SuccessfulExit=false` dictionary, so a clean exit is final while a real crash
-still restarts; systemd's `Restart=on-failure` was already the equivalent
-(don't add `RestartSec` — see the note in `service.go`), and the Windows
-`ONLOGON` scheduled task never retried at all.
-
-⚠️ **AND AN UNPAIRED AGENT COLLECTS — IT NO LONGER IDLES AT ALL.** The bullet
-above used to describe the whole daemon: `Run` started nothing but the
-integrations detector until `awaitConfig` saw `hook.json`, so a machine between
-install and login had **no telemetry proxy listening** (every AI tool `keld
-signal setup` had already configured posted into a closed port), no transcript
-watcher, no block emitter and no enrichment. That gate is left over from the
-design where the hook POSTed telemetry straight to Atlas and without a token
-there genuinely was nothing to do. **Collect always, pair to send**
-(`daemon/pairing.go`, `daemon/senders.go`): every collector is constructed and
-started immediately, and every sender resolves its endpoint through `pairing`,
-which answers `""` until the pairing arrives. A sender handed `""` **HOLDS** —
-it spools the batch, keeps the cursor, or re-spools the pointer — and never
-reports success and never drops; said three ways, `publish.ErrNotPaired`,
-`clientevents.ErrNotPaired` and `settings.ErrNotPaired`. The endpoint gets the
-treatment the ingest token already had (a getter read per request, not a string
-captured at construction), which is what lets a pairing be adopted mid-run with
-no restart. **Enrichment is the one collector with nowhere local to put its
-OUTPUT** — a block is cut into the ledger and re-offered by a held cursor, a
-telemetry batch lands in the proxy's spool, a finished profile has neither — so
-the worker holds each job back in the enrich spool on the existing "not ready
-yet is never un-enrichable" path, consuming no retry attempt; the spool drain is
-held with it, or the drain and the deferral chase each other once per sweep.
-Both are gated on Atlas being ON as well as on the pairing, since a local-only
-machine publishes through `localOnlySender` and must keep enriching. One log
-line when collection starts unpaired and one when the pairing lands, following
-`awaitConfig`'s announce-once idiom; `keld signal status`/`doctor` and the
-health strip's `atlas` row say **collecting, not paired** — `n/a` with reason
-`not_paired`, never `failed` (which accuses a healthy machine) and never
-silence (which renders as "we could not tell").
+**An unconfigured agent does not fail, and an unpaired one COLLECTS.** A missing
+`~/.keld/hook.json` is a normal startup state (the service is registered before
+onboarding), so a clean exit must stay final: launchd's `KeepAlive` is the
+`SuccessfulExit=false` dictionary (an unconditional `<true/>` cost **69 spawns in
+12 minutes**), systemd's `Restart=on-failure` is the equivalent — don't add
+`RestartSec`. **Collect always, pair to send** (`daemon/pairing.go`,
+`daemon/senders.go`): every collector starts immediately, every sender resolves
+its endpoint through `pairing` per request, and a sender handed `""` **HOLDS** —
+spools, keeps its cursor or re-spools — never reports success and never drops
+(`publish.ErrNotPaired`, `clientevents.ErrNotPaired`, `settings.ErrNotPaired`).
+Enrichment holds each job in the enrich spool without consuming a retry, and the
+spool drain is held with it; both are gated on Atlas being ON as well, so a
+local-only machine keeps enriching. Status, doctor and the health strip say
+**collecting, not paired** (`n/a`, reason `not_paired`) — never `failed`, never
+silence. Detail: **`docs/architecture/pairing-and-collection.md`**.
 
 **Capture triggers.** Two triggers feed the same queue: the **command hook**
 (`keld __hook --source <tool>`, wired by `keld setup`), and an on-device
@@ -368,238 +219,55 @@ and watcher fallbacks stay re-offerable). Sources: `~/.claude/projects` →
 `KELD_WATCH_BACKFILL` (default off = forward-only), `KELD_WATCH_ROOTS` (comma-separated
 `source:dir`, default empty). macOS + Linux; Windows deferred.
 
-**Cowork went VM-backed, and host-side capture cannot follow it.** Newer Claude
-desktop builds run Cowork inside a VM (`vm_bundles/claudevm.bundle`) whose
-transcripts live in the VM's disk image, not under `local-agent-mode-sessions`.
-Nothing on the host can read them: no folder is shared and the VM's address does
-not answer the host. Discovery therefore finds no *live* Cowork transcripts on
-these machines — and because the pre-VM session directories are never cleaned up,
-a root is still discovered, just permanently stale. `coworkHidden`
-(`internal/agent/watch/roots.go`) detects that exact shape — VM images touched
-within `coworkActiveWindow` while no Cowork `.jsonl` was written in the same
-window — and logs one advisory line per daemon run, because the failure is
-otherwise completely silent: Cowork just stops appearing in Atlas. It keys on
-transcript **freshness**, not root existence, precisely so the stale-directory
-machines are caught. Restoring capture needs a path the host can read (or an
-in-VM emitter); `KELD_WATCH_ROOTS=cowork:<dir>` points the watcher at one the day
-it exists.
+**Cowork went VM-backed and host-side capture cannot follow it** (as of
+2026-08-06). Newer Claude desktop builds run Cowork inside a VM whose transcripts
+live in its disk image; nothing on the host can read them, and because the
+pre-VM session directories are never cleaned up a root is still discovered, just
+permanently stale. `coworkHidden` (`internal/agent/watch/roots.go`) detects that
+exact shape and logs one advisory line per daemon run — the failure is otherwise
+completely silent. `KELD_WATCH_ROOTS=cowork:<dir>` points the watcher at a
+readable path the day one exists.
 
-**The transcript-first usage mirror (`internal/agent/promptlog`).** Cowork's own
-OTEL is configured to Keld but its sandbox egress blocks `atlas.keld.co`, so the
-daemon mirrors the transcript's events into OTLP logs+metrics host-side. That
-narrow workaround is now the general mechanism, for the reason the teleproxy
-bullet above already documents at length: **a tool reads its telemetry
-configuration once, at startup**, so every change Keld makes to it is invisible
-until a human restarts the editor, while a transcript needs no configuration, no
-credential inside the tool and no restart. Evidence it is enough: this machine's
-ledger holds **1,073 delivered blocks (966 Claude Code, 107 Codex) covering
-22,746 requests and $3,732.92 of estimated spend, all derived from transcripts
-rather than from OTLP**.
+**The transcript-first usage mirror (`internal/agent/promptlog`).** Started as
+Cowork's workaround (its sandbox blocks egress to Atlas) and is now the general
+mechanism: a transcript needs no config, no credential inside the tool and no
+restart. **Never emits prompt/response text** (`privacy_test.go` canaries every
+text-bearing field). Rules:
+- **Each mirror speaks its tool's NATIVE OTLP shape**, so Atlas needs no new
+  parser: `claude_code`/`cowork` → `user_prompt` + `api_request` (+ token
+  metrics), `codex` → `codex.sse_event` `response.completed`, `gemini` →
+  `gemini_cli.api_response`. Codex and Gemini emit no metrics.
+- ⚠️ **ONE record per REQUEST, not per line** — Claude Code stamps a request's
+  usage on every content-block line (1.79x measured); the mirror emits on a
+  request's first line. Codex prices a record only where the cumulative total
+  ADVANCED. Gemini's session is one document, so it arrives through
+  `Telemetry.ObserveFile`, not the per-line hook.
+- **Dedup contract:** every identifier on a priced record is read off the
+  transcript, nothing from process state — **no `event.sequence`** on
+  `api_request`, no wall clock, no counter. `assistant_response` is no longer
+  mirrored. The remaining gap (Atlas preferring `request_id`) is Atlas-side.
+- **Sources are a parameter** (`Telemetry.SetSources`, wired to the per-tool
+  `tool_otlp` switch; `SourcesFromEnv` still defaults to `{cowork}`). Per source,
+  mirroring is on or off — half a source double-counts. Widening the mechanism
+  and flipping the policy stay separate changes.
 
-⚠️ **THREE MIRRORS, EACH IN ITS OWN TOOL'S NATIVE OTLP SHAPE, so Atlas needs no
-new parser.** `claude_code`/`cowork` → `claude_code.user_prompt` +
-`claude_code.api_request` (+ `claude_code.token.usage` metrics); `codex` →
-`codex.sse_event` with `event.kind == "response.completed"`, the record Atlas
-prices Codex off; `gemini` → `gemini_cli.api_response`, the token-bearing event
-(NOT `api_request`, which is the request side). Codex and Gemini emit no metrics
-— Atlas prices both entirely off their log record, and inventing a metric name
-would be a guess. Identity (`user.email`/`account_uuid`/`organization.id`) is
-recovered from the Cowork session path/metadata where it exists; elsewhere it is
-absent, which costs nothing, because Atlas stamps the authoritative `principal`
-from the ingest token that authenticated the request.
-**Never emits prompt/response text** — `privacy_test.go` puts a canary in every
-text-bearing field each of the three tools writes and asserts none reaches the
-wire.
+**Gemini capture.** ⚠️ **Two chat shapes are in the wild** (a JSON document up to
+0.37.1, JSONL from 0.60.0) and reading either alone leaves a population
+uncaptured. **`internal/geminichat` is the ONE place that knows the shape** and
+decides by CONTENT, never extension; watch, resolve and the conformance
+checkpoint all read through it. A `$set` line is not a turn. The watcher's lane
+is a DOCUMENT lane whose cursor counts prompts already offered, and it reads a
+file from the start when its mtime is newer than the watcher's start (a one-shot
+`gemini -p` would otherwise never be captured — its hook is inert). The
+credential rides a `/t/<token>` path segment; `/v1/traces` is accepted and
+discarded (counted). The reader is registered under BOTH `gemini` (hook) and
+`gemini_cli` (watcher) — which name is right is an Atlas-side decision, not a
+rename in passing. `mockllm` answers Gemini's router FROM THE REQUEST'S SCHEMA.
+`traces: false` must not come back into `~/.gemini/settings.json` (the tool
+rejects the key); `logPrompts: false` is the real control.
 
-⚠️ **GEMINI CANNOT RIDE THE PER-LINE HOOK.** Its session is ONE JSON document
-rewritten whole every turn, so there are no appended lines to observe; it arrives
-through `Telemetry.ObserveFile` on `watch.WithDocumentObserver`, the coarse
-sibling of `observe` and of the ingest signal, carrying coordinates only.
-`geminichat.Session.Responses` is the reader — gated on the `tokens` BLOCK rather
-than on a type string, because shape is what stays stable across builds (measured:
-203 of 262 messages across 55 real chat files carry it, no user turn does).
-
-⚠️ **ONE RECORD PER REQUEST, NOT PER LINE, AND THE DIFFERENCE IS 1.79x.** Claude
-Code writes one assistant line per CONTENT BLOCK and stamps the whole request's
-usage on every one of them: measured over the 40 largest real transcripts here,
-**13,755 assistant lines carrying a `message.usage` resolve to 7,683 distinct
-`requestId`s**, 4,088 of them written as more than one line (max 11), and **0**
-of those requests disagree with themselves about their token counts. A record per
-line therefore publishes 1.79x the tokens the work cost. **Replicated
-independently on a wider sample the same night** — every transcript under
-`~/.claude/projects` rather than the 40 largest: **26,410 lines carrying usage,
-14,622 distinct `requestId`s, 1.81x, and again 0 requests disagreeing with
-themselves.** Two samples, two ratios, one conclusion; the ratio is a property
-of how the tool writes, not of which transcripts were read.
-⚠️ **AND ATLAS DOES NOT ABSORB IT**, which is what makes this a live data defect
-rather than a wasteful payload: `services/otel.py::_dedup_key` prefers
-`session.id:event.sequence` and falls back to `request_id` only when one of them
-is absent, while the pre-fix mirror stamped a fresh sequence per record. Every
-duplicate was therefore stored as its own row. Cowork is the only source that
-has been mirrored, so Cowork's tokens and spend in Atlas are inflated by about
-that factor for as long as this has run. The client half is fixed here; making a
-mirrored row and a tool-sent row COLLAPSE needs Atlas to prefer `request_id` on
-`api_request`, which is one line in that function and is not in this repo. The mirror emits on the
-FIRST line of a request and drops the rest — one variable, not a set, because
-**7,703 request runs and 0 requests that resumed after another intervened** says
-a request's lines are contiguous. Codex has the same class of defect from the
-other end: **936 of 10,061 real `token_count` records (9.3%) repeat the previous
-record's `total_token_usage` exactly** while still carrying a non-zero
-`last_token_usage`, so the mirror prices a record only where the cumulative total
-ADVANCED — which reconciles with the session's own final total on 22 of 23
-rollouts.
-
-**The dedup contract.** Atlas stores one tool event per `(event_ts, dedup_key)`
-and upserts, so a mirrored row and a row the tool sent itself must agree on both
-halves. Every identifier on a PRICED record is read off the transcript line and
-nothing comes from process state — in particular the mirror emits **no
-`event.sequence`** on `api_request`, because Atlas keys a Claude-Code row on
-`session.id:event.sequence` and falls back to `request_id`
-(`services/api/app/services/otel.py::_dedup_key`), and a process-local counter
-renumbers on a daemon restart while the tool's own `requestId` does not. ⚠️ **The
-remaining gap is Atlas-side and is one line**: the tool DOES send a sequence, so
-under the current preference order the two rows do not collapse; preferring
-`request_id` on `api_request` closes it. Codex and Gemini key on a content HASH
-of the attributes, so for those the mirror's dedup IS the determinism of its
-payload — which is why no wall clock and no counter appear in either. ⚠️
-**`assistant_response` is no longer mirrored**: it carried only `response_length`
-(a measurement of response TEXT, priced by nothing), it could not be told from
-`api_request` under the natural key since Claude Code stamps both with the same
-`request_id`, and per-request it is not computable without buffering a whole
-request.
-
-**Source selection is a parameter, not a setting read here.** `SourcesFromEnv`
-still defaults to `{cowork}` with `KELD_WATCH_TELEMETRY` (off/on) and
-`KELD_WATCH_TELEMETRY_SOURCES`; `Telemetry.SetSources` REPLACES the set whole, and
-is the seam the per-tool `tool_otlp` switch is wired to at the one call site in
-`daemon.go`. Per source, mirroring is on or off — half a source is how the same
-request gets counted twice. Widening the MECHANISM and flipping the POLICY are
-deliberately separate changes: a default flipped in `SourcesFromEnv` would start
-mirroring on every machine the moment the binary shipped, beside tools still
-posting their own OTLP.
-
-**Codex** and **Gemini** also keep their own watcher roots (`~/.codex/sessions`
-and `~/.gemini/tmp/*/chats`) + specialized readers for ENRICHMENT (TranscriptReader
-resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
-that path is unchanged.
-
-⚠️ **GEMINI WRITES TWO DIFFERENT CHAT SHAPES AND BOTH ARE IN THE WILD; READING
-EITHER ALONE LEAVES A WHOLE POPULATION UNCAPTURED.** Under
-`~/.gemini/tmp/<project>/chats/`:
-- `session-<ts>-<id>.json` — ONE JSON DOCUMENT, session id at the top level and
-  the turns in a `messages` array, `content` a bare STRING (258 of 262 measured
-  messages) or an array of `{text}` blocks (4). Measured on a developer machine:
-  **55 files, 262 messages, 58 user prompts**, the oldest from 2025-09 — every
-  one written by builds up to and including **0.37.1**.
-- `session-<ts>-<id>.jsonl` — ONE OBJECT PER LINE: a session-meta first line
-  carrying `sessionId`, `{"$set":…}` MUTATION lines that are not turns, and one
-  line per message. Written by **0.60.0**, the version CI installs from npm
-  `@latest`.
-
-⚠️ **AND THE HISTORY IS THE OPPOSITE OF WHAT IT LOOKS LIKE.** This client
-originally parsed the LINE form only, and was written correctly for it — but
-`watch.transcriptFiles` filtered on the `.jsonl` EXTENSION, so on every machine
-running a build that had moved to the document form it read nothing at all and
-said nothing. The conformance chain exposed that: `transcript` reported "0
-transcript(s)" with the chat file sitting in the directory it had just walked.
-Switching wholesale to the document form then simply MOVED the blind spot to
-0.60.0 — three chain A cells green on the fix and still unable to find a
-transcript. So neither shape is "the" format and neither may be dropped.
-**`internal/geminichat` decides by CONTENT, not extension**: a file that parses
-as one object with a `sessionId` is a document, otherwise it is read as lines —
-so a build that renames the file without changing the format, or the reverse,
-cannot silently stop being readable. A `$set` line is NOT a turn: 0.60.0 puts
-the CLI's own `<session_context>` preamble inside the first one, so following it
-would take boilerplate for the user's first prompt and shift every later ordinal.
-**`internal/geminichat` is now the ONE place that knows the shape** — watch,
-resolve and the conformance checkpoint all read through it, so the predicate
-deciding which messages are genuine prompts, and therefore what every ordinal
-means, has one definition rather than three copies each commented to stay in
-step. Its fixture is a REAL captured 0.37.1 file. The watcher's Gemini lane is
-therefore a DOCUMENT lane (`watch.scanDocument`): its cursor counts PROMPTS
-ALREADY OFFERED rather than bytes, because the file is rewritten whole on every
-turn and "bytes appended" names nothing; forward-only first sight and the
-first-sight ingest signal are unchanged.
-
-⚠️ **AND GEMINI'S TELEMETRY CREDENTIAL CANNOT RIDE A QUERY STRING.** Gemini
-cannot carry an auth HEADER (its `OTEL_EXPORTER_OTLP_HEADERS` is honoured only
-in a "trusted" workspace), so the token rides the URL — and it used to ride
-`?token=`, on the stated belief that "gemini's exporter preserves the URL's
-query string when it appends the signal path". It does not, and the composition
-is not URL-aware at all: the SDK does plain string concatenation,
-`${endpoint}/v1/logs`, over a base it first normalises through `new URL(...).href`
-— which appends the missing root slash. So `http://127.0.0.1:14318?token=SECRET`
-became `http://127.0.0.1:14318/?token=SECRET/v1/logs`: path `/`, token
-`SECRET/v1/logs`. Measured on gemini-cli 0.37.1 against a live proxy, every
-export failed, alternating **404** (no route at `/`) and **401** (that is not the
-secret), printed as raw `OTLPExporterError` stack traces in the user's terminal.
-The token is now a PATH SEGMENT (`telemetry.GeminiTokenPath`, `<base>/t/<token>`),
-which survives the concatenation because appending to a URL that already has a
-path is what the SDK assumes it is doing; the proxy serves both `/v1/…` and
-`/t/{token}/v1/…` and still ACCEPTS the query form, since a machine configured
-by an older release keeps its settings file across an upgrade and locking it out
-would add a second outage to the one it already has. **`/v1/traces` is now
-accepted and DISCARDED** (counted, not silent): Gemini builds a trace exporter
-unconditionally with no per-signal switch, so with no route there every run
-printed a 404 for a signal Atlas does not read.
-
-⚠️ **AND THE MOCK MODEL COULD NOT ANSWER GEMINI'S ROUTER, WHICH READ AS A KELD
-FAILURE.** Gemini CLI classifies every prompt before choosing a model
-(`NumericalClassifierStrategy` → `BaseLlmClient.generateJson`) with
-`responseMimeType: "application/json"` and a `responseJsonSchema` — captured from
-0.37.1: `{complexity_reasoning: STRING, complexity_score: INTEGER}`. Answered
-with prose it reports "API returned invalid content after all retries" and the
-process **EXITS 41**. Measured: ~3 minutes of retries per prompt, then either a
-slow success (the router falls back) or a hard failure — so the same defect
-looked like "Gemini is slow" locally and killed all three chain A cells in CI, on
-macOS, Linux and Windows alike, while the harness reported it against Keld.
-`mockllm` now SYNTHESISES the reply FROM THE SCHEMA THE REQUEST CARRIES rather
-than hardcoding the one observed, because a fixed answer for a known schema is
-the "fixture that resembles the code rather than the tool" failure one level up.
-
-⚠️ **AND FORWARD-ONLY FIRST SIGHT DROPPED EVERY ONE-SHOT GEMINI RUN.**
-Forward-only exists so installing Keld does not enrich a machine's entire past,
-and on a LINE source that is cheap: a transcript is appended to over time, so
-first sight lands on a file still growing and the next prompt is captured.
-A DOCUMENT is different — `gemini -p` writes a whole NEW session file per
-invocation, so its only prompt is already in the file the first time the watcher
-sees it, and forward-only skipped it permanently. There is no second chance and
-**no hook to fall back on**: Gemini's `BeforeAgent` event carries no prompt id,
-which `internal/hook` already treats as a silent no-op, so the hook keld writes
-into `~/.gemini/settings.json` is structurally inert. So `scanDocument` reads
-from the beginning when the file's mtime is NEWER than the watcher's own start
-instant — a file being written now cannot be the history that rule protects
-against. The bound is one SESSION (tens of prompts, not a corpus) and the queue
-dedups by prompt id, so the one ambiguous case — a session predating the daemon
-that is appended to afterwards — costs its earlier turns being offered once.
-
-⚠️ **AND THE TWO GEMINI CAPTURE LANES CALL THE TOOL BY DIFFERENT NAMES.** The
-watcher root, `resolve.GeminiReader`, and the conformance tool id all say
-`gemini_cli`; the hook keld writes into `~/.gemini/settings.json` says
-`--source gemini`, because `tools.GeminiAdapter` is `Name()`d "gemini".
-`resolve.Resolve` dispatches on that string and an unregistered source is a
-deliberate SKIP rather than an error — so EVERY hook-delivered Gemini prompt
-resolved no text and published nothing, in silence. Measured in the conformance
-chain once the transcript format was fixed: `transcript` PASS (2 files, 2 prompt
-ids read), `publish` **0**, with the hook independently verified to fire.
-The reader is now registered under BOTH names (the
-`NewClaudeReaderForSource("cowork")` idiom), which restores the lane with no
-wire change. ⚠️ It does **not** settle which name is right: a hook-sourced row
-publishes `source_id` "gemini" and a watcher-sourced one "gemini_cli", so one
-tool wears two names in the org's data. Unifying them is a deliberate
-Atlas-side decision about existing rows, not a rename to be done in passing.
-
-⚠️ **`traces: false` IS NO LONGER WRITTEN INTO `~/.gemini/settings.json`.** It was
-belt-and-braces — span CONTENT is gated by `shouldIncludePayloads = traces &&
-logPrompts`, so setting both hardened the guarantee against a future build
-flipping the `logPrompts` default. That future arrived in the other direction:
-measured on 0.37.1, `"traces"` and `shouldIncludePayloads` appear ZERO times in
-its bundle, and every invocation printed "Invalid configuration in
-~/.gemini/settings.json … Unrecognized key(s) in object: 'traces' … Please fix
-the configuration" — about a file Keld wrote, blamed on the user. A key a tool
-does not recognise is not free insurance. `logPrompts: false` is the real control
-and is still set; the test assertion is INVERTED rather than deleted so the key
-cannot return as harmless hardening.
+Detail: **`docs/architecture/telemetry-proxy-and-capture.md`** and
+**`docs/architecture/gemini-capture.md`**.
 
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
@@ -641,351 +309,115 @@ model — the remaining facets still need it. The **gold labels are kept** in
 classifier: the study named the label *wording* as the suspect, so a
 `SpeechActDefs` re-bakeoff is the live alternative to permanent removal.
 
-**The sensitivity facet's two sources.** Neither classifies; the class is
-a rollup over which entity labels were DETECTED (`sensitivityFromEntities`).
-**Neither is GLiNER2** — this facet does not touch `ctx.Model` at all, and a
-test asserts its output is identical with a Model present and with none.
-1. **`creddetect`** — vendored gitleaks credential rules. Pure Go, no model, no
-   network, over the FULL prompt text. Always available; the only source that
-   needs nothing at all.
-2. **The sidecar's `/pii`** (`enrich.PIIScanner` → `sidecar.Client.DetectPIIIn`
-   → `app/pii.py`, presidio-analyzer). **Region-scoped pattern recognizers**,
-   every one of them checksum- or algorithm-validated: a universal tier
-   (`credit_card`, `email`, `phone`, `iban`, `crypto_wallet`) plus one country
-   tier per configured region — `us` by default (`ssn`, `aba_routing`, `us_npi`,
-   `medical_license`), with `uk es it pl fi kr in au ng th sg` opt-in. It needs
-   **no GLiNER2** — and, since the NER came out, **no spaCy model either**: only
-   a blank tokenizer, because every recognizer left is a regex plus a check
-   algorithm. It never touches the inference single-flight, so it is wired in
-   `ml_backend:"deterministic"` too. It returns **offsets only, never the
-   matched value** — the Go side resolves and masks from its own copy of the
-   text.
+**The sensitivity facet's two sources — NEITHER of them GLiNER2.** The facet does
+not touch `ctx.Model` at all (a test asserts its output is identical with a Model
+present and with none); nothing classifies, and the class is a rollup over which
+entity labels were DETECTED (`sensitivityFromEntities`).
+1. **`creddetect`** — vendored gitleaks credential rules, pure Go, no model, no
+   network, over the FULL prompt text. Always available.
+2. **The sidecar's `/pii`** (`app/pii.py`, presidio-analyzer) — region-scoped
+   pattern recognizers, every one checksum- or algorithm-validated, needing no
+   GLiNER2 and no spaCy model. It returns **offsets only, never the matched
+   value**; the Go side resolves and masks from its own copy of the text.
+   Configure with `KELD_PII_REGIONS` / `pii_regions`; `Remote.PIIRegions`
+   overrides both and takes effect on the **next prompt**.
 
-   ⚠️ **Region-scoped is a PRECISION decision, not a cost one** (the full set
-   measured **+0.5 ms/prompt**, which is nothing). Almost every national-id
-   recognizer is a bare digit run plus ONE check digit, so its false-positive
-   floor against arbitrary numbers is 1-in-10 or 1-in-11 — a checksum makes a
-   false positive unlikely, not impossible — and the shapes **collide across
-   countries**. A valid `us_npi` is ten digits starting 1 or 2, which is exactly
-   the `uk_nhs` shape, and `uk_nhs` rolls up to `phi`: enabling `uk` inside a
-   US-only org manufactures the most severe class out of provider ids. Verified
-   collisions are pinned in `sidecar/app/test_pii_regions.py`. Configure with
-   `KELD_PII_REGIONS` (comma-separated, `none` = universal only) or
-   `pii_regions` in `~/.keld/agent-config.json`; an Atlas org value
-   (`Remote.PIIRegions`) overrides both and takes effect on the **next prompt**,
-   because the region list rides each `/pii` request rather than the sidecar's
-   startup environment. **Atlas does not serve the key yet** — the client seam
-   exists so adopting it is a server change alone.
+⚠️ **Region scoping is a PRECISION decision, not a cost one** — the full set
+measured +0.5 ms/prompt. National-id shapes COLLIDE across countries (a valid
+`us_npi` is exactly the `uk_nhs` shape, and `uk_nhs` rolls up to `phi`), so
+enabling a region an org does not operate in manufactures severity. Collisions
+are pinned in `sidecar/app/test_pii_regions.py`.
 
-   ⚠️ **`phi` is deliberately narrow, and two assignments were argued rather
-   than assumed.** `us_npi` maps to `pii`, NOT `phi`: an NPI is a public CMS
-   provider-registry number, so routing it to the most severe class would
-   overstate a lookup as a leak. `aba_routing` maps to `pci` while identifying a
-   **bank branch from a published directory**, not an account — kept as a
-   reliable marker that banking data is present, not as leaked data itself.
-   `it_vat_code`, `kr_brn`, `in_gstin`, `au_abn`, `au_acn` and `sg_uen` are
-   **business registration numbers**, included only because each of those
-   registers also issues to sole traders; they are the weakest members of their
-   (opt-in) regions. See `SensitivityFromEntity`'s comment in `labels.go`.
+⚠️ **`person` and `address` are NOT DETECTED — the coverage is four types, not
+six.** presidio's `SpacyRecognizer` measured **~1% precision** on 2,000 real
+developer prompts and was removed rather than tuned. Free-form personal names in
+prose are now undetectable; `SensitivityFromEntity` still knows both names so a
+future detector needs no schema change.
 
-   ⚠️ **Ten recognizers the design asked for DO NOT EXIST in
-   presidio-analyzer 2.2.362**, so those regions are absent entirely rather than
-   silently empty: there is **no German recognizer of any kind**, no Swedish, no
-   South African, no Turkish, and no UK driving licence.
+⚠️ **The published-test-value gate lives in ONE place: `sidecar/app/wellknown.py`**,
+applied **at source** inside `scan()`. Do not add a Go copy and do not add a
+second detector that would need one. A companion numeric-fragment gate lives in
+`pii.py` because it needs the surrounding text.
 
-⚠️ **`person` and `address` are NOT DETECTED. The coverage is four types, not
-six.** They came from presidio's `SpacyRecognizer`, and on **2,000 real
-developer prompts** that recognizer produced **998 of 1,090 spans with zero
-confirmed names and zero addresses** — `JSON` ×132, `Docker`, `YAGNI` ×27,
-exported Go identifiers, hex colour literals, and a bare `❌` at **0.85**, the
-same score a real name gets. Overall precision was **~1%**, and **24% of prompts
-published `sensitivity: pii`**. No threshold separates a common noun from a name,
-so the recognizer was removed rather than tuned; the same measurement rerun
-against the current detector publishes `pii` on **0.45%** of prompts at 100%
-precision, and `pci`/`phi` never fire. Both dropped types mapped to `pii`, the
-LOWEST severity class, so nothing severe was lost — but free-form personal names
-in prose are now **undetectable**, and that is a real narrowing, not a tuning.
-`SensitivityFromEntity` still knows both names so a future detector needs no
-schema change. Full before/after:
-`~/keld/refseries-context/pii-precision/RESULTS.md` (reproduce with
-`scripts/pii_precision.py --port N --regions us|all`). The same 2,000-prompt run
-against the **widened** detector with **every region enabled** produced **zero**
-spans of any new type — the only raw presidio output was three readings of one
-digit run inside a URL path, all removed by the fragment gate.
-There is deliberately **no third, GLiNER2 source**. `/entities` over a
-`SensitiveEntityLabels` vocabulary used to be one, and it was redundant:
-presidio produced every mapped type the GLiNER2 NER did (`person`/`address` then
-came from its `SpacyRecognizer`, which is spaCy, not GLiNER2 — both have since
-been dropped as measured noise, see above), so the NER added no type of its
-own while needing a corroboration rule to keep its confident, perfectly-shaped
-documentation constants off the wire. That rule, the label vocabulary, and the
-call are all gone. Re-admitting a model here is a deliberate decision with its
-own evidence, not a rewiring.
+**`facets_degraded` turns on the SCAN, not the Model.** The scan is the sole
+source for every personal-data type, so absent/failed/**truncated** ⇒ degraded
+(unless the answer already reached `phi`, which no missing evidence could raise).
+Never let a check that did not run publish a confident negative.
 
-⚠️ **The published-test-value gate lives in ONE place: `sidecar/app/wellknown.py`.**
-`4111 1111 1111 1111` passes Luhn, `123-45-6789` is the textbook SSN,
-`user@example.com` is RFC 2606 — developer transcripts are saturated with them,
-and ungated the facet reports `pci`/`phi` continuously and is worse than absent.
-The gate is applied **at source**, inside `scan()` before it answers, so nothing
-it suppresses can reach Go by another route — there is no second detector to
-route around it. Two rules there are **measured, not structural**: a no-reply /
-machine local-part denylist (66 of 78 `email` spans in the corpus were one
-`noreply@` address quoted out of a `Co-Authored-By` git trailer — an unattended
-sink is not personal data), and a rejection of Go-module-version paths
-(`host.tld/pkg@v1.23.4` parses as local-part-at-domain and scored 1.0). A
-companion **numeric-fragment gate** lives in `pii.py`, not here, because it needs
-the surrounding text: a match preceded by `[0-9.,:/-]` is the tail of a longer
-token, which is how 13 digits after a decimal point published **`pci` at 1.0**.
-It is asymmetric on purpose — the right-hand side rejects only a continuation
-(digit, or `.,-` then a digit), because "…4470, then email" is prose and the
-whitespace-token rule would have cost real detections. With **no scan available
-the four personal-data types simply have no source**; only credentials remain, and the loss is declared (see
-`facets_degraded` below) rather than papered over. Do not add a Go copy of the
-list, and do not add a second detector that would need one.
+Measurements, region tables and the two argued severity assignments:
+**`docs/architecture/sensitivity-and-pii.md`**.
 
-**`facets_degraded` for sensitivity turns on the SCAN.** The scan is the sole
-source for every personal-data type, so a whole scan leaves nothing uncovered
-and a Model's absence costs nothing.
-Scan absent / failed / **`truncated`** ⇒ degraded, unless the answer already
-reached the ceiling of the severity order (`phi`), which no missing evidence
-could raise.
+**The deterministic passes, and the analysis service they call.** These need no
+model and run under every backend that enriches at all:
+
 - **`workstreams`** (`enrich/workstreams.go`) is the one pass that runs **no
   inference**: it asks the sidecar's `/analyze` for the deterministic dimensions
-  of the hour of work ending at this prompt — the seven ALLOCATION dimensions
-  (project, branch, model, output_type, language, skill, tooling) plus the
-  published INVENTORY ones — counted from tool-call metadata.
-  It takes COORDINATES (transcript path + prompt id), never text, and publishes
-  as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
-  confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
-  the daemon has an analysis backend (`enrich.WithDimensions`) **and** the
-  source is one the analysis can read — `claude_code`/`cowork` only
-  (`enrich.DimensionsEligible`): the analysis resolves a prompt by Claude-Code
-  JSONL shape, so Codex/Gemini prompt ids 404, and registering it there would
-  downgrade every one of their jobs to `"partial"` for a facet that was never
-  obtainable. Callers with no backend (eval, localagent) are unchanged. A failed analysis
-  fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
-  set. Attribution needs **two** things, not one: the winning value's share is
-  ≥ 0.50 **and** the window holds ≥ `window.MIN_EVIDENCE` (5) observations at
-  that level. The second exists because a share is a ratio — one tool call
-  gives share 1.0 by construction. Five is derived, not chosen: under the 0.50
-  floor read as a null hypothesis, `0.5**n` first falls below 5% at n=5, so
-  below it no share distinguishes the window from a coin flip. Measured on the
-  572-window reference sample: 347 of 2927 attributed dimension slots become
-  unattributed, 330 of which were publishing at share 1.0 and 129 off a single
-  observation.
-  ⚠️ **EVERY dimension now publishes, and the floor is a LABEL rather than a
-  publish gate** (schema v21 / sidecar SCHEMA 16). This reverses the rule that a
-  sub-floor dimension is simply absent, and it reverses the second half of
-  MIN_EVIDENCE's own justification, which used to read "`evidence` is dropped on
-  the way to the published enrichment, so nothing downstream can tell one
-  observation from five hundred". It isn't dropped any more: `Labeled` carries
-  `evidence` (the count) and `status` (`attributed`/`thin`/`tie`/`no_majority`/
-  `absent` — `enrich.DimensionStatuses`, the sidecar's `window.REASONS`), both
-  `omitempty` so the ML facets that share the type are byte-unchanged. Deleting
-  the dimension cost 924 of 12,016 measured dimension-slots (7.7%) that held
-  **real evidence and published nothing** — 198 of them one observation short —
-  with `toolchain` discarding more slots (172) than it published (138).
-  **The floor did NOT move and nothing was promoted:** `attributed` still means
-  exactly what it meant, the two conditions above are unchanged, and removing
-  them would take P(false attribution) from 0.031 to 0.50. A consumer that
-  renders `thin` identically to `attributed` is misreporting — the contract
-  states that and cannot enforce it. A dimension is now
-  present-with-a-stated-outcome, never silently missing; only a **pre-16
-  sidecar**'s JSON null still drops (it sent no count and no status, so there is
-  nothing to state), and an object with no `status` from that same sidecar reads
-  as `attributed`, because that sidecar emitted an object only when it had
-  attributed.
-  **Nothing from `/analyze` reaches Atlas except those dimensions and the nine
-  inventory ones.** ⚠️ **All nine inventories now publish, including
-  `named_terms`** — a deliberate reversal (schema v18) of the rule that governed
-  this file for most of its life. `inventory.named_terms` is proper nouns lifted
-  from **message text**, matched against no declared vocabulary, and real person
-  names have been observed in it ("Federico", "Daniel"). It used to be
-  unmodelled on `sidecar.AnalyzeResult` precisely so a publish path had
-  structurally nowhere to forward it; it is now modelled like its eight
-  siblings, bounded by SHAPE alone (`sidecar.convertNamedTerms`).
-  There is deliberately **no person-name filter**, and adding one would be worse
-  than the absence: spaCy's person detection measured **~1% precision** on this
-  corpus (998 of 1,090 spans with zero confirmed names), which is why presidio's
-  `SpacyRecognizer` was removed from `sensitivity` outright. A filter at that
-  precision does not remove names, it only removes the belief that names are
-  present. The alternative that was NOT taken, and is still the safer shape if
-  this is ever revisited, is `/match` + `publish.Custom`: an org declares its
-  customers/suppliers/initiatives and only the **matched id** publishes — never
-  a span, an offset, or the text. What still holds: `inventory` as a BLOCK
-  remains unforwardable (a test pins it), so a tenth key the sidecar adds later
-  cannot ride along; no raw prompt text, no spans and no offsets cross; masking
-  is still enforced Go-side.
-- **The PATH inventory dimensions (`files`, `directories`, `components`) publish
-  a frequency distribution, and their caps are per-level.** The `file`/`dir`/
-  `component` levels were extracted and stored long before they were published;
-  they answer "which paths were hot this hour", which is a distribution, not a
-  single owner — so they are INVENTORY, never ALLOCATION. ⚠️ **The blanket
-  open-vocabulary cap of 12 is wrong for them**, and silently: measured over 165
-  one-hour windows, distinct-per-window runs p50 8 / p90 32 / max 54 for `file`,
-  p50 5 / p90 14 / max 27 for `dir`, p50 3 / p90 7 / max 17 for `component`, so
-  a cap of 12 truncates **33% of windows** on `file` alone. Truncation is top-N
-  by count, so a hotspot can never be the thing cut — but the tail is what
-  separates "this hour touched three files" from "this hour touched forty", and
-  losing it silently makes a scattered window read as a focused one. Caps sit
-  just above each level's own p90 (**40 / 24 / 16**) and the cut is **declared**
-  in the sibling `inventory_omitted`, which is what stops a truncated inventory
-  from being indistinguishable from a short one — the `omittedNotice` rule
-  (Conventions → never cut text mid-sentence) applied one level up. That block
-  covers ALL nine inventory dimensions, since the other six were silently
-  truncating at 12 already.
-  ⚠️ **What makes these safe to publish is that they are ALREADY
-  workspace-relative** — `reconcile()` resolves every path against the resolved
-  workspace root. Verified over the full 500-transcript corpus plus a Cowork
-  session: **zero** absolute paths, zero `~`/`/Users`/`/home`, zero `../`
-  escapes, zero URLs, zero Windows drive paths, at all three levels. It is
-  gated TWICE, not merely tested: the sidecar payload asserts the shape, and
-  `sidecar.notWorkspaceRelative` re-checks it per entry at the Go decode
-  boundary, dropping a bad value without losing the rest of the list. Two gates
-  because the vocabulary is OPEN — `physical_acts` can lean on a closed table,
-  and these cannot. The residual exposure is repo *structure* (`services/api/app/billing`)
-  and any customer name inside a filename — the same class `branch` already
-  crosses. (That comparison used to end "not the class `named_terms` does";
-  since v18 `named_terms` crosses too, so paths are no longer the more exposed
-  of the two.) Do not add a producer for these
-  levels that bypasses `reconcile()`. Note they are coding-heavy: a
-  non-engineering session yields **3 distinct paths in total**, so an empty list
-  here is a real answer, not a gap.
-⚠️ **THE PROMPT INDEX HOLDS BOTH IDS, AND HOLDING ONLY `uuid` SILENTLY EMPTIED
-EVERY ENRICHMENT.** A Claude Code user line carries two: `uuid`, unique per line,
-and `promptId`, the identity of the human TURN — shared by every follow-on line of
-it (measured on a real transcript: one `promptId` spanned **7 user lines across 8
-minutes**). The daemon names a prompt by `promptId` and only by it:
-`watch/filter.go` REJECTS a line without one, the spool pointer carries it, the
-queue dedups on it, and it is published as `corr_id`, which Atlas joins against
-`ToolEvent.prompt_id`. So `promptId` is the id `/analyze` and `/tick` are ASKED
-about. While the index held only `uuid`, every lookup 404'd, the workstreams pass
-**failed** (not skipped — a failed pass is what sets `partial`), and every prompt
-published `pipeline_status:"partial"` with no workstreams, no dynamics and no
-prior. Under `ml_backend:"deterministic"` that is the whole payload. Measured on a
-live v2 machine: **8 of 8 prompts partial, and 0 of 1,627 stored enrichments had
-ever carried a workstream.**
-**Why no test caught it, which is the part to keep:** both halves of the sidecar
-agreed on `uuid` — the index AND `analyze.py`'s oracle scan — so
-`analyze_window_by_parse`, the equality test that guards the entire store,
-compared two identical wrong answers; and every sidecar fixture built a user turn
-as `{"type":"user","uuid":…}` with **no `promptId` at all**, so the sidecar's own
-corpus did not look like a real transcript. The Go tests use fakes and never
-crossed the seam either. An oracle that shares the bug proves nothing, and a
-fixture that does not resemble production is why it could.
-Both ids are now indexed, in FILE order under `upsert_prompts`' existing
-`ON CONFLICT DO NOTHING`, so a shared `promptId` resolves to the FIRST line
-carrying it — the human prompt's own instant, never a continuation's, which would
-run every window minutes long. `analyze.py`'s oracle matches either id and **must
-change in the same commit as the index**, or the equality test goes back to
-proving nothing. `resolve/claude.go` already accepted either id when reading
-prompt TEXT; this made the sidecar consistent with a rule the Go side already had.
-Pinned from both ends by `sidecar/app/test_prompt_id_seam.py` and
-`watch/filter_test.go`'s `TestHumanPromptIDIsThePromptIdFieldNotTheUUID`, which
-name each other — **do not remove `promptId` from those fixtures.**
-`ingest.STATE_VERSION` 4 → 5 is the repair: existing stores hold uuid-only
-indexes and nothing recomputes them, so **expect one reparse per transcript on
-upgrade.**
+  of the hour ending at this prompt — seven ALLOCATION dimensions (project,
+  branch, model, output_type, language, skill, tooling) plus nine published
+  INVENTORY ones — counted from tool-call metadata. It takes COORDINATES
+  (transcript path + prompt id), **never text**. `ModelFree`+`AlwaysRun`,
+  registered only with an analysis backend (`enrich.WithDimensions`) **and** a
+  source the analysis can read (`enrich.DimensionsEligible`: `claude_code` /
+  `cowork` only — Codex/Gemini prompt ids 404). A failed analysis fails the pass
+  (`pipeline_status:"partial"`); it never publishes an empty set.
+  **Attribution needs TWO things:** the winning share ≥ 0.50 **and** ≥
+  `window.MIN_EVIDENCE` (5) observations. A share is a ratio — one tool call
+  gives 1.0 by construction. Five is derived: `0.5**n` first falls below 5% at
+  n=5.
+  **EVERY dimension publishes and the floor is a LABEL, not a publish gate**
+  (schema v21 / sidecar SCHEMA 16): `Labeled` carries `evidence` and `status`
+  (`attributed`/`thin`/`tie`/`no_majority`/`absent`). **The floor did not move
+  and nothing was promoted** — removing the two conditions would take
+  P(false attribution) from 0.031 to 0.50. A consumer rendering `thin` as
+  `attributed` is misreporting.
+  ⚠️ **All nine inventories publish, including `named_terms`** (schema v18) —
+  proper nouns from message text, term + count, no span or offset, and real
+  person names have been observed in it. There is deliberately **no person-name
+  filter**: none measures better than ~1% precision, so one would remove the
+  belief that names are present rather than the names. `inventory` as a BLOCK
+  stays unforwardable (a test pins it), so a tenth key cannot ride along.
+  **The PATH inventory levels** (`files`/`directories`/`components`) are already
+  workspace-relative — `reconcile()` resolves against the workspace root, and it
+  is gated TWICE (sidecar payload assert + `sidecar.notWorkspaceRelative` at the
+  Go decode boundary). Do not add a producer that bypasses `reconcile()`.
+  Per-level caps (**40 / 24 / 16**) sit just above each level's p90 and the cut
+  is declared in `inventory_omitted`.
+  ⚠️ **A prompt is named by `promptId`, never `uuid`.** `watch/filter.go` rejects
+  a line without one, the spool pointer carries it, the queue dedups on it, and
+  it publishes as `corr_id`. Holding only `uuid` in the sidecar's index silently
+  404'd every lookup and made **8 of 8 prompts partial**. Pinned from both ends by
+  `sidecar/app/test_prompt_id_seam.py` and `watch/filter_test.go` — **do not
+  remove `promptId` from those fixtures**, and `analyze.py`'s oracle must change
+  in the same commit as the index or the equality test proves nothing.
 
-- **The watcher signals ingest; the sidecar never polls.** `/analyze` answers out
-  of a persistent reference-series store, and the parse that fills it is driven by
-  the transcript watcher: a file that advanced in a poll is signalled once (per
-  file, per poll) to the sidecar's **`POST /ingest`**, which parses only the
-  appended tail from its own byte-offset checkpoint. Coordinates only — a path,
-  never a line, never text. The seam is `watch.WithIngestSignal` (the coarse
-  sibling of the per-line `observe` hook); the daemon-side policy is
-  `daemon/ingestsignal.go`: **fire-and-forget** on a bounded, path-coalescing
-  queue with one serial sender, so an unreachable sidecar can never block or slow
-  the watcher's poll loop — the loop that carries every hook-free prompt. Signals
-  are **dropped, not retried**, because ingest resumes from the stored offset: the
-  next signal catches up, and `/analyze`'s own on-demand ingest is the backstop if
-  none ever comes. Scoped to `enrich.DimensionsEligible` sources (the same
-  predicate the pass is gated on — a Codex/Gemini window can never be served, so
-  ingesting it is pure cost). Forward-only by default, matching
-  `KELD_WATCH_BACKFILL`: a first sighting consumes nothing, so a daemon restart is
-  not a herd of whole-file ingests. Why it matters: a first whole-file ingest
-  measured **5.1s on a 90 MB transcript**, and inside an `/analyze` request that
-  lands on an enrichment job's per-pass deadline.
+  Caps, studies and the full incident: **`docs/architecture/window-analysis.md`**.
+- **The watcher signals ingest; the sidecar never polls.** A file that advanced
+  in a poll is signalled once to `POST /ingest`, which parses only the appended
+  tail from its byte-offset checkpoint. Coordinates only. Signals are
+  **dropped, not retried** (the next one catches up); the queue is bounded and
+  path-coalescing with one serial sender, so an unreachable sidecar can never
+  slow the watcher's poll loop.
 - **Retention is bounded by TIME, and a pruned window REFUSES (410) rather than
-  answering narrower.** The store's raw `event` rows expire at
-  `KELD_REFSERIES_RETAIN_DAYS` (400) and the one text-derived level, `term`, at
-  `KELD_REFSERIES_TERM_RETAIN_DAYS` (90); `KELD_REFSERIES_MAX_MB` (1024) is a size
-  **backstop**, not the operating policy — measured, 1,552,800 rows (400 days at
-  3,882/day) is 174 MB, so the cap is ~6-9 years and the horizon is what bites.
-  ⚠️ **Pruning raw events does not degrade a window's edges — it breaks the digest
-  outright.** `/analyze` serves every window with
-  `exclude_slots=(RECONCILE_SLOT,)` (reconcile must be re-scoped per window), and
-  `Store.window_rows` answers an excluded-slot query **entirely from `event`** —
-  a `bin` row has no slot dimension to filter on — so for the digest path `bin`
-  is not a degraded fallback for a pruned event, it is not read at all. Measured
-  on the test fixture: prune the events, keep every bin, and the window returns
-  **200** with `evidence` 179 → 36, `project`/`branch`/`model` silently `null`,
-  and a confident 0.833 share off a fifth of the data, with `is_current()` still
-  True so nothing objects. So the store keeps a monotonic **serving floor** and a
-  window starting below it is refused: `WindowExpired` → **410** (`analyze_expired`),
-  which the Go client treats as a genuine error rather than retrying — correct,
-  since retrying can never restore a pruned row — so the workstreams facet
-  publishes `partial`. Not 503 (the one status `post()` retries through; it would
-  spin forever) and not 404 ("prompt not in this transcript", which would hide a
-  horizon set shorter than the windows being asked for). `term` is the **only**
-  level whose **bins** are pruned too: it is an INVENTORY level, so it is
-  precomputed into `bin`, and under "rollups are never pruned" no event policy
-  would bound the lifetime of a person's name at all. Never pruned: every other
-  level's bins, and `prompt`/`parse_state`/`ingest` — the prompt index is what
-  keeps 410 distinguishable from 404, and `parse_state` is what makes a tail parse
-  equal a full parse. Pruning is **chunked** (5,000 rows, measured 14 ms, one short
-  transaction each) so it cannot lock out the watcher-driven `/ingest`, rides
-  `ingest_file` (both writers) with an hourly gate that being over-cap overrides,
-  and is reported in `/metrics` under `store` — size (`live_mb` **and** `file_mb`,
-  because **SQLite does not shrink the file on DELETE**: measured, 400,000 events
-  took the file to 41.5 MB, and deleting half of them left the file at 41.5 MB
-  while live pages halved to 21.1 MB. A cap read off the file size would delete
-  every row the store had and *still* be over cap — it would prune the whole
-  series to no effect — so it is enforced on `page_count - freelist_count`
-  (`Store.live_mb`) and `/metrics` reports both), per-table row counts, oldest
-  retained event, `serving_floor_ts` and what each policy removed.
-- ⚠️ **`/analyze` and `/ingest` are confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
-  auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
-  adequate while every endpoint only processed text the caller already held.
-  `/analyze` is the first that opens an **arbitrary filesystem path as the
-  daemon's user** and returns content derived from it, so unconfined it is a
-  confused deputy: on a multi-user host any other local user can POST a path
-  under someone else's `~/.claude/projects` and read back their workspaces,
-  branches and named terms. The path is therefore checked against an allowlist
-  before the open — `os.path.realpath` on both sides, so neither `../` nor a
-  symlink escapes — and anything outside answers **403** (not 404: a rejected
-  path and an unresolvable one must stay distinguishable), counted as
-  `analyze_rejected`/`ingest_rejected` in `/metrics`. `/ingest` shares the
-  allowlist because it is the same read with a persistence side effect. The daemon sets the variable at spawn from
-  `watch.AnalyzeRoots()` (`daemon/sidecarenv.go`), which is the **stable
-  ancestors** of each layout plus `KELD_WATCH_ROOTS`, not `DiscoverRoots()`'s
-  globbed leaves: session directories appear after the sidecar is spawned.
-  Empty means **deny everything**; absent means the sidecar's own per-user
-  defaults.
-- **This is the client-side analysis and enrichment service, not a GLiNER2
-  wrapper.** GLiNER2 was the first use case, not a precondition: the service
-  starts and serves with no model loaded, and `/analyze` answers with the
-  inference worker still `down` (pinned in `test_main.py` against the real
-  `lifespan`). `/analyze`'s `named_terms` level is **on** by default
-  (`KELD_TERMS=0` switches it off) and loads spaCy — ~619 MB, into the FastAPI
-  parent, permanently, since the parent is never recycled.
-  ⚠️ **That default used to be justified by the level being unforwardable, and
-  that argument no longer exists** — `named_terms` publishes as of schema v18
-  (see the workstreams bullet above). The default is unchanged, but it is now an
-  open decision resting on the level's usefulness rather than on its output
-  being confined to the device, and it costs 619 MB in a parent that is never
-  recycled, inside a budget already documented below as oversubscribed. Anyone
-  revisiting `KELD_TERMS`' default should know it was never re-argued on its own
-  merits. That coexists with
-  GLiNER2 fine (~60 + ~619 + ~2740 MB against a 4096 MB budget); what did not
-  was the **accounting** — see the parent-reserve bullet under Resource safety.
-  The response carries `named_terms_status` (`ok` / `skipped:disabled` /
-  `degraded:spacy_unavailable`), because an empty `named_terms` is otherwise
-  not self-describing: a window that held no terms and a level that never ran
-  look identical. `KELD_TERMS_MAX_LEN` (default 100k chars/message) restores
-  spaCy's own per-document guard, which had been set to 20,000,000 — i.e.
-  disabled; over-length messages are skipped by the NER pass, never cut, and
-  the regex shapes still read them in full.
+  answering narrower.** `KELD_REFSERIES_RETAIN_DAYS` (400), `term` at
+  `KELD_REFSERIES_TERM_RETAIN_DAYS` (90); `KELD_REFSERIES_MAX_MB` (1024) is a
+  size backstop enforced on **live pages**, not file size (SQLite does not shrink
+  on DELETE). Pruning raw events does not degrade a window's edges — it breaks
+  the digest outright, which is why the store keeps a monotonic serving floor and
+  answers **410**, never 503 (retried forever) or 404 (hides a short horizon).
+- ⚠️ **`/analyze` and `/ingest` are confined to `KELD_ANALYZE_ROOTS`.** The
+  sidecar has **no auth**; these are the first routes that open an arbitrary
+  filesystem path as the daemon's user, so unconfined they are a confused deputy
+  on a multi-user host. `realpath` on both sides, **403** outside (not 404).
+  Empty means **deny everything**; absent means the sidecar's own defaults.
+- **This is the client-side analysis service, not a GLiNER2 wrapper.** It starts
+  and serves with no model loaded. `/analyze`'s `named_terms` level is **on** by
+  default (`KELD_TERMS=0` off) and loads spaCy — ~619 MB into the FastAPI parent,
+  permanently, since the parent is never recycled. ⚠️ That default was justified
+  by the level being unforwardable, and **since schema v18 it publishes**, so the
+  default now rests on usefulness alone and was never re-argued on its own
+  merits. `named_terms_status` distinguishes a level that never ran from a window
+  that held no terms; `KELD_TERMS_MAX_LEN` (100k chars/message) restores spaCy's
+  own per-document guard.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
@@ -997,848 +429,288 @@ upgrade.**
   augments with it — `task_type` and the others drop it.
 
 **The reference-series store (`analysis/store.py`, `analysis/ingest.py`).**
-`/analyze` used to re-parse the whole transcript on every request: median **0.79s
-on a 90 MB file**, and since a 60-minute window holds a **mean of 3.8 user prompts
-(max 20, over 370 windows)** that is the same hour parsed **~4x**, up to 20x in a
-burst. It now answers from a persistent series at `~/.keld/state/refseries.db`
-(native SQLite, created `0600`, path resolved through `KELD_HOME`; never pickled
-pandas — the package is deliberately pandas-free): **2.3ms on the same file, 340x.**
-Nothing else persisted before this, so no dynamics were computable at all. Equality
-with a parse is **asserted, not assumed**: `analyze_window_by_parse` is retained as
-the ORACLE and never as a fallback, and **0 of 90 real prompts across 30 transcripts
-differ from it**.
-- **A window is a query over 5-minute bins (`BIN_SECONDS = 300`) and the two edges
-  are read EXACTLY.** A 60-minute window ending at a prompt's own instant
-  essentially never lands on a bin boundary, so both edge bins are almost always
-  partial; snapping outward over-counts, snapping inward drops, and either turns
-  every digest into an approximation. `window_rows` partitions instead — the
-  fully-covered interior from `bin` (11 of 13 queries for a typical hour), the two
-  edges from `event` — and a window shorter than one bin has no interior and is
-  answered from events alone. The ordering rule is **not** reimplemented in SQL:
-  SQLite computes the per-`(level, ref)` sums and `window.rollup` merges and applies
-  its own alphabetical tie-break, so `rollup_window` returns exactly what
-  `window.rollup` returns over the same rows and `dimensions.payload` consumes it
-  unchanged.
-- **`bin` is sparse by design, and its absence must never read as "no evidence".**
-  Two things make that unmisreadable rather than merely documented: a **`bin_level`
-  registry that `bin.level` REFERENCES** (with `foreign_keys=ON`, so the table
-  physically cannot hold an unregistered level — asserted with a direct INSERT), and
-  `rollup_window` routing unbinned levels to `event`, so the sparseness never reaches
-  a caller. `PRECOMPUTED_LEVELS` is **derived** from `dimensions.ALLOCATION` +
-  `INVENTORY` (16 levels) rather than typed, against the 19 `events_for_turns` emits;
-  registering a new level backfills its bins from the retained events, with no
-  transcript re-read.
-- **Row timestamps are quantized to the series' own 0.1s resolution**
-  (`levels.quantize`), so a window edge finer than that is not representable and is
-  evaluated at that resolution. Measured against the old exact-timestamp turn
-  selection: **6 of 90 real prompts move one turn across an edge, changing an
-  evidence count by 1; 0 change any published VALUE.**
-- WAL + `busy_timeout=5000` + `synchronous=NORMAL`; one writer, readers on executor
-  threads — WAL is what lets a digest be served *during* an ingest. `NORMAL` is safe
-  **only** because events, re-rolled bins and the byte-offset checkpoint commit in
-  **ONE transaction**: a dropped trailing commit loses the offset too, so the next
-  ingest re-reads the same tail. A half-applied batch is the state nothing downstream
-  would notice, which is why `transaction()` exists. Non-ref rows are dropped on the
-  way in — a `say` row carries `len(body)`, a measure of message text, and a `tok`
-  row carries token counts; neither is a reference event. ⚠️ **That drop is now
-  conditional** — see `KELD_CAPTURE` below — but the default is still drop, and
-  nothing routes those rows to `event` either way.
+`/analyze` used to re-parse the whole transcript per request — median **0.79s on
+a 90 MB file**, the same hour parsed ~4x. It now answers from a persistent series
+at `~/.keld/state/refseries.db` (native SQLite, `0600`, via `KELD_HOME`; the
+package is deliberately pandas-free): **2.3ms on the same file**. Equality with a
+parse is **asserted, not assumed** — `analyze_window_by_parse` is retained as the
+ORACLE and never as a fallback (0 of 90 real prompts differ).
+- **A window is a query over 5-minute bins and BOTH EDGES ARE READ EXACTLY**:
+  interior from `bin`, the two partial edge bins from `event`. Snapping either
+  way turns every digest into an approximation. The ordering rule is not
+  reimplemented in SQL — `window.rollup` merges and applies its own tie-break.
+- **`bin` is sparse by design and its absence must never read as "no evidence"**:
+  a `bin_level` registry that `bin.level` REFERENCES (with `foreign_keys=ON`) plus
+  `rollup_window` routing unbinned levels to `event`. `PRECOMPUTED_LEVELS` is
+  DERIVED from `dimensions.ALLOCATION` + `INVENTORY`, never typed.
+- Row timestamps are quantized to 0.1s (`levels.quantize`). WAL +
+  `busy_timeout=5000` + `synchronous=NORMAL` — `NORMAL` is safe **only** because
+  events, re-rolled bins and the byte-offset checkpoint commit in **ONE
+  transaction**.
+- ⚠️ **`KELD_CAPTURE` (default OFF) is fingerprinted into `parse_state`**, so
+  flipping it forces one reparse and no transcript can hold rows from two
+  settings — but that is a per-TRANSCRIPT guarantee, so a corpus builder can see
+  two incomparable populations. Absent means NOT RECORDED, never zero. It keeps
+  four numeric signals (per-role character counts, the token split, tool-call
+  outcomes, and `bin_offset`). ⚠️ `capture.scan`'s anchoring timestamp must be
+  the RECORD'S OWN: a bare first-`"timestamp"` regex took a nested one on 1.5% of
+  lines and produced non-monotone byte offsets, so non-message lines are DECODED.
+- ⚠️ **Thinking-block LENGTH is not in this data** — every block carries an empty
+  `thinking` string. The COUNT is the signal. Don't wire a length consumer.
 
-⚠️ **`KELD_CAPTURE` (default OFF) keeps four signals the store used to compute and
-discard, and flipping it costs a reparse.** They are the training corpus step 2 of
-`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md` needs, and all four
-are numbers: per-role message CHARACTER COUNTS (`say`), the raw token split (`tok`),
-tool-call OUTCOMES (`is_error` + result size), and `bin_offset` — the byte position
-where each 5-minute bin's first line starts. The first three ride `turn_magnitude`'s
-existing `kind` dimension (a new magnitude is data, not DDL); only `bin_offset` adds
-a table. `Store.has_magnitudes` stays scoped to the COST kinds so a published field
-cannot move because a character count arrived.
-- **Why a byte index at all:** `transcript.turns_between` is O(FILE) — a whole-file
-  parse, 0.79 s on the 90 MB transcript — so re-reading one block through it puts
-  back the exact cost this store exists to remove. A block is bin-aligned by
-  construction, so a block span maps to a byte range: one seek, one bounded scan.
-- ⚠️ **The anchoring timestamp must be the RECORD'S OWN, and a bare regex does not
-  give that.** `capture.scan` reads the instant off the raw line without decoding it,
-  and taking the first `"timestamp"` anywhere in the line took a NESTED one:
-  `file-history-snapshot` records have no top-level timestamp at all, and measured
-  over 73,449 lines of the 40 largest real transcripts 1,135 of them (1.5%) match. The
-  result was not merely imprecise but NON-MONOTONE — 31 of those 40 transcripts held a
-  bin whose offset disagreed with `json.loads`, one anchoring at byte 13,931 of a 24 MB
-  file whose preceding bin anchored at 9,426,720, i.e. a negative-length byte range —
-  and these rows are written once at ingest and never re-derived. The line is therefore
-  routed: a message-shaped line (`"type":"user"`/`"assistant"`, the shape `turns_in`
-  gates on) keeps the regex, measured exact on 45,587 lines and 293.7 MB of the 321.3 MB
-  corpus; anything else is DECODED, exact by construction and so robust to a record type
-  Claude Code has not invented yet, and affordable because the bookkeeping records are
-  the small ones — 8.3 ms to decode every one of them on the 90 MB transcript.
-- ⚠️ **`KELD_CAPTURE` is fingerprinted into `parse_state`** (`ingest.capture_mode`, the
-  sibling of `terms_mode`), so a change forces one reparse and no single transcript can
-  hold rows from two settings. That is a per-TRANSCRIPT guarantee and the store is not
-  one transcript: flip it on and only sessions that see another append reparse, so a
-  dormant session keeps no capture rows. A corpus builder querying the store CAN
-  therefore see two incomparable populations; whether a per-session marker is needed is
-  a step-2 decision, deliberately not answered. Absent means NOT RECORDED, never zero.
-- ⚠️ **Thinking-block LENGTH is not in this data and no toggle changes that.** Every
-  block a platform writes carries a signature and an EMPTY `thinking` string (9,148
-  measured in `text.think_blocks`, re-measured 7,648 with 0 of nonzero length), so
-  `say_asst_think` is emitted and, being zero, never stored. The COUNT is the signal and
-  is captured as `say_asst_think_blocks`. Don't wire a length consumer.
-- `bin_offset` and `turn_magnitude` are both swept to the retention SERVING FLOOR
-  rather than carrying horizons of their own: below it, one is a number nothing can be
-  joined to and the other a seek into a window `/analyze` refuses (410). `/metrics`
-  reports both row counts under `store.rows`.
+Derivations, measurements and the retention/`/metrics` detail:
+**`docs/architecture/reference-series-store.md`**.
 
-⚠️ **`KELD_TEXTEMBED` (default OFF) is the TEXT half of the same corpus, and it is the
-first thing in this repo that reads message text in order to keep something derived
-from it** (`analysis/textembed.py`). The deterministic half enters as numbers; this
-half enters as a text embedding, and neither is ever serialised into the other's
-modality — a bi-encoder fed digest PROSE answered `record` on 36 of 36 inputs, so
-that direction is closed.
-- **The unit is the MESSAGE, not the shell.** A 240-minute shell holds hundreds of KB;
-  `tool_result` lines are the huge ones `turns_in` skips unparsed and must stay that
-  way (this module reads only `text` and `thinking` content BLOCKS, so a `tool_result`
-  riding a `tool_use` line is unreadable by construction, not by filter); and shells
-  overlap across rows, so per-message encoding means each message is encoded ONCE EVER
-  and every shell reuses the vector. Three streams — `user`, `asst`, `think` — kept
-  separate and never concatenated. `think` is `skipped:empty` in practice: 9,144
-  thinking blocks re-measured over the 40 largest local transcripts, **0 non-empty**.
-- **Qwen3-Embedding-0.6B via `transformers.AutoModel`, encode 1024-d, publish MRL
-  prefix-sliced to 256-d.** Nothing was added to `sidecar/requirements.txt` — gliner2
-  already pulls torch and transformers. The 256 is the one parameter that cannot be
-  revised retroactively: a corpus collected at 256 cannot be widened without
-  re-embedding every machine's history.
-- **Its own child process, and bf16 is MEASURED on both axes.** Not the FastAPI parent:
-  `parent_reserve_mb()` is a high-water latch, so anything resident there permanently
-  shrinks the inference worker's hard limit. Measured on 200 real messages, 2 threads:
-  float32 **3113 MB / 804.0 ms per message**, bfloat16 **1673 MB (1813 peak) /
-  766.2 ms** — bf16 is 1313 MB cheaper and no slower, so it is not a latency trade.
-  Idle-unloaded (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned when the toggle is off.
-  ⚠️ **Two of those bf16 figures were SINGLE-SHOT and did not survive the sustained
-  arm** (`loadtest embed`, 104 messages / 23 batches / 181 s on a real 14.4 MB
-  transcript, same host): resident replicates (1673 → **1700 MB**), but the peak is
-  **2345-2432 MB, not 1813** — a one-shot script cannot see an in-flight transient, and the peak is
-  not a stable number (2072/2345/2414/2432/2389 across five runs) — and the
-  cost is **1119-1635 ms/message, not 766.2** (message LENGTH is the variable, and ~1.1-1.6 s
-  is what `featuretext`'s independent ~1.44 s/message already said). The dtype comparison
-  is unaffected — both arms ran the same inputs — and bf16 stands on the 1313 MB, which
-  replicated. Size any per-message or per-block cost off **~1.6 s**.
-- **Absent weights are a STATED status, never a crash or a stall.** They are provisioned
-  on demand into `~/.keld/models` and handed over as `KELD_TEXTEMBED_DIR`, the sibling of
-  `KELD_GLINER2_DIR`; nothing downloads at import. `degraded:weights_unavailable`, an
-  empty vector list, and a retry cooldown — not a latch, because provisioning is
-  asynchronous, and not per call, because a failed spawn costs seconds.
-- **A fixed ORTHOGONAL projection is applied before publish**, generated deterministically
-  from `KELD_TEXTEMBED_PROJECTION_SEED`. It preserves cosine and inner products exactly,
-  so training is unaffected, and it withholds the embedding space from off-the-shelf
-  inversion tooling. ⚠️ The matrix is **Keld's, not the client's** — issued to the fleet,
-  so the client multiplies by a constant it did not choose.
-- ⚠️ **Never cut a message mid-sentence.** Long messages are split at sentence boundaries
-  and the chunk vectors mean-pooled; a single sentence over the cap is dropped WHOLE and
-  the drop is declared as `dropped_chars`. Every scalar (`dispersion`/`drift`/`novelty`)
-  is `None` where it could not be computed, never 0.0 — an absent comparison and a
-  comparison that found no movement are different facts.
+⚠️ **`KELD_TEXTEMBED` (default OFF) reads message text in order to keep something
+derived from it** (`analysis/textembed.py`) — the second of the two qualifications
+at the top of this file. What crosses is a 256-d vector: Qwen3-Embedding-0.6B
+encodes 1024-d on device, MRL prefix-sliced to 256, then multiplied by a **fixed
+orthogonal projection** (`KELD_TEXTEMBED_PROJECTION_SEED`) that preserves cosine
+and inner products exactly — training unaffected, off-the-shelf inversion tooling
+needs a matrix the client did not choose. ⚠️ The matrix is **Keld's, not the
+client's**. No text, span or offset crosses.
+- **The unit is the MESSAGE, not the shell**, so each message is encoded once
+  ever and every overlapping shell reuses the vector. Three streams (`user`,
+  `asst`, `think`) kept separate and never concatenated; `think` is
+  `skipped:empty` in practice.
+- **Its own child process, bf16** (measured 2026-08-26: 1313 MB cheaper than
+  float32 and no slower). Sustained cost is **~1.1-1.6 s/message** and the peak
+  **2.35-2.43 GB** — size any per-message work off ~1.6 s, not off the
+  single-shot figures the design first carried.
+- **Absent weights are a STATED status** (`degraded:weights_unavailable`), never a
+  crash or a stall. ⚠️ **Never cut a message mid-sentence** — long messages split
+  at sentence boundaries and mean-pool; an over-long single sentence is dropped
+  WHOLE and declared in `dropped_chars`. Every scalar is `None` where it could not
+  be computed, never 0.0.
+- **`POST /features` is a CURSOR route** (schema 17), not an anchor-instant one:
+  `{path, since_ts, now, max_rows, resolved}` → `{schema, rows, watermark}`, with
+  `/features/probe` kept for studies. `since_ts` is `>` on a row's own instant so
+  a batch is never cut inside one. `FEATURE_SPEC_VERSION` 2, `DIMS` **1534** — the
+  106 text slots are present **whether or not the toggle is on**, because a width
+  that depended on the environment is the incoherent-corpus failure the frozen
+  manifest exists to prevent.
+- ⚠️ **Encoding runs OFF the request** (the sidecar client's timeout is 5 s; one
+  batch of 64 messages costs ~92 s). The instant of the first unencoded message is
+  the **FRONTIER** and no row at or after it is emitted; `pending:encoding` is the
+  stated status. A message the encoder ran on and produced nothing for is cached
+  as such, or the frontier LATCHES and the cursor wedges forever. A **degraded**
+  encoder drops the text half WHOLE and returns no frontier.
 
-⚠️ **`POST /features` is a CURSOR route, not an anchor-instant one, and the sidecar chooses the
-anchors** (schema **17**; `analysis/features.py`'s `feature_rows`, `analysis/featuretext.py`).
-`{path, since_ts, now, max_rows, resolved}` → `{schema, rows, watermark}` — `POST /blocks`' shape,
-because only this process owns the store and can therefore see where the non-empty 5-minute bins
-and the closed blocks are; a daemon supplying a grid would have to guess it. The anchor-instant form
-is kept, unchanged, as **`POST /features/probe`** for studies, which want raw floats in `manifest()`
-order rather than the transport. Three anchor kinds ride one **globally chronological** stream
-(`message` / `bin` / `block`) and `since_ts` is `>` on a row's own instant, so a batch is cut at an
-instant boundary and **never inside one** — two rows can share a 0.1 s tick, and emitting half of
-them would advance the caller's cursor past the other half forever. `anchor_id` is REQUIRED on a
-`message` row (the turn's uuid) for the same reason. Rows carry the vector int8-quantised as
-`{dims, scale, q}`, `q` base64 of two's-complement bytes, `dims` declared so the Go side compares
-rather than trusts. Measured end to end on a real 26 MB transcript: **1.6 s for 96 rows** structured
-only, 604 rows across the whole session replayed in 90 cursor calls with **0 lost and 0 repeated**,
-and **0 of 604 rows dropped** by `sidecar.FeatureRowsFor`'s six refusals.
-- **`FEATURE_SPEC_VERSION` is 2 and `DIMS` is 1534, not the spec's 1,414.** `S(t)` gained the
-  per-shell, per-stream text scalars (`<shell>.text.<stream>.{n,dispersion,drift,novelty}` plus a
-  `_known` flag per scalar) and `row.meta.text_recorded`. ⚠️ Those 106 slots are present **whether
-  or not `KELD_TEXTEMBED` is on**: a width that depended on a machine's environment is exactly the
-  incoherent-corpus failure the frozen manifest exists to prevent, so the flag beside them is what
-  says they may be read — `capture_recorded`'s idiom one group along.
-- ⚠️ **A `message` row exists ONLY where the text half ran, and that is ABSENT rather than empty.**
-  A message has no lookback, so there is no structured vector to compute; with the toggle off the
-  kind simply does not appear. `bin`/`block` rows never carry a `text` block at all — the centroid
-  is not published — so the text half reaches them as those scalars.
-- ⚠️ **ENCODING RUNS OFF THE REQUEST, and that is forced by a measurement, not tidiness.** The
-  daemon's sidecar client has a **5-second** timeout and one batch of 64 real messages costs
-  **~92 s** (~1.44 s/message with the real weights, 2 threads — and **1119-1635 ms/message** re-measured
-  under `loadtest embed`'s sustained arm, which is the figure to size with) plus the child's first
-  load, measured at **2.8 s warm / ~20 s cold** (this line said ~90 s, one cold contended reading;
-  the argument never turned on it, since even 2.8 s plus any encoding is past the 5 s budget);
-  a whole 1,646-message session is ~40 minutes. A synchronous encode could not land at any
-  useful batch size, and a timed-out POST is classed as *retryable*, so the failure mode is an
-  unbounded retry loop rather than one slow response. `featuretext.TextSource` therefore serves what
-  its cache holds (measured **0.12-0.44 s** per call, real weights) and hands the remainder to one
-  background pass. The instant of the first message with no vector is the **FRONTIER**, and NO row
-  at or after it is emitted — including `bin`/`block` rows — so every published row's text half is
-  measured over a **complete** message history up to its own instant, and the cursor never runs past
-  an unencoded message. `pending:encoding` is the stated status meanwhile.
-- ⚠️ **A message the encoder RAN on and produced nothing for is cached as such, or the frontier
-  LATCHES AND THE CURSOR WEDGES FOREVER.** A message whose every sentence exceeds the chunk cap is
-  dropped whole and will never have a vector; left as a cache miss it would pin the frontier at its
-  own instant permanently. That is kept distinct from a **degraded** encoder, which must be retried —
-  and a degraded encoder drops the text half WHOLE and returns no frontier, because publishing rows
-  over a prefix of the history while the rest is unreachable is the confident-number-over-a-fraction
-  failure the frontier exists to prevent.
-- The encoder child is idle-unloaded from the same 1 s poll loop that recycles the inference worker
-  (measured **1.70 GB resident / 2.35-2.43 GB peak**, bf16, real weights — the "~1.9 GB" this line used
-  to carry sat between the two and named neither) — nothing else would ever release it, because
-  `/features` only ever spawns. ⚠️ **That unload is now MEASURED end to end rather than asserted:**
-  `python -m loadtest embed` is the encoder's arm of the load-test harness (`sidecar/loadtest/`,
-  opt-in, never part of `smoke`) and it drives a sustained encode off a real transcript to establish
-  no leak (**+32 MB** over 180 s), a bounded peak, that idle-unload actually returns **1711 MB** to
-  the OS and the next request respawns the child, that `/analyze`, `/blocks` and `/features` keep
-  answering *during* a pass (p50 **17→20 / 117→165 / 54→77 ms**), and the per-message cost above.
-  ⚠️ Its first run found `embed.peak_rss_mb` pinned to the TROUGH — 1717 MB reported against a live
-  2072 MB — because `Encoder.maybe_unload` took the encode lock BLOCKING and stalled the very poll
-  loop whose lock-free `observe_rss` ran one line earlier. That is the RSS-oscillation incident's
-  shape one child over; fixed, and pinned by `app/test_guard_visibility.py`'s encoder block. **A
-  lock-free sampler behind a blocking caller is not a lock-free sampler.**
+Full contract, the loadtest figures and the two defects they found:
+**`docs/architecture/text-vectors-and-features.md`** and
+`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`.
 
-⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
-every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
-third — the set of `requestId`s already costed. It exists because `events_for_turns` deduped
-requests with a set **local to one call** while incremental ingest calls it once per batch, and
-`turn_magnitude`'s primary key includes `source_line` (the batch ordinal). So a request whose
-assistant lines straddled a batch boundary was written twice and `turn_magnitudes` summed both:
-measured **2x on a three-line request cut after line 1, and 3x ingested a line at a time** —
-exactly lines-per-request. Nothing caught it because the oracle test ingests in ONE batch, the
-fixture used one `requestId` per line (making the dedup a structural no-op), and `test_ingest`'s
-chunked-equivalence comparator did not look at `turn_magnitude` at all. It does now.
-`ingest.STATE_VERSION` 3 → 4 is the REPAIR rather than mere bookkeeping: existing stores already
-hold the duplicate rows and nothing recomputes them, so the version mismatch forces one reparse and
-`clear_session` drops them. **Expect every store to reparse once on upgrade.** The set costs
-1,875 ids / ~59 KB of JSON on a 90 MB transcript — the same order as `pending` — and a truncated
-hash was deliberately rejected, because a collision would silently DROP a request's spend rather
-than double it.
+⚠️ **A tail parse is only equal to a full parse because it was MADE equal**, and
+if it isn't the series is silently and permanently wrong — nothing downstream
+re-derives these rows. `ingest_file` resumes from the `ingest` table's byte offset
+(rotation caught by a `HEAD_BYTES = 4096` head fingerprint that includes the byte
+count). Two retroactive sources, handled differently because the costs differ:
+**`reconcile` is RECOMPUTED WHOLE each batch** (which is why `Store.replace_events`
+DELETEs its slot first — a recomputed set must be able to RETRACT a row), and
+**workspace evidence ACCUMULATES, with a change in the DERIVED ANSWER forcing a
+reparse**. The parse state carries a **third** accumulator, `reqs`, because
+`events_for_turns` deduped requests with a set local to one call — a request
+straddling a batch boundary was costed twice.
 
-⚠️ **A tail parse is only equal to a full parse because it was MADE equal.**
-`ingest_file` parses just the bytes a transcript grew by, resuming from the `ingest`
-table's byte offset (rotation/truncation caught by a `HEAD_BYTES = 4096` head
-fingerprint that includes the byte *count*, since a growing file changes how much
-there is to hash). The non-obvious part is that this is **not** automatically equal
-to parsing the whole file, and if it isn't, the series is silently and permanently
-wrong — nothing downstream re-derives these rows. **Measured first:** naive
-per-chunk ingest of real transcripts differed from a single pass by up to **4,179
-`repo_mentioned` rows** and **1,276 `workspace_evidence` rows** on single files.
-Both retroactive sources are real, and they are handled by two different means
-because the costs differ:
-- **`reconcile` is RECOMPUTED WHOLE each batch.** It resolves prose paths against
-  every DECLARED path, so a tail declaration reattributes a head mention and no
-  incremental form is correct. `pending` is persisted in `parse_state`, the tail is
-  appended, and the result REPLACES the previous one — exact by construction, no
-  detection needed. Affordable because `pending` is tiny: **104-859 entries for
-  2-47 MB transcripts, and reconciling the whole of one costs 0-3ms.** This is why
-  `Store.replace_events` exists and DELETEs its slot first: `upsert_events` can only
-  add or raise a count, but a recomputed set must be able to **RETRACT** a row, or a
-  reattributed file stays counted under both names — reconcile's own split-share
-  defect reintroduced by the storage layer.
-- **Workspace evidence ACCUMULATES, and a change in the DERIVED ANSWER forces a
-  reparse.** `scan_workspace` is a whole-file pre-pass: a `CLAUDE.md` read at 17:00
-  re-resolves the 09:00 turns from "cwd as given" to "repo-level marker", and with it
-  the `root_dir` every path is relative to. Accumulation is exactly equal to one pass
-  but cannot be retroactive, so the distinct cwds seen so far (1-8 per transcript) are
-  carried and their resolution + remote selection recomputed after each batch. Keying
-  on the **answer** rather than the raw evidence means a new `cd` target that resolves
-  to the same workspace costs nothing. Reparse over re-derivation is deliberate:
-  re-deriving means a second, partial copy of `events_for_turns`.
-
-**Equivalence at corpus scale: 284 real transcripts (0-47 MB), each ingested in 40
+**Equivalence at corpus scale: 284 real transcripts, each ingested in 40
 successive chunks against one whole-file ingest — 0 files differed, 0 rows
-differed.** Retroactive reparses hit **0.7% of appends (53/7,571)**. The 47 MB file
-costs **1.82s for its entire 41-chunk lifetime against 0.76s for one full parse**
-(~44ms per ingest, against the 0.8-1.0s per PROMPT the parse path used to spend),
-and chunk count barely moves the total — which is the O(tail) claim holding. Two
-further silent-wrongness traps are pinned rather than hoped for: the **watermark**
-must not retreat (taking the batch's last turn regresses on the 9-in-9,937 real
-turns whose timestamp precedes the previous line), and `ingest.terms_mode`
-fingerprints the terms pipeline's **identity** into the parse state — `term` is the
-one level never re-derived, so a store ingested under `KELD_TERMS=0` would otherwise
-report no `named_terms` forever. A changed fingerprint reparses.
+differed** (measured 2026-08-26). The watermark must not retreat, and
+`ingest.terms_mode` / `capture_mode` fingerprint the pipeline's identity into the
+parse state; a changed fingerprint reparses. Bumping `ingest.STATE_VERSION` is
+the REPAIR mechanism for rows already written wrong — **expect one reparse per
+transcript on such an upgrade**.
 
-**The dynamics block (`analysis/dynamics.py`) — what MOVED in the window.** The same
-`/analyze` call that characterises the window also answers what changed inside it:
-`DimensionAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
-round-trip and no inference at all** (two `rollup_window` calls, ~2ms each) and they
-publish under `ml_backend:"deterministic"` too. The span is cut into a recent
-**slice** and an abutting **baseline**, and each dimension is compared across the
-cut. What crosses to Atlas is the derived half only:
-- `status` — the comparison's own outcome, from a closed six-value set (`compared`,
-  `both_absent`, `slice_absent`, `baseline_absent`, `slice_thin`, `baseline_thin`).
-  **Always stated**, so a missing metric is readable rather than merely absent:
-  `tooling` is *absent* on 50.3% of 60-minute windows, and a reader who cannot tell
-  absence from stability reads near-constant churn off a dimension that has no data
-  at all. **Metrics are reported only under `compared`.**
-- `turnover` / `decay` — the share of slice evidence in values absent from the
-  baseline, and its mirror. **Two different facts**: a slice can take on a new value
-  without dropping an old one. Both are shares, so they are invariant to how busy the
-  window was.
-- `concentration_shift` — the slice dominant's share of the slice minus that same
-  value's share of the baseline: is the thing that owns the window holding more of it
-  than it used to. Withheld when the slice has no dominant value, rather than computed
-  against an arbitrary pick.
-- `changed` — did the dominant value change? **Three-state**: `false` for
-  `both_absent` (a level that never fired did not change), and **nil** wherever the
-  comparison cannot support a yes or a no. A plain `bool`/`float64` would render all
-  of that as `false`/`0.0`, i.e. "we checked, nothing moved" — the single misreading
-  the evidence-floor work exists to prevent.
-- `reading` — the conclusion, **stated**, from a closed 7-value vocabulary in
-  precedence order: `switched` / `narrowing` / `broadening` / `churning` / `widening`
-  / `shedding` / `steady`. Computed entirely from the four fields above: no new
-  inference, no second query. Unstated (empty) outside `compared`, never defaulted to
-  `steady`.
+Why each measurement was taken and what it cost to miss:
+**`docs/architecture/reference-series-store.md`**.
 
-⚠️ **Stating the conclusion IS the feature — emitting the numbers alone measured
-worse than emitting nothing.** Three arms scored on the same windows: a 16 KB
-characterisation of raw window numbers came in at **-3.3/-20.0 on synthesis
-accuracy**, worse than emitting nothing, against **+36.7** for a digest of the same
-facts. The digest was not number-free; it *labelled* each number and stated the
-conclusion, and all 14 full-document failures were the one question where the reader
-got `engineer_messages: 5` / `assistant_messages: 84` and had to divide. A bare
-number also invites a **wrong** reading: asked "which ticket?", a model answered
-**2659** — the window's own `reference_events` count — and labelling it moved correct
-declines from **76% to 100%**. So the numbers ship **keyed** (in JSON the key IS the
-label) beside the stated reading; the unlabelled remainder, which is what made the
-losing arm 16 KB, does not — no per-side value/share/evidence/reason, no timestamps,
-no sizer detail.
+**The dynamics block (`analysis/dynamics.py`) — what MOVED in the window.** The
+same `/analyze` call answers it, so dynamics cost **no second round-trip and no
+inference** and publish under `ml_backend:"deterministic"` too. The span is cut
+into a recent **slice** and an abutting **baseline**. What crosses is the derived
+half only: `status` (a closed six-value set, **always stated**, so absence is
+readable — `tooling` is absent on 50.3% of 60-minute windows), `turnover` and
+`decay` (two different facts), `concentration_shift`, `changed` (**three-state**:
+`false` only for `both_absent`, **nil** wherever the comparison cannot support a
+yes or a no), and `reading` (a closed 7-value vocabulary, in precedence order).
+⚠️ **Stating the conclusion IS the feature** — raw window numbers scored
+**-3.3/-20.0** on synthesis accuracy, worse than emitting nothing, against
+**+36.7** for a labelled digest. Numbers ship **keyed** beside the stated reading;
+the unlabelled remainder does not.
+**That same cut is the privacy mechanism.** Every field that could hold a level's
+own string lives in the per-side `slice`/`baseline` objects, which do not cross —
+`term` has held real person names. The subtree's only strings are `status` and
+`reading`, asserted by a reflect walk at the decode boundary and a marshal-level
+wire test. Both vocabularies are mirrored Go-side (`enrich.DynamicStatuses` /
+`DynamicReadings`) and pinned against `dynamics.py` by reading that file, because
+the Go side **DROPS** an unrecognised value and the sidecar ships separately.
+**`MIN_EVIDENCE` (5) is about SAMPLE SIZE, not minutes**, and `MATERIAL =
+1/MIN_EVIDENCE = 0.2` is derived from it. Duration appears nowhere in the
+derivation and `min_evidence_for()` deliberately takes no duration argument — a
+duration-scaled floor would make a published attribution's significance a
+function of slice length while `value` and `share` look identical either way.
+**The FLOOR ITSELF must not move.**
+**The slice is sized by an EWMA change detector** (`DEFAULT_SIZER`, fast 0.3 /
+slow 0.02 / threshold 0.2, on a 60-second observation step), which beat
+`FixedSizer(15)` by **+74.6 / +27.0 points** — and is believed because of the
+**shuffled-truth control**: the EWMA collapses 86.4% → 24.1% on shuffled truth
+while every fixed sizer barely moves. ⚠️ **`river` was measured and REJECTED; do
+not add it hopefully.** Detection reads **`branch` only** — widening it is
+unmeasured.
+**Half the dimensions were dropped on their own distributions**
+(`DROPPED_DIMENSIONS = ("project", "model", "tooling")`), against a bar written
+down FIRST, re-measured 2026-08-25 on 500 transcripts / 2,555 windows. ⚠️ **The
+CONSTANT band test alone MISCLASSIFIES A SPARSE SIGNAL** — never apply it without
+the inside/outside contrast beside it. `DYNAMIC_DIMENSIONS` is derived from
+`dimensions.ALLOCATION` minus the dropped set and `dynamics()` neither takes nor
+forwards a `dimensions=` argument, so **the published vocabulary cannot be
+widened by a caller**.
 
-**That same cut is the privacy mechanism.** Every dynamics field that could hold a
-reference level's own string lives in the per-side `slice`/`baseline` objects, and
-`term` — the one level read from message text — has held real person names. So no
-field that crosses the wire can hold a level value at all: the subtree's only strings
-are `status` and `reading`, asserted exhaustively by a reflect walk at the decode
-boundary and by a marshal-level wire test. Both vocabularies are mirrored Go-side as
-`enrich.DynamicStatuses`/`DynamicReadings` and pinned against `dynamics.py` by
-reading that file, because the Go side **DROPS** an unrecognised value — the sidecar
-is frozen and shipped separately, so version skew is real, and a drift would silently
-stop publishing a dimension instead of failing.
+**The session prior (`analysis/prior.py`) — the session this window sits in,
+reported BESIDE it.** Per dimension a `value`/`share`/`evidence`/`status` plus
+three contrasts: `agrees`, `departure`, `novel`. Same `rollup_window`, wider
+bounds, no second parse and no inference.
+⚠️ **CONTRAST, NEVER FALLBACK — every other rule here is subordinate to this
+one.** The prior never supplies a value the window lacked; with no window value
+all three contrasts are `None` and `workstreams` keeps its honest blank. **45.1%
+of windows have no prior at all**, and that number is the standing pressure to
+soften this. Don't. The block is emitted anyway, saying `absent` out loud,
+because a suppressed block reads as an oversight and an oversight is what someone
+eventually "fixes".
+⚠️ **The prior is cut at the window's START** — "the session so far" taken
+literally puts the window inside its own prior, under which `novel` cannot fire
+at all. Nothing is accumulated; it is **recomputed** per request.
+**`ENABLED = ("branch", "language", "output_type", "skill")`**, decided over 1,022
+windows. ⚠️ `output_type` was first excluded on agreement alone and **that was
+wrong** — agreement is defined only where both sides attribute, so it is silent
+about precisely the windows the dimension is for. `tooling` stays out, with the
+bar for revisiting it written into `prior.py` and its test. `PRIOR_DIMENSIONS` is
+**derived** from `dimensions.ALLOCATION`, so an INVENTORY level is structurally
+not addable — which is what keeps `named_terms` out by construction rather than
+by care.
 
-**`MIN_EVIDENCE` (5) is about SAMPLE SIZE, not minutes — and `MATERIAL =
-1/MIN_EVIDENCE = 0.2` is derived from it.** Duration appears nowhere in the
-derivation: it asks whether unanimity could have come from a coin, which depends only
-on how many times the coin was flipped (`0.5**n` first falls below 5% at n=5, and
-`min_evidence_for(floor, alpha)` deliberately takes **no duration argument**, so a
-duration-scaled floor cannot be written by accident). A duration-scaled floor is not a
-generalisation of that argument but a worse one: it would make the significance of a
-published attribution a function of slice length while `value` and `share` look
-identical either way. (`evidence` used to be **dropped before publish** too, so no reader
-could tell a 3%-confident claim from a 50%-confident one; since v21 the count and the
-status DO publish — see the workstreams bullet — which is what turned the floor into a
-label. The duration argument is unaffected: a duration-scaled floor would still make
-significance a function of slice length, and it is the FLOOR ITSELF that must not move.) Measured over 20,000 windows
-(4,000 seeded anchors x 5 slice lengths, 55 transcripts / 542 MB): median `workspace`
-evidence falls **130 → 20** from 60 to 5 minutes — a sixth, as the plan predicted —
-but a sixth of 130 is still four times the floor. Buying back the 424 of 3,902
-`project` slots the floor costs at 5 minutes gains 13.5 pooled points and takes
-P(false attribution) from **0.031 to 0.50**. `MATERIAL` follows the same argument one
-level down: at the floor a share is measured over 5 observations, so 0.2 is the finest
-difference one observation can produce.
+**The block cutter (`analysis/blocks.py`) — where a piece of work ENDS.** Two
+terminators and the set is closed: **idle** (`IDLE_BINS` 3 = 15 minutes of
+silence) and **budget** (`MAX_BLOCK_MINUTES` 20). Reported separately
+(`REASONS`), because a reader who cannot tell them apart cannot tell an
+arithmetic boundary from a real pause. Both numbers are MEASURED, in a
+pre-registered four-arm study over 496 sessions; retuning either re-opens it.
+**Blocks tile the ACTIVE part of a session, not `[lo, hi)`** — the invariant is
+*every active bin lies in exactly one block*, never "the blocks cover the span".
+⚠️ **There is NO merge rule, and the absence is the design.** The obvious repair
+was built and measured: it changes a published VALUE in **88.6%** of the merges
+it performs, against a pre-registered 5% bar. A thin block publishes
+UNATTRIBUTED and survives as its own block. Do not add a merge rule and do not
+add a knob for one — a knob is a merge rule with the decision deferred.
+⚠️ **A THIRD terminator was ABLATED and every measured number improved**
+(attributable 95.29% → 96.21%; the detector was the ONLY source of empty blocks).
+`EwmaSizer` was **not** removed — it keeps its separate, measured use sizing the
+dynamics slice. `_form` keeps the `cuts` parameter it is now always handed `[]`
+for, so the shipped arithmetic stays identical to the measured arm.
+⚠️ **`cut()` requires BIN-ALIGNED bounds and fails SILENTLY without them** —
+evidence lands in no block, nothing errors, and no block looks wrong. The caller
+owns the alignment (`analyze._block_span`); it is deliberately not clamped inside
+`cut()`, because the study oracle pins that function byte-identical to the
+measured arm.
+**`/analyze` reports the block BESIDE the window, never instead of it** — an
+additive `block` key carrying the span and the two boundary reasons and nothing
+else, because the two definitions of thinness in this codebase disagree (95.3%
+per-level against 99.3% pooled). Whoever adds the first consumer picks the
+per-level measure deliberately. Phases 2-5 of
+`docs/superpowers/specs/2026-08-25-signal-block-pipeline-design.md` are **NOT
+built**.
 
-**The slice is sized by an EWMA change detector, and that beat a constant by
-measurement.** `DEFAULT_SIZER = EwmaSizer()` (fast 0.3, slow 0.02, threshold 0.2)
-encodes the `branch` series as a per-bucket novelty share and cuts at the LAST rising
-edge of `fast - slow`, on a **60-second** observation step — deliberately finer than
-the 5-minute bin, giving 60 observations inside the span budget instead of 12. Over 25
-sessions / 111 transitions / 1,966 windows: **86.4% precision / 54.8% recall against
-`FixedSizer(15)`'s 11.8% / 27.8% — +74.6 and +27.0 points**, firing on 27.0% of
-windows, median detection **2.0 min** from the nearest real transition against fixed's
-10.0.
-- **The shuffled-truth control is why that is believed.** Relocate every transition to
-  a random non-empty bin of the same session and the EWMA collapses **86.4% → 24.1%**,
-  while every fixed sizer **barely moves (11.9% → 10.9%)** — because a constant offset
-  carries no information about the work and **was never a detector**. The fixed sweep
-  is flat at chance across 5-30 min.
-- ⚠️ **`river` was measured and REJECTED; do not add it hopefully.** Its best detector
-  (PageHinkley, 55.5% / 34.3%) clears the pre-registered rules but is **dominated on
-  both metrics** by an idiom already in this repo (the sidecar's own CPU-EWMA rate
-  governor); ADWIN and KSWIN lose outright, and ADWIN scores *better* on shuffled
-  truth than on real truth. Their defaults are silent inside a **60-observation
-  budget** and their detection lag (6-9 buckets) exceeds the 5-minute hit tolerance,
-  so those two structurally cannot hit. `sidecar/requirements.txt` is untouched.
-- `FixedSizer` stays as the **no-detection fallback**, which is 73% of windows, and
-  `SLICE_MINUTES` stays **15**. 10 minutes was the measured optimum for a constant
-  standing ALONE; behind a detector the constant only ever runs on stationary work,
-  where localisation is irrelevant by definition and attribution rate is the metric
-  instead (`language` 68.0% vs 63.0% at 15 vs 10). Both numbers are measured on their
-  own population. Detection reads **`branch` only**, because that is what could be
-  measured — `workspace` has **ZERO** transitions in 51 sessions, a transcript being
-  scoped to one project dir. Widening the level is unmeasured.
+Every study, bar and distribution behind the numbers above:
+**`docs/architecture/window-analysis.md`**.
 
-**Half the dimensions were dropped on their own distributions.** Cheap was not an
-argument for emitting one, so every dynamic was measured over EVERY window `/analyze`
-could answer — **51 sessions, 2,702 windows**, the quiet ones included, sized by the
-shipped `DEFAULT_SIZER` — against a bar written down FIRST: disqualified if 90% of
-readings fall inside one 0.05-wide band (CONSTANT), if `compared` on under 10% of
-windows (RARE), or if the yes/no a reader acts on is yes on ≥90% of windows
-(ALWAYS-YES).
-⚠️ **RE-MEASURED 2026-08-25 on 500 transcripts / 2,555 windows, because the original ran on
-55.** The store every pre-`bbb74b4` study used held 55 of 500 transcripts — a unique-session-key
-filter dropped all 445 `agent-*.jsonl` subagent transcripts, whose names collide in 8 characters.
-On the rebuilt corpus `project` (100% zero), `model` (98.6%) and `tooling` (comparable on 3.2%)
-all REPLICATE, so the drops stand on 9x the evidence. Full results:
-`~/keld/refseries-context/blocks/DYNAMICS-REMEASURED.md`.
-⚠️ **And the CONSTANT band test alone MISCLASSIFIES A SPARSE SIGNAL — never apply it without the
-inside/outside contrast beside it.** Re-measured, `branch` sits at 90.2% inside one band and so
-"fails" CONSTANT by 0.2 points, while its turnover is **0.346 inside a transition window against
-0.003 outside** — a 115x separation, and the actual reason it is kept. A metric that is zero on
-90% of windows and large on the rest is concentrated AND informative; those are not opposites and
-the band test cannot distinguish them. Applied alone it recommends removing exactly the signals
-that fire rarely and mean the most. `skill` likewise re-measures at 9.0% comparable against the
-10% RARE bar, down from 12.6%, and is KEPT: the 445 newly-included subagent transcripts are short
-and skill-free, so they enlarge the denominator without adding comparable windows — a population
-effect, not a weakening signal.
-`DROPPED_DIMENSIONS = ("project", "model", "tooling")`:
-- `project` — turnover, decay and shift **identically 0.000 on all 2,180 compared
-  windows**, `changed` never True, reading `steady` 100.0%. Constant **BY
-  CONSTRUCTION**: a transcript is scoped to one project directory, the same fact
-  `DETECT_LEVEL` is pinned on.
-- `model` — turnover exactly zero on 98.5% of 2,126 windows, lift against ground truth
-  **+0.000**, and `changed` **True 0 times in 2,702 windows**.
-- `tooling` — `compared` on **3.9%** (106 of 2,702), and where it IS comparable it
-  points the **WRONG WAY**: mean turnover 0.010 inside a transition window against
-  0.070 outside.
+**Model backends.** `ml_backend` (local, **startup-only**, `settings.Settings`)
+selects one of three modes. The rule they share: **no facet is ever silently
+swapped for a lower-fidelity substitute of itself.**
+- **`"auto"`/`""` (compiled-in default)** — enrichment is **ML-only** for its full
+  facet set. A sidecar that is reloading, evicted or not yet provisioned is
+  **waited out**: jobs queue/spool until it is ready.
+- **`"deterministic"`** — enrichment stays **on** with a `nil` `enrich.Model`. A
+  *different* facet set that needs no model (credential detection, and the
+  workstream dimensions `/analyze` derives from coordinates), **not** a fallback.
+  **The analysis service still runs**; only the model is never loaded, and never
+  even provisioned. When a sidecar is installed the readiness gate polls that
+  service's **`/health`** (in the background, behind a cached atomic — an inline
+  probe would cost thousands of loopback connects per deferred job); a
+  present-but-unhealthy service keeps jobs queued. When **no sidecar is
+  installed** (or its port cannot be allocated) the gate is **trivially true** and
+  the analyzer nil — nothing can arrive this daemon lifetime, so waiting would
+  wedge the mode forever; the workstreams pass simply never registers.
+  ⚠️ **The supervisor never gives up**: after `maxRestarts` consecutive failed
+  starts it RESTS (1 min doubling to 30) and retries; `RequestRestart` ends a
+  rest, and a child answering `/health` resets the budget. The readiness deadline
+  counts AWAKE time, and both sleep detectors compare wall-clock instants
+  (`Round(0)`) — macOS's monotonic clock stops while asleep.
+- **`"off"`** — enrichment is **disabled entirely**: no worker, `/enrich`
+  accepts-and-discards (202). Telemetry and client-events are unaffected.
 
-KEPT: `branch` — mean turnover **0.346 INSIDE** a transition window against **0.003
-outside**, which is what a change-of-work metric looks like — plus `output_type`,
-`language` and `skill`; the last is 2.6 points above the RARE bar and that is
-stated at the constant rather than smoothed. Inventory levels are excluded
-structurally and the exclusion was confirmed by distribution rather than by argument
-(`integrations` `compared` on **0** of 2,702 windows; `named_terms` non-zero on
-**98.3%** — no window in which it says no, a disqualifier needing no ground truth).
-`DYNAMIC_DIMENSIONS` is derived from `dimensions.ALLOCATION` minus the dropped set,
-and `dynamics()` neither takes nor forwards a `dimensions=` argument, so **the
-published vocabulary cannot be widened by a caller** — the parameter exists only to
-reproduce that measurement. The dropped three are still reported as allocation
-workstreams by the digest; only their *dynamics* are gone.
+**A SKIP IS NOT A FAILURE.** `runStage` is tri-state
+(`passOK`/`passFailed`/`passSkipped`): a deterministic run whose every executed
+pass succeeded publishes `pipeline_status:"enriched"` and names what it dropped in
+`facets_skipped`. `"partial"` keeps its one meaning — something that should have
+worked did not. **A HALF-run pass is neither**: a pass declares reduced capability
+per job via `degradedExtractor`, commits normally, and is named in the **sibling**
+`facets_degraded`. Both lists are subsets of the `extractor_versions` keys; a pass
+that was never *registered* is absent from both. Neither moves `pipeline_status`.
 
-**The session prior (`analysis/prior.py`) — the session this window sits in, reported
-BESIDE it.** A window is characterised in isolation, so a value sitting just over the
-attribution floor is indistinguishable from one that is the whole story. The session is a
-cheap, stable frame of reference that makes the difference visible: per dimension a
-`value`/`share`/`evidence`/`status` for the session, plus three contrast measures —
-`agrees`, `departure` (the window's share minus that value's share of the prior) and
-`novel` (the window's value never occurred before it). Same `rollup_window`, wider bounds,
-no second parse and no inference.
+⚠️ **WHAT A FRESH INSTALL LANDS ON IS NOT THE COMPILED-IN DEFAULT.**
+`keld-agent install` writes `{"ml_backend":"deterministic","blocks":true,
+"attribution":false}` via `settings.WriteInstallDefaults`, which **MERGES** so an
+operator's other keys survive. That is v2: the model-free facet set plus the block
+emitter, and **no multi-gigabyte model download, ever**. ⚠️ `attribution` is
+written OFF unconditionally — until 2026-09-09 it was written as a copy of
+`blocks`, i.e. ON, which switched on a 1.2 GB download and on-device text reading
+for someone who had chosen nothing. The config write happens **first** in
+`runInstall`, before login, because `ml_backend` is read at startup and never
+re-read; the restart inside `installService` is what makes it take effect. A test
+pins that order.
+The **compiled-in defaults are unchanged** (`auto`, `Blocks` false) so every
+machine an installer never writes to — an in-place upgrade, `go run`, CI, the eval
+harness — keeps the full ML facet set.
+⚠️ **`ml_backend` has NO REMOTE OVERRIDE.** The installer is the only lever that
+will ever exist, so a re-install FLIPS an existing `auto` machine and an existing
+fleet's Atlas Context column empties machine-by-machine with **no server-side
+brake**. `--backend auto|deterministic|off` is the manual path back.
+⚠️ **`make install-linux` routes through `keld-agent install` too**, so a dev
+machine converges on `deterministic` — pass `--backend auto` to keep exercising
+GLiNER2. And ⚠️ **do not run `keld-agent install` to test the config write**:
+`KELD_HOME` isolates `~/.keld` but NOT the service path.
 
-⚠️ **CONTRAST, NEVER FALLBACK — every other rule here is subordinate to this one.** The
-prior never supplies a value the window lacked: with no window value all three contrasts
-are `None` and `workstreams` keeps its honest blank. A thin window inheriting the
-session's value buys coverage by laundering "we do not know" into something confident,
-which is the exact defect `MIN_EVIDENCE` exists to prevent and which this project has
-already paid for twice (`activity_type`'s `transform` predicted 36 times, right zero;
-`speech_act`'s `statement` 22 times, right zero). **45.1% of windows have no prior at
-all** — 461 of 1,022 are a session's first — and that number is the standing pressure to
-soften this. Don't. The block is emitted anyway, saying `absent` out loud, because a
-suppressed block reads as an oversight and an oversight is what someone eventually
-"fixes".
+⚠️ **FIRST SIGHT BACKFILLS** (`KELD_BLOCKS_BACKFILL`, default ON) — a reversal of
+the forward-only default, which left every already-closed block permanently
+unreachable. The analogy to `KELD_WATCH_BACKFILL` does not hold: a block backfill
+is a query against a store that already holds the answer, bounded to
+`maxPerSweep` (24) per transcript per sweep. Re-emission is free — a block's
+identity is `(session, block.start)` and Atlas upserts. ⚠️ It needed two more
+things, each silent without the next: first sight must **signal at all** (the
+PROMPT path stays forward-only — offering every historical prompt is a real herd),
+and those signals must be **PACED** (`firstSightPerPoll` 4; firing all of them at
+once dropped ~2,088 of 2,152 permanently). A refused signal is **retried**, not
+dropped.
 
-⚠️ **The prior is cut at the window's START, which is a deliberate correction to its own
-spec.** "The session so far" taken literally puts the window INSIDE its own prior, and
-that reading is degenerate rather than merely weak: `novel` cannot fire — 0 of 1,022
-windows on all seven dimensions, structurally — a session's first window IS its own prior
-(agreement 100%, departure 0), and every departure shrinks toward zero monotonically with
-how much of the session the window is (`language` agreement 70.6% → 89.9%, `skill` 25.8%
-→ 83.8%, purely from the overlap). So it covers `[session start, window start)`: still
-causal, a strict subset of what the daemon knew, and the only reading under which all
-three measures are non-degenerate. Nothing is accumulated — the prior is **recomputed**
-per request from stored events, because an incrementally-updated one would drift from
-those events with no way to check it.
+⚠️ **`KELD_DEV_BLOCKS` (the `prompt`/`bin`/`minute` developer granularities) needs
+both halves of the daemon to agree.** Their boundary reasons are the mode names,
+so `enrich.DevBlockReasons` mirrors `devblocks.MODES` (pinned by reading that
+Python file), stays DISJOINT from `enrich.BlockReasons`, and is admitted per
+client (`Client.AdmitDevBlockReasons`) only by the caller that resolved the
+granularity. The granularity is refused unless Atlas is a LOOPBACK mock, and
+`sidecarEnv` assigns the RESOLVED value **always, empty included**, so a refused
+mode overrides what the child would inherit; the same single resolution decides
+admission. A refusal that discards work says so, once per run
+(`BlocksAnswer.DroppedUnreadableReason`) — never a silent `continue`.
 
-**`ENABLED = ("branch", "language", "output_type", "skill")`**, decided over 1,022 windows
-(`docs/superpowers/specs/2026-08-24-session-prior-results.md`): `skill` 25.8% agreement /
-44.0% novelty — the signal, being the phase transitions of the process — `language` 70.6%
-/ 2.3%, `branch` 76.1% / 6.1%, `output_type` 86.7% / 1.1%. `project` and `model` agree
-**100.0% with zero disagreements**, so a contrast there would publish a constant.
-⚠️ **`output_type` was excluded on that 86.7% and the exclusion was WRONG** — not because
-the number was wrong but because of what agreement can say: it is defined only where BOTH
-sides are attributed, so it is silent about precisely the windows the dimension is for.
-On John's Cowork session the prior carried `output_type` in **6 of 7** windows where the
-window could not attribute at all (the deck is built in hour one; every hour after reads
-`absent` while the session reads `presentation`) against `tooling` 4/7 and every other
-dimension 0/7. That session's SHAPE outweighs its size: it is skill-free, as is 61.6% of
-the corpus, and without `output_type` the block would rarely say anything for the majority
-case. `tooling` stays out, with the bar for revisiting it written into `prior.py` and its
-test rather than remembered: agreement ≤ 0.90 **or** prior-attributed coverage ≥ 0.70,
-against its current 98.5% / 24.3%.
-
-`PRIOR_DIMENSIONS` is **derived** from `dimensions.ALLOCATION` rather than restated, so
-the two cannot drift and **an INVENTORY level is structurally not addable** — which is
-what keeps `named_terms` (the one level read from message text, and which has held real
-person names) out of this block by construction rather than by care. `status` is named
-`status`, not `reason`: `reason` is on publish's `forbiddenWireKeys` as the dynamics
-per-side key, and a second meaning on the wire is a reader's error waiting to happen. A
-prior that is itself `no_majority` is **informative** — the window's ambiguity is the
-session's — and is never collapsed into "no prior". Cost is 1.6 µs per dimension; the
-block's ~16.7 ms is its two rollups, paid per call regardless of how many dimensions ride
-it.
-
-**The block cutter (`analysis/blocks.py`) — where a piece of work ENDS.** A window is an
-arbitrary hour; a **block** is a contiguous span of one session's ACTIVE time, and where one
-ends is the only question this module answers. Two terminators, and the set is closed:
-**idle** — `IDLE_BINS` (3) consecutive empty 5-minute bins, i.e. 15 minutes of silence, which
-is not a claim about the work but a claim there wasn't any — and **budget**,
-`MAX_BLOCK_MINUTES` (20) elapsed, which is only "we had to cut somewhere". They are reported
-separately (`REASONS = session_start / idle / budget / session_end`) because a reader who
-cannot tell them apart cannot tell an arithmetic boundary from a real pause. Both numbers are
-MEASURED, in a pre-registered four-arm study over 496 sessions
-(`~/keld/refseries-context/blocks/BLOCK-BOUND-2-{PREREGISTRATION,RESULTS}.md`, harness
-`scripts/block_sizing_eval.py`): a plain time cap (A′), an evidence-gated cap that defers
-until the block can attribute (B′), a turn count (C′), and no bound at all (D′). **A′ won, at
-20 minutes** — and on the CONSTRAINTS rather than on the metric: with dead air excluded every
-arm attributes within a point of every other (**95.2-96.2%**), so what separated them is that
-A′'s maximum block EQUALS its cap by construction (**0.33h**), while B′ is **bit-identical**
-to A′ at every cap ≥ 30 min (the deferral gate never fires once idle is handled) and D′
-produces **7.5-hour** blocks with **53.0%** of them spanning a whole session. `IDLE_BINS` was
-fixed in the pre-registration and then swept (2/3/6 bins = 10/15/30 min) rather than left
-asserted: at the shipped cap, **94.9%** attributable at 10 min, **95.3% at 15**, **93.4%** at
-30. Retuning either re-opens the four-arm comparison.
-
-**Blocks tile the ACTIVE part of a session, not `[lo, hi)`.** Idle splits the span into active
-segments first and the cap runs WITHIN each; the dead air between them belongs to NO block. So
-the invariant is **every active bin lies in exactly one block**, and never "the blocks cover
-the span" — which is what round 1 of the study measured by accident, tiling silence with empty
-20-minute blocks, and it cost arm A its attribution outright (**29.8% → 95.3%** once
-corrected). A reader tempted to make blocks abut across a gap is reintroducing exactly that.
-
-⚠️ **There is NO merge rule, and the absence is the design.** The 95% attribution bar was
-DEFINED, in the pre-registration and before the run, as the point at which a merge rule becomes
-unnecessary; A′@20 clears it (**95.3%**, **96.21%** after the ablation below). The obvious
-repair — fold a thin block forward into its neighbour — was built and measured
-(`BLOCK-SIZING-RESULTS.md`): it changes a published VALUE in **88.6%** of the merges it
-performs, against a pre-registered **5%** bar, and merges chain (**94.6%** of the 7,391
-absorbed blocks were followed by a block that was itself thin). Merging does not recover a thin
-block's answer; it overwrites it with the neighbour's. So a thin block publishes UNATTRIBUTED
-and survives as its own block — an honest blank, the same call `window.MIN_EVIDENCE` and
-`prior.py`'s CONTRAST-NEVER-FALLBACK make one level down. Do not add a merge rule and do not
-add a knob for one: a knob is a merge rule with the decision deferred.
-
-⚠️ **A THIRD terminator was ABLATED, and every measured number improved.** The change detector
-(`EwmaSizer` over the `branch` series) was the third terminator in the arm that won the
-pre-registered comparison. A post-hoc ablation over the same 496-session corpus at the shipped
-cap (`BLOCK-BOUND-2-ABLATION.md`) emptied its cut list: attributable **95.29% → 96.21%**,
-blocks holding any evidence **99.3% → 100.0%** — the detector was the **ONLY** source of empty
-blocks, which is the precise failure the idle terminator was introduced to eliminate — merge
-rate **1.36% → 0.67%**, longest block unchanged at 20m. The mechanism is not subtle: a detected
-cut ends a block EARLY, so it holds less evidence and is likelier to fall under `MIN_EVIDENCE`;
-the detector was buying its **4.3%** of boundaries by thinning the blocks around them. What is
-given up is the claim those cuts sat in more MEANINGFUL places — which is exactly the claim
-**Phase 0a could not establish**: `branch` recalled **7.1%** of real work shifts against a
-fixed-interval control's **17.3%**, and every alternative detection level failed its bar, with
-`action` scoring **−3.5** — better on shuffled truth than on real truth. Two consequences worth
-knowing: the bound is now **fully domain-agnostic** (detection was its only branch-dependent
-part, so a session with no repository behaves identically — nothing missing, nothing degraded),
-and `blocks.py` no longer imports `dynamics` at all. ⚠️ **`EwmaSizer` was NOT removed** — it
-keeps its separate, measured, shipped use sizing the dynamics SLICE (above), which this
-ablation does not touch. `_form` likewise keeps the `cuts` parameter it is now always handed
-`[]` for, so the shipped arithmetic stays identical to the measured arm evaluated with an empty
-cut list rather than being a second code path that would have to be shown equal to it;
-`detected` is therefore deliberately absent from `REASONS`, which is what `cut` can emit.
-
-⚠️ **`cut()` requires BIN-ALIGNED bounds and fails SILENTLY without them.** `active_segments`
-filters on bin STARTS, so a bin straddling a non-aligned `from_ts` is dropped from every
-segment while `rollup_window`, which takes exact instants, still counts the events inside it:
-evidence lands in no block, nothing errors, and no block looks wrong. The caller owns the
-alignment (`analyze._block_span` floors and ceils). It is deliberately not clamped inside
-`cut()`, because the study oracle pins that function byte-identical to the measured arm, whose
-harness always passed bin-aligned session bounds — a clamp would mean the shipped cutter is no
-longer the arm that was measured.
-
-**`/analyze` reports the block BESIDE the window, never instead of it.** An additive `block`
-key (opt-in) carrying the span and the two boundary reasons, and nothing else — no evidence or
-attributability field, because the two definitions of thinness in this codebase disagree:
-per-level attribution reads 95.3% against 99.3% for holding any pooled evidence, and a block
-holding one unit at each of eight allocation levels clears a pooled floor while every level in
-it reads `thin`. Whoever adds the first consumer picks the per-level measure deliberately
-rather than reaching for the shorter pooled sum. Sidecar `SCHEMA` 14 → 15; every other field is
-still computed over the hour, and narrowing the window to the block is a later phase with its
-own eval re-run. **Phases 2-5 of
-`docs/superpowers/specs/2026-08-25-signal-block-pipeline-design.md` are NOT built** — `covers`
-(the prompt-id → block-span episode mapping, `complete: false` where an episode runs past the
-block), the Go wire (the deterministic facets move onto `publish.WindowEnrichment` and
-`publish.Enrichment` shrinks to `sensitivity` plus correlation), the tick becoming the primary
-trigger rather than a gap-filler, and the `ml_backend:"deterministic"` default flip. The last
-two are gated on Atlas, for the same reason the tick ships inert (below): flipping the default
-before Atlas renders block facets **blanks its Context column**, since `function_guess`,
-`subcategory` and `activity_type` are all in the deterministic skipped set.
-
-**Model backends.** `ml_backend` (local, startup-only, `settings.Settings`)
-selects one of three modes:
-- **`"auto"`/`""` (default)** — Enrichment is **ML-only** for its full facet
-  set: there is no deterministic *substitute* for the model's own facets. A
-  reloading/evicted/not-yet-provisioned sidecar is waited out, never silently
-  swapped for a lower-fidelity stand-in of the same facets — that swap is the
-  thing this project forbids. `sidecar/` — HTTP client to the GLiNER2 sidecar
-  (`/classify`, `/extract`, `/entities`); the sole `Model` implementation.
-  Model provisioning (`provision/`) fetches weights (`hf.go`) into
-  `~/.keld/models` **on demand** — see the provisioning gotcha below. Why a
-  bundled sidecar over in-process ONNX:
-  `docs/keld-agent-p2-onnx-decision.md` (historical — see the superseded note
-  at its top).
-- **`"deterministic"`** — enrichment stays **on** and `Worker` runs with a
-  `nil` `enrich.Model`. This is a *different* set of facets — the ones that
-  need no model at all, e.g. credential detection (`CredentialSpans`) and
-  regular-format PII detection (`PIISpans` — ssn/credit_card/email; both pure
-  Go, no sidecar, no network) and the **workstream dimensions** the sidecar's
-  `/analyze` derives from transcript coordinates — not a fallback for the
-  model's facets.
-  **The analysis service still runs; only the model is never loaded.** The
-  sidecar is the client-side analysis-and-enrichment service in general
-  (`/analyze`, `/match`, `/vocabulary`, `/classify`, `/extract`) and GLiNER2 is
-  one capability it loads lazily on its first inference — so this mode starts
-  the service (`deterministicBackend` → `sidecarService` + `go sup.Start`) and
-  simply never issues an inference, which means the weights are never loaded
-  and never even provisioned. Not starting it was a trap: `analyzerFor` came
-  back nil, the workstreams pass never registered, and the mode published a
-  single credential-derived facet.
-  When a service exists, its readiness gate **polls service health**
-  (`/health`), not model warmth — the model never warms here, so a warmth gate
-  would hold every job forever, and a trivially-true gate would publish
-  workstream-less profiles for every job that landed before the service
-  finished starting. It polls in the **background** and the gate reads a cached
-  atomic (`serviceHealthGate`, the same `warmGate` mechanism `"auto"` uses for
-  warmth) — `Worker` calls the gate per job and `waitWarm` re-calls it every
-  ~20ms, so a gate that probed `/health` inline would cost thousands of
-  loopback connects per deferred job, and a full client timeout on *every* call
-  against a service that accepts TCP but never answers. Waiting there is right: the supervisor is bringing the
-  service up, so the work becomes doable shortly, and a service that is present
-  but never comes up **wedges** this mode (jobs queue/spool) rather than
-  degrading — the same trade `"auto"` makes.
-  **When there is no service at all, the gate is trivially true instead.**
-  `sidecarService` reports `ok == false` when no sidecar binary is installed
-  (`err == nil`) or the loopback port could not be allocated (`err != nil`);
-  neither resolves without a daemon restart, so `deterministicBackend` takes
-  `noAnalysisService` — one `sidecar.unavailable` event (the two causes stay
-  distinguishable via its `reason`/`error` field), an open gate, and a **nil**
-  analyzer. Enrichment then runs its remaining model-free facets (credential
-  detection) with the workstreams pass simply unregistered — absent from
-  `extractor_versions` rather than present-and-failed, and so not a downgrade
-  (see `pipeline_status` below). Holding the gate here would wedge the mode
-  forever on what is the state of **every** machine before the sidecar tarball
-  is fetched. Dropping the facet entirely and reporting it dropped is not the
-  substitution never-degrade forbids — nothing lower-fidelity stands in for
-  window analysis.
-  ⚠️ **This used to carry a known gap — "a service that starts and then
-  permanently gives up (supervisor restart cap exhausted) still wedges this
-  mode" — and on 2026-09-09 a real machine fell into it overnight, so the gap
-  is closed at its cause rather than distinguished.** The supervisor no longer
-  gives up: after `maxRestarts` CONSECUTIVE failed starts it **rests** (one
-  minute, doubling to thirty) and tries again on its own, a `RequestRestart`
-  (the page's Restart button, the health owner's ladder) ends the rest at once,
-  and a child that answers `/health` resets the budget — four crashes over a
-  month are four recoveries, not a crash loop. `ErrSupervisorStopped` therefore
-  means only "Start has not begun or the daemon is shutting down". Two clock
-  facts made the night possible and both are fixed in the same commit
-  (`supervisor.go` → `defaultStartSleepGap`, `servicehealth.go`'s detector):
-  the sidecar's **readiness deadline is measured in time the machine was
-  AWAKE** — a wall-clock jump between two health polls re-arms it instead of
-  spending it, because macOS wakes for ~2 seconds every 15 minutes and each
-  wake used to kill a child as a "failed start" (three of them spent the cap);
-  and both sleep detectors compare **wall-clock instants (`Round(0)`)**,
-  because on macOS Go's monotonic clock does not advance while the machine
-  sleeps, which is why the health owner's own detector logged nothing across a
-  night of sleep. A gate that waits on this service therefore waits for a
-  bounded rest, never for a human.
-  `wireEnrichment` returns the analyzer as its own value (derived from the
-  service client, not from the `Model`) and threads it to `process`.
-  `Settings.MLEnabled()` is false in this mode;
-  `Settings.EnrichmentEnabled()` is true. The pipeline tolerates a nil `Model`:
-  `enrich.runStage` skips any `Extractor` that needs a model and hasn't opted
-  in via the `modelFreeExtractor` capability (mirroring `alwaysRunner`) —
-  `SensitivityExtractor` is the one built-in that implements it, since its
-  credential layer runs regardless of the model and its NER half is simply
-  skipped when `ctx.Model == nil` — a clean skip, decided before `Run`, rather
-  than a nil-interface panic.
-  **A skip is NOT a failure.** `runStage` returns a tri-state
-  (`passOK`/`passFailed`/`passSkipped`): a pass that needs a Model where there
-  structurally is none does not set `anyFailed`, so a deterministic run whose
-  every executed pass succeeded publishes `pipeline_status:"enriched"`.
-  `"partial"` keeps its one meaning — something that should have worked did
-  not (panic, error, pass deadline) — including for a model-free pass that
-  errors in this mode. This is `WithDimensions`' idiom one level down: don't
-  downgrade a profile for a facet the run never had. The thinner facet set
-  stays **visible** in the new `Profile.FacetsSkipped` / wire
-  `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —
-  always a subset of the `extractor_versions` keys, since a pass that was
-  never registered at all (unwired workstreams, above) is absent from both.
-  **A HALF-run pass is neither.** `sensitivity` is `ModelFree`, so it RUNS in
-  this mode — and, since it consults no model at all, it runs WHOLE whenever the
-  PII scan is available. What still half-runs it is a missing/failed/truncated
-  **scan**: only the credential layer is left, so an SSN with no credential
-  pattern publishes `sensitivity:"none"`, a confident negative from a check
-  nobody performed. A pass therefore declares reduced
-  capability per job via the optional `degradedExtractor` capability
-  (`Degraded(ctx) bool`, consulted after a successful `Run`, mirroring
-  `modelFreeExtractor`); `runStage` reports `passDegraded`, the result commits
-  normally, and the pass is named in `Profile.FacetsDegraded` / wire
-  `facets_degraded` — a **sibling** of `facets_skipped`, not a member: a
-  skipped facet has no value, a degraded one has a real value to be read as
-  "from the checks that ran". Both lists are subsets of the
-  `extractor_versions` keys (pinned by a test), both are omitted when empty,
-  and neither moves `pipeline_status`. The sensitivity **vocabulary** is
-  unchanged — `"none"` plus the marker is the honest pair, and a new
-  `"unknown"` label would be a contract break for no extra information — so
-  that work bumped nothing. (The dynamics block below took `SchemaVersion`
-  7 → 8 when it began publishing; the current value is stated once, above, at
-  the `labels.go` bullet — don't restate it here, it only goes stale twice.)
-- **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
-  started and `/enrich` accepts-and-discards (returns 202, never enqueues).
-  Telemetry and client-events are unaffected.
-
-⚠️ **WHAT A FRESH INSTALL LANDS ON, AND WHY IT IS NOT THE COMPILED-IN DEFAULT.**
-`keld-agent install` writes three keys into `~/.keld/agent-config.json` —
-`{"ml_backend": "deterministic", "blocks": true, "attribution": false}` — via
-`settings.WriteInstallDefaults`, which MERGES, so an operator's `pii_regions`,
-`include_entity_text` and feature toggles survive an installer run. That is v2: the
-model-free facet set plus the block emitter, and **no multi-gigabyte model download,
-ever**. ⚠️ **`attribution` is written OFF unconditionally, and until 2026-09-09 it
-was written as a copy of `blocks` — i.e. ON.** A fresh install therefore switched on
-vector attribution (a 1.2 GB text-model download and a pass that reads messages on
-the device) for a person who had chosen nothing, for a feature still being built.
-It is now a DEVELOPER control on the page — the Developer box, behind seven taps on
-the version — and a re-install converges it to off the way `ml_backend` converges,
-so the machines `v3.0.0-rc.1` turned it on for are turned back off by the next
-install. `KELD_ATTRIBUTION` still wins in both directions.
-
-⚠️ **FIRST SIGHT BACKFILLS, and that default is a REVERSAL.** The block emitter
-used to seed its cursor at the transcript's watermark and emit nothing on first
-sight — so on a fresh install every block that already existed was unreachable
-(measured on this repo's corpus: **24 closed blocks in one transcript, none of
-which ever reached Atlas**), plus, permanently, the block each transcript was
-mid-way through when first seen. The reasoning was an analogy to
-`KELD_WATCH_BACKFILL` — a restart must not "emit a herd of history" — and the
-analogy does not hold: the watcher's backfill re-reads whole transcripts from
-disk and is unbounded in FILE SIZE, while a block backfill is a query against a
-store that already holds the answer, bounded to `maxPerSweep` (24, the sidecar's
-own `DEFAULT_MAX_BLOCKS`) per transcript per sweep and drained across sweeps by
-the cursor. The pacing that makes it safe was already there. `KELD_BLOCKS_BACKFILL=0`
-restores forward-only, and that branch keeps its tests rather than being deleted.
-Re-emission is free either way: a block's identity is `(session, block.start)`
-and Atlas upserts, so a re-delivered block is not a duplicate.
-
-⚠️ **BACKFILL NEEDED TWO MORE THINGS, AND EACH FAILED SILENTLY WITHOUT THE NEXT.**
-The emitter can only cut blocks for a transcript the STORE has ingested, and it
-only sees transcripts in its active set, which the watcher's advance signal
-fills. So:
-1. **First sight has to signal at all.** Under forward-only `scanFile` set a
-   first-sighting cursor to EOF and returned EARLY, so `advanced` never fired and
-   a transcript entered the active set only when it next GREW — a session that
-   ended yesterday could never be backfilled, whatever the toggle said. The two
-   paths are now separated at that sighting: the PROMPT path stays forward-only
-   (offering every historical prompt for enrichment is a real herd, and the EOF
-   cursor is what prevents it — measured, 2 enrichments rather than 2,152 across
-   a full fresh-install simulation), while the ingest/blocks signal fires,
-   because it carries coordinates only and does not depend on the cursor.
-2. **Those signals have to be PACED.** The ingest signal rides a 64-slot,
-   path-coalescing queue whose policy is DROP rather than retry — safe for a
-   growing transcript because the next signal catches up, and unsafe for a first
-   sighting, which has no next signal. Firing all of them at once on a machine
-   with **2,152 known transcripts filled the 64 slots and dropped ~2,088
-   permanently**, and the dropped ones were exactly the dormant transcripts the
-   change existed to reach. First sightings now drain `firstSightPerPoll` (4) per
-   poll; four because the real limit is downstream — one serial sender, and a
-   first whole-file ingest measured 5.1s on a 90 MB transcript. Measured end to
-   end: `parse_state` 8 → 109 in two minutes (~51 transcripts/min, ~13 minutes
-   for 683), with system load FALLING (2.41 → 1.13) rather than spiking.
-   ⚠️ A refused signal is RETRIED, not dropped: `drainFirstSight` pops an entry
-   only when the hook reports it was taken on, so the pacing rate is real
-   backpressure rather than a constant guessed against the sidecar's throughput.
-
-The two-key config write is written FIRST in `runInstall`, before login, because `ml_backend` is
-read at daemon startup and never re-read — the restart inside `installService`
-(`launchctl bootout`+`bootstrap` / `systemctl --user restart` / `schtasks /End`+`/Run`)
-is what makes the new mode take effect in the same run. On macOS that is not
-academic: the pkg's `postinstall` kickstarts the agent BEFORE opening
-`onboard.command`, so a daemon is already running on the old settings by then. A
-test pins the order.
-
-The **compiled-in defaults are unchanged** (`ml_backend` zero value = `"auto"`,
-`Settings.Blocks` = false) and that is deliberate, not a hedge. Every machine an
-installer never writes to — a binary upgraded in place, `go run`, CI, the eval
-harness — keeps the full ML facet set, `TestBuiltInPipelineStillDemandsAModel` keeps
-passing untouched, and Atlas's Context column keeps rendering `function_guess` /
-`subcategory` / `activity_type` for that population. Phase 5 of
-`docs/superpowers/specs/2026-08-25-signal-block-pipeline-design.md` (the default
-flip) is still unstarted and still gated on Atlas.
-
-⚠️ **`ml_backend` has NO REMOTE OVERRIDE.** It is local and startup-only and nothing
-in `agentcfg/` touches it, so Atlas can neither move a machine between modes nor roll
-one back. **The installer is the only lever that will ever exist**, which has two
-consequences worth stating rather than discovering: a re-install FLIPS an existing
-`auto` machine (deliberate — every re-install converges), and an existing fleet's
-Atlas Context column therefore empties machine-by-machine at whatever pace people
-upgrade, with no server-side brake. If that pace ever needs controlling, the control
-is a staged rollout of the installer itself. `--backend auto|deterministic|off` on
-`keld-agent install` is the manual path back.
-
-`blocks` likewise has no remote override — an asymmetry with `Remote.Features`, which
-CAN turn feature rows off fleet-wide — and `KELD_BLOCKS=0` is what switches a single
-machine off without editing JSON. The key exists at all because an env-only toggle is
-**unreachable from an installer**: `LaunchAgentPlist` and `SystemdUnit` carry no
-environment block and the Windows task is a bare `/TR "<exe>" run`, so there is
-nowhere to put `KELD_BLOCKS` that the daemon would see.
-
-⚠️ **`KELD_DEV_BLOCKS` NEEDS BOTH HALVES OF THE DAEMON TO AGREE, AND FOR ITS
-WHOLE LIFE THEY DID NOT — SO THE FEATURE WAS DEAD AND SAID NOTHING.** The
-developer granularities (`prompt`/`bin`/`minute`, `sidecar/app/analysis/devblocks.py`)
-exist so a test can produce a CLOSED block in seconds rather than waiting out the
-20-minute cap or the 15-minute idle, and each cuts blocks whose two boundary
-reasons are the MODE NAME — deliberately not drawn from `blocks.REASONS`. The Go
-client's version-skew gate (`enrich.BlockReasons`, applied in
-`BlocksCharacterised`) had never heard of those names, so it DISCARDED every one
-of those blocks, with a bare `continue`. Measured in the conformance chain: the
-sidecar holding one closed block, the emitter enabled, no error reported
-anywhere, and zero blocks at the mock Atlas — with "the sidecar closed nothing"
-and "this binary threw away everything it was handed" indistinguishable from
-outside. Four CI rounds went into narrowing that, and what finally answered it
-was one log line naming what each SWEEP asked and got (`KELD_BLOCKS_DEBUG`).
-Three things now hold, and each was absent:
-- `enrich.DevBlockReasons` mirrors `devblocks.MODES`, **pinned by reading that
-  Python file** the way `DynamicStatuses` is — a hand-mirrored list is what
-  allowed the drift.
-- The two vocabularies stay DISJOINT and the dev one is admitted per client
-  (`Client.AdmitDevBlockReasons`), only by the caller that already resolved the
-  granularity. So a binary nobody configured still refuses a dev boundary.
-- **A refusal that discards work now SAYS SO** (`BlocksAnswer.DroppedUnreadableReason`,
-  one loud line per daemon run). A silent `continue` is the same defect class as
-  a check that cannot see what it reports on.
-
-⚠️ **AND THE REFUSAL THAT KEEPS DEV BLOCKS OFF A REAL ATLAS WAS ITSELF INERT.**
-`settings.DevBlocksMode` refuses the granularity unless the configured Atlas is a
-LOOPBACK mock — a minute-long block is a false statement about somebody's work
-and must never reach the org's numbers — and `daemon.devBlocksMode` exists to say
-so out loud. **Nothing called either.** The sidecar reads `KELD_DEV_BLOCKS` out
-of its own environment and INHERITS the daemon's, so a developer who exported the
-variable got dev blocks on any machine, including one publishing to a real Atlas,
-while the refusal sat in a function with no callers. `sidecarEnv` now assigns the
-RESOLVED value **always, empty included** (the treatment `KELD_ANALYZE_ROOTS`
-already gets): refused resolves to `""`, which OVERRIDES the inherited value in
-the child rather than deferring to it. The same resolved value decides
-`AdmitDevBlockReasons`, from ONE call — resolved twice, the two could disagree,
-and the disagreement that matters is a machine cutting minute-long blocks that
-the publisher happily forwards.
-
-⚠️ **`make install-linux` routes through `keld-agent install` too** (`Makefile`'s
-`install-service` target), so a dev machine converges on `deterministic` like
-everyone else — pass `--backend auto` to keep exercising GLiNER2 locally. And
-⚠️ **do not run `keld-agent install` to test the config write**: `KELD_HOME`
-isolates `~/.keld` but NOT the service path, which `service.Install` resolves from
-`os.UserHomeDir()` — it will rewrite your real unit to point at the `go run` temp
-binary and restart it into `failed`.
-
-**Delivery reliability (never degrade, never wedge).** When enrichment is
-enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sidecar
-that isn't ready yet (not yet provisioned, restarting, mid-recycle, or the
-supervisor couldn't bring it up at all) keeps the readiness gate **closed**:
-jobs simply queue/spool until the sidecar is ready, they are never processed by
-anything else. `ml_backend:"deterministic"` obeys the same rule against a
-different definition of ready — the service answering `/health`, since it asks
-for no inference — but only when a service actually exists to become ready. With
-no sidecar installed at all it runs on without window analysis rather than wait
-for something that cannot arrive (see *Model backends* above).
+**Delivery reliability (never degrade, never wedge)** and **deadlines are PER
+PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, 30s): a job issues 8-9
+inferences, so a job-wide budget discarded every pass that had already succeeded
+and re-spooled the whole job. Bounded per pass, a slow pass costs exactly one
+facet and progress is monotonic. `KELD_ENRICH_JOB_TIMEOUT` (5m) is only a **wedge
+backstop** and must stay above `passes × pass timeout` or it resurrects that
+failure mode — a unit test pins the invariant. An exhausted job
+(`KELD_ENRICH_MAX_ATTEMPTS`, 4) is `spool.Quarantine`'d, never retried forever;
+Atlas dedups on `dedup_key`.
 
 **What each lane buffers, replays and loses is written down per lane in
 `docs/durability.md`**, with the spool path, cursor or ring size cited for every
@@ -1848,410 +720,196 @@ reporter starts, and the rows a feature flush drops past its first failing
 chunk). The page carries the one-sentence version beside the health strip
 (`ui/app.js` · `durabilityNote`), pinned against that document from both sides.
 
-**Deadlines are PER PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, default
-30s). Per-pass is the only correct unit: a job issues 8-9 inferences, so a
-job-wide budget meant one slow pass discarded *every pass that had already
-succeeded* and re-spooled the whole job — the same work redone and re-discarded
-until the attempt budget ran out. That amplification kept the sidecar in
-permanent burst and was the driver behind the RAM-oscillation incident. Bounded
-per pass, a slow pass costs exactly one facet: `runStage` reports it failed, the
-other passes commit, and the profile publishes as `pipeline_status:"partial"`.
-Progress is monotonic. Each pass deadline is a child of the job context (via
-`enrich.WithJobContext`) and is bound to the backend through
-`enrich.ContextModel` (`Client.WithModelContext`), so expiry aborts that pass's
-in-flight sidecar call instead of leaving an orphan attempt consuming the
-single-flight sidecar.
+Each mode's full behaviour, the installer ordering, the backfill and dev-block
+incidents:
+**`docs/architecture/model-backends-and-install-defaults.md`**.
 
-`KELD_ENRICH_JOB_TIMEOUT` (default **5m**) is now only a **wedge backstop** for a
-job stuck outside a pass (resolve, publish). It must stay above
-`passes x KELD_ENRICH_PASS_TIMEOUT` or it pre-empts the per-pass deadlines and
-resurrects the discard-everything failure mode; a unit test pins that invariant.
-A job that trips the backstop re-spools, **bounded** by
-`KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an exhausted job is
-`spool.Quarantine`'d to `spool/bad/` rather than retried forever. Atlas dedups on
-`dedup_key`, so a late double-publish from a recovering attempt is harmless.
+**Tick-driven window characterisation (`daemon/tick.go`, sidecar `/tick`) — OFF
+by default (`KELD_TICK`).** Enrichment fires per prompt and every window looks
+**back** 60 minutes, so the work a prompt *causes* falls outside that prompt's own
+window: measured, only **55-56%** of turns lie inside some prompt's look-back, and
+it is worse the more autonomous the agent. A tick characterises the gaps (99.5%
+after).
+- **The frontier is the whole no-double-publish guarantee:** never emit above
+  `min(watermark, now - span)`. Exact, not a margin. The price is latency only,
+  and **nothing safety-relevant waits for a tick** — `sensitivity` and every text
+  facet keep their per-prompt trigger; this path never reads prompt text.
+- **A timer, not the ingest signal** (a gap becomes emittable a span after the
+  work, by which time the machine is quiet). Idle emits nothing structurally.
+- **The covered set comes from the DAEMON, not the store** — the store's `prompt`
+  index holds assistant-shaped turns too, and planning against it emits nothing.
+- ⚠️ **The client half ships INERT, which is why it is off.** A tick row publishes
+  under its own `corr_scheme:"window"` (it could not ride a prompt's correlation —
+  Atlas upserts over every column and would OVERWRITE the anchor prompt's
+  enrichment), so it is stored and **joins to nothing** until Atlas learns a
+  time+identity join. Flipping the default is a one-line change the day it does.
 
-**Tick-driven window characterisation (`daemon/tick.go`, sidecar
-`analysis/coverage.py` + `analysis/tick.py`, `POST /tick`) — OFF by default
-(`KELD_TICK`).** Enrichment fires **per prompt** and every window looks **back**
-60 minutes, so the work a prompt *causes* falls outside that prompt's own
-window; when the next prompt is more than an hour later, nothing characterises
-it. Measured (`scripts/tick_coverage.py`, frozen corpus): **56.4%** of john's
-reference events and **55.0%** of the 496-transcript Claude Code corpus's turns
-lie inside some prompt's look-back — a third to a half of all work is invisible
-to enrichment, and it is worse the more autonomous the agent. A tick
-characterises the gaps: **99.7% / 99.5%** after.
+Coverage measurements and the state file's rules:
+**`docs/architecture/window-analysis.md`**.
 
-- **The frontier is the whole no-double-publish guarantee.** Never emit above
-  `min(watermark, now - span)`. Time `t` below that can only be covered by a
-  prompt in `(t, t+span]`, all of which have already arrived, so the covered set
-  there is FINAL and an emitted window can never later overlap a prompt's. Not a
-  margin — exact, and replayed against randomised incremental prompt streams.
-  The price is latency only: a window facet lands up to `span + interval` after
-  the work. **Nothing safety-relevant waits for a tick** — `sensitivity` and
-  every text facet keep their per-prompt trigger, and this path never reads
-  prompt text at all.
-- **A timer, not the ingest signal.** A gap becomes emittable a whole span after
-  the work, by which time the machine is usually quiet and no ingest signal is
-  coming. Measured, the share of recovered work emitted only after the
-  transcript's last turn: **5.8%** (john) / **79.5%** (Claude Code corpus) — an
-  ingest-driven tick would drop it, in exactly the burst-then-silence shape the
-  tick exists for. **Idle emits nothing** structurally instead: a silent
-  interval's windows hold no evidence and are dropped sidecar-side.
-- **The interval is latency, not coverage.** 99.5% at 5/10/20/60 minutes alike.
-  Default 10m (`KELD_TICK_INTERVAL`).
-- **The covered set comes from the DAEMON, not the store.** The store's `prompt`
-  index holds every user- *and* assistant-shaped turn (~260 rows for john's 14
-  human prompts); planning against it swallows the session and emits nothing.
-  The daemon names the prompt ids (it owns `watch/filter.go`'s human-prompt
-  filter) and the store times them; state in `~/.keld/state/tick.json`
-  (per-transcript monotonic cursor + bounded prompt memory, forward-only on
-  first sight).
-- **Watermark and retention are honoured through `analyze_window`'s own
-  `StoreBehind`/`WindowExpired`, never re-derived.** Behind ⇒ the cursor stops
-  and the tick retries. Expired ⇒ the window is dropped, counted, and the cursor
-  **advances** — stopping on a permanent refusal would wedge a daemon that had
-  been down longer than the retention horizon.
-- ⚠️ **The client half ships INERT, and that is why it is off by default.** A
-  tick row publishes under `corr_scheme:"window"` with a deterministic
-  `<session>@<window_end>` id, in its own wire type (`publish.WindowEnrichment`)
-  carrying no text facets at all. It could **not** ride a prompt's correlation:
-  Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme, corr_id)` and
-  inserts `ON CONFLICT DO UPDATE` over every column, so the design spec's
-  recommended option (a) would **overwrite** the anchor prompt's enrichment
-  rather than dedup against it. Under its own scheme it cannot collide — but
-  every Atlas consumer joins `Enrichment.corr_id == ToolEvent.prompt_id`, so a
-  window row is accepted and stored (including in `enrichments.raw`) and
-  **joins to nothing** until Atlas learns a time+identity join. Switching
-  `KELD_TICK` on logs that and emits a `window.tick_enabled` client-event
-  saying so. Flipping the default is a one-line change the day Atlas catches up.
-
-**Adaptive input truncation (`enrich/lenstat`).** GLiNER2's transient activation
-memory scales with sequence length, and gliner2's own `max_len` defaults to
-`None` — *no truncation* — so one long prompt could allocate a multi-GB spike.
-The daemon therefore tracks the streaming mean/variance of observed prompt
-lengths (Welford; **lengths only, never text**, persisted to
-`~/.keld/state/prompt-lengths.json`) and truncates at **mu + 2*sigma**, the window
-that covers ~97.7% of that machine's prompts in full. It is clamped to
-`[KELD_ENRICH_TOKEN_FLOOR (512), KELD_ENRICH_TOKEN_CEILING (768)]` and stays at
-the liberal ceiling until `KELD_ENRICH_LEN_MIN_SAMPLE` (200) observations make the
-estimate representative. The floor means the adaptive cap can only ever *widen*
-the window; the ceiling is the memory budget expressed in tokens and is a hard
-invariant, since mu+2*sigma knows nothing about RAM. The cap rides each request
-as `max_len` (`Client.WithMaxLen` → sidecar → gliner2). Ceiling values are
-**measured**, not estimated — see the table in `lenstat.go`; cost is superlinear
-in both memory *and* latency, so raising it is not a free win. Credential
-detection is unaffected (`creddetect.Detect` runs Go-side on the full text);
-NER-derived PII sees only the window.
-
+**Adaptive input truncation (`enrich/lenstat`).** gliner2's `max_len` defaults to
+`None` — *no truncation* — so one long prompt could allocate a multi-GB spike. The
+daemon tracks the streaming mean/variance of prompt lengths (Welford; **lengths
+only, never text**) and truncates at **mu + 2*sigma**, clamped to
+`[KELD_ENRICH_TOKEN_FLOOR (512), KELD_ENRICH_TOKEN_CEILING (768)]`, staying at the
+ceiling until 200 observations make the estimate representative. The floor means
+the adaptive cap can only ever *widen* the window; the ceiling is the memory
+budget expressed in tokens and is a hard invariant. Ceiling values are
+**measured** (the table in `lenstat.go`) — cost is superlinear in memory *and*
+latency. Credential detection is unaffected; NER-derived PII sees only the window.
 ⚠️ **This is sized for chat-scale prompts and does NOT extend to agentic-workflow
-payloads** (system prompt + work prompt + metadata, thousands of tokens). Three
-things break: mu+2*sigma is meaningless on the resulting bimodal population; no
-token cap both admits such a payload and fits the memory budget (measured
-marginal cost exceeds 1 MB/token, so ~4000 tokens implies ~7 GB); and
-head-truncation discards the work prompt when the system prompt leads. The fix is
-segment-aware **windowed** inference — bounded peak regardless of payload length,
-linear rather than superlinear cost — spec'd in
-`docs/superpowers/specs/2026-07-24-agentic-scale-input-bounding.md`. Read it
-before extending enrichment to agentic sources.
+payloads.** Three things break: mu+2*sigma is meaningless on a bimodal
+population; no token cap both admits such a payload and fits the budget (>1
+MB/token measured, so ~4000 tokens implies ~7 GB); and head-truncation discards
+the work prompt when the system prompt leads. Read
+`docs/superpowers/specs/2026-07-24-agentic-scale-input-bounding.md` before
+extending enrichment to agentic sources.
 
 **Control plane.** Enrichment is governed per-org from Atlas
 (`settings/`, `agentcfg/`); the daemon polls `GET /v1/enrichment-settings`
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
-**Auto-update (`internal/agent/update/`).** The daemon moves itself, the `keld`
-CLI and the frozen sidecar to the release **Atlas names** — fetch, verify,
-swap, restart, confirm, roll back. Two seams and **no new clock**: the trigger
-is the settings poll's existing `onRemote` hook, and the confirm pass runs at
-the top of `Run`.
+⚠️ **The version source is ATLAS, NOT `releases/latest`.** A client that resolves
+`latest` itself converges the entire fleet the moment a tag is pushed — the same
+defect as `ml_backend`'s missing brake, with a faster fuse.
+`settings.Remote.Release` (`agent_release`) carries `{enabled, version, base_url}`
+and **an absent block means NO UPDATE**. `KELD_AUTOUPDATE=0` refuses locally;
+**local refusal wins, local permission never does.**
+⚠️ **`version` is a PIN, not a floor** — the daemon moves to it in EITHER
+direction, because a control plane that can only move a fleet forward is not a
+brake. Comparison is identity after normalizing one leading `v`, never semver
+ordering.
+⚠️ **A missing published SHA-256 is FATAL here** while `install.sh` warns and
+continues — the installer has a human who can abort; an unattended swap does not.
+⚠️ **The macOS `.pkg` cannot be updated in place and its symlinks are the trap:**
+the daemon migrates to `~/.local/bin` and repoints the LaunchAgent via
+`service.InstallAt` (not `Install`, which reads the stale `os.Executable()`);
+`Swap.Replace` uses `os.Lstat`, never `os.Stat`; and `/usr/local/bin/keld` cannot
+be rewritten at all, so `keld signal doctor` names it with the exact `ln -sf`.
+⚠️ **Auto-rollback alone is unstable — `failed_versions` closes the loop.** Past
+`KELD_UPDATE_CONFIRM_DEADLINE` (15m) the swap is undone whichever version is
+running (a stale marker IS the crash report), and a rolled-back version is never
+retried **until the pin moves**. A failed restart leaves the marker PENDING on
+purpose; a rollback that cannot restore does **not** restart.
+⚠️ **WHO SETS THE PIN IS AN OPEN ATLAS-SIDE QUESTION, AND `base_url` IS THE SHARP
+EDGE. As of 2026-08-27** nothing serves `agent_release`, so the client is inert.
+`checksums.txt` is fetched from the SAME `base_url`, so it proves the transfer was
+not corrupted, never that the bytes came from Keld — write access to
+`agent_release` is therefore equivalent to root on every machine in the org.
+Three ways out are recorded in `docs/auto-update.md`; **none was implemented on
+that date.** Choose before the first real rollout and record the choice WITH THE
+DATE it was taken.
 
-⚠️ **The version source is ATLAS, NOT `releases/latest`, and that is the whole
-point rather than a preference.** This file already states the problem for
-`ml_backend`: "an existing fleet's Atlas Context column therefore empties
-machine-by-machine at whatever pace people upgrade, **with no server-side
-brake**. If that pace ever needs controlling, the control is a staged rollout
-of the installer itself." A client that resolves `releases/latest` itself
-converges the entire fleet the moment a tag is pushed — that is the same defect
-with a faster fuse, not a smaller version of it. So `settings.Remote.Release`
-(`agent_release`) carries `{enabled, version, base_url}`, pointer-fielded like
-`PIIRegions`/`Features`, and **an absent block means NO UPDATE** — the
-strictest reading of the omitted-key rule, because unattended binary
-replacement is the last thing that should be reachable from the server by
-omission. `KELD_AUTOUPDATE=0` refuses locally; **local refusal wins, local
-permission never does.** Atlas does not serve the key yet, so the seam exists
-and nothing moves until it does.
-⚠️ **`version` is a PIN, not a floor**, and the daemon moves to it in EITHER
-direction. A control plane that can only move a fleet forward is not a brake,
-and the brake is the entire reason for choosing Atlas — so a downgrade is a
-first-class supported operation, not an error case. Comparison is identity
-after normalizing one leading `v`, never semver ordering: ordering is what a
-floor needs, and it has parsing edge cases a pin does not.
-⚠️ **A MISSING PUBLISHED SHA-256 IS FATAL HERE, and `install.sh` warns and
-continues.** The divergence is deliberate and is the one asymmetry worth
-remembering: the installer has a human reading its output who can abort, and an
-unattended swap does not. So the single case where the installer degrades
-gracefully is the case this must refuse. Staging lives **inside** the
-destination (no `/tmp` fallback) for the reason `install.sh` gives — the commit
-must be a same-filesystem rename, not a cross-device copy of the sidecar's
-~15,000 files.
-⚠️ **THE macOS `.pkg` CANNOT BE UPDATED IN PLACE, AND ITS SYMLINKS ARE THE
-TRAP.** The pkg stages to a root-owned `/usr/local/keld`, so an unprivileged
-daemon migrates: it installs to `~/.local/bin` and repoints the LaunchAgent via
-**`service.InstallAt`** — new, because `service.Install` reads
-`os.Executable()`, which at that moment is still the OLD path, and using it
-would leave launchd starting the stale binary forever while the update reported
-success. Two more consequences, each implemented rather than hoped away.
-`installers/macos/scripts/postinstall` **repoints `~/.local/bin/keld` to a
-root-owned SYMLINK back at `/usr/local/keld/keld`**, so `Swap.Replace` uses
-`os.Lstat`, never `os.Stat` — following the link would displace the pkg's own
-binary, which we do not own, while the link itself sits in a user-owned
-directory and is ours to replace. And `/usr/local/bin/keld` (root-owned,
-usually ahead of `~/.local/bin` on PATH) **cannot be rewritten at all**: the
-daemon converges and the CLI a human types does not, so
-`keld signal doctor` names that link with the exact `ln -sf` rather than
-letting the install quietly disagree with itself about its own version.
-⚠️ **AUTO-ROLLBACK ALONE IS UNSTABLE — `failed_versions` is what closes the
-loop.** `~/.keld/update/state.json` is written **before** the restart, and
-cleared only by a daemon that came up as the new version. Three outcomes, and
-the third is the one that makes a bad release self-healing rather than a
-bricked fleet: past `KELD_UPDATE_CONFIRM_DEADLINE` (15m) the swap is undone
-**whichever version is running**, because a binary that crashed on startup
-never got far enough to clear its own marker — the stale marker IS the crash
-report. Then, since Atlas still pins the bad version, without a memory of the
-failure the next poll re-applies it: swap, crash, roll back, swap. A
-rolled-back version is therefore never retried **until the pin moves** — the
-update-loop equivalent of `KELD_ENRICH_MAX_ATTEMPTS` quarantining a job rather
-than retrying it forever. Two refusals keep the recovery honest: a **failed
-restart leaves the marker PENDING** on purpose (the swap already happened, so
-the next start must still be able to undo it), and a **rollback that cannot
-restore does NOT restart** — the machine is in an unknown state and bouncing
-the service can only obscure it, so it reports at error severity and stops.
-A pre-flight `keld-agent --version` runs on the staged binary **before** any
-swap: a wrong-architecture build hashes correctly and cannot run, and catching
-that costs milliseconds rather than a restart, a rollback and a second restart.
-`Maybe` takes its decision **inline** (a pure function over already-loaded
-state) and hands only the work to a single-flighted goroutine — the settings
-poll carries per-org config to every other subsystem and must never block on a
-190 MB download. Reporting is disk-only in `internal/localagent/update.go`,
-the same rule `models.go` follows: a CLI that cannot reach the daemon does not
-thereby know an update failed.
-⚠️ **WHO SETS THE PIN IS AN OPEN ATLAS-SIDE QUESTION, AND `base_url` IS THE
-SHARP EDGE.** **As of 2026-08-27** nothing serves `agent_release` and there is
-no producer for it, so the client is inert — a date, because an open question
-recorded without one reads as current forever and is indistinguishable from one
-nobody revisited. Before one exists: `version` + `base_url` together
-say "fetch this binary from this host and run it", and the checksum gate does
-NOT constrain that — `checksums.txt` is fetched from the SAME `base_url`, so it
-proves the transfer was not corrupted, never that the bytes came from Keld.
-Write access to `agent_release` is therefore equivalent to root on every machine
-in the org. Three ways out, cheapest first: Atlas never serves `base_url` and
-the client ignores it (mirrors configured locally); a server-supplied
-`base_url` is honoured only when a local env var permits that host; or release
-assets are signed and verified against a key compiled into the binary — the only
-one that makes the host untrusted. **None was implemented on that date.** Choose
-before the first real rollout, not after, and record the choice WITH THE DATE it
-was taken — here and in `docs/auto-update.md`, whose status block is dated for
-the same reason. Reference: `docs/auto-update.md`. Spec:
+Full rationale and traps: **`docs/auto-update.md`**. Spec:
 `docs/superpowers/specs/2026-08-27-signal-auto-update-design.md`.
 
-**The signal-embeddings publish half (`internal/agent/features/`).** The daemon
-side of `POST /features`: an emitter with a per-transcript cursor, the sibling of
-`internal/agent/blocks/` and built the same way — it asks the sidecar which rows
-exist past its cursor and publishes them. Rows ride `publish.FeatureRow` under
-their **own `corr_scheme`**, never `Enrichment` or `BlockEnrichment`, because
-Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme, corr_id)` and
-upserts `ON CONFLICT DO UPDATE` over every column — sharing a scheme OVERWRITES
-rather than dedups, the same trap `publish/window.go` documents at length. The
-corr id is `session@feature@anchor@key`: four segments against a block id's two
-and a prompt id's zero, so the id spaces are disjoint by SHAPE as well as by
-scheme. Transport is `clientevents`' batch path (extracted in `a00a1e1` so a
-second route could reuse it), with its own spool dir — a shared one would
-cross-post bodies between routes.
+**The signal-embeddings publish half (`internal/agent/features/`).** An emitter
+with a per-transcript cursor, the sibling of `internal/agent/blocks/`. Rows ride
+`publish.FeatureRow` under their **own `corr_scheme`**, never `Enrichment` or
+`BlockEnrichment` — Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme,
+corr_id)` and upserts over every column, so sharing a scheme OVERWRITES rather
+than dedups. The corr id is `session@feature@anchor@key`: four segments against a
+block id's two and a prompt id's zero, so the id spaces are disjoint by SHAPE as
+well as by scheme. Transport is `clientevents`' batch path with its **own** spool
+dir — a shared one would cross-post bodies between routes.
 ⚠️ **The cursor advances on BUFFERING, not on delivery**, because a batching path
-cannot observe delivery. That is made safe by backpressure rather than by hope: a
-sweep never takes more rows than the buffer has room for, so a full buffer HOLDS
-the cursor instead of dropping rows the sidecar would never re-offer.
+cannot observe delivery. Backpressure is what makes that safe: a sweep never takes
+more rows than the buffer has room for, so a full buffer HOLDS the cursor.
 
 **Four toggles, all OFF by default, and they are not interchangeable.**
-`KELD_CAPTURE` (the extra ingest rows + `bin_offset`) ⚠️ is fingerprinted into
-`parse_state`, so flipping it forces one reparse — that is why it is separate,
-and why turning publishing off must never cost a reparse to turn back on.
-`KELD_TEXTEMBED` gates the encoder child. `KELD_FEATURES` computes and stores
-rows locally; `KELD_FEATURES_PUBLISH` sends them to Atlas. The last two carry an
-Atlas per-org override riding the existing settings poll (`Remote.Features`,
-`Remote.FeaturesPublish`) — the `client_telemetry` precedent, remote overrides
-local, and an OMITTED key leaves the local base rather than defaulting on, so a
-silent fleet-wide enable is not reachable from the server.
-The whole subsystem registers only under `ml_backend:"deterministic"`. Under
-`"auto"` it is ABSENT — never registered, so it appears in neither
-`facets_skipped` nor `extractor_versions`, which is this codebase's existing
-distinction between a pass that was skipped and one that was never wired.
+`KELD_CAPTURE` (extra ingest rows; ⚠️ fingerprinted into `parse_state`, so
+flipping it forces one reparse — which is why turning publishing off must never
+cost a reparse to turn back on), `KELD_TEXTEMBED` (the encoder child),
+`KELD_FEATURES` (compute and store locally), `KELD_FEATURES_PUBLISH` (send to
+Atlas). The last two carry an Atlas per-org override riding the settings poll
+(`Remote.Features`, `Remote.FeaturesPublish`); remote overrides local, and an
+**omitted** key leaves the local base rather than defaulting on, so a silent
+fleet-wide enable is not reachable from the server. The whole subsystem registers
+only under `ml_backend:"deterministic"`; under `"auto"` it is **ABSENT** — in
+neither `facets_skipped` nor `extractor_versions`.
 
 **PROJECT ATTRIBUTION (`internal/agent/attrib/`, `daemon/attrib.go`,
 `sidecar/app/analysis/attribution.py`, `sidecar/app/verifier.py`) — which declared
 project a closed BLOCK belongs to, decided on device.** OFF by default
-(`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org declares
-projects (`settings.RemoteProject`: id/title/description/team/repos/keywords/ticket key)
-via `KELD_PROJECTS_FILE` or the settings poll's `projects` key; the daemon pushes them
-down with `POST /projects` and the block emitter's `OnPublished` hook schedules a durable
-job per published block. `POST /attribute` takes COORDINATES and the block's own
-already-computed dims and answers with project IDS, confidences, closed enums and integer
-timings — no text, no span, no offset, in either direction.
-- **The score is embedding + a deterministic boost, and NOTHING is assigned without the
-  encoder.** `BOOST_CAP` (0.35) sits below `THRESHOLD - BAND` (0.41) by construction, so a
-  boost-only score cannot cross the bar; a machine with no weights answers
-  `degraded:weights_unavailable` and the durable job re-attributes it later. There is
-  exactly one attribution path, the benchmarked one. `source` is therefore
-  `embedding|verifier` — **"metadata" is not producible** — and `encoder_state` is
-  `warm|absent`, never `cold`: the route never loads the encoder inside a request, it
-  answers `pending` and warms on a background thread.
-- **⚠️ TWO NEW MODEL CHILDREN AND A NEW NATIVE DEPENDENCY, ON THE SAME BUDGET.** The
-  **text encoder** (Qwen3-Embedding-0.6B, ~1.2 GB of weights, 1.70 GB resident /
-  2.35-2.43 GB peak) is the SAME child the signal-embeddings path uses — one provisioner,
-  never two fetching into one directory. The **verifier** (Gemma 4 E2B Q4_K_M GGUF, ~3 GB,
-  `llama-cpp-python` — the repo's first **compiled native** runtime dependency, pinned
-  exactly for that reason) runs in its OWN recycled worker child with its own
-  `WorkerManager`, its own `KELD_VERIFIER_RSS_MARGIN_MB` (512, half GLiNER2's, because a
-  fixed-`n_ctx` GGUF has less room to drift than a transformer on unbounded input), and
-  `KELD_ATTRIBUTION_VERIFIER=1` as its opt-IN — ⚠️ **OFF by default since 2026-09-03**
-  (it was on within the gate until then): the one real-data A/B went 1-for-3 for minutes of
-  CPU per block, its 3 GB beside the encoder's 1.7 GB exhausted swap on the benchmark
-  machine, and every figure in `docs/notes/whats-next-attribution.md` §8 was measured
-  without it, so the default now matches what was measured. The provisioner reads the same
-  switch, so a machine that never opts in never fetches the GGUF. Both halves
-  (`attrib.VerifierEnabled`, `verifier.enabled`) mirror one table and change together.
-  So `KELD_SIDECAR_MEM_BUDGET_MB` is now
-  spent by **three** children, not one: the verifier's manager subtracts the parent's RSS
-  plus the other two children's high-water peaks before computing its own hard limit
-  (`_verifier_reserve_rss`), and reports the overrun rather than absorbing it — `/metrics`
-  gained a `verifier` block beside `worker` and `embed`. ⚠️ **Both children are polled by
-  `lifespan`'s one poll loop.** The verifier's manager shipped UNPOLLED for a whole branch,
-  and `poll()` is the sole driver of the RSS ceiling, the recycle, the idle unload and the
-  pressure eviction — so a llama.cpp child held its weights and a 4096-token KV cache for
-  the sidecar's entire life, unbounded and unmeasured. A manager that is constructed is not
-  a manager that is guarded.
-- **⚠️ `llama_cpp` must be in the PyInstaller spec, and its absence is invisible.** It is a
-  ctypes binding: `libllama` plus ~10 ggml shared objects are opened by a path computed at
-  import time (PyInstaller's binary analysis cannot follow that), and the one
-  `from llama_cpp import Llama` lives inside `Verifier.__init__` — PyArmor-encrypted
-  bytecode under `KELD_OBFUSCATE=1`, which CI sets for releases. So the module AND its
-  libraries are both invisible, and a spec missing them ships a binary that starts, is
-  healthy, classifies, scans for PII and fails EVERY verdict. Exactly the freeze_support()
-  and presidio failure class. `make freeze-check` / `make obfuscate-check` now spawn the
-  verifier child and demand a real verdict (`keld-agent-sidecar --selftest verifier`), and
-  that arm FAILS rather than skips when no GGUF is present — a gate that passes quietly on
-  the machines lacking the model is the same as no gate.
-  ⚠️ **BUT IT IS DEVELOPER-MANUAL TODAY, NOT CI.** Nothing under `.github/` invokes
-  `scripts/freeze-check-local.sh` or `--selftest`: `ci.yml` excludes both targets
-  deliberately (they need the ~5 GB sidecar venv and the GLiNER2 weights, and take
-  minutes), and `installers.yml` runs its own inline `/classify` smoke, which by
-  construction cannot reach the verifier's import path. So the arm exists and must be run
-  by hand before a release; **nothing automatically stops this defect returning.** Wiring
-  it into `installers.yml`'s per-release smoke — where the freeze already happens — is the
-  follow-up, and it needs a GGUF on that runner or an explicit
-  `KELD_FREEZE_CHECK_VERIFIER=0` waiver.
-- **⚠️ TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE.**
-  `daemon/sidecarenv.go` sets `KELD_TEXTEMBED=1` (set-if-absent) whenever attribution is
-  on, because `/attribute` needs the same encoder. Nothing derived from it is PUBLISHED by
-  that — feature rows stay gated on `KELD_FEATURES`/`KELD_FEATURES_PUBLISH` and the org's
-  `features` toggle, and `/attribute` answers with ids — but the encoder does read message
-  text locally, which is new behaviour on a machine that had the toggle off, and it is the
-  toggle this file describes as the one deciding whether text is read to keep something
-  derived from it. `KELD_TEXTEMBED=0` explicitly still wins; `/attribute` then answers
-  `skipped:disabled` for every block.
-- **The two model downloads are gated on a KNOWN NON-EMPTY project list.** 4.2 GB fetched
-  for an org that has declared nothing buys nothing — every `/attribute` answers
-  `skipped:no_projects` without loading a model — and Atlas does not serve `projects` yet,
-  so that is currently every machine without `KELD_PROJECTS_FILE`. The gate is read live per
-  published block, so a list arriving on a later poll starts the fetch with no restart.
-- **⚠️ `skipped:no_projects` is NON-TERMINAL while the daemon holds a list, and the daemon
-  re-posts after a sidecar respawn.** `attribution._projects` is module state in the sidecar
-  PARENT, so the supervisor's crash-restart takes it, while the daemon's change-gated POST
-  concludes there is nothing new to say: every subsequent block was published attributed to
-  nothing AND THE JOB DELETED, permanently, until the daemon itself restarted. Both halves
-  are fixed — `Supervisor.SetOnRespawn` re-posts the list, and the attributor HOLDS the job
-  (the shape `degraded:weights_unavailable` already uses) whenever it believes projects are
-  declared. The second half also closes the startup race, where the first sweep runs
-  concurrently with the first POST. Anything else the daemon pushes DOWN once, rather than
-  riding each request the way `PIIRegions` does, has the same shape and belongs on that hook.
-- **Version skew HOLDS rather than quarantines.** An older frozen sidecar 404s `/attribute`;
-  that is surfaced as `AttributeResult.RouteUnsupported` and holds the job, because the
-  sidecar updates on its own cadence and the work becomes doable when it catches up. A
-  genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
-  skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
-  invisible to the fleet.
-- ⚠️ **A BLOCK LANDS IN EVERY PROJECT THAT MATCHES IT (2026-09-23), AND SIGNAL HAS NO
-  GROUPS (2026-09-25).** One piece of work can legitimately belong to several projects, so
-  overlap is the model, not an error:
-  - the RULE pass (`projects.Attribute`) no longer refuses: two projects claiming one repo
-    both get the block, and `ReasonConflict` is never produced (the constant survives so an
-    old ledger row reads). There is no precedence and no order to maintain;
-  - TOTALS (`projects.Rollup`, `GET /v1/projects`' `totals`) are per project, each counting
-    every block it holds in full, while `coverage` counts a shared block once. Signal sends
-    every id it assigned; Atlas decides what to do with overlap on its own side.
-  ⚠️ **Groups were built and removed in the same week, on purpose.** On 2026-09-23 Signal
-  mirrored Atlas's groups and cut the model-based decision once PER GROUP; Revision 2 then
-  stopped Signal matching Atlas's workstreams, which left a group carrying only a heading,
-  group totals and a "counts for my work" switch, so Revision 4 (2026-09-25) removed them.
-  The sidecar is back to ONE pooled competition — the pre-2026-09-23 decision, byte for
-  byte — and the daemon posts no `group`. A group survives only as the stored container
-  3.0.6 needs (see Vocabulary); a project in a group that had been switched off was made
-  HIDDEN once, on upgrade, so it still counts for nothing.
-  Spec: `docs/superpowers/specs/2026-09-23-multi-group-attribution-discovery.html`.
-- **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
-  An absolute threshold conflated two questions and real-transcript evaluation showed it
-  (2026-09-02, 21 real blocks: every block carries a per-block score offset, so one bar
-  admits 0.4x false positives beside 0.6+ true ones). LEVEL — does the block belong to
-  anything? — is answered by a competitor: `NULL_DOC` is embedded beside the projects and
-  a project attributes only by BEATING "nothing" in the same ranking (the null gets no
-  boost). SHAPE — is there a clear winner? — is `MARGIN` (0.08, `KELD_ATTRIBUTION_MARGIN`):
-  everything within MARGIN of the top is assigned, and `VERIFY_HALO` (0.04,
-  `KELD_ATTRIBUTION_VERIFY_HALO`) around the cut is where the verifier adjudicates. One
-  deliberate consequence: a strong exact-match boost (repo + ticket) CAN carry a project
-  past the null on its own — with an encoder present; with none, nothing is ever assigned
-  (AC-4 as amended).
-- ⚠️ **WHAT IS SCORED CHANGED ON 2026-09-03, AND THE CHANGE IS MEASURED: THE WHOLE BLOCK,
-  MEAN-POOLED, CENTRED.** Until then `_span_texts` returned the USER stream only, on the
-  argument that "scoring a project against the model's own prose would attribute work to
-  whatever the assistant happened to name" — plausible, written at implementation time, and
-  never measured; the eval recorded the cost the day it shipped (benchmark 0.929 with
-  assistant text, ported pipeline 0.823 without) and kept the rule. On 61 real, labelled
-  blocks (`docs/notes/whats-next-attribution.md` §9): user text alone put **28%** of blocks
-  on the right project; the whole block, mean-pooled and centred, put **92%** there. Three
-  facts behind that: a real block's user words are often "continue" while the reply names
-  the work; **24 of 25 blocks with no user text at all** — agent continuations — have
-  assistant text, so this is also how the structurally-silent third of a machine's work
-  attributes; and MEAN beats MAX (92% vs 82%) because the best of ~12 messages is high for
-  anything. The feared failure did occur, on 4 of 61. Only the USER's words still feed
-  `concepts` (which publishes phrases) and the verifier prompt.
-  **Centring** (`attribution.Offsets`) subtracts each document's running mean similarity
-  over the messages the machine has scored — because the null is written as speech and the
-  projects as artifacts, the null out-scored every project on 66% of individual messages
-  regardless of topic, and the projects' own baselines spanned 0.093 against a MARGIN of
-  0.08. It is a running mean of SCALARS persisted at `~/.keld/state/attribution-offsets.json`
-  (two floats per document, never a vector), keyed by the document's TEXT so a reworded
-  project starts fresh, and GATED all-or-nothing at `KELD_ATTRIBUTION_MIN_BACKGROUND` (50)
-  messages: below it the decision is exactly the uncentred one, because a ten-message
-  offset measured non-monotone. Whole-block without centring measured 59%. The attribution
-  meta carries `centred` and `background_n`, and `model_versions.scoring` names the rule,
-  because centred and uncentred rows differ on ~40% of blocks and nothing else would say so.
-  **Rollback is one environment variable:** `KELD_ATTRIBUTION_SCORING=user-max` restores the
-  pre-2026-09-03 decision exactly (user turns only, MAX, no centring, no baseline observed)
-  and stamps `scoring: user-max-uncentred-v0`. The baseline file is `{"stats", "seen"}`:
-  `seen` is the last 2,000 block keys folded in, so a RETRIED job (held on publish failure,
-  re-POSTed after a sidecar respawn) enters the running mean once, not once per attempt. A
-  baseline that cannot be saved is re-learned after a restart and warned about ONCE per
-  process — never silently, because a machine that can never persist sits uncentred for its
-  first 50 messages after every restart.
-- **Quality.** The 0.823 recorded before this was measured under the OLD absolute threshold
-  with user-only text and the verifier on — a pipeline that no longer exists in three ways.
-  `sidecar/app/test_attribution_quality.py` (opt-in, `KELD_ATTRIBUTION_EVAL=1`) now scores
-  the shipped configuration — whole-block, mean, centred (primed over the fixtures), no
-  verifier unless `KELD_ATTRIBUTION_EVAL_VERIFIER=1` — and its floor is a regression tripwire
-  under THAT measurement, not the design gate. MARGIN/VERIFY_HALO are starting points
-  awaiting calibration on LABELED REAL blocks — the correction flywheel, not another
-  synthetic sweep. Runbook: `docs/attribution-smoke.md`.
+(`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org
+declares projects (`settings.RemoteProject`) via `KELD_PROJECTS_FILE` or the
+settings poll; the daemon pushes them down with `POST /projects` and the block
+emitter's `OnPublished` hook schedules a durable job per published block.
+`POST /attribute` takes COORDINATES and the block's already-computed dims and
+answers with project IDS, confidences, closed enums and integer timings — **no
+text, no span, no offset, in either direction.**
+- ⚠️ **TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE.**
+  `daemon/sidecarenv.go` sets `KELD_TEXTEMBED=1` (set-if-absent) because
+  `/attribute` needs the same encoder. Nothing derived from it is *published* by
+  that, but the encoder does read message text locally, which is new behaviour on
+  a machine that had the toggle off. `KELD_TEXTEMBED=0` explicitly still wins.
+- **NOTHING is assigned without the encoder.** `BOOST_CAP` (0.35) sits below
+  `THRESHOLD - BAND` (0.41) by construction, so a boost-only score cannot cross
+  the bar; a machine with no weights answers `degraded:weights_unavailable` and
+  re-attributes later. There is exactly one attribution path, the benchmarked
+  one — `source` is `embedding|verifier` and "metadata" is **not producible**.
+- **The decision is RELATIVE, not an absolute bar:** `cut = max(null, top -
+  MARGIN)`. `NULL_DOC` is embedded beside the projects, so a project attributes
+  only by BEATING "nothing" in the same ranking. `MARGIN` (0.08) answers shape;
+  `VERIFY_HALO` (0.04) is where the verifier adjudicates.
+- ⚠️ **WHAT IS SCORED CHANGED ON 2026-09-03: the WHOLE BLOCK, mean-pooled,
+  centred.** User text alone put **28%** of 61 real labelled blocks on the right
+  project; whole-block mean-pooled and centred put **92%** there. MEAN beats MAX
+  (92% vs 82%), and **24 of 25 blocks with no user text at all** are agent
+  continuations that only attribute this way. The feared failure — attributing to
+  what the assistant happened to name — did occur, on 4 of 61. Only the USER's
+  words still feed `concepts` and the verifier prompt. **Centring**
+  (`attribution.Offsets`) is a running mean of SCALARS, gated all-or-nothing at
+  `KELD_ATTRIBUTION_MIN_BACKGROUND` (50) messages. Rollback is one variable:
+  `KELD_ATTRIBUTION_SCORING=user-max`.
+- **⚠️ TWO MODEL CHILDREN AND A NEW NATIVE DEPENDENCY, ON THE SAME BUDGET.** The
+  text encoder is the SAME child the signal-embeddings path uses (one provisioner,
+  never two). The **verifier** (Gemma 4 E2B Q4_K_M GGUF, ~3 GB,
+  `llama-cpp-python` — the repo's first compiled native dependency, pinned exactly
+  for that reason) runs in its own recycled worker child and is
+  **`KELD_ATTRIBUTION_VERIFIER=1` opt-IN, OFF by default since 2026-09-03**: the
+  one real-data A/B went 1-for-3 for minutes of CPU per block, and every figure in
+  `docs/notes/whats-next-attribution.md` §8 was measured without it. So
+  `KELD_SIDECAR_MEM_BUDGET_MB` is spent by **three** children; the overrun is
+  reported, not absorbed. ⚠️ **Both children must be polled by `lifespan`'s one
+  poll loop** — `poll()` is the sole driver of the RSS ceiling, the recycle, the
+  idle unload and the pressure eviction. A manager that is constructed is not a
+  manager that is guarded.
+- ⚠️ **`llama_cpp` must be in the PyInstaller spec, and its absence is
+  invisible** — a ctypes binding imported inside `Verifier.__init__`, itself
+  PyArmor-encrypted under `KELD_OBFUSCATE=1`. A spec missing it ships a binary
+  that starts, is healthy, and fails EVERY verdict. `make freeze-check` /
+  `make obfuscate-check` spawn the verifier child and demand a real verdict, and
+  that arm FAILS rather than skips when no GGUF is present. ⚠️ **BUT IT IS
+  DEVELOPER-MANUAL TODAY, NOT CI** — nothing under `.github/` invokes it, so
+  **nothing automatically stops this defect returning.**
+- **The two model downloads are gated on a KNOWN NON-EMPTY project list**, read
+  live per published block. ⚠️ **`skipped:no_projects` is NON-TERMINAL while the
+  daemon holds a list**, and the daemon re-posts after a sidecar respawn
+  (`Supervisor.SetOnRespawn`): module state in the parent does not survive a
+  crash-restart, and a change-gated POST concluded there was nothing new to say.
+  Anything else the daemon pushes DOWN once belongs on that hook.
+- **Version skew HOLDS rather than quarantines** (`AttributeResult.RouteUnsupported`
+  on a 404); a genuine quarantine emits `attribution.job_quarantined`.
+- ⚠️ **A block lands in EVERY project that matches it, and Signal has no groups**
+  (2026-09-23 / 2026-09-25). Overlap is the model, not an error: the rule pass
+  (`projects.Attribute`) never refuses and never produces `ReasonConflict` (the
+  constant survives only so an old ledger row reads); there is no precedence.
+  Totals are per project, each counting every block it holds in full, while
+  `coverage` counts a shared block once; Signal sends every id it assigned and
+  Atlas decides what overlap means. The sidecar runs ONE pooled competition and
+  the daemon posts no `group` — a group survives only as 3.0.6's stored
+  container (see *Vocabulary*).
+- **Quality.** `sidecar/app/test_attribution_quality.py` (opt-in,
+  `KELD_ATTRIBUTION_EVAL=1`) scores the *shipped* configuration and its floor is a
+  regression tripwire under THAT measurement, not the design gate. MARGIN and
+  VERIFY_HALO await calibration on LABELED REAL blocks — the correction flywheel,
+  not another synthetic sweep.
+
+Full scoring rationale, the evaluation and the packaging traps:
+**`docs/architecture/project-attribution.md`**. Follow-ups:
+`docs/notes/whats-next-attribution.md`. Runbook: `docs/attribution-smoke.md`.
 
 **`keld signal doctor` / `status` report on-device model state**
 (`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
@@ -2318,145 +976,61 @@ spooled to `~/.keld/spool/clientevents/` (bounded, drop-oldest) when Atlas is
 unreachable. Full wire contract (envelope, event/code catalog, settings
 defaults, redaction guarantee): **`docs/signal-client-events.md`**.
 
-**Resource safety (the sidecar is a good citizen).** Single-flight + bounded
-queue (503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and a
-**CPU thread scaler** (`torch.set_num_threads` capped to host load, default 50%
-of cores). Inference itself runs in a separate **inference worker** child
-process, not the long-lived FastAPI service — the service holds no model and
-its own RSS stays flat regardless of uptime. The worker is **recycled** (killed
-and respawned, reclaiming its heap via process exit — the only cross-platform
-memory reset) on an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB`),
-**memory pressure** (available RAM ≤ `KELD_SIDECAR_EVICT_AVAIL_PCT` — held down
-until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables),
-a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
-lazily on the next request.
+**Resource safety (the sidecar is a good citizen).** Single-flight + bounded queue
+(503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and a **CPU
+thread scaler** (capped to host load, default 50% of cores). Inference runs in a
+separate **inference worker child**, not the long-lived FastAPI service, and is
+**recycled** — killed and respawned, reclaiming its heap via process exit, the
+only cross-platform memory reset — on an RSS ceiling, memory pressure, idle
+(`KELD_SIDECAR_IDLE_UNLOAD_S`), a hung-job timeout, or a crash.
 
-⚠️ **A SUPERVISOR KILL REAPS THE PROCESS GROUP, NOT THE PID IT CAN SEE — and until
-`e40dd53` it did not.** Every mechanism above assumes killing the sidecar reclaims
-what the sidecar was holding, and that assumption was false for the whole life of
-the worker child. `Supervisor.killChild` sent `cmd.Process.Kill()` — SIGKILL, to the
-sidecar's pid alone. SIGKILL cannot be caught, so `main.py`'s `lifespan` teardown
-(`wm.shutdown`, `_TEXT_SOURCE.shutdown`) never ran, and the `multiprocessing`
-children were reparented to init and held their memory indefinitely. Measured on a
-real machine: an inference worker at **2.9 GB** and encoder children at **0.55-1.9 GB**
-surviving their parent, reparented to `systemd --user`.
+⚠️ **A SUPERVISOR KILL REAPS THE PROCESS GROUP, NOT THE PID IT CAN SEE.** Every
+mechanism above assumes killing the sidecar reclaims what it held, and that was
+false until `e40dd53`: SIGKILL to the pid alone left `lifespan`'s teardown unrun
+and the `multiprocessing` children reparented to init, holding **2.9 GB** and
+**0.55-1.9 GB**. The fix is `Setpgid` at spawn plus `stopChild`: **SIGTERM to the
+sidecar ALONE** so the teardown can run, then **SIGKILL to the GROUP
+unconditionally**. ⚠️ Two changes elsewhere are what make it work, and removing
+either makes it silently inert while every test passes: `sidecarService` uses
+`exec.Command`, not `CommandContext` (whose cancel hook SIGKILLs first), and `Run`
+waits on `AwaitSidecarStop`. `KELD_SIDECAR_STOP_GRACE` (5s) is a BOUND, not a
+budget. **Windows is PARTIAL** — `taskkill /T` reaps the tree but no SIGTERM is
+reachable, so `lifespan` still does not run there.
 
-The fix is `Setpgid` at spawn plus `stopChild`: **SIGTERM to the sidecar ALONE**, so
-the `lifespan` teardown that already existed can finally run and exit the children
-cleanly, then **SIGKILL to the GROUP unconditionally**, because a tidy parent exit can
-still leave a straggler. `Setpgid` is set in the supervisor rather than in each spawn
-func so no caller can forget it, and `childGroup` refuses to signal a group whose
-`pgid != pid` — that would be the daemon's own group — falling back to a pid-only kill,
-never worse than the old behaviour. A process group over `Pdeathsig` because the latter
-is Linux-only. Multiprocessing spawn inherits the group, so the frozen binary's
-`freeze_support()` re-exec lands inside it.
-`KELD_SIDECAR_STOP_GRACE` (default **5s**) is a BOUND, not a budget: idle teardown
-measures **110.6 ms**, while an encoder mid-weights-load does *not* finish in 5s and is
-reaped by the group kill. It must not track the worst case — `TextSource.shutdown` can
-drain a ~92s encode, and launchd SIGKILLs the daemon itself at 20s.
-⚠️ Two changes elsewhere are what make this work at all, and removing either makes the
-fix silently inert while every test still passes: `sidecarService` uses `exec.Command`
-rather than `CommandContext` (whose cancel hook SIGKILLs the pid immediately and
-pre-empts the SIGTERM), and `Run` waits on `AwaitSidecarStop` (because `serve()`
-returned microseconds after ctx cancel and the daemon exited mid-reap).
-**Windows is PARTIAL:** `taskkill /T` reaps the tree, but no SIGTERM is reachable from
-a console-less service, so `lifespan` still does not run there; the job object that
-would be the real answer is not implemented. Stated in `procgroup_windows.go`'s header.
+⚠️ **The guard must not sample under the inference lock.** Sampling while holding
+it could only ever measure the trough between jobs: RSS oscillated **2715 → 5692
+MB against a 3409 MB ceiling with `recycles == 0`**. So `observe_rss()` samples
+**lock-free**; the **RSS ceiling** is a baseline-drift guard decided only when the
+lock is free, taken **non-blocking**; and a **hard limit** enforced on the
+lock-free sample kills the worker even mid-job. ⚠️ **A lock-free sampler behind a
+blocking caller is not a lock-free sampler** — the encoder child reintroduced this
+exact shape and is now pinned by `app/test_guard_visibility.py`.
 
-**The guard must not sample under the inference lock.** `poll()` used to read the
-worker's RSS while holding the same lock `call()` holds for an entire inference,
-so it could only ever sample *between* jobs — right after the worker returned its
-heap to the OS. Every in-flight spike was invisible: measured live, RSS
-oscillated 2715MB → 5692MB against a 3409MB ceiling with `recycles == 0`. So the
-guard now has two tiers:
+**The parent's share of the budget is MEASURED, not assumed** —
+`parent_reserve_mb()` returns `max(constant, high-water parent RSS)`. **High-water,
+not live**: a limit tracking a live sample would relax when the parent dipped,
+with nothing about the risk having changed. **And the composition must be monotone
+too**: `hard_limit_mb()` is `max(budget - reserve, ceiling + hard_margin)`, after a
+step discontinuity where 2 MB of parent growth bought the worker 511 MB.
 
-- `observe_rss()` samples **without the lock** (reading RSS needs no lock; only
-  mutating the worker does) and records `peak_rss_mb` for the current worker
-  generation.
-- The **RSS ceiling is a baseline-drift guard**, decided only when the lock is
-  free (a mid-inference sample measures a transient spike, not drift, and
-  recycling for it would kill a job to reclaim memory about to be freed anyway).
-  The lock is taken **non-blocking** — waiting would stall the poll loop for a
-  whole inference and pin every sample to a job boundary, i.e. the trough.
-- A **hard limit** (`KELD_SIDECAR_MEM_BUDGET_MB` 4096 − `KELD_SIDECAR_PARENT_RESERVE_MB`
-  150, or absolute `KELD_SIDECAR_RSS_HARD_MB`) is enforced on the lock-free
-  sample and kills the worker **even mid-job** (`kills.hard`). Derived from the
-  TOTAL budget, because that is the actual requirement; it never sits below
-  `ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB`, or an ordinary spike would become a
-  mid-job kill. Prevention (bounded `max_len`) keeps peaks far below it, so this
-  stays a backstop. Note it bounds *sustained* use: with a 1s poll a fast
-  allocation can overshoot briefly before the kill lands.
+**The honest consequence: at the delivered defaults the budget cannot be met** —
+parent 619.6 + ceiling 3409 + margin 512 = **4540.6 MB against a 4096 MB budget**.
+The margin wins, and the overshoot is **reported, not absorbed**
+(`budget_shortfall_mb()` in `/metrics`, plus one loud line per **worker
+generation** — not per poll, which is the same as never warning). Which term gives
+is an operator's decision the code must not make silently.
 
-**The parent's share of the budget is MEASURED, not assumed.** `hard_limit_mb()`
-is `total budget − what the parent costs`, and "what the parent costs" was the
-constant `KELD_SIDECAR_PARENT_RESERVE_MB` (150) — true only while the parent
-held nothing but FastAPI. Once the `term` level's spaCy pipeline is resident
-the parent is ~680 MB, so the worker's hard limit was computed ~470 MB too
-generous: under-protection, arrived at silently, in the one direction that
-matters. `WorkerManager.parent_reserve_mb()` now returns
-`max(constant, high-water measured parent RSS)`, sampled lock-free by `poll()`.
-**High-water, not live**: a limit tracking a live sample moves in both
-directions, so a parent dip would relax the worker's limit with nothing about
-the risk having changed — the same non-monotone failure the RSS guard already
-had by sampling the trough. The parent is never recycled, so its cost is
-monotone in fact and the peak is the honest summary. `max()` with the constant
-keeps it strictly conservative against the old behaviour: an early sample can
-never grant MORE headroom than before. The standing invariant is unchanged —
-the hard limit never sits below `ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB`.
-
-**And the composition must be monotone too, which it was not.** A monotone
-reserve does not give a monotone limit for free. `hard_limit_mb()` returned
-`budget − reserve` whenever that came out above the ceiling and the
-`ceiling + hard_margin` floor only when it did not, putting a **step
-discontinuity** at `reserve == budget − ceiling`: measured at the delivered
-defaults (model_cost 2385, ceiling 3409, budget 4096), parent 686 gave 3410 and
-parent 688 gave **3921** — 2 MB of parent growth bought the worker 511 MB and
-abandoned the budget without bound. The guard relaxed exactly when memory
-pressure was highest, and spaCy's 619.6 MB sits one NER transient below that
-edge, with the high-water latch making the crossing permanent. It is now
-`max(budget − reserve, ceiling + hard_margin)`: monotone by construction, and
-the floor is **unconditional** rather than a property of one branch — which is
-also what fixes the invariant, since 3476.4 shipped against a required 3921.
-
-**The honest consequence: at the delivered defaults the budget cannot be met.**
-parent 619.6 + ceiling 3409 + margin 512 = **4540.6 MB** against a 4096 MB
-budget. No hard limit satisfies both. The margin wins — a limit under
-`ceiling + hard_margin` turns every ordinary transient spike into a mid-job
-kill, a worse failure than overshooting a budget — and the overshoot is
-**reported, not absorbed**: `budget_shortfall_mb()` surfaces in `/metrics`, and
-`poll()` logs one loud line per **worker generation** (not per poll — a
-once-a-second line is a flood operators filter out, which is the same as never
-warning) naming every term and the levers. Which term gives —
-`KELD_SIDECAR_MEM_BUDGET_MB`, `KELD_ENRICH_TOKEN_CEILING` /
-`KELD_SIDECAR_RSS_MARGIN_MB`, or `KELD_TERMS=0` — is an operator's decision the
-code must not make silently.
-
-`GET /metrics` exposes a `worker` block (`state`/`worker_rss_mb`/**`peak_rss_mb`**/
-`parent_rss_mb`/**`parent_reserve_mb`**/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/
-**`budget_shortfall_mb`**/`recycles`/
-`kills` incl. `hard`) alongside governor EWMA/threads/queue/counts — the peak and
-the limits it is judged against, because an instantaneous sample is exactly what
-made the oscillation look healthy. Full mechanisms + load-test validation:
-**`sidecar/loadtest/README.md`**.
-
-**`KELD_SIDECAR_MAX_CHARS` (default 24000) is a tokenizer-cost guard, not the
-memory bound.** Memory scales with *tokens*, and gliner2 truncates to `max_len`
-only *after* tokenizing, so a char pre-clip still helps on a pathological paste —
-but it must stay generous enough never to pre-empt the token cap. It previously
-defaulted to 8000 (~1100 word tokens), which silently made it the real
-constraint and rendered any larger token cap dead.
-
-**Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`),
-inherited by the spawned worker child. The daemon injects `MALLOC_ARENA_MAX=2`
-plus `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=2` and `KELD_SIDECAR_MAX_THREADS=2`
-(all set-if-absent, so an operator can override) — a cheap Linux-only baseline
-footprint reducer, not the memory-safety mechanism itself (that's the worker
-recycle above). Without the arena cap, glibc spawns a malloc arena per
-allocating thread and each retains freed heap — RSS then balloons to ~2× the
-model working set (measured 6.4 GB vs a ~2.6 GB working set on a 20-core host).
+**`KELD_SIDECAR_MAX_CHARS` (24000) is a tokenizer-cost guard, not the memory
+bound** — memory scales with *tokens*, and it must stay generous enough never to
+pre-empt the token cap. **Footprint caps are set at spawn, parent-side**
+(`MALLOC_ARENA_MAX=2` plus the `*_NUM_THREADS=2` family, all set-if-absent).
 `MALLOC_ARENA_MAX` **must** be parent-set: glibc reads it when the child's
-allocator initializes, before Python can set it for itself. The thread caps
-also bound CPU to ≤2 cores.
+allocator initializes, before Python can set it for itself. Without it RSS
+balloons to ~2x the model working set (measured 6.4 GB against ~2.6 GB).
+
+The incidents, the metrics block and load-test validation:
+**`docs/architecture/sidecar-resource-safety.md`** and
+`sidecar/loadtest/README.md`.
 
 ## The CLI (`keld`)
 
@@ -2572,7 +1146,12 @@ sidecar/
       match.py vocab.py shell.py terms.py text.py paths.py   supporting passes
   loadtest/          smoke + soak load-test harness (see its README)
   keld-agent-sidecar.spec / build-freeze.sh   PyInstaller packaging
-docs/                enrichment-settings.md, ONNX decision, superpowers/{specs,plans}
+docs/
+  architecture/      the subsystem detail this file points at (see Design docs)
+  notes/             working notes + live follow-ups
+  superpowers/       {specs,plans}
+                     enrichment-settings.md, auto-update.md, durability.md,
+                     ONNX decision, ...
 scripts/             install.sh / install.ps1, send-test-prompt.py, enrichments-sink.py
 ```
 
@@ -2679,133 +1258,28 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Distribution packaging** freezes the sidecar with PyInstaller
   (`keld-agent-sidecar.spec`) into `keld-agent-sidecar`; the daemon resolves it
   beside `keld-agent` (flat or nested layout).
-- **macOS signing needs TWO certs, and notarization is decoupled from the release.**
-  `installers/macos/build-pkg.sh` signs **every** Mach-O in the payload with the
-  *Developer ID Application* cert — not just the three entrypoints, because the
-  frozen sidecar is a one-dir tree of ~15k files / ~100 native libs and
-  notarization rejects the whole submission over a single unsigned one — then signs
-  the pkg itself with the *Developer ID Installer* cert. CI imports both p12s into
-  a throwaway keychain and **derives the identity names from it** (a hand-typed
-  name fails at `productsign` with an opaque error). Bundle the **G2 intermediate**
-  in each p12 or a clean runner can't build a chain to a trusted root.
-  ⚠️ **AND NOTHING IN THE INSTALLER DOWNLOADS IT ANY MORE — THE PAGE DOES.**
-  The wizard pane used to fetch the ~300 MB engine and hold Continue until the
-  fetch SETTLED (succeeded or failed). Three things were wrong, and the third
-  broke a real install on 2026-09-21: it puts a large download in front of
-  somebody who has not finished installing, on a release host measured
-  answering **504 on three of four full pulls** with a 30-minute client timeout
-  per attempt; the engine is not needed to FINISH installing (telemetry works
-  without it, enrichment spools); and rendering its progress from the
-  XPC-hosted pane drove a layout pass that pegged the plugin's main thread —
-  sampled on the stuck installer, **302 of 553 samples** in
-  `updateNextEnabled → KeldPaneView layout → heightFor:width:`, with the
-  download **already finished and staged on disk**. The person watched
-  "Downloading the analysis engine" for as long as they were willing to wait
-  for something that had succeeded.
-  ⚠️ **AND IT IS AUTOMATIC — THE PAGE REPORTS, IT DOES NOT ASK.** The first cut
-  of this put a Download/Update button on the page, which is the installer's
-  question moved one screen along: a mismatched engine is version SKEW, not a
-  preference, and every hour that button goes unclicked is an hour of work that
-  cuts no blocks. `engineManager.autoStart` fetches once per daemon run
-  (bounded, because a fetch that failed will fail the same way in thirty seconds
-  and a clock would turn a flaky host into a download loop); the page shows a
-  one-line bar with progress and names the version when it lands; only a
-  FAILURE offers Try again, which is the one place a human choice exists again.
-  ⚠️ **The fetch is PINNED to the daemon's own release**, and shipping it
-  unpinned in `v3.0.5-rc.4` installed a stale engine within the hour: an empty
-  tag resolves `releases/latest`, every `-rc.N` is a PRERELEASE, and that
-  endpoint excludes them — so a 3.0.5-rc.4 daemon fetched **v3.0.4** and the
-  page then correctly reported the engine it had just installed as out of date.
-  `postinstall` and `onboard.command` already pinned; this was the fourth caller
-  of a rule the other three encoded privately, which is the argument for
-  `internal/sidecarinstall` owning it.
-  The daemon owns it now: `GET /v1/engine` reports whether one is NEEDED
-  (`ml_backend` ≠ "off"), what is installed, and whether it is outdated — read
-  from DISK, never by probing the running service, so a present-but-starting
-  engine never reads as absent — and `POST /v1/engine/install` starts one fetch
-  and answers **202 immediately** while the page polls. `dev` on either half
-  answers "not outdated", the same cannot-tell refusal `version.Skew`,
-  `localagent.ModelState` and the doctor check all make. The page shows
-  **nothing at all** on a healthy machine (`ui/app.js` · `engineNotice`), so
-  nobody is handed a 300 MB button they have no reason to press. The install
-  logic itself moved to `internal/sidecarinstall` so the CLI command and the
-  daemon run ONE definition rather than the daemon shelling out to a binary.
-  ⚠️ **postinstall still fetches on a SILENT/MDM install** (`had_handoff`
-  false) — the same condition that decides whether to open `onboard.command` —
-  because a machine nobody will open the page on would otherwise publish no
-  blocks and never say why. A GUI install does not; the card is the
-  notification. `installers/macos/plugin_test.sh` INVERTS its three old
-  assertions rather than deleting them, so a download reintroduced into that
-  pane fails there.
-  ⚠️ **The pkg ships WITHOUT the sidecar.** Apple's notary service scans every file
-  in a submission, and the frozen sidecar is ~15k files / ~190MB of torch — which
-  put a real submission **4+ hours** into an unbounded queue. The pkg payload is now
-  just `keld`, `keld-agent`, `onboard.command`, `VERSION` (4 files, ~2 Mach-O to
-  sign instead of ~103). `onboard.command` fetches the sidecar tarball into
-  **`~/.local/bin`** — a well-known `sidecarBinPath()` dir that is user-writable, so
-  no sudo prompt, and the same place `install.sh` puts it. It fetches **before**
-  `keld-agent install`, because that command starts the daemon and the sidecar
-  should exist by then. Pinned to the pkg's own release via the staged `VERSION`
-  file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
-  and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
-  the script retries.
-  ⚠️ **AND IT SKIPPED ON PRESENCE, WHICH COST ~3 WEEKS OF BLOCKS.** `fetch_sidecar`
-  used to return early whenever any sidecar directory existed, so a pkg upgrade over
-  an earlier install kept whatever sidecar was already there — measured on a real
-  machine, a **2.3.0 daemon against an Aug 11 sidecar**. That sidecar predates
-  `/blocks` entirely, so it answered **404**, which the emitter read as "no blocks
-  closed yet": telemetry flowed, **zero blocks published**, and `keld signal doctor`
-  reported no problems throughout, correctly — every fact either side could reach was
-  fine, because **neither half knew what the other was**. The two halves ship as
-  separate artifacts on separate cadences and nothing compared them.
-  The fix is one stamp and three readers. `sidecar/build-freeze.sh` writes
-  `dist/keld-agent-sidecar/VERSION` from `KELD_VERSION` (⚠️ at the tree ROOT, **not**
-  via PyInstaller `datas`, which land under `_internal/` — a shell script must read
-  it, so a PyInstaller layout change must not silently turn every comparison into
-  "no version"); `onboard.command` compares it against the pkg's own `VERSION` and
-  **replaces on mismatch, or when the tree carries no VERSION at all** (which predates
-  the stamp and is therefore stale by definition); the sidecar returns it on
-  `/health`; and the daemon compares it against `version.CLI` once per run, emitting
-  `sidecar.version_skew` (warn, floor-exempt) plus one log line, with `keld signal
-  doctor` saying the same thing on demand.
-  ⚠️ **`dev` ON EITHER HALF MEANS "CANNOT TELL", NEVER SKEW** (`version.Skew` returns
-  `known=false`): a source checkout, `make sidecar`'s venv wrapper and any local
-  freeze have no VERSION, and a check that fires on every developer machine is one
-  nobody reads on the machine that matters. Same refusal `localagent.ModelState` and
-  `TelemetryState` make. An **unreachable** sidecar is likewise silent here — that is
-  `sidecar.unavailable`'s job, and describing one failure twice under two names is how
-  a fleet view stops meaning anything.
-  ⚠️ **THE INSTALLER HALF IS macOS-ONLY; THE DETECTION HALF IS NOT.** Windows bundles
-  the sidecar in the Inno payload (`ignoreversion recursesubdirs`) and `install.sh`
-  replaces it unconditionally, so only the pkg — which cannot carry it past
-  notarization — produces skew by construction. The daemon/doctor check runs
-  everywhere anyway: a hand-placed sidecar, an interrupted update or a restored
-  `.prev` produces the same state without the known cause.
-  ⚠️ **`enrich.BlocksAnswer` EXISTS FOR THIS**, and a bare `ok` bool is what hid it:
-  `BlocksCharacterised` now answers with a struct carrying `RouteUnsupported`, so a
-  404 is distinguishable from "the store is behind". The emitter still **HOLDS the
-  cursor** either way — the work becomes doable when the sidecar catches up — so what
-  changed is what is SAID, not what is done. That generalizes the reading
-  `/attribute` already had. Spec:
-  `docs/superpowers/specs/2026-09-04-sidecar-version-skew-discovery.md`.
-  ⚠️ **Notarization is a HARD GATE — a release cannot ship un-notarized.**
-  `KELD_NOTARY_REQUIRED` defaults to **1**, so `build-pkg.sh` fails unless Apple
-  returns `Accepted`; the workflow relaxes it to 0 only for the documented
-  **no-secrets** path (forks/dry runs without the Apple secrets, which are meant to
-  produce unsigned non-distributable output). The earlier design shipped regardless
-  of verdict, which was wrong: "unstapled but valid online" only holds once a ticket
-  **exists**, and with no verdict there is no ticket, so Gatekeeper blocks the
-  installer outright. That hedge existed because Apple returned *zero* verdicts for
-  days (one submission sat 5h32m — no error, no log, no queue position, service
-  healthy); it resolved 2026-08-06 **account-side**, and verdicts now land in ~25s
-  (23s v0.20.0, 24s v0.21.0), so tolerating "no verdict" buys nothing.
-  `KELD_NOTARY_TIMEOUT` (default 15m) is now the **stall tolerance before failing**,
-  ~36x observed latency. A rejection (`Invalid`) fails for a different reason — a
-  broken payload, which waiting won't fix. The submission id is still written to
-  `<pkg>.notarization-id` + the run summary first, so a failed build can be stapled
-  or diagnosed without log archaeology. `staple.yml` sweeps daily as a backstop.
-  Invariants pinned by `installers/macos/build_pkg_notarization_test.sh` (static
-  assertions — the gate can't execute off macOS).
+- **macOS signing needs TWO certs:** *Developer ID Application* on **every**
+  Mach-O in the payload (notarization rejects a whole submission over one unsigned
+  lib), *Developer ID Installer* on the pkg. CI derives the identity names from the
+  imported keychain, and each p12 must bundle the **G2 intermediate**.
+  ⚠️ **The pkg ships WITHOUT the sidecar** (notarizing its ~15k files queued a
+  submission 4+ hours), and **the installer does not download it** — except
+  `postinstall` on a SILENT/MDM install. The daemon fetches it automatically, once
+  per run, **pinned to its own release** (`internal/sidecarinstall`;
+  `GET /v1/engine` reads DISK, `POST /v1/engine/install` answers 202); the page
+  reports and only a failure offers Try again. `plugin_test.sh` inverts the old
+  assertions so a download put back into the pane fails there.
+  ⚠️ **The two halves ship separately, so their versions are COMPARED:** the frozen
+  tree carries a root-level `VERSION` stamp (not PyInstaller `datas`), the pkg
+  replaces a sidecar on mismatch or when it has no stamp, and the daemon emits
+  `sidecar.version_skew` (doctor says the same). `dev` on either half means
+  *cannot tell*, never skew. A `/blocks` 404 is `BlocksAnswer.RouteUnsupported` and
+  the emitter HOLDS its cursor — a presence-only check once cost ~3 weeks of blocks.
+  ⚠️ **Notarization is a HARD GATE** (`KELD_NOTARY_REQUIRED=1`, relaxed only on the
+  no-secrets path); `KELD_NOTARY_TIMEOUT` (15m) is stall tolerance, and the
+  submission id is written first. Pinned by
+  `installers/macos/build_pkg_notarization_test.sh`.
+  Full entry: **`docs/architecture/packaging-and-installers.md`**.
 - **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
   freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
   (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
@@ -2827,56 +1301,21 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   worker-spawn gate locally (Linux); CI's installer smoke does the same for every
   shipped OS. Any change touching the worker/spawn/freeze path must keep those
   green.
-- **macOS onboarding UI:** onboarding happens INSIDE the installer wizard — a
-  custom Installer.app section (`installers/macos/plugin/`, ordered before the
-  Install step) that redeems the setup code, downloads the analysis sidecar with a
-  progress bar, and collects which AI tools to configure. It renders the NDJSON
-  emitted by `keld … --json` and reimplements none of it.
-  ⚠️ **A pane CANNOT be placed after the Install step** (measured 2026-09-14,
-  macOS 26.5.2: it enters with `installStarted=0` and the plugin's host process
-  stops when installation completes), which is why everything interactive is
-  pre-install and `scripts/postinstall` does every destructive step afterwards.
-  ⚠️ **Two failure modes here are completely silent** — a `SectionOrder` entry
-  missing `.bundle` loads nothing, and a bundle signed before its executable was
-  recompiled fails to load with no diagnostic at all. Both are pinned by
-  `installers/macos/plugin_test.sh`. `postinstall` falls back to opening
-  `onboard.command` only when BOTH the pane never ran at all (no handoff file
-  was ever written) AND the machine ended up unconfigured (no `hook.json`) —
-  not on either alone: gating on `hook.json` by itself would also fire for a
-  person who ran the pane and deliberately chose "Set up later", and opening a
-  Terminal at someone who just made that choice is exactly what this branch
-  exists to stop. `installers/macos/onboard.command` is retained for the
-  pane-never-ran fallback and for MDM; it is no longer opened on the success
-  path. It is staged into the payload by `build-pkg.sh` (alongside `keld`,
-  `keld-agent` and `VERSION`) and, on the fallback path, opened via
-  `launchctl asuser <uid> sudo -u <user> open "$PREFIX/onboard.command"` — the
-  same asuser idiom every other user-side postinstall command uses, so the
-  script runs in the console user's own GUI session rather than root's.
-  See `docs/macos-wizard-onboarding.md`.
-- **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
-  payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`
-  step with `postinstall shellexec skipifsilent`. It is the sibling of macOS's
-  `onboard.command` and does the same three things: prompt for the one-time setup
-  code, run `keld-agent install --code "$CODE"` (falling back to `--yes` browser
-  login), and report success from OBSERVED STATE — an `ingest_token` in
-  `hook.json` — never from an exit code. `skipifsilent` is there so an MDM
-  `/SILENT` push does not block on a console waiting for a human; such a machine
-  is finished by `keld-agent install --code <CODE>` from the management tool.
-  ⚠️ **This bullet used to describe an Inno `[Code]` wizard page driving `keld
-  --json` with a WinAPI timer and async NDJSON polling, and said its "UX is
-  human-verified on Windows". THAT PAGE NEVER EXISTED** — `git log` on the `.iss`
-  shows two commits and neither added it. What was actually there was `[Run]
-  keld-agent.exe install` with `runhidden nowait`: an interactive login in a
-  window nobody could see, on a step Inno neither waited for nor could report.
-  Every Windows machine registered its logon task and then idled on
-  `awaitConfig` forever — nothing collected, nothing said. A doc describing
-  unbuilt code as built is what kept that invisible, which is why the correction
-  is stated rather than quietly swapped. **Do not re-add `runhidden` to that
-  `[Run]` line.** The wizard page is a nicer UX and remains a legitimate future
-  change; it is an aspiration, not a description.
-  ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves
-  `onboard.cmd` is staged (a missing `Source:` is a compile error) and nothing
-  more; no CI check can confirm a console appeared and a human pasted a code.
+- **macOS onboarding UI** happens inside the installer wizard
+  (`installers/macos/plugin/`), before the Install step — ⚠️ a pane cannot follow
+  it, so everything interactive is pre-install and `scripts/postinstall` does every
+  destructive step afterwards. Two silent failures (a `SectionOrder` entry missing
+  `.bundle`; a bundle signed before its executable was recompiled) are pinned by
+  `installers/macos/plugin_test.sh`. `postinstall` opens `onboard.command` only
+  when the pane never ran AND no `hook.json` exists — never on either alone. See
+  `docs/macos-wizard-onboarding.md`.
+- **Windows onboarding UI** is `installers/windows/onboard.cmd`, opened by the
+  `[Run]` step with `postinstall shellexec skipifsilent`; it reports success from
+  OBSERVED STATE (an `ingest_token` in `hook.json`), never an exit code. ⚠️ **Do
+  not re-add `runhidden` to that `[Run]` line** — it idled every Windows machine
+  forever. The Inno `[Code]` wizard page an older doc described **never existed**,
+  and nothing here is verified on Windows.
+  Full entries: **`docs/architecture/packaging-and-installers.md`**.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
@@ -2920,6 +1359,31 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   `merges.txt` are real tokenizer files.
 
 ## Design docs
+
+⚠️ **This file was split on 2026-09-28** (it had reached ~216k characters, which is
+past what is safely loadable). The rules and invariants stayed here; the
+measurements, studies and incident post-mortems behind them moved, **verbatim**,
+into `docs/architecture/`. Each of those files carries a dated provenance header
+saying when its material was last substantively changed and that the split
+re-verified nothing. **Nothing was deleted.** When a change touches one of these
+areas, read its file before editing — the rule in this file will tell you what you
+must not break, and only the linked file will tell you what it cost to learn.
+
+| Area | File |
+|---|---|
+| Telemetry proxy, the telemetry secret, capture triggers, the transcript-first usage mirror | `docs/architecture/telemetry-proxy-and-capture.md` |
+| Gemini capture: two chat shapes, the credential path, the router, the tool name | `docs/architecture/gemini-capture.md` |
+| Startup without a config; an unpaired daemon collects | `docs/architecture/pairing-and-collection.md` |
+| `sensitivity`: two sources, PII regions, the test-value gate | `docs/architecture/sensitivity-and-pii.md` |
+| The `workstreams` dimensions, dynamics, the session prior, blocks, the tick | `docs/architecture/window-analysis.md` |
+| The reference-series store: ingest, retention, capture, `/analyze` confinement | `docs/architecture/reference-series-store.md` |
+| Text vectors, `/features`, the publish half and the four toggles | `docs/architecture/text-vectors-and-features.md` |
+| Model backends, install defaults, dev blocks, delivery reliability | `docs/architecture/model-backends-and-install-defaults.md` |
+| Project attribution, and a block in every matching project | `docs/architecture/project-attribution.md` |
+| Sidecar resource safety and input bounding | `docs/architecture/sidecar-resource-safety.md` |
+| Packaging and installers: signing, notarization, sidecar version skew, onboarding UIs | `docs/architecture/packaging-and-installers.md` |
+| Auto-update | `docs/auto-update.md` |
+| What each lane buffers, replays and loses | `docs/durability.md` |
 
 Specs in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`; control
 plane in `docs/enrichment-settings.md`; sidecar resource safety + load testing in
