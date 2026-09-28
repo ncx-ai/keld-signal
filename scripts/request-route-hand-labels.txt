@@ -1,0 +1,159 @@
+# Hand labels — PER-REQUEST routing class. 120 inference requests, blind, stratified 15/class.
+#
+# Corpus: a colleague's real Claude Code transcripts (~/keld/john-projects), 298 files after
+# observer-session exclusion, 8,193 requests. Sample drawn by scripts/request_gold_sample.py
+# (seed 11), committed at e1df5e6 BEFORE a single label was written. The blind file carries no
+# class, and the key was held back in a separate file. Both orderings are provable from git.
+#
+# ⚠️ STRATIFIED, NOT RANDOM — 15 per class. A proportional draw is ~32% operate / 29% retrieve
+# and gives single digits for author_prose and delegate, the classes that decide routing
+# quality. **No base rate may be read off these labels.** What they measure is PER-CLASS
+# precision of the deterministic classifier, nothing else.
+#
+# THE QUESTION EACH LABEL ANSWERS: which model capability did this one inference stress?
+# That is the decision a per-request router makes. Not "what kind of work is this block".
+#
+# CLASSES (8, asserted to cover the population — there is no `other`):
+#   retrieve      reads/searches/inspects existing state; args are a path or a query
+#   operate       mechanical side effect, no authored content (git add, mkdir, docker, ledger)
+#   verify        runs a check on correctness (tests, lint, build, type-check)
+#   author_code   produces source/config content, in a file OR inline in a tool argument
+#   author_prose  produces document content (docs, reports, commit messages, PR bodies, Notion)
+#   synthesize    long prose to the caller, no tool — reports, findings, explanations
+#   delegate      dispatches a subagent or skill with an authored prompt
+#   acknowledge   short prose to the caller, no tool
+#
+# RULES, fixed before labelling:
+#  1. Judge by what the model had to PRODUCE, not by what the work was about.
+#  2. ⚠️ AN AUTHORED PROGRAM IN A TOOL ARGUMENT IS `author_code`, whatever the program DOES.
+#     A `python3 -c` that crops an image or inspects XML still required writing correct Python,
+#     which is the capability a router would be substituting. A shell pipeline of standard
+#     utilities (grep/ls/find/git) is NOT authoring. This rule was written down after the
+#     first four such cases were labelled inconsistently, and all of them were revisited.
+#  3. A commit message or PR body IS authored prose. `git commit -m "$(cat <<EOF ...)"` with a
+#     real message is author_prose; `git add` + a one-line message is operate.
+#  4. Mixed requests take the DOMINANT authored content, not the first tool.
+#  5. Prose-only requests split on intent, not token count: a structured report is synthesize
+#     even when short; a status line is acknowledge even when it lists commits.
+#
+# index  class
+R001 operate
+R002 delegate
+R003 author_code
+R004 retrieve
+R005 author_code
+R006 synthesize
+R007 verify
+R008 verify
+R009 acknowledge
+R010 verify
+R011 delegate
+R012 acknowledge
+R013 verify
+R014 acknowledge
+R015 verify
+R016 synthesize
+R017 retrieve
+R018 synthesize
+R019 acknowledge
+R020 author_prose
+R021 operate
+R022 delegate
+R023 retrieve
+R024 author_prose
+R025 delegate
+R026 operate
+R027 synthesize
+R028 author_code
+R029 author_prose
+R030 operate
+R031 retrieve
+R032 author_code
+R033 verify
+R034 author_prose
+R035 author_prose
+R036 retrieve
+R037 synthesize
+R038 delegate
+R039 author_code
+R040 author_prose
+R041 synthesize
+R042 retrieve
+R043 author_prose
+R044 retrieve
+R045 verify
+R046 retrieve
+R047 delegate
+R048 synthesize
+R049 author_prose
+R050 retrieve
+R051 author_code
+R052 synthesize
+R053 acknowledge
+R054 operate
+R055 delegate
+R056 retrieve
+R057 verify
+R058 acknowledge
+R059 retrieve
+R060 verify
+R061 retrieve
+R062 synthesize
+R063 operate
+R064 acknowledge
+R065 synthesize
+R066 author_code
+R067 operate
+R068 operate
+R069 author_code
+R070 verify
+R071 synthesize
+R072 verify
+R073 author_prose
+R074 author_prose
+R075 synthesize
+R076 delegate
+R077 retrieve
+R078 delegate
+R079 synthesize
+R080 author_code
+R081 verify
+R082 author_code
+R083 acknowledge
+R084 synthesize
+R085 acknowledge
+R086 author_code
+R087 verify
+R088 acknowledge
+R089 retrieve
+R090 operate
+R091 synthesize
+R092 author_code
+R093 author_code
+R094 author_code
+R095 synthesize
+R096 author_prose
+R097 verify
+R098 synthesize
+R099 author_code
+R100 acknowledge
+R101 retrieve
+R102 operate
+R103 author_prose
+R104 retrieve
+R105 delegate
+R106 delegate
+R107 author_code
+R108 delegate
+R109 verify
+R110 retrieve
+R111 synthesize
+R112 author_code
+R113 author_code
+R114 acknowledge
+R115 author_prose
+R116 delegate
+R117 retrieve
+R118 delegate
+R119 author_prose
+R120 delegate
