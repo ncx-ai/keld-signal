@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Score the DETERMINISTIC per-request classifier against 120 blind hand labels."""
 import json, re, collections
-key={k[0]:(k[1],k[2]) for k in json.load(open("/tmp/claude-1000/vf/req_key.json"))}
+# ⚠️ The key file records the class AT SAMPLING TIME. Re-derive from the CURRENT
+# requests.json instead, or a re-run silently scores a stale classifier.
+_k=json.load(open("/tmp/claude-1000/vf/req_key.json"))
+_R=json.load(open("/tmp/claude-1000/vf/requests.json"))
+key={r[0]:(r[1], _R[r[1]]["cls"]) for r in _k}
 gold={m.group(1):m.group(2).strip()
       for m in re.finditer(r"^(R\d{3})\s+(\S+)\s*$", open("scripts/request-route-hand-labels.txt").read(), re.M)}
 assert len(gold)==120, len(gold)

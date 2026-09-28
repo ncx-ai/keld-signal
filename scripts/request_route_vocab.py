@@ -19,48 +19,104 @@ CODE={".py",".go",".ts",".tsx",".js",".jsx",".rs",".java",".rb",".c",".h",".cpp"
       ".sql",".css",".scss",".html",".vue",".swift",".kt",".php",".lua",".mjs",".cjs",".spec"}
 CFG ={".json",".yaml",".yml",".toml",".ini",".cfg",".conf",".lock",".env",".plist",".xml",".iss"}
 
-def strip_cd(c):
-    """⚠️ Must strip NEWLINE-separated hops too, not just `&&`/`;`. The first version handled
-    only the latter, so 21.8% of `operate` still read as the command `cd` -- a multi-line
-    script whose real verb is on line 2."""
+HEREDOC_RE=re.compile(r"<<-?\s*(['\"]?)(\w+)\1\s*\n(.*?)^\s*\2\s*$", re.S|re.M)
+
+def split_heredocs(c):
+    """⚠️ SEPARATE THE COMMAND FROM ITS HEREDOC BODIES BEFORE MATCHING ANYTHING.
+
+    Every shape regex below used to run over the WHOLE command string, so a 16,000-token
+    implementation plan written with `cat > plan.md <<'PLAN'` classified as `verify` -- the
+    word "test" appeared in the plan's PROSE. Same for a commit message mentioning pytest.
+    The command skeleton decides the shape; the body only decides prose-vs-code and size."""
+    bodies=[m.group(3) for m in HEREDOC_RE.finditer(c)]
+    return HEREDOC_RE.sub(" <<BODY> ", c), bodies
+
+def strip_lead(c):
+    """Strip leading hops that hide the real verb. `cd <path> &&` prefixes 56.7% of Bash
+    calls; `echo "=== header ==="` prefixes many more, written purely so the OUTPUT is
+    readable. Both made the first token meaningless."""
     while True:
         m=re.match(r"^\(?\s*(?:cd|pushd)\s+[^\s;&|\n]+\s*(?:&&|;|\n)\s*(.*)$", c, re.S)
+        if not m:
+            m=re.match(r"^\s*echo\s+(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]*)\s*(?:&&|;|\n)\s*(.*)$", c, re.S)
+        if not m:
+            m=re.match(r"^\s*(?:export|source|set)\s+[^\n;&]*(?:&&|;|\n)\s*(.*)$", c, re.S)
         if not m: return c.strip()
         c=m.group(1).strip()
 
-# ⚠️ A heredoc in a Bash call is USUALLY AUTHORED PROSE, NOT CODE. Measured: 24.9% of Bash
-# calls carry a heredoc or an inline `-c` program, median 945 chars against 178 for the rest --
-# and sampling them shows the bulk are `git commit -m "$(cat <<EOF ...)"` and `gh pr create
-# --body`, i.e. a written commit message or PR description. A router must not send those to a
-# code model: the authored content is prose. Inline interpreter programs are the code case.
-PROSE_CMD=re.compile(r"(git\s+commit\b[^\n]*-m|gh\s+(pr|issue|release)\s+\w+[^\n]*--(body|notes)"
-                     r"|gh\s+pr\s+comment)", re.S)
-CODE_CMD =re.compile(r"(python3?\s+-c\s+['\"]|node\s+-e\s+['\"]|perl\s+-[e]\s|ruby\s+-e\s"
-                     r"|cat\s*>\s*\S+\.(py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
-                     r"|tee\s+\S+\.(py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
-                     r"|sed\s+-i|perl\s+-[pi])", re.S)
+# A commit message or PR body is AUTHORED PROSE -- but only when there IS one. `git add x &&
+# git commit -m "fix(engine): one line"` is a mechanical checkpoint, not authoring; the same
+# command carrying a 600-char body is not. The threshold is the message, never the command.
+COMMIT_MSG=re.compile(r"git\s+commit\b[^\n]*?-(?:m|F)\s*(?:-|\"|'|\$\()", re.S)
+PR_BODY   =re.compile(r"gh\s+(?:pr|issue|release)\s+\w+[^\n]*--(?:body|notes)|gh\s+pr\s+comment", re.S)
+# An inline interpreter program, in every form that appears in this corpus: -c, -e, and the
+# heredoc-to-stdin forms `python3 - <<PY` / `python3 << EOF` (which `-c` matching missed).
+CODE_CMD  =re.compile(r"(python3?\s+-c\s+['\"]|node\s+-e\s+['\"]|perl\s+-e\s|ruby\s+-e\s"
+                      r"|(?:python3?|node|ruby|perl)\s*-?\s*<<BODY>"
+                      r"|cat\s*>\s*\S+\.(?:py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
+                      r"|tee\s+\S+\.(?:py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
+                      r"|sed\s+-i|perl\s+-[pi])", re.S)
+DOC_WRITE =re.compile(r"(?:cat|tee)\s*>>?\s*\S+\.(?:md|mdx|txt|rst|adoc)\b", re.S)
+# A side effect beats a leading read: `git status && git log && docker compose up --build` is
+# a deploy, not an inspection, and the inspection is just the preamble.
+SIDE_FX   =re.compile(r"\b(docker\s+compose|docker\s+run|docker\s+build|kubectl|terraform|pulumi"
+                      r"|npm\s+(?:i|install|ci)\b|pip\s+install|bun\s+install|uv\s+sync"
+                      r"|git\s+(?:add|commit|push|checkout|switch|merge|rebase|stash|reset|restore|tag)"
+                      r"|gh\s+(?:pr|release)\s+(?:create|merge|edit)"
+                      r"|mkdir|rm\s|cp\s|mv\s|chmod|ln\s|nohup|pkill|kill\s)", re.S)
 
-VERIFY=re.compile(r"\b(pytest|go\s+test|npm\s+(run\s+)?test|yarn\s+test|vitest|jest|ruff|eslint"
+VERIFY=re.compile(r"\b(pytest|go\s+test|(?:npm|yarn|pnpm|bun)(?:\s+--?\S+)*\s+(?:run\s+)?test|vitest|jest|ruff|eslint"
                   r"|go\s+vet|gofmt|tsc|mypy|golangci|cargo\s+test|make\s+(test|lint|check|freeze-check))\b")
 RETRIEVE=re.compile(r"^(ls|cat|head|tail|find|grep|rg|wc|stat|tree|du|which|file|diff|jq|lsof|ps|env|pwd|printenv"
                     r"|git\s+(log|show|diff|status|branch|remote|rev-parse|merge-base|blame|ls-files)"
                     r"|gh\s+(pr\s+(view|list|diff|checks)|api|run\s+(view|list)|issue\s+(view|list))"
                     r"|curl\s+-s?I?\s*http)\b")
+CODE_TOOLS={"javascript_tool","evaluate_script","javascript_exec"}
+# SendUserFile DELIVERS an existing artifact; its caption is a sentence, not a document.
+OPERATE_TOOLS={"SendUserFile","TodoWrite","TaskUpdate","TaskCreate","ExitPlanMode",
+               "EnterPlanMode","mark_chapter","AskUserQuestion","SubagentHandback",
+               "preview_start","navigate","computer"}
 RETRIEVE_TOOLS={"Read","Glob","Grep","LS","NotebookRead","WebFetch","WebSearch","ToolSearch",
                 "notion-fetch","notion-search","notion-ai-search","get_page_text","read_page",
                 "list_network_requests","read_console_messages","notion-query-data-sources"}
 AUTHOR_TOOLS={"Write","Edit","MultiEdit","NotebookEdit"}
-PROSE_TOOLS={"notion-update-page","notion-create-pages","Artifact","SendUserFile","ArtifactData",
+PROSE_TOOLS={"notion-update-page","notion-create-pages","Artifact","ArtifactData",
              "notion-create-comment","mcp__claude_ai_Claude_Docs__update","update","create"}
 DELEG={"Agent","Task","Skill"}
-PLAN_TOOLS={"TodoWrite","TaskUpdate","ExitPlanMode","EnterPlanMode","mark_chapter"}
 
 def ext(p): return os.path.splitext(str(p or ""))[1].lower()
+
+def is_report(t):
+    """A prose-only request is `synthesize` when it is STRUCTURED reporting, not when it is
+    long. Measured on the labels: three real completion reports sat at 247/374/376 output
+    tokens, under any threshold that also excluded "Task 2 committed; review in flight."
+    Structure is the signal -- headings, bullet lists, tables, or bold field labels."""
+    if re.search(r"^\s{0,3}#{1,4}\s", t, re.M):            return True
+    if len(re.findall(r"^\s*[-*|]\s|^\s*\|", t, re.M)) >= 3: return True
+    if len(re.findall(r"\*\*[^*\n]{2,30}:?\*\*\s*[:\-]?", t)) >= 3: return True
+    return False
+
+def classify_bash(raw):
+    skel, bodies = split_heredocs(raw)
+    body = "\n".join(bodies)
+    c = strip_lead(skel)
+    if VERIFY.search(c):                              return "verify"
+    if COMMIT_MSG.search(c) or PR_BODY.search(c):
+        # authored only if there IS a message: a heredoc/$() body, or a -m string with a
+        # newline or real length. A one-line conventional-commit subject is a checkpoint.
+        m=re.search(r"-m\s*(\"|')(.*?)\1", raw, re.S)
+        msg = body if body else (m.group(2) if m else "")
+        return "author_prose" if ("\n" in msg or len(msg) > 120) else "operate"
+    if CODE_CMD.search(c):                            return "author_code"
+    if DOC_WRITE.search(c):                           return "author_prose"
+    if SIDE_FX.search(c):                             return "operate"
+    if RETRIEVE.match(c):                             return "retrieve"
+    return "operate"
 
 def route_class(r):
     names=[(n.split("__")[-1], i) for n,i in r["tools"]]
     if not names:
-        return "synthesize" if r["out"]>=400 else "acknowledge"
+        return "synthesize" if (r["out"]>=400 or is_report(r["text"])) else "acknowledge"
     for n,i in names:
         if n in DELEG: return "delegate"
     for n,i in names:
@@ -68,16 +124,11 @@ def route_class(r):
             e=ext(i.get("file_path") or i.get("notebook_path") or "")
             return "author_code" if (e in CODE or e in CFG) else "author_prose"
         if n in PROSE_TOOLS: return "author_prose"
+        if n in CODE_TOOLS:  return "author_code"
     for n,i in names:
-        if n=="Bash":
-            c=strip_cd((i.get("command") or "").strip())
-            if VERIFY.search(c):    return "verify"
-            if PROSE_CMD.search(c): return "author_prose"
-            if CODE_CMD.search(c):  return "author_code"
-            if RETRIEVE.match(c):   return "retrieve"
-            return "operate"
+        if n=="Bash":           return classify_bash(i.get("command") or "")
         if n in RETRIEVE_TOOLS: return "retrieve"
-        if n in PLAN_TOOLS:     return "operate"
+        if n in OPERATE_TOOLS:  return "operate"
     return "operate"
 
 files=[]
