@@ -47,3 +47,18 @@ test("the Today pane looks as it did", async ({ signal, page }) => {
     maskColor: "#d9dde3",
   });
 });
+
+// The Overview's frame: range control, tiles, section heads and legends. The
+// plot and the histogram grid are masked — which day or hour a corpus block
+// lands on depends on when in the day the suite runs, the same wall-clock
+// dependency the Today shot above clips away. Their shape is asserted by
+// overview.spec.ts instead.
+test("the Overview looks as it did", async ({ signal, page }) => {
+  await signal.open("overview");
+  await expect(page.locator(".ov-tile").first()).toBeVisible();
+  await expect(page).toHaveScreenshot("overview.png", {
+    clip: { x: 0, y: 0, width: 1280, height: 900 },
+    mask: [page.locator(".ov-dates"), page.locator(".ov-tile .v"), page.locator(".ov-summary"), page.locator(".ov-frame"), page.locator(".ov-dot"), page.locator(".ov-hbody"), page.locator(".ov-legend")],
+    maskColor: "#d9dde3",
+  });
+});

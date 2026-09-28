@@ -1000,6 +1000,40 @@ export function paneVisible(pane, devMode) {
   return devMode || !DEV_ONLY_PANES.includes(pane);
 }
 
+/** Where Signal opens, and where an address it does not know lands. */
+export const DEFAULT_PANE = "overview";
+
+/** Each pane's topbar title. The Focus blocks pane keeps its old internal
+ *  name, `today` — its render function, its body class and its tests all say
+ *  so — while the person sees "Focus blocks". */
+export const PANE_TITLE = {
+  overview: "Overview",
+  today: "Focus blocks",
+  projects: "Projects",
+  integrations: "Integrations",
+  settings: "Settings",
+};
+
+/** Address word → pane. `focus` is Focus blocks' address; `today` still
+ *  reaches it so a bookmark made before the rename keeps working. */
+const PANE_BY_HASH = {
+  overview: "overview",
+  focus: "today",
+  today: "today",
+  projects: "projects",
+  integrations: "integrations",
+  settings: "settings",
+};
+
+/** The pane a location hash opens. Pure so the router's rule can be tested
+ *  without a DOM. A hidden pane is not reachable by hash either — see
+ *  DEV_ONLY_PANES. */
+export function paneForHash(hash, devMode) {
+  const pane = PANE_BY_HASH[String(hash || "").replace(/^#\/?/, "")];
+  if (!pane) return DEFAULT_PANE;
+  return paneVisible(pane, devMode) ? pane : DEFAULT_PANE;
+}
+
 export const DEV_TAPS = 7;
 
 /** How long a tap streak survives without another tap.
@@ -1877,7 +1911,7 @@ if (typeof document !== "undefined") {
   }
 
   const state = {
-    pane: "today",
+    pane: DEFAULT_PANE,
     ledger: null,
     settings: null,
     catalog: null,
@@ -1886,6 +1920,8 @@ if (typeof document !== "undefined") {
     engine: null,
     offline: false,
     local: loadLocalPrefs(),
+    // overview: the Overview's own ledger, for the range named by `sig`.
+    overview: { sig: "", ledger: null, loading: false, error: false, cachedAt: null },
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
     // resending with ?restart=1 — empty for a restart /v1/config asked for,
@@ -1993,10 +2029,7 @@ if (typeof document !== "undefined") {
   }
 
   function paneFromHash() {
-    const h = (location.hash || "#/today").replace(/^#\//, "");
-    if (!["today", "projects", "integrations", "settings"].includes(h)) return "today";
-    // A hidden pane is not reachable by hash either — see DEV_ONLY_PANES.
-    return paneVisible(h, devModeOn()) ? h : "today";
+    return paneForHash(location.hash, devModeOn());
   }
 
   /** Show or hide the nav links for dev-only panes. Called from route(), so
@@ -2011,18 +2044,11 @@ if (typeof document !== "undefined") {
     });
   }
 
-  const PANE_TITLE = {
-    today: "Today",
-    projects: "Projects",
-    integrations: "Integrations",
-    settings: "Settings",
-  };
-
   function setActiveNav(pane) {
     document.querySelectorAll("nav[aria-label='Panes'] a").forEach((a) => {
       a.classList.toggle("on", a.dataset.pane === pane);
     });
-    document.getElementById("topbarTitle").textContent = PANE_TITLE[pane] || "Today";
+    document.getElementById("topbarTitle").textContent = PANE_TITLE[pane] || PANE_TITLE[DEFAULT_PANE];
   }
 
   function el(tag, attrs, ...children) {
@@ -2056,6 +2082,342 @@ if (typeof document !== "undefined") {
     const cls = status === "ok" ? "ok" : status === "failed" ? "no" : status === "pending" ? "wait" : "unknown";
     const glyph = status === "ok" ? "✓" : status === "failed" ? "✗" : status === "pending" ? "…" : "—";
     return el("span", { class: `pill ${cls}` }, el("span", { class: "dot" }), glyph);
+  }
+
+  // ---- Overview ----
+  //
+  // Its OWN ledger fetch, never loadAll's: Focus blocks keeps exactly the
+  // request it has always made (todayLedgerURL), so nothing it shows can move
+  // because the Overview exists. The range and the split are per-viewer
+  // preferences (page convention 3) and the page reopens on the last range
+  // picked.
+
+  const OVERVIEW_CACHE_KEY = "keld_signal_cached_overview";
+
+  function overviewRange() {
+    return resolveRange(state.local.overviewRange);
+  }
+  function overviewSplit() {
+    const s = state.local.overviewSplit;
+    return SPLITS.some((x) => x.key === s) ? s : "tokens";
+  }
+  function overviewSignature(win) {
+    return JSON.stringify([win.range, win.start, win.end]);
+  }
+
+  async function loadOverview() {
+    const win = rangeWindow(overviewRange(), Date.now());
+    const sig = overviewSignature(win);
+    state.overview.loading = true;
+    try {
+      const ledger = await fetchJSON(rangeLedgerURL(win));
+      state.overview = { sig, ledger, loading: false, error: false, cachedAt: null };
+      writeJSONStorage(OVERVIEW_CACHE_KEY, { sig, ledger, at: Date.now() });
+    } catch {
+      // A cached copy is shown only for the SAME range; another range's
+      // blocks drawn under this range's title would be a false statement.
+      const cached = readJSONStorage(OVERVIEW_CACHE_KEY, null);
+      const usable = cached && cached.sig === sig;
+      state.overview = {
+        sig,
+        ledger: usable ? cached.ledger : null,
+        loading: false,
+        error: true,
+        cachedAt: usable ? cached.at : null,
+      };
+    }
+  }
+
+  function setOverviewRange(range) {
+    state.local.overviewRange = range;
+    saveLocalPrefs(state.local);
+    route();
+  }
+
+  function setOverviewSplit(key) {
+    state.local.overviewSplit = key;
+    saveLocalPrefs(state.local);
+    route();
+  }
+
+  const isoDay = (unix) => {
+    const d = new Date(unix * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  function renderRangeControl(win) {
+    const current = win.range.key;
+    const labels = { today: "Today", "7d": "7d", "1m": "1m", custom: "Custom" };
+    const pick = (key) => {
+      if (key === "custom") {
+        // Start a Custom range from what is on screen, so switching to it
+        // changes nothing until a date is edited.
+        setOverviewRange({ key: "custom", from: isoDay(win.days[0]), to: isoDay(win.days[win.days.length - 1]) });
+      } else setOverviewRange({ key });
+    };
+    const seg = el(
+      "div",
+      { class: "ov-range", role: "toolbar", "aria-label": "Range" },
+      ...RANGE_KEYS.map((k) =>
+        el("button", { type: "button", class: k === current ? "on" : "", "aria-pressed": k === current ? "true" : "false", onclick: () => pick(k) }, labels[k])
+      )
+    );
+    if (current !== "custom") return seg;
+    const onDate = () => {
+      const from = document.getElementById("ovFrom").value;
+      const to = document.getElementById("ovTo").value;
+      if (from && to) setOverviewRange({ key: "custom", from, to });
+    };
+    return el(
+      "div",
+      { class: "ov-range-wrap" },
+      seg,
+      el(
+        "div",
+        { class: "ov-dates-pick" },
+        el("input", { type: "date", id: "ovFrom", "aria-label": "From", value: isoDay(win.days[0]), onchange: onDate }),
+        el("span", {}, "to"),
+        el("input", { type: "date", id: "ovTo", "aria-label": "To", value: isoDay(win.days[win.days.length - 1]), onchange: onDate })
+      )
+    );
+  }
+
+  /** One tile: the headline, and on hover or keyboard focus the breakdown
+   *  behind it — top three, then "other", then the no-value bucket, each as
+   *  its own row so "no repository" never hides inside "other". */
+  function overviewTile(label, value, sub, breakdown, fmt, noneLabel) {
+    const rows = [...breakdown.top.map((e) => ({ label: e.label, value: e.value }))];
+    if (breakdown.other > 0) rows.push({ label: OTHER_LABEL, value: breakdown.other, muted: true });
+    if (breakdown.none > 0) rows.push({ label: noneLabel, value: breakdown.none, muted: true });
+    const max = Math.max(0, ...rows.map((r) => r.value));
+    const detail = rows.length
+      ? el(
+          "div",
+          { class: "ov-breakdown" },
+          ...rows.map((r) =>
+            el(
+              "div",
+              { class: "ov-brow" + (r.muted ? " muted" : "") },
+              el("span", { class: "ov-blabel", title: r.label }, r.label),
+              el("span", { class: "ov-track" }, el("span", { class: "ov-fill", style: `width:${max ? (r.value / max) * 100 : 0}%` })),
+              el("span", { class: "ov-bval" }, fmt(r.value))
+            )
+          )
+        )
+      : null;
+    return el(
+      "div",
+      { class: "tile ov-tile", tabindex: detail ? "0" : null },
+      el("div", { class: "l" }, label),
+      el("div", { class: "ov-headline" }, el("div", { class: "v" }, value, sub ? el("small", {}, sub) : null)),
+      detail
+    );
+  }
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+    return node;
+  }
+
+  function renderVolumeChart(series, split, stats, win) {
+    const loaded = series.columns.filter((c) => c.loaded);
+    const colors = new Map(series.categories.map((c) => [c.key, c.color]));
+    const splitLabel = SPLITS.find((s) => s.key === split).label;
+
+    const links = el(
+      "div",
+      { class: "ov-splits", role: "toolbar", "aria-label": "Split" },
+      ...SPLITS.map((s) =>
+        el("button", { type: "button", class: s.key === split ? "on" : "", "aria-pressed": s.key === split ? "true" : "false", onclick: () => setOverviewSplit(s.key) }, s.label)
+      )
+    );
+    const head = el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Cost & volume"), links);
+    const perM = stats.usdPerMillion === null ? "" : ` · ${formatUSD(stats.usdPerMillion)} per million tokens`;
+    const summary = el(
+      "div",
+      { class: "ov-summary mono" },
+      `${formatTokens(stats.tokens)} tokens · ${formatEstUSD(stats.usd)}${perM}${split === "tokens" ? "" : ` · ${splitLabel.toLowerCase()}`} · ${win.dates}`
+    );
+
+    // ⚠️ A range with blocks but no measured tokens has no scale to draw
+    // against; an axis reading "0" top to bottom would be a chart of nothing.
+    if (!series.maxTokens) {
+      return el("section", { class: "ov-chart" }, head, summary, el("p", { class: "ov-note" }, "No measured tokens in this range yet — blocks are waiting to be measured."));
+    }
+
+    const ticks = [1, 2 / 3, 1 / 3];
+    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatTokens(series.maxTokens * t))), el("span", {}, "0"));
+    const rightAxis = el(
+      "div",
+      { class: "ov-axis right mono" },
+      ...ticks.map((t) => el("span", {}, series.maxUsd ? formatUSD(series.maxUsd * t) : "")),
+      el("span", {}, "$0")
+    );
+
+    const n = series.columns.length;
+    const bars = el("div", { class: "ov-bars", style: `grid-template-columns:repeat(${n}, minmax(0, 1fr))` });
+    for (const c of series.columns) {
+      if (!c.loaded) {
+        bars.appendChild(el("div", { class: "ov-col not-loaded", title: `${c.label} · not loaded` }));
+        continue;
+      }
+      const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatTokens(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
+      for (const s of c.segments) {
+        if (!s.value) continue;
+        stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.maxTokens) * 100}%;background:${colors.get(s.key)}` }));
+      }
+      bars.appendChild(stack);
+    }
+    const plot = el("div", { class: "ov-plot" }, el("div", { class: "ov-grid" }), bars);
+    if (series.maxUsd && loaded.length) {
+      const pts = series.columns
+        .map((c, i) => (c.loaded ? [((i + 0.5) / n) * 100, 100 - (c.usd / series.maxUsd) * 100] : null))
+        .filter(Boolean);
+      const svg = svgEl("svg", { class: "ov-line", viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
+      svg.appendChild(svgEl("polyline", { points: pts.map((p) => p.map((v) => v.toFixed(2)).join(",")).join(" "), fill: "none", "vector-effect": "non-scaling-stroke" }));
+      plot.appendChild(svg);
+      for (const [x, y] of pts) plot.appendChild(el("span", { class: "ov-dot", style: `left:${x}%;top:${y}%` }));
+    }
+    const xLabels = el(
+      "div",
+      { class: "ov-x mono", style: `grid-template-columns:repeat(${n}, minmax(0, 1fr))` },
+      ...series.columns.map((c, i) => el("span", {}, n > 12 && i % 2 ? "" : c.label))
+    );
+
+    const totals = new Map(series.categories.map((c) => [c.key, 0]));
+    for (const c of loaded) for (const s of c.segments) totals.set(s.key, (totals.get(s.key) || 0) + s.value);
+    const legend = el(
+      "div",
+      { class: "ov-legend mono" },
+      el("span", {}, el("i", { class: "ov-key line" }), "spend (est.)"),
+      ...series.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatTokens(totals.get(c.key))}`))
+    );
+
+    return el(
+      "section",
+      { class: "ov-chart" },
+      head,
+      summary,
+      el("div", { class: "ov-frame" }, leftAxis, el("div", { class: "ov-main" }, plot, xLabels), rightAxis),
+      legend
+    );
+  }
+
+  function renderHistogram(grid, split) {
+    const colors = new Map(grid.categories.map((c) => [c.key, c.color]));
+    const labels = new Map(grid.categories.map((c) => [c.key, c.label]));
+    const clock = (i) => {
+      const m = i * 20;
+      return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    };
+    const rows = grid.rows.map((r) =>
+      el(
+        "div",
+        { class: "ov-hrow" + (r.loaded ? "" : " not-loaded") },
+        el("span", { class: "ov-hlabel mono" }, r.label),
+        el(
+          "div",
+          { class: "ov-hcells" },
+          ...r.cells.map((k, i) =>
+            el("span", {
+              class: "ov-cell",
+              style: k ? `background:${colors.get(k)}` : null,
+              title: r.loaded ? `${r.label} ${clock(i)}${k ? ` · ${labels.get(k)}` : ""}` : `${r.label} · not loaded`,
+            })
+          )
+        )
+      )
+    );
+    const hours = el("div", { class: "ov-hhours mono" }, el("span", {}), el("div", {}, ...["00:00", "06:00", "12:00", "18:00"].map((h) => el("span", {}, h))));
+    const meta = split === "tokens" ? "20-minute cells · one row per day" : `20-minute cells · one row per day · ${SPLITS.find((s) => s.key === split).label.toLowerCase()}`;
+    return el(
+      "section",
+      { class: "ov-hist" },
+      el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Histogram"), el("span", { class: "ov-meta mono" }, meta)),
+      el("div", { class: "ov-hbody" }, ...rows, hours),
+      el("div", { class: "ov-legend mono" }, ...grid.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
+    );
+  }
+
+  function renderOverview(root) {
+    root.innerHTML = "";
+    const wrap = el("div", { class: "ov" });
+    root.appendChild(wrap);
+    const win = rangeWindow(overviewRange(), Date.now());
+    const ov = state.overview;
+    const fresh = ov.sig === overviewSignature(win);
+    // First sight of this range: fetch once, then draw. route() is re-entered
+    // when it lands, the same pattern the Integrations pane uses.
+    if (!fresh && !ov.loading) {
+      loadOverview().then(route);
+    }
+
+    wrap.appendChild(
+      el(
+        "div",
+        { class: "ov-head" },
+        el("div", {}, el("span", { class: "ov-title" }, win.title), el("span", { class: "ov-dates" }, win.dates)),
+        renderRangeControl(win)
+      )
+    );
+
+    const ledger = fresh ? ov.ledger : null;
+    if (!ledger) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "loading" },
+          fresh && ov.error ? "Signal did not answer, so this range cannot be drawn yet." : "Loading this range…"
+        )
+      );
+      return;
+    }
+    if (ov.error && ov.cachedAt) {
+      wrap.appendChild(el("p", { class: "ov-note" }, `Signal did not answer — showing this range as it was last loaded, at ${formatClock(Math.floor(ov.cachedAt / 1000))}.`));
+    }
+
+    const blocks = blocksInWindow(ledger.blocks, win);
+    const { truncated, loadedFrom } = ledgerTruncated(ledger.blocks);
+    if (truncated) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Work before ${formatDateHeading(loadedFrom)} is shaded "not loaded", not zero.`
+        )
+      );
+    }
+    if (!blocks.length) {
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "ov-empty" },
+          el("div", { class: "ov-empty-title" }, "Nothing captured in this range."),
+          el("p", {}, "Signal picks up sessions from Claude Code, Codex and Gemini CLI on this machine. Try a longer range, or open Focus blocks for today's detail.")
+        )
+      );
+      return;
+    }
+
+    const { catalog } = state;
+    const split = overviewSplit();
+    const stats = overviewStats(blocks);
+    const opts = { loadedFrom: truncated ? loadedFrom : null };
+    const count = (v) => `${Math.round(v)}`;
+    wrap.appendChild(
+      el(
+        "div",
+        { class: "tiles ov-tiles" },
+        overviewTile("Tokens", formatTokens(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatTokens, NO_MODEL_LABEL),
+        overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD, NO_MODEL_LABEL),
+        overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes, NO_REPO_LABEL),
+        overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count, NO_REPO_LABEL)
+      )
+    );
+    wrap.appendChild(renderVolumeChart(volumeSeries(blocks, win, split, catalog, opts), split, stats, win));
+    wrap.appendChild(renderHistogram(slotGrid(blocks, win, split, catalog, opts), split));
   }
 
   // ---- Today ----
@@ -3614,7 +3976,8 @@ if (typeof document !== "undefined") {
     // careful.
     document.body.classList.toggle("pane-today", pane === "today");
     const root = document.getElementById("paneRoot");
-    if (pane === "today") renderToday(root);
+    if (pane === "overview") renderOverview(root);
+    else if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
     else if (pane === "integrations") {
       // The route is not part of loadAll(): it is this pane's own, polled at
@@ -3640,6 +4003,7 @@ if (typeof document !== "undefined") {
     // server answers the same file every time, so this is inert there.
     setInterval(async () => {
       await loadAll();
+      if (state.pane === "overview") await loadOverview();
       route();
     }, 30000);
     // The Integrations pane polls faster, and only while it is the pane being
