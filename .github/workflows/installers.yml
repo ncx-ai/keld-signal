@@ -610,6 +610,27 @@ jobs:
             Endpoint               = 'https://eus.codesigning.azure.net/'
             CodeSigningAccountName = 'keld'
             CertificateProfileName = 'keld-public-trust'
+            # ⚠️ **EXCLUDING THE INTERACTIVE CREDENTIAL IS WHAT TURNS A HANG INTO
+            # AN ERROR.** DefaultAzureCredential walks its chain and
+            # InteractiveBrowserCredential is LAST — so with no environment
+            # credentials present, signtool reached it and BLOCKED FOREVER waiting
+            # for a browser on a headless runner. Measured: the compile sat for
+            # two hours with no output before it was cancelled, and because Inno
+            # was mid-SignTool there was nothing in the log to say why.
+            #
+            # The env vars below are the real fix; this is the one that makes the
+            # NEXT missing-credential mistake fail in seconds and say so. The rest
+            # of the excluded list is developer-machine paths (VS, CLI, cached
+            # tokens) that cannot work in CI and only slow the walk down.
+            ExcludeCredentials = @(
+              'InteractiveBrowserCredential',
+              'SharedTokenCacheCredential',
+              'VisualStudioCredential',
+              'VisualStudioCodeCredential',
+              'AzureCliCredential',
+              'AzurePowerShellCredential',
+              'AzureDeveloperCliCredential'
+            )
           } | ConvertTo-Json | Set-Content -LiteralPath $meta -Encoding ascii
 
           # ⚠️ **NO QUOTES AROUND THE PATHS, AND THAT IS A CONSTRAINT RATHER THAN
@@ -637,8 +658,24 @@ jobs:
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
+        # ⚠️ A CEILING, NOT A BUDGET. iscc takes ~3 minutes; this exists so a
+        # signing call that BLOCKS cannot burn the job. It already did once: with
+        # no credentials in the environment the dlib walked
+        # DefaultAzureCredential to InteractiveBrowserCredential and waited for a
+        # browser that will never exist on a runner — two hours, no output, and
+        # nothing in the log to say why, because Inno was inside the SignTool.
+        timeout-minutes: 20
         env:
           KELD_VERSION: ${{ env.TAG }}
+          # ⚠️ **THE SIGNTOOL DLIB READS THESE FROM THE ENVIRONMENT, and this step
+          # not having them is what hung the build.** The Action takes the same
+          # credentials as INPUTS, so passing them there was not enough — this is
+          # a different mechanism for the same service and it authenticates via
+          # EnvironmentCredential, which is FIRST in the chain and returns
+          # immediately once these are set.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"

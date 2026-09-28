@@ -371,6 +371,22 @@ printf '%s\n' "$pkg_step" | grep -q 'Signing uninstaller' || \
   fail "the build never checks that iscc actually signed the uninstaller"
 printf '%s\n' "$pkg_step" | grep -q 'Skeldsign' || \
   fail "iscc is not given the keldsign SignTool; SignedUninstaller would halt the compile"
+# ⚠️ THE SIGNTOOL DLIB AUTHENTICATES FROM THE ENVIRONMENT, unlike the Action,
+#    which takes the same credentials as inputs. Without these the dlib walks
+#    DefaultAzureCredential all the way to InteractiveBrowserCredential and
+#    BLOCKS waiting for a browser that cannot exist on a runner - measured at two
+#    hours with no output before the run was cancelled.
+printf '%s\n' "$pkg_step" | grep -q 'AZURE_CLIENT_SECRET' || \
+  fail "the iscc step has no AZURE_* credentials; the uninstaller signer would hang on interactive auth"
+printf '%s\n' "$pkg_step" | grep -q 'timeout-minutes' || \
+  fail "the iscc step has no timeout; a blocking signing call would burn the whole job"
+# ⚠️ MATCH THE LIST ENTRY, NOT THE PROSE. The comment beside this setting names
+#    InteractiveBrowserCredential while explaining why it is excluded, so an
+#    unscoped grep matched the explanation and passed with the setting deleted —
+#    the same way guard #1 once matched the [Run] comments. Found by checking
+#    that it fails.
+printf '%s\n' "$prep_sign" | grep -qF "'InteractiveBrowserCredential'," || \
+  fail "the signing metadata does not exclude InteractiveBrowserCredential - a missing credential hangs instead of failing"
 
 # 13b. ⚠️ THE ACTION'S `files:` INPUT REQUIRES AN ABSOLUTE PATH AND REFUSES A
 #      RELATIVE ONE ("The file path '...' is not rooted." — measured, run
