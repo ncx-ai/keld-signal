@@ -697,8 +697,8 @@ fieldset:disabled { opacity: .55; }
   --ov-other: #B9B4A7;
   --ov-none: #DCD8CD;
   --ov-unknown: repeating-linear-gradient(135deg, #CFCABD 0 2px, #EDEAE2 2px 5px);
-  --ov-cache: var(--green-strong);
-  --ov-fresh: #C5E2CA;
+  --ov-cache: #C5E2CA;
+  --ov-fresh: var(--green-strong);
   /* Token shades, lightest to darkest — the design system's own greens. */
   --ov-t1: #C5E2CA;
   --ov-t2: #7DBB8A;
