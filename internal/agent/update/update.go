@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/winproc"
 )
 
 // Restarter restarts the daemon's OS service. Injected so the whole apply path
@@ -259,7 +261,9 @@ func (u *Updater) probe(bin string) error {
 func DefaultProbe(bin string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "--version").CombinedOutput()
+	vc := exec.CommandContext(ctx, bin, "--version")
+	winproc.Hide(vc) // the daemon has no console; this pre-flight would get its own window
+	out, err := vc.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("staged binary failed to run: %w (%s)", err, truncate(string(out), 200))
 	}

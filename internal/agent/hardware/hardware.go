@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/winproc"
 )
 
 // execTimeout bounds every shell-out this package makes. Collect runs
@@ -76,7 +78,11 @@ func Collect() Info {
 func commandOutput(name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	c := exec.CommandContext(ctx, name, args...)
+	// The daemon runs with no console, so a probe child would be given its own
+	// window. See internal/winproc.
+	winproc.Hide(c)
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}

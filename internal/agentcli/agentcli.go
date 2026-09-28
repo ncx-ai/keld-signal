@@ -24,6 +24,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/winproc"
 )
 
 // reauthRequiredLine is the human line surfaced by `keld-agent status` (and,
@@ -93,6 +94,11 @@ type stepRunner func(name string, args ...string) error
 // runStep is the production stepRunner: run the command with inherited stdio.
 func runStep(name string, args ...string) error {
 	c := exec.Command(name, args...)
+	// ⚠️ NO CONSOLE WINDOW. Under the installer this runs with no console of its
+	// own, so a console child is given a fresh one and it appears on screen. The
+	// inherited stdio below is unaffected — handles are passed whether or not a
+	// window exists. See internal/winproc.
+	winproc.Hide(c)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
