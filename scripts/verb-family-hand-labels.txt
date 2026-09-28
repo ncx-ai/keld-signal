@@ -121,3 +121,87 @@ V057 converse > research
 V058 text.transform > review > research
 V059 other
 V060 plan > review > text.create
+
+# =====================================================================================
+# LIVE LABELS — assigned 2026-09-28 from UNTRUNCATED blind views.
+# =====================================================================================
+#
+# Source: /tmp/claude-1000/vf/blind_views.txt, 354,390 bytes / 333k chars of turn text,
+# byte-identical to what the model is scored on (verified: `view text 333k  turn text 333k
+# identical: True`, `markers in views: 0`). Every turn read whole; no view was skimmed.
+#
+# ⚠️ V-IDS DO NOT CORRESPOND TO THE SUPERSEDED SET ABOVE. The frame was regenerated after
+# `bound()` was removed, and more windows clear the minimum-length filter untruncated, so
+# V017 here is not V017 there. Do not diff the two lists.
+#
+# Blocks are cut by the SHIPPED rule — 20-minute budget, 15-minute idle (IDLE_BINS=3 over
+# 300s bins) — not the 60-minute windows the engineering frame used. The two gold sets are
+# therefore NOT poolable; that is recorded as owed work, not a defect here.
+#
+# Same six rules as above, unchanged.
+#
+# Two duplicate pairs are in the sample by construction (the same session appears under two
+# roots): V012/V032 and V023/V037 and V056/V057. Each pair is labelled identically; a scorer
+# that disagrees across a pair is reporting its own variance, which is worth knowing.
+#
+# index  verbs, most prominent first
+V001 plan
+V002 research > code.edit
+V003 code.edit > review > code.write
+V004 review > text.transform
+V005 code.edit > text.transform > review
+V006 plan > research
+V007 review > plan
+V008 code.edit > code.write > review
+V009 other > text.summarize
+V010 text.transform > review > research
+V011 converse > plan > research
+V012 text.transform > text.create
+V013 research > review
+V014 text.transform > text.create
+V015 code.write > converse
+V016 code.edit > research > review
+V017 text.create > review
+V018 text.transform > review
+V019 review > text.create > research
+V020 review > text.transform > research
+V021 code.edit > research > text.transform
+V022 converse > plan
+V023 review > plan
+V024 review > research
+V025 code.edit > research
+V026 research > review
+V027 research > text.transform
+V028 text.transform > converse
+V029 research > other
+V030 other
+V031 code.edit > review
+V032 text.transform > text.create
+V033 text.transform > research > review
+V034 code.edit > review
+V035 code.edit > text.transform > review
+V036 other
+V037 review > plan
+V038 plan > text.transform
+V039 text.transform > review > research
+V040 text.transform > code.edit
+V041 text.create > research > text.transform
+V042 text.transform
+V043 review > code.edit > text.transform
+V044 review > plan
+V045 converse > text.transform
+V046 code.edit > research
+V047 code.edit > review
+V048 research > other
+V049 research > review
+V050 plan
+V051 converse > research > plan
+V052 text.transform > research
+V053 research > converse
+V054 research > review
+V055 code.edit > research
+V056 code.edit > research > review
+V057 code.edit > research > review
+V058 code.write > code.edit > review
+V059 plan > text.transform
+V060 research > converse
