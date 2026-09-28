@@ -39,6 +39,8 @@ VALUE_FLAGS = {
     "pnpm": {"--prefix", "-w", "--filter"}, "yarn": {"--cwd"},
     "docker": {"-H", "--host", "--context", "-f", "--file"},
     "kubectl": {"-n", "--namespace", "--context", "-f"},
+    "curl": {"-m", "-X", "-w", "-H", "-d", "-o", "-u", "--data", "--header",
+           "--max-time", "--write-out", "--output", "--request"},
     "uv": {"--python", "--with", "--directory"}, "uvx": {"--from", "--python", "--with"},
 }
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|\$\([^)]*\)|\S+')
@@ -64,6 +66,14 @@ def strip_lead(c):
             r"^\s*(?:export\s+|local\s+)?[A-Za-z_][A-Za-z0-9_]*="
             r"(?:\"[^\"]*\"|'[^']*'|\$\([^)]*\)|[^\s;&|\n]*)\s*(?:&&|;|\n)\s*(.*)$",
             r"^\s*(?:source|\.|set|shopt|umask)\s+[^\n;&]*(?:&&|;|\n)\s*(.*)$",
+            # WRAPPERS: `timeout 900 cargo check`, `env X=1 cmd`, `nohup cmd`, `bash -c cmd`.
+            # The wrapper is never the verb. Found on a SECOND person's corpus, where
+            # `timeout N <cmd>` alone was 2.6% of the residual.
+            r"^\s*(?:timeout|nohup|nice|stdbuf|ionice|command|exec)\s+(?:-\S+\s+|\d+\s+)*(.+)$",
+            r"^\s*env\s+(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+(.+)$",
+            # ASSIGNMENT DIRECTLY PREFIXING A COMMAND, no separator: `PYTHONPATH=. python x`.
+            # The existing assignment rule required `&&`/`;`/newline and missed this form.
+            r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)+(?=\S)(.+)$",
             # loop / conditional headers, MULTI-LINE as well as one-line
             r"^\s*(?:for|while|until)\b.*?\bdo\b\s*(.*?)(?:\n|;)\s*done\b",
             r"^\s*if\b.*?\bthen\b\s*(.*?)(?:\n|;)\s*fi\b",
@@ -123,13 +133,13 @@ DOC_WRITE =re.compile(r"(?:cat|tee)\s*>>?\s*\S+\.(?:md|mdx|txt|rst|adoc)\b", re.
 SIDE_FX   =re.compile(r"\b(docker\s+compose|docker\s+run|docker\s+build|kubectl|terraform|pulumi"
                       r"|(?:python3?|node|ruby|bun|deno)\s+\S+\.(?:py|js|mjs|cjs|rb|ts)\b"
                       r"|uv\s+run|uvx|npx|(?:npm|pnpm|yarn|bun)(?:\s+--?\S+)*\s+run\b"
-                      r"|sleep|unzip|zip|tar|curl\s+-[Xd]|git\s+(fetch|clone|worktree\s+(add|remove))|gh\s+repo\s+clone|brew\s+(install|uninstall|upgrade)|make\b|uvicorn|launchctl|open\s+-a|pdftoppm|pdftotext|ffmpeg|sips|magick|scp|rsync|launchctl|systemctl|security\s+(?:add|delete)"
+                      r"|sleep|unzip|zip|tar|curl\s+-[Xd]|git\s+(fetch|clone|worktree\s+(add|remove))|gh\s+repo\s+clone|brew\s+(install|uninstall|upgrade)|make\b|uvicorn|launchctl|open\s+-a|docker\s+(exec|cp|kill|stop|start|rm|rmi|pull|push|network|volume|system)|cargo\s+(run|fetch|build|install|update|add|remove|publish|clean)|go\s+(build|run|install|get|mod|generate)|rustc|mvn|gradle|bazel|^(?:true|false|:)\s*$|pgrep|pkill|systemctl|journalctl|curl\b[^\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--data|\s-d\s)|pdftoppm|pdftotext|ffmpeg|sips|magick|scp|rsync|launchctl|systemctl|security\s+(?:add|delete)"
                       r"|npm\s+(?:i|install|ci)\b|pip\s+install|bun\s+install|uv\s+sync"
                       r"|git\s+(?:add|commit|push|checkout|switch|merge|rebase|stash|reset|restore|tag)"
                       r"|gh\s+(?:pr|release)\s+(?:create|merge|edit)"
                       r"|mkdir|rm\s|cp\s|mv\s|chmod|ln\s|nohup|pkill|kill\s)", re.S)
 
-VERIFY=re.compile(r"\b(pytest|go\s+test|(?:npm|yarn|pnpm|bun)(?:\s+--?\S+)*\s+(?:run\s+)?test|vitest|jest|ruff|eslint"
+VERIFY=re.compile(r"\b(pytest|go\s+test|(?:npm|yarn|pnpm|bun)(?:\s+--?\S+)*\s+(?:run\s+)?test|vitest|jest|ruff|eslint|cargo\s+(?:test|check|clippy|fmt|bench)|go\s+(?:test|vet)|gofmt|shellcheck"
                   r"|go\s+vet|gofmt|tsc|mypy|golangci|cargo\s+test|make\s+(test|lint|check|freeze-check))\b")
 # ⚠️ `sed` WITHOUT `-i` IS A READ, NOT AN EDIT -- it filters a stream to stdout. It was
 # 19.5% of the unmatched residual on its own, and every one of those was a `retrieve`
@@ -137,7 +147,7 @@ VERIFY=re.compile(r"\b(pytest|go\s+test|(?:npm|yarn|pnpm|bun)(?:\s+--?\S+)*\s+(?
 RETRIEVE=re.compile(r"^(ls|cat|head|tail|find|grep|rg|wc|stat|tree|du|which|file|diff|jq|lsof|ps|env|pwd|printenv"
                     r"|sed(?!\s+-i)|awk|cut|sort|uniq|tr|column|xxd|od|base64\s+-d|unzip\s+-l|open\s+-R"
                     r"|curl\s+(?:-[sSLkI]+\s+)*(?:-o\s+\S+\s+)?https?://"
-                    r"|git\s+(log|show|diff|status|branch|remote|rev-parse|merge-base|blame|ls-files|grep|ls-tree|cat-file|describe|shortlog|rev-list|worktree\s+list|config\s+--get)|docker\s+(ps|images|logs|inspect)|printf\b"
+                    r"|git\s+(log|show|diff|status|branch|remote|rev-parse|merge-base|blame|ls-files|grep|ls-tree|cat-file|describe|shortlog|rev-list|worktree\s+list|config\s+--get)|docker\s+(ps|images|logs|inspect|stats|top|version)|printf\b|echo\b(?![^\n]*>)|true$|cargo\s+(tree|metadata)|go\s+(list|env|version)"
                     r"|gh\s+(pr\s+(view|list|diff|checks)|api|run\s+(view|list)|issue\s+(view|list))"
                     r"|curl\s+-s?I?\s*http)\b")
 CODE_TOOLS={"javascript_tool","evaluate_script","javascript_exec"}
@@ -145,6 +155,7 @@ CODE_TOOLS={"javascript_tool","evaluate_script","javascript_exec"}
 OPERATE_TOOLS={"SendUserFile","TodoWrite","TaskUpdate","TaskCreate","ExitPlanMode",
                "resize_window","tabs_close","tabs_create","EnterWorktree","ExitWorktree",
                "TaskStop","CronCreate","CronDelete","ScheduleWakeup","form_input",
+               "Monitor","BashOutput","KillShell","shortcuts_execute","upload_image",
                "EnterPlanMode","mark_chapter","AskUserQuestion","SubagentHandback",
                "preview_start","navigate","computer"}
 RETRIEVE_TOOLS={"Read","Glob","Grep","LS","NotebookRead","WebFetch","WebSearch","ToolSearch",

@@ -1284,3 +1284,69 @@ invoked **by path** that matched no rule is being run; a bare unknown verb stays
 `operate` composition now: 65.5% `SIDE_FX`, 26.4% a tool in `OPERATE_TOOLS`, 6.8% path-invoked
 script, 1.2% `echo` redirect, **1 request unaccounted**. That is the number that says it is a
 class again and not a bucket.
+
+### 2026-09-28 — CROSS-PERSON CHECK: the vocabulary held, the rules were person-shaped at the margins
+
+Every number to this point came from ONE person's transcripts. The residual is a coverage
+metric needing no labels, so the rules ran unchanged against a second corpus — the repo
+owner's `~/.claude/projects`, **568 transcripts / 40,677 requests**, five times John's, with
+the two sessions belonging to this investigation excluded (they are unrepresentatively
+Bash-and-Python-heavy and the rules were written inside them).
+
+**Result against the pre-registered bar: 7.1%** — the middle band, *person-shaped at the
+margins; one more resolver round*. That round closed it.
+
+| | JOHN | OWNER |
+|---|---|---|
+| residual, first run | 2.8% | **7.1%** |
+| residual, after one round | **1.7%** | **1.6%** |
+| labelled-holdout macro F1 | 0.920 → **0.920** (no change) | — |
+
+#### What the gap was made of
+
+Two thirds was the SAME shape a fifth time — a wrapper or prefix standing where the verb
+belongs — in forms John's corpus never contained: `timeout 900 cargo check`, `env X=1 cmd`,
+`PYTHONPATH=. python x` (an assignment with **no separator**, which the existing assignment
+rule required), and bare `echo X` / `true` as an entire command rather than a prefix.
+
+The rest was **two toolchains John never used**: `cargo` (5.1%) and `go`. That is not a bug
+in the rules, it is coverage of a tool that was absent from the first corpus — and it is
+exactly the class of gap a single-corpus study cannot surface.
+
+One real defect surfaced too: `canonical()` treats a flag's VALUE as the verb for any program
+not in `VALUE_FLAGS`, so `curl -s -m 5 -o /dev/null -w '…' http://x` resolved to `curl 5`.
+Fixed by giving `curl` its value-taking flags; `-X POST`/`--data` now routes to `operate`
+while a plain fetch stays `retrieve`.
+
+#### ⚠️ The class shares differ, and that is a finding rather than a failure
+
+| class | JOHN | OWNER |
+|---|---|---|
+| retrieve | 39.2% | **47.6%** |
+| verify | 5.3% | **10.4%** |
+| author_prose | **9.1%** | 5.0% |
+| synthesize | **7.9%** | 3.8% |
+| subagent share | 41.5% | **70.6%** |
+
+The owner's work is test-and-inspect heavy and runs twice as much through subagents; John's
+carries the document authoring and reporting. **No class collapsed on either corpus**, which
+is the evidence that matters: the eight-class vocabulary transferred even though one person's
+rules did not, and it is the vocabulary — not the regexes — that was the real claim.
+
+⚠️ **AND THE ECONOMICS ARE WORSE ON THE SECOND CORPUS, NOT BETTER: in:out is 405:1**
+(median 200,434 in, 295 out) against John's 234:1. The case that routing by activity type
+optimises the wrong 0.4% of token flow is stronger here, not weaker.
+
+#### What this does and does not establish
+
+**Does:** the vocabulary is not person-specific; the rules generalise after one round that
+cost nothing on the labelled set (fitted 0.945 and holdout 0.920 both unchanged, while
+coverage rose on BOTH corpora — a fix that improved coverage without touching accuracy is the
+shape of a real fix rather than an overfit).
+
+**Does not:** the second round's fixes were derived from the owner's residual, so **1.6% on
+the owner's corpus is now fitted to it** exactly as 2.8% was to John's. A third person is the
+clean test. The evidence that this is not overfitting is that John's labelled holdout did not
+move while John's own residual also fell, 2.8% → 1.7%.
+
+**Still owed, unchanged:** a second labeller. I wrote the classifier and both label sets.
