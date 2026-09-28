@@ -1121,6 +1121,35 @@ end;
 // inability to stop the daemon surfaces immediately afterwards as a file-in-use
 // error from the copy step, which reports the actual blocked path rather than a
 // guess made here.
+// RemoveStaleUninstaller deletes an existing uninstaller EXE so this install
+// writes the current — signed — one in its place. See the call site for why Inno
+// otherwise keeps it forever.
+//
+// Refuses in the two cases where the slot is not clearly ours: no EXE (nothing
+// to do) and no matching .dat (the log is what binds unins000 to this AppId, and
+// without it Inno may choose a different number, which would leave Add/Remove
+// pointing at a file that never appears).
+procedure RemoveStaleUninstaller;
+var
+  Exe, Dat: String;
+begin
+  Exe := ExpandConstant('{app}\unins000.exe');
+  Dat := ExpandConstant('{app}\unins000.dat');
+  if not FileExists(Exe) then
+    exit;
+  if not FileExists(Dat) then
+  begin
+    Trace('uninstaller: no unins000.dat, leaving the existing exe alone');
+    exit;
+  end;
+  if DeleteFile(Exe) then
+    Trace('uninstaller: removed the stale exe so a signed one is written')
+  else
+    // Not fatal: the install proceeds and the old uninstaller stays. Saying so
+    // is the point — a silent failure here is indistinguishable from the bug.
+    Trace('uninstaller: could NOT remove the stale exe; it will be kept unsigned');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   RC: Integer;
@@ -1137,6 +1166,26 @@ begin
        '', SW_HIDE, ewWaitUntilTerminated, RC);
   // A moment for the OS to release the file handles the copy is about to take.
   Sleep(600);
+
+  // ⚠️ **INNO KEEPS AN EXISTING unins000.exe ON UPGRADE, SO THE SIGNED ONE NEVER
+  // LANDS ON A MACHINE THAT ALREADY HAS AN UNSIGNED ONE.** Measured: v11
+  // replaced every binary in {app} at 14:35 and left unins000.exe untouched from
+  // 11:10, still NotSigned — while CI had proved the uninstaller stub inside
+  // keld-setup.exe WAS signed. The uninstaller is only written when it is
+  // missing (or older), and both were produced by the same Inno version, so
+  // nothing about the file looked stale to it.
+  //
+  // The consequence is the one this whole signing exercise exists to remove:
+  // installing works and UNINSTALLING is refused, on precisely the machines that
+  // upgraded — which is every beta tester who took a build before signing landed.
+  //
+  // ⚠️ THE .dat IS WHAT CLAIMS THE SLOT, NOT THE .exe. Inno finds the existing
+  // uninstall log for this AppId and reuses its number, so deleting only the
+  // EXE leaves unins000 bound to this install and Inno writes a fresh one there.
+  // Deleting the .dat WOULD orphan the log and strand every file recorded in it,
+  // so it is deliberately left alone — and if the log is absent, nothing is
+  // touched at all, because then the slot is not ours to assume.
+  RemoveStaleUninstaller;
 end;
 
 // RunQuiet runs a console program with NO CONSOLE WINDOW AT ALL, and waits.
@@ -1247,6 +1296,19 @@ begin
                  ExpandConstant('{tmp}\post-agent'));
   if RC <> 0 then
     Trace('agent install rc=' + IntToStr(RC));
+
+  // ⚠️ CONFIRM THE UNINSTALLER EXISTS, because PrepareToInstall DELETED the old
+  // one and the assumption that Inno rewrites it in the same slot is exactly
+  // that — an assumption. `{uninstallexe}` is Inno's own answer to "which file
+  // did I choose", so this checks the real outcome rather than the expected one.
+  // A missing uninstaller is recoverable (re-run the installer) and invisible
+  // until someone tries to uninstall months later, which is why it is recorded
+  // now rather than discovered then.
+  if FileExists(ExpandConstant('{uninstallexe}')) then
+    Trace('uninstaller: present at ' + ExpandConstant('{uninstallexe}'))
+  else
+    Trace('uninstaller: MISSING at ' + ExpandConstant('{uninstallexe}') +
+          ' - re-run the installer to restore it');
 end;
 
 // Cancel and teardown both write the sentinel, so a helper — and the `keld`

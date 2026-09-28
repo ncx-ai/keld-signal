@@ -265,6 +265,25 @@ grep -q 'function PrepareToInstall' "$iss" || \
   fail "nothing stops the running agent before files are replaced; with CloseApplications=no the upgrade would fail on locked binaries"
 prep="$(sed -n '/function PrepareToInstall/,/^end;/p' "$iss")"
 printf '%s\n' "$prep" | grep -q 'taskkill' || fail "PrepareToInstall does not stop the agent processes"
+
+# 9a-2. ⚠️ AN UPGRADE MUST PICK UP THE SIGNED UNINSTALLER. Inno keeps an existing
+#       unins000.exe — it only writes one when it is missing or older, and both
+#       come from the same Inno version. Measured: v11 replaced every binary in
+#       {app} and left unins000.exe untouched and NotSigned, while CI had proved
+#       the stub inside keld-setup.exe WAS signed. So every machine that upgraded
+#       keeps an uninstaller SAC will refuse.
+grep -q 'procedure RemoveStaleUninstaller' "$iss" || \
+  fail "nothing removes the stale uninstaller; an upgraded machine keeps the unsigned one and cannot uninstall"
+stale="$(sed -n '/procedure RemoveStaleUninstaller/,/^end;/p' "$iss")"
+# ⚠️ The .dat claims the slot. Deleting it would orphan the log and strand every
+#    file recorded in it, so the procedure must read it and must NOT delete it.
+printf '%s\n' "$stale" | grep -q 'unins000.dat' || \
+  fail "RemoveStaleUninstaller ignores unins000.dat - without that check the slot may not be ours to reuse"
+printf '%s\n' "$stale" | grep -q "DeleteFile(Dat)" && \
+  fail "RemoveStaleUninstaller deletes the uninstall LOG - that orphans every file it records"
+# And the outcome must be verified, since reusing the slot is an assumption.
+grep -q '{uninstallexe}' "$iss" || \
+  fail "nothing confirms an uninstaller exists after install; a wrong slot guess would be silent until someone uninstalls"
 # Both helpers are console programs launched from a GUI installer.
 [ "$(printf '%s\n' "$prep" | grep -c 'SW_HIDE')" -ge 2 ] || \
   fail "PrepareToInstall runs schtasks/taskkill without SW_HIDE - each pops a console window"
