@@ -78,6 +78,13 @@ const SUGGESTION = {
   blocks: 3, minutes: 45, tokens: 12000,
 };
 
+// A FOLDER suggestion: a project cannot match a block on a folder name, so the
+// pane does not offer it (2026-09-28) and says what it held instead.
+const FOLDER = {
+  id: "workspace:tanuki-studio", kind: "workspace", value: "tanuki-studio",
+  blocks: 29, minutes: 385, tokens: 41900000,
+};
+
 const CATALOG = {
   projects: [
     project("p_atlas", "Atlas Platform", "github.com/ncx-ai/keld-atlas"),
@@ -85,7 +92,7 @@ const CATALOG = {
     project("p_billing", "Billing", "github.com/ncx-ai/keld-billing", { ticket_key: "BILL" }),
     project("p_old", "Old experiment", "github.com/ncx-ai/keld-old", { hidden: true }),
   ],
-  suggestions: [SUGGESTION],
+  suggestions: [SUGGESTION, FOLDER],
   coverage: { attributed: 2, total: 2, since: new Date().toISOString() },
   totals: {
     projects: [
@@ -224,6 +231,17 @@ test.describe("Only projects: one flat list", () => {
     const y = rowFor(page, Y);
     await expect(y.locator(".ws-pill .pill")).toHaveText(["Atlas Platform"]);
     await expect(page.locator("body")).not.toContainText(/\bgroups?\b/i);
+  });
+
+  test("a folder suggestion is not offered, and the pane says what it held", async ({ page, shell }) => {
+    await open(page, shell, "projects");
+    await expect(page.getByText("Suggested by your activity · 1")).toBeVisible();
+    await expect(page.locator(".suggestion-row")).toHaveCount(1);
+    await expect(page.locator(".suggestion-row")).toContainText(SUGGESTION.value);
+    await expect(page.locator(".suggestion-row", { hasText: FOLDER.value })).toHaveCount(0);
+    // NEGATIVE: never "Nothing left over" while folder-only blocks remain.
+    await expect(page.getByText(/29 blocks more have only a folder name/)).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("Nothing left over");
   });
 
   test('"New project" asks for a name, not a group, and sends none', async ({ page, shell }) => {

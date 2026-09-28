@@ -357,6 +357,33 @@ export function totalLine(total) {
  *  project with its own total line, and apart from them the hidden ones, so
  *  a person can bring one back. Each project counts a block it shares with
  *  another in full — only the coverage tile counts a shared block once. */
+/** The suggestions the Projects pane offers: only those that can become a RULE.
+ *  A project matches a block by repository or ticket key and nothing else — a
+ *  folder (workspace) name is saved as a note and never matched — so "Same as"
+ *  or "New project" on a folder row said "Applied on this machine." and moved
+ *  nothing. Measured on a real machine: 41 of 45 left-over blocks sat behind
+ *  three folder rows that could not be claimed. Until a folder is a rule of its
+ *  own those rows are not offered; `folderBlocks` is what they held, so the pane
+ *  can say so rather than hide it. (2026-09-28) */
+export function claimableSuggestions(catalog) {
+  const all = (catalog && catalog.suggestions) || [];
+  const shown = all.filter((s) => s.kind !== "workspace");
+  const folderBlocks = all.filter((s) => s.kind === "workspace").reduce((n, s) => n + (s.blocks || 0), 0);
+  return { shown, folderBlocks };
+}
+
+/** The line under (or instead of) the suggestions. It must never say nothing is
+ *  left over while folder-only blocks remain: that is the one false thing
+ *  hiding them could make the page say. */
+export function leftOverNote(shownCount, folderBlocks, leftOverBlocks) {
+  if (!shownCount && !leftOverBlocks) return "Nothing left over — every focus block landed in a project.";
+  if (!folderBlocks) return "";
+  const n = `${folderBlocks} block${folderBlocks === 1 ? "" : "s"}`;
+  return shownCount
+    ? `${n} more have only a folder name. A project matches on a repository or ticket key, so they are not listed.`
+    : `${n} left over have only a folder name. A project matches on a repository or ticket key, so there is nothing to suggest yet.`;
+}
+
 export function projectListing(catalog) {
   const all = (catalog && catalog.projects) || [];
   const totals = totalsIndex(catalog);
@@ -2104,7 +2131,7 @@ if (typeof document !== "undefined") {
       root.appendChild(el("p", { class: "loading" }, "No project data yet."));
       return;
     }
-    const suggestions = catalog.suggestions || [];
+    const { shown: suggestions, folderBlocks } = claimableSuggestions(catalog);
     const coverage = catalog.coverage || { attributed: 0, total: 0 };
     const { visible, hidden } = projectListing(catalog);
 
@@ -2122,8 +2149,9 @@ if (typeof document !== "undefined") {
     );
 
     root.appendChild(el("div", { class: "section-label suggested" }, `Suggested by your activity · ${suggestions.length}`));
+    const note = leftOverNote(suggestions.length, folderBlocks, leftOverBlocks);
     if (!suggestions.length) {
-      root.appendChild(el("p", { style: "color:var(--muted);font-size:13px" }, "Nothing left over — every focus block landed in a project."));
+      root.appendChild(el("p", { style: "color:var(--muted);font-size:13px" }, note));
     } else {
       for (const s of suggestions) {
         root.appendChild(
@@ -2162,6 +2190,7 @@ if (typeof document !== "undefined") {
           )
         );
       }
+      if (note) root.appendChild(el("p", { style: "color:var(--muted);font-size:13px" }, note));
     }
 
     // ONE flat list (Revision 4). A block lands in every project that matches
