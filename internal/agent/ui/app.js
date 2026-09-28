@@ -2243,7 +2243,7 @@ if (typeof document !== "undefined") {
       )
     );
     const head = el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Cost & volume"), links);
-    const perM = stats.usdPerMillion === null ? "" : ` · ${formatUSD(stats.usdPerMillion)} per million tokens`;
+    const perM = stats.usdPerMillion === null ? "" : ` · ${formatEstUSD(stats.usdPerMillion)} per million tokens`;
     const summary = el(
       "div",
       { class: "ov-summary mono" },
@@ -2389,6 +2389,20 @@ if (typeof document !== "undefined") {
 
     const blocks = blocksInWindow(ledger.blocks, win);
     const { truncated, loadedFrom } = ledgerTruncated(ledger.blocks);
+    // ⚠️ A capped answer with nothing in this range is NOT an empty range.
+    // `since` has no upper bound, so for a Custom range in the past the newest
+    // 2,000 blocks can all fall after it — drawing "Nothing captured" there
+    // would state a zero nobody measured.
+    if (truncated && !blocks.length) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `This range could not be loaded. Signal returns at most ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, newest first, and all of them fall after it. Pick a range closer to today.`
+        )
+      );
+      return;
+    }
     if (truncated) {
       wrap.appendChild(
         el(
@@ -2419,7 +2433,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "tiles ov-tiles" },
-        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatTokens, NO_MODEL_LABEL),
+        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatVolume, NO_MODEL_LABEL),
         overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD, NO_MODEL_LABEL),
         overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes, NO_REPO_LABEL),
         overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count, NO_REPO_LABEL)

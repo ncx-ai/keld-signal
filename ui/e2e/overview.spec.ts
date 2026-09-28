@@ -99,6 +99,35 @@ test.describe("Overview", () => {
     expect(await page.locator(".ov-col.not-loaded").count()).toBeGreaterThanOrEqual(1);
   });
 
+  test("a past range the row cap never reached says it was not loaded, not that it was empty", async ({ signal, page }) => {
+    const now = Math.floor(Date.now() / 1000);
+    const blocks = Array.from({ length: 2000 }, (_, i) => ({
+      key: { session: "s", start: now - 3600 - i * 60 },
+      end: now - 3600 - i * 60 + 30,
+      source: "claude_code", start_reason: "idle", end_reason: "budget", cells: {},
+    }));
+    await page.route(/\/v1\/ledger\?since=\d+&limit=2000$/, (route) =>
+      route.fulfill({ json: { generated_at: new Date().toISOString(), health: [], blocks, pending: [] } })
+    );
+    await signal.open("overview");
+    await page.getByRole("toolbar", { name: "Range" }).getByRole("button", { name: "Custom" }).click();
+    await page.locator("#ovFrom").fill("2026-01-01");
+    await page.locator("#ovTo").fill("2026-01-07");
+    await expect(page.getByText(/This range could not be loaded/)).toBeVisible();
+    await expect(page.getByText("Nothing captured in this range.")).toHaveCount(0);
+  });
+
+  test("when Signal stops answering, the Overview shows the range as last loaded and says so", async ({ signal, page }) => {
+    await signal.open("overview");
+    await expect(page.locator(".ov-tile").first()).toBeVisible();
+    // Only the Overview's own request fails, so this is the cached-range
+    // path, not the whole-page "not running" one.
+    await page.route(/\/v1\/ledger\?since=\d+&limit=2000$/, (route) => route.abort());
+    await page.reload();
+    await expect(page.getByText(/showing this range as it was last loaded/)).toBeVisible();
+    await expect(page.locator(".ov-tile")).toHaveCount(4);
+  });
+
   for (const width of [1280, 400]) {
     test(`no sideways scroll at ${width}px`, async ({ signal, page }) => {
       await page.setViewportSize({ width, height: 900 });
