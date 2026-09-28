@@ -179,6 +179,13 @@ def is_report(t):
     if re.search(r"^\s{0,3}#{1,4}\s", t, re.M):            return True
     if len(re.findall(r"^\s*[-*|]\s|^\s*\|", t, re.M)) >= 3: return True
     if len(re.findall(r"\*\*[^*\n]{2,30}:?\*\*\s*[:\-]?", t)) >= 3: return True
+    # ⚠️ ENUMERATED PROSE, found by a tool-free NEGATIVE CONTROL on a different domain
+    # (WildChat, 11,575 assistant turns). A structured procedure written as `Step 1: … Step 2:`
+    # or `1. … 2. …` carries no markdown bullet or heading, so the three rules above miss it
+    # and it lands on the token threshold -- the longest `acknowledge` in that corpus was a
+    # 399-token numbered how-to, one token under the cut. The synthesize/acknowledge boundary
+    # is also 2 of the 6 remaining holdout errors, so this is one defect seen from two sides.
+    if len(re.findall(r"(?:^|\n)\s*(?:Step\s+\d+|\d+[.)])\s+\S", t)) >= 3: return True
     return False
 
 def classify_bash(raw):

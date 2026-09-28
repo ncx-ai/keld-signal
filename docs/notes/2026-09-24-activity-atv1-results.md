@@ -1350,3 +1350,81 @@ clean test. The evidence that this is not overfitting is that John's labelled ho
 move while John's own residual also fell, 2.8% → 1.7%.
 
 **Still owed, unchanged:** a second labeller. I wrote the classifier and both label sets.
+
+### 2026-09-28 — ⚠️ CORRECTION: the "0.4% of token flow" claim was WRONG
+
+I stated repeatedly in this investigation that routing by activity type optimises "the 0.4% of
+token flow that is generation", from a raw in:out ratio of 234:1 (john) / 405:1 (owner).
+**That figure counted cache-read tokens at the same weight as fresh ones.** It does not
+survive the decomposition.
+
+| | JOHN | OWNER |
+|---|---|---|
+| fresh input | 50,183 (**0.00%**) | 194,260 (**0.00%**) |
+| cache WRITE | 47,611,220 (2.78%) | 168,676,664 (1.43%) |
+| cache READ | 1,662,834,635 (**97.21%**) | 11,647,878,142 (**98.57%**) |
+| output | 7,295,683 | 29,144,690 |
+| raw in:out | 234:1 | 405:1 |
+| **non-cache-read in:out** | **6.5:1** | **5.8:1** |
+
+**97–98.6% of all input is cache reads**, priced roughly a tenth of fresh input. Fresh input
+is statistically zero. Under Claude-shaped ratios (read 0.1 / fresh 1.0 / write 1.25 /
+output 5.0):
+
+| | JOHN | OWNER |
+|---|---|---|
+| cache read | 63.4% | 76.6% |
+| cache write | 22.7% | 13.9% |
+| **output** | **13.9%** | **9.6%** |
+| fresh | 0.0% | 0.0% |
+
+So output is **~10–14% of modelled cost, not 0.4%** — a factor of ~30 off, in the direction
+that makes this project *more* worthwhile, not less.
+
+**And the correction goes further than the arithmetic.** Model choice does not scale the
+output slice alone — it scales the WHOLE request, cache reads included. A `retrieve` sent to a
+model priced 5x lower is 5x cheaper on its cache reads too. Cost by class:
+
+| class | JOHN | OWNER |
+|---|---|---|
+| **retrieve** | **32.4%** | **42.0%** |
+| author_code | 15.7% | 14.6% |
+| operate | 15.4% | 12.9% |
+| author_prose | 13.6% | 6.6% |
+| synthesize | 9.3% | 5.6% |
+| verify | 5.1% | 11.6% |
+
+`retrieve` is **a third to nearly half of modelled cost on both corpora**, and it is the class
+most plausibly substitutable — reading a file over a long cached context and emitting a
+250-token tool call is not a frontier-model task. That is the prize, and the classifier
+identifies it at F1 0.92–1.00.
+
+⚠️ The 0.1/1.0/1.25/5.0 ratios are an assumption, approximately Claude's shape. The
+conclusion is not sensitive to it: cache-read dominance holds at any plausible discount, and
+`retrieve`'s share is driven by request volume, not by the price vector.
+
+### 2026-09-28 — NEGATIVE CONTROL on a tool-free, out-of-domain corpus
+
+WildChat (`allenai/WildChat-1M`, 59,857 conversations), **11,575 assistant turns with zero
+tool calls** — ordinary chat: homework, creative writing, translation, code Q&A, in English
+and Chinese. This cannot test the classifier generally, because 87% of what it reads (tool
+calls) is absent by construction. It tests one thing, falsifiably:
+
+**Claim: on tool-free data, only the prose-only branch may fire. Any tool-derived class
+appearing would be a defect. Result: NONE. Control passes.** 74.8% `acknowledge`, 25.2%
+`synthesize`, nothing else, across 11,575 turns.
+
+It also **independently reproduced the one known weak boundary from a different domain.** The
+longest `acknowledge` in that corpus was a **399-token numbered how-to** — one token under the
+threshold — because a procedure written as `Step 1: … Step 2:` carries no markdown bullet or
+heading, so `is_report`'s three structure rules all missed it. `synthesize->acknowledge` is
+also 2 of the 6 remaining holdout errors. One defect, seen from two sides.
+
+`is_report` now also matches enumerated prose. On WildChat that moves **1,838 turns (15.9%)**
+from `acknowledge` to `synthesize`; on both labelled sets it is **exactly neutral** — fitted
+0.945 and holdout 0.920, unchanged, errors unchanged at 6 each.
+
+⚠️ **So this change is principled and costless, not measured.** WildChat has no gold labels,
+so "15.9% moved" is not "15.9% moved correctly" — those turns fit the written definition of
+`synthesize` better, which is a judgement. It is kept because it costs nothing on the data
+that does have labels and closes a real observed hole; it is not evidence of improvement.
