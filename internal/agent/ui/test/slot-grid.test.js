@@ -46,9 +46,41 @@ test("cells take the block's split category, and the legend is the chart's", () 
   assert.equal(g.rows[6].cells[33], keys[1]);
 });
 
-test("under Tokens every active cell reads as active time", () => {
-  const g = slotGrid([block({ h: 10 })], week, "tokens", catalog);
-  assert.equal(g.rows[6].cells[30], "active");
+const sized = (h, total) => block({ h, tokens: { input: 0, output: total, cache_read: 0, cache_creation: 0 } });
+
+test("under Tokens a cell is shaded by its block's tokens, in four greens cut at the range's quartiles", () => {
+  const blocks = [sized(8, 100), sized(9, 200), sized(10, 300), sized(11, 400), sized(12, 1000)];
+  const g = slotGrid(blocks, week, "tokens", catalog);
+  const row = g.rows[6].cells;
+  // 08:00 → cell 24, one per hour after it (3 cells an hour).
+  assert.deepEqual([row[24], row[27], row[30], row[33], row[36]], ["t1", "t2", "t3", "t4", "t4"]);
+  assert.deepEqual(g.categories.map((c) => c.key), ["t1", "t2", "t3", "t4"]);
+  assert.ok(g.categories.every((c) => /--ov-t[1-4]/.test(c.color)));
+});
+
+test("one outsized block does not wash every other cell out to the palest shade", () => {
+  const blocks = [sized(8, 100), sized(9, 110), sized(10, 120), sized(11, 130), sized(12, 50_000)];
+  const g = slotGrid(blocks, week, "tokens", catalog);
+  const levels = new Set([24, 27, 30, 33].map((i) => g.rows[6].cells[i]));
+  assert.ok(levels.size >= 3, `quartiles spread the ordinary blocks, got ${[...levels]}`);
+});
+
+test("when every block used the same tokens, every cell is the full shade", () => {
+  const g = slotGrid([sized(8, 500), sized(9, 500)], week, "tokens", catalog);
+  assert.equal(g.rows[6].cells[24], "t4");
+  assert.equal(g.rows[6].cells[27], "t4");
+});
+
+test("a block that was never measured is not shaded as if it used few tokens", () => {
+  const g = slotGrid([block({ h: 10, measured: false }), sized(11, 100)], week, "tokens", catalog);
+  assert.equal(g.rows[6].cells[30], "unmeasured");
+  assert.ok(g.categories.some((c) => c.key === "unmeasured"));
+});
+
+test("each shade's label names the token range it covers", () => {
+  const blocks = [sized(8, 1_000_000), sized(9, 2_000_000), sized(10, 3_000_000), sized(11, 4_000_000)];
+  const g = slotGrid(blocks, week, "tokens", catalog);
+  assert.deepEqual(g.categories.map((c) => c.label), ["under 1.8M", "1.8M – 2.5M", "2.5M – 3.3M", "3.3M or more"]);
 });
 
 test("rows before the oldest loaded block are marked not loaded", () => {

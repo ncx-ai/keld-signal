@@ -699,7 +699,11 @@ fieldset:disabled { opacity: .55; }
   --ov-unknown: repeating-linear-gradient(135deg, #CFCABD 0 2px, #EDEAE2 2px 5px);
   --ov-cache: var(--green-strong);
   --ov-fresh: #C5E2CA;
-  --ov-active: var(--green);
+  /* Token shades, lightest to darkest — the design system's own greens. */
+  --ov-t1: #C5E2CA;
+  --ov-t2: #7DBB8A;
+  --ov-t3: #2D7A48;
+  --ov-t4: #1A4D24;
   --ov-empty: var(--deep);
   --ov-not-loaded: repeating-linear-gradient(135deg, var(--rule) 0 2px, transparent 2px 6px);
 }
@@ -799,6 +803,8 @@ fieldset:disabled { opacity: .55; }
 .ov-hrow.not-loaded .ov-cell { background: transparent; }
 .ov-hhours div { display: grid; grid-template-columns: repeat(4, 1fr); font-size: 10px; color: var(--muted); }
 .ov-hist .ov-legend { margin-left: 68px; }
+.ov-levels > span:first-child { gap: 3px; }
+.ov-levels > span:first-child .ov-key { width: 10px; height: 10px; }
 
 @media (max-width: 720px) {
   .ov-tiles { grid-template-columns: repeat(2, 1fr); }

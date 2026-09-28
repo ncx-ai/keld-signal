@@ -961,16 +961,57 @@ export function volumeSeries(blocks, win, split, catalog, { loadedFrom = null } 
 
 export const SLOTS_PER_DAY = 72;
 const SLOT_SECONDS = 1200;
-const ACTIVE_CATEGORY = [{ key: "active", label: "active time", color: "var(--ov-active)", kind: "active" }];
+
+/** Linear-interpolated quantile of an ascending list. */
+function quantile(sorted, p) {
+  const at = (sorted.length - 1) * p;
+  const lo = Math.floor(at);
+  return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (at - lo);
+}
+
+/** The Tokens split's four shades, as GitHub's contribution graph draws them:
+ *  darker green, more tokens. The bands are cut at the range's own QUARTILES
+ *  of block tokens, not at fractions of the largest block — one outsized block
+ *  would otherwise wash every ordinary one out to the palest shade. A band is
+ *  half-open: a block sitting exactly on a cut is in the band above it. A block
+ *  that was never measured has its own key, never a pale green that would
+ *  claim it used few tokens. */
+function tokenLevels(blocks) {
+  const values = [];
+  for (const b of blocks) {
+    const m = measuredOf(b);
+    if (m) values.push(totalTokens(m.tokens));
+  }
+  values.sort((a, b) => a - b);
+  const cuts = values.length ? [0.25, 0.5, 0.75].map((p) => quantile(values, p)) : [0, 0, 0];
+  const [q1, q2, q3] = cuts.map(formatVolume);
+  const categories = [
+    { key: "t1", label: `under ${q1}`, color: "var(--ov-t1)", kind: "level" },
+    { key: "t2", label: `${q1} – ${q2}`, color: "var(--ov-t2)", kind: "level" },
+    { key: "t3", label: `${q2} – ${q3}`, color: "var(--ov-t3)", kind: "level" },
+    { key: "t4", label: `${q3} or more`, color: "var(--ov-t4)", kind: "level" },
+  ];
+  if (values.length < blocks.length) {
+    categories.push({ key: "unmeasured", label: "not measured yet", color: "var(--ov-unknown)", kind: "unmeasured" });
+  }
+  const keyOf = (b) => {
+    const m = measuredOf(b);
+    if (!m) return "unmeasured";
+    const v = totalTokens(m.tokens);
+    return `t${1 + cuts.filter((c) => v >= c).length}`;
+  };
+  return { categories, keyOf };
+}
 
 /** The histogram: one row per local day of 72 twenty-minute cells. A cell
  *  holds the category key of the block covering its MIDPOINT, or null — so a
  *  five-minute block that misses every midpoint colours nothing, rather than
- *  a whole cell claiming twenty minutes of work. Under Tokens a cell is just
- *  "active time"; otherwise it uses the chart's own categories. */
+ *  a whole cell claiming twenty minutes of work. Under Tokens a cell is one
+ *  of four shades by its block's tokens (tokenLevels); otherwise it uses the
+ *  chart's own categories. */
 export function slotGrid(blocks, win, split, catalog, { loadedFrom = null } = {}) {
   const list = blocks || [];
-  const model = splitModel(list, split, catalog);
+  const model = split === "tokens" ? tokenLevels(list) : splitModel(list, split, catalog);
   const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric" });
   const rows = win.days.map((day) => {
     const cells = new Array(SLOTS_PER_DAY).fill(null);
@@ -981,7 +1022,7 @@ export function slotGrid(blocks, win, split, catalog, { loadedFrom = null } = {}
     }
     return { day, label: label.format(new Date(day * 1000)), cells, loaded: loadedFrom === null || day > loadedFrom };
   });
-  return { rows, categories: split === "tokens" ? ACTIVE_CATEGORY : model.categories };
+  return { rows, categories: model.categories };
 }
 
 /** How many taps on the version turns developer mode on or off. Seven, because
@@ -2314,6 +2355,25 @@ if (typeof document !== "undefined") {
     );
   }
 
+  /** GitHub's "Less ■■■■ More": the four shades in order, each naming its
+   *  token range on hover, and "not measured yet" beside them when present. */
+  function levelLegend(categories) {
+    const levels = categories.filter((c) => c.kind === "level");
+    const rest = categories.filter((c) => c.kind !== "level");
+    return el(
+      "div",
+      { class: "ov-legend ov-levels mono" },
+      el(
+        "span",
+        {},
+        "Less",
+        ...levels.map((c) => el("i", { class: "ov-key", style: `background:${c.color}`, title: `${c.label} tokens` })),
+        "More"
+      ),
+      ...rest.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label))
+    );
+  }
+
   function renderHistogram(grid, split) {
     const colors = new Map(grid.categories.map((c) => [c.key, c.color]));
     const labels = new Map(grid.categories.map((c) => [c.key, c.label]));
@@ -2340,13 +2400,13 @@ if (typeof document !== "undefined") {
       )
     );
     const hours = el("div", { class: "ov-hhours mono" }, el("span", {}), el("div", {}, ...["00:00", "06:00", "12:00", "18:00"].map((h) => el("span", {}, h))));
-    const meta = split === "tokens" ? "20-minute cells · one row per day" : `20-minute cells · one row per day · ${SPLITS.find((s) => s.key === split).label.toLowerCase()}`;
+    const meta = split === "tokens" ? "20-minute cells · one row per day · shaded by the block's tokens" : `20-minute cells · one row per day · ${SPLITS.find((s) => s.key === split).label.toLowerCase()}`;
     return el(
       "section",
       { class: "ov-hist" },
       el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Histogram"), el("span", { class: "ov-meta mono" }, meta)),
       el("div", { class: "ov-hbody" }, ...rows, hours),
-      el("div", { class: "ov-legend mono" }, ...grid.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
+      split === "tokens" ? levelLegend(grid.categories) : el("div", { class: "ov-legend mono" }, ...grid.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
     );
   }
 
