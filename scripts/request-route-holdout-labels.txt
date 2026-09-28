@@ -1,0 +1,102 @@
+# HOLDOUT labels — 80 inference requests, disjoint from the 120 the rules were derived from.
+#
+# Sampled by request_holdout_sample.py (10/class, seed 29, first 120 excluded), committed at
+# 6b5e0a0 before a label was written. Same eight classes and same five rules as
+# request-route-hand-labels.txt.
+#
+# ⚠️ WHY THIS EXISTS: the post-fix macro F1 of 0.916 on the original 120 is FITTED. Nine rule
+# changes were derived by reading that set's 20 errors, so re-scoring it measures how well the
+# fixes were written down, not whether they generalise. This is the honest counterpart.
+#
+# ⚠️ TWO CASES WHERE I BENT RULE 2 AND AM SAYING SO RATHER THAN HIDING IT.
+# Rule 2 says an authored program in a tool argument is `author_code` whatever it does. H069
+# and H079 are a `python3 - <<PY` and a `cat >> progress.md <<L` whose PROGRAM is a trivial
+# find-and-replace or an append, and whose substance is paragraphs of authored documentation
+# and analysis. I labelled both `author_prose`, on the ground that the model's work was the
+# prose and the program was transport. That is a real ambiguity in my own rubric, it favours
+# neither side of this comparison systematically, and a second labeller may well disagree.
+# H066 is the same shape from the other direction: a Write of test-fixture markdown plus a
+# Write of a JS driver, near-equal in size, called `author_prose` because the markdown is the
+# subject and the driver the instrument.
+#
+# index  class
+H001 author_code
+H002 verify
+H003 operate
+H004 author_prose
+H005 synthesize
+H006 retrieve
+H007 verify
+H008 retrieve
+H009 verify
+H010 delegate
+H011 synthesize
+H012 author_code
+H013 synthesize
+H014 synthesize
+H015 acknowledge
+H016 verify
+H017 verify
+H018 author_code
+H019 acknowledge
+H020 author_code
+H021 retrieve
+H022 verify
+H023 operate
+H024 retrieve
+H025 synthesize
+H026 verify
+H027 retrieve
+H028 delegate
+H029 delegate
+H030 verify
+H031 synthesize
+H032 retrieve
+H033 author_prose
+H034 acknowledge
+H035 acknowledge
+H036 verify
+H037 author_code
+H038 author_code
+H039 retrieve
+H040 operate
+H041 operate
+H042 author_code
+H043 acknowledge
+H044 synthesize
+H045 retrieve
+H046 acknowledge
+H047 acknowledge
+H048 author_prose
+H049 acknowledge
+H050 retrieve
+H051 operate
+H052 operate
+H053 author_prose
+H054 author_prose
+H055 delegate
+H056 author_code
+H057 synthesize
+H058 delegate
+H059 retrieve
+H060 delegate
+H061 synthesize
+H062 delegate
+H063 synthesize
+H064 author_prose
+H065 author_prose
+H066 author_prose
+H067 synthesize
+H068 delegate
+H069 author_prose
+H070 delegate
+H071 retrieve
+H072 author_code
+H073 delegate
+H074 retrieve
+H075 retrieve
+H076 author_code
+H077 verify
+H078 verify
+H079 author_prose
+H080 synthesize

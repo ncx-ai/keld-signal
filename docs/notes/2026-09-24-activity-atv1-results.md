@@ -1103,3 +1103,67 @@ call-share alone would under-weight it by a factor of nearly three.
    read the first token, so `cd` looked like the dominant activity. And **a Bash heredoc is
    usually authored PROSE, not code** — 24.9% of Bash calls carry one, median 945 chars against
    178, and the bulk are `git commit -m "$(cat <<EOF...)"` and `gh pr create --body`.
+
+### 2026-09-28 — the `operate` fix, and the HOLDOUT that checks it
+
+Nine mechanism fixes, derived by reading all 20 errors rather than guessing. The largest is
+general and would have kept biting: **every shape regex ran over the whole command string,
+heredoc bodies included**, so a 16,000-token implementation plan written with
+`cat > plan.md <<'PLAN'` classified as `verify` — the word "test" appeared in its PROSE — and
+a commit message mentioning pytest did the same. `classify_bash` now splits the command
+skeleton from its heredoc bodies and matches only the skeleton.
+
+The rest, each with the error count it closed:
+
+| fix | closed |
+|---|---|
+| `strip_lead` also strips `echo "=== header ==="` and `export`/`source` hops, not only `cd` | 3 |
+| prose-only splits on STRUCTURE, not token count (three real reports sat at 247/374/376) | 3 |
+| `VERIFY` accepts flags between runner and `test` (`npm --prefix X test`) | 2 |
+| `CODE_CMD` matches `python3 - <<PY` / `python3 << EOF`, which `-c` matching missed | 2 |
+| a commit is `author_prose` only when there IS a message (heredoc/`$()`, or `-m` with a newline or >120 chars) | 2 |
+| `SIDE_FX` beats a leading retrieve — `git status && … && docker compose up --build` is a deploy | 1 |
+| `javascript_tool` / `evaluate_script` are `author_code` | 1 |
+| `SendUserFile` DELIVERS an artifact; its caption is a sentence, not a document | 1 |
+| `git commit -F -` matches as well as `-m` | 1 |
+
+⚠️ **Also fixed: the scorer read the class recorded in the key file AT SAMPLING TIME**, so the
+first re-run silently scored the OLD classifier and reported no change at all. A green
+"0.833, unchanged" that was measuring nothing. It now re-derives from `requests.json`.
+
+#### Fitted vs held out
+
+| | fitted (the same 120) | **HOLDOUT (80 fresh, disjoint)** |
+|---|---|---|
+| agreement | 111/120 = 0.925 | **71/80 = 0.887** |
+| macro F1 | 0.916 | **0.881** |
+| population-weighted expected accuracy | 0.903 | **0.856** |
+
+Before the fix, the same population-weighted figure was **0.751**. So the honest gain is
+**0.751 → 0.856**, and the generalisation gap (0.903 fitted vs 0.856 held out) is **0.047** —
+real, small, and reported rather than absorbed.
+
+Holdout per class:
+
+| class | prec | rec | F1 |
+|---|---|---|---|
+| author_code | 1.000 | 1.000 | **1.000** |
+| delegate | 1.000 | 1.000 | **1.000** |
+| synthesize | 1.000 | 0.833 | 0.909 |
+| author_prose | 0.900 | 0.900 | 0.900 |
+| acknowledge | 0.800 | 1.000 | 0.889 |
+| retrieve | 1.000 | 0.769 | 0.870 |
+| verify | 0.900 | 0.818 | 0.857 |
+| **operate** | **0.500** | 0.833 | **0.625** |
+
+`operate` improved (precision 0.400 → 0.500) but is **still the weak class and still the
+residual** — `retrieve->operate` 3, `verify->operate` 2 are 5 of the 9 remaining errors. Its
+holdout n is 6, so that 0.500 carries little confidence either way. It is the next fix, not a
+solved problem.
+
+⚠️ **The labeller bias is unchanged and still bounds both numbers.** I wrote the classifier and
+labelled both sets. The holdout removes the fitting problem, not the bias one — a second
+labeller who has not seen `request_route_vocab.py` is still owed. Two holdout labels (H069,
+H079) are cases where I bent my own rule 2 and said so in the labels file rather than quietly
+picking whichever side scored better; a third (H066) is the same ambiguity from the other
+direction.
