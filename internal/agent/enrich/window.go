@@ -1,11 +1,11 @@
 package enrich
 
 // WindowSpanMinutes is the span a TICK-emitted characterisation covers, and it
-// is the same hour WorkstreamSpanMinutes gives a prompt's window — deliberately,
+// is the same hour DimensionSpanMinutes gives a prompt's window — deliberately,
 // so a tick row and a prompt row describe comparable amounts of work and a
 // report can pool them. A tick window is shorter only when the gap it fills is
 // (see the sidecar's app/analysis/coverage.py).
-const WindowSpanMinutes = WorkstreamSpanMinutes
+const WindowSpanMinutes = DimensionSpanMinutes
 
 // WindowCorrScheme is the correlation scheme a tick-emitted enrichment carries.
 //

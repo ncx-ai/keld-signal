@@ -26,7 +26,7 @@ type PIIResult struct {
 
 // PIIScanner detects concrete leaked personal data in text: the presidio layer
 // behind the sidecar's /pii, which needs no GLiNER2 and never touches the
-// inference single-flight. It is injected (like WorkstreamAnalyzer) rather than
+// inference single-flight. It is injected (like DimensionAnalyzer) rather than
 // derived from Model, because ml_backend "deterministic" has this service and
 // no Model at all.
 //

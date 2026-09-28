@@ -34,6 +34,30 @@ one already here.
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
+## Vocabulary — project, group, dimension (2026-09-23, amended 2026-09-25)
+
+A **project** (e.g. "SDKs") is Signal's own bucket, defined in Signal. A **group** (e.g.
+"Products") holds projects. The repo/branch/model/… facets `/analyze` counts are
+**dimensions**. An **Atlas workstream** is Atlas's value; Signal receives the org's list but
+does not match or show it. Until 2026-09-23 Signal called a group a "workstream" and the
+dimensions "workstreams" too — three meanings for one word. The 2026-09-23 rename also
+called the project a "workstream"; that was reversed on 2026-09-25 (Revision 3 of the
+multi-group discovery) once Signal stopped matching Atlas's workstreams, so the two words now
+name different things. `scripts/check_vocabulary.sh` fails CI on any retired name
+(`scripts/vocabulary-denylist.txt`).
+
+**Kept on purpose — the keep list:** Atlas wire keys `projects` (settings and block row),
+`projects_status`, `project_matches` and the facet key `workstreams`; the sidecar route
+`POST /projects` and its `projects` body key (version skew); the status value
+`skipped:no_projects`; the dimension named `project` (workspace basename); and anything about
+Claude Code's `~/.claude/projects` directories or a `.keld.toml` project.
+⚠️ **Stored names are exactly 3.0.6's, and must stay that way:** `state/projects.json`
+(version 1, groups under `workstreams`, each project's group under `workstream`),
+`workstreams_off` in agent-config.json and `KELD_PROJECTS_FILE`. Auto-update can roll a
+machine back to 3.0.6, which reads only those; a renamed file meant the rolled-back daemon
+found nothing, and whatever it saved was ignored after the next upgrade. Translate at
+`projects.Load`/`Save`, never by moving the file.
+
 ## Architecture
 
 ```mermaid
@@ -722,9 +746,9 @@ could raise.
   It takes COORDINATES (transcript path + prompt id), never text, and publishes
   as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
   confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
-  the daemon has an analysis backend (`enrich.WithWorkstreams`) **and** the
+  the daemon has an analysis backend (`enrich.WithDimensions`) **and** the
   source is one the analysis can read — `claude_code`/`cowork` only
-  (`enrich.WorkstreamsEligible`): the analysis resolves a prompt by Claude-Code
+  (`enrich.DimensionsEligible`): the analysis resolves a prompt by Claude-Code
   JSONL shape, so Codex/Gemini prompt ids 404, and registering it there would
   downgrade every one of their jobs to `"partial"` for a facet that was never
   obtainable. Callers with no backend (eval, localagent) are unchanged. A failed analysis
@@ -745,7 +769,7 @@ could raise.
   the way to the published enrichment, so nothing downstream can tell one
   observation from five hundred". It isn't dropped any more: `Labeled` carries
   `evidence` (the count) and `status` (`attributed`/`thin`/`tie`/`no_majority`/
-  `absent` — `enrich.WorkstreamStatuses`, the sidecar's `window.REASONS`), both
+  `absent` — `enrich.DimensionStatuses`, the sidecar's `window.REASONS`), both
   `omitempty` so the ML facets that share the type are byte-unchanged. Deleting
   the dimension cost 924 of 12,016 measured dimension-slots (7.7%) that held
   **real evidence and published nothing** — 198 of them one observation short —
@@ -864,7 +888,7 @@ upgrade.**
   the watcher's poll loop — the loop that carries every hook-free prompt. Signals
   are **dropped, not retried**, because ingest resumes from the stored offset: the
   next signal catches up, and `/analyze`'s own on-demand ingest is the backstop if
-  none ever comes. Scoped to `enrich.WorkstreamsEligible` sources (the same
+  none ever comes. Scoped to `enrich.DimensionsEligible` sources (the same
   predicate the pass is gated on — a Codex/Gemini window can never be served, so
   ingesting it is pure cost). Forward-only by default, matching
   `KELD_WATCH_BACKFILL`: a first sighting consumes nothing, so a daemon restart is
@@ -982,14 +1006,14 @@ differ from it**.
   answered from events alone. The ordering rule is **not** reimplemented in SQL:
   SQLite computes the per-`(level, ref)` sums and `window.rollup` merges and applies
   its own alphabetical tie-break, so `rollup_window` returns exactly what
-  `window.rollup` returns over the same rows and `workstreams.payload` consumes it
+  `window.rollup` returns over the same rows and `dimensions.payload` consumes it
   unchanged.
 - **`bin` is sparse by design, and its absence must never read as "no evidence".**
   Two things make that unmisreadable rather than merely documented: a **`bin_level`
   registry that `bin.level` REFERENCES** (with `foreign_keys=ON`, so the table
   physically cannot hold an unregistered level — asserted with a direct INSERT), and
   `rollup_window` routing unbinned levels to `event`, so the sparseness never reaches
-  a caller. `PRECOMPUTED_LEVELS` is **derived** from `workstreams.ALLOCATION` +
+  a caller. `PRECOMPUTED_LEVELS` is **derived** from `dimensions.ALLOCATION` +
   `INVENTORY` (16 levels) rather than typed, against the 19 `events_for_turns` emits;
   registering a new level backfills its bins from the retained events, with no
   transcript re-read.
@@ -1227,7 +1251,7 @@ report no `named_terms` forever. A changed fingerprint reparses.
 
 **The dynamics block (`analysis/dynamics.py`) — what MOVED in the window.** The same
 `/analyze` call that characterises the window also answers what changed inside it:
-`WorkstreamAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
+`DimensionAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
 round-trip and no inference at all** (two `rollup_window` calls, ~2ms each) and they
 publish under `ml_backend:"deterministic"` too. The span is cut into a recent
 **slice** and an abutting **baseline**, and each dimension is compared across the
@@ -1374,7 +1398,7 @@ stated at the constant rather than smoothed. Inventory levels are excluded
 structurally and the exclusion was confirmed by distribution rather than by argument
 (`integrations` `compared` on **0** of 2,702 windows; `named_terms` non-zero on
 **98.3%** — no window in which it says no, a disqualifier needing no ground truth).
-`DYNAMIC_DIMENSIONS` is derived from `workstreams.ALLOCATION` minus the dropped set,
+`DYNAMIC_DIMENSIONS` is derived from `dimensions.ALLOCATION` minus the dropped set,
 and `dynamics()` neither takes nor forwards a `dimensions=` argument, so **the
 published vocabulary cannot be widened by a caller** — the parameter exists only to
 reproduce that measurement. The dropped three are still reported as allocation
@@ -1430,7 +1454,7 @@ case. `tooling` stays out, with the bar for revisiting it written into `prior.py
 test rather than remembered: agreement ≤ 0.90 **or** prior-attributed coverage ≥ 0.70,
 against its current 98.5% / 24.3%.
 
-`PRIOR_DIMENSIONS` is **derived** from `workstreams.ALLOCATION` rather than restated, so
+`PRIOR_DIMENSIONS` is **derived** from `dimensions.ALLOCATION` rather than restated, so
 the two cannot drift and **an INVENTORY level is structurally not addable** — which is
 what keeps `named_terms` (the one level read from message text, and which has held real
 person names) out of this block by construction rather than by care. `status` is named
@@ -1623,7 +1647,7 @@ selects one of three modes:
   every executed pass succeeded publishes `pipeline_status:"enriched"`.
   `"partial"` keeps its one meaning — something that should have worked did
   not (panic, error, pass deadline) — including for a model-free pass that
-  errors in this mode. This is `WithWorkstreams`' idiom one level down: don't
+  errors in this mode. This is `WithDimensions`' idiom one level down: don't
   downgrade a profile for a facet the run never had. The thinner facet set
   stays **visible** in the new `Profile.FacetsSkipped` / wire
   `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —
@@ -2465,6 +2489,9 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    projects/        groups and projects: the local document (projects.json),
+                     the rule pass (Attribute), suggestions, the page's edits
+    attrib/          the semantic attribution job (POST /attribute) per closed block
     update/          auto-update: Atlas pins a release; fetch, verify, swap by
                      displacement, restart, confirm — or restore .prev and
                      never retry that version until the pin moves
@@ -2509,7 +2536,7 @@ sidecar/
       textembed.py     per-message text vectors, in their own encoder child
       window.py        rollup / attribution / dominant; MIN_EVIDENCE
       levels.py        level vocabulary + 0.1s timestamp quantization
-      workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
+      dimensions.py    ALLOCATION + INVENTORY payload (the published shape)
       transcript.py    JSONL line seams (turns_in / tool_use_in)
       workspace.py     whole-file workspace + remote resolution
       reconcile.py     prose paths against declared paths (re-scoped per window)

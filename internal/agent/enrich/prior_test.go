@@ -34,12 +34,12 @@ func TestPriorStatusVocabularyMatchesTheSidecar(t *testing.T) {
 	}
 	// The WORKSTREAM dimensions publish the same vocabulary under their own
 	// name, and this pin covers both because there is only one list. Asserted
-	// rather than assumed: `WorkstreamStatuses = PriorStatuses` is what makes
+	// rather than assumed: `DimensionStatuses = PriorStatuses` is what makes
 	// two names safe, and retyping it would put a second copy of window.REASONS
 	// in this package with nothing pinning it.
-	if strings.Join(want, ",") != strings.Join(WorkstreamStatuses, ",") {
-		t.Errorf("WorkstreamStatuses is not the same list:\n python %v\n go     %v",
-			want, WorkstreamStatuses)
+	if strings.Join(want, ",") != strings.Join(DimensionStatuses, ",") {
+		t.Errorf("DimensionStatuses is not the same list:\n python %v\n go     %v",
+			want, DimensionStatuses)
 	}
 }
 
@@ -95,11 +95,11 @@ func TestANullContrastMarshalsAsNullNotAsAgreement(t *testing.T) {
 // call, and it must never be mistaken for the digest. Two maps, keyed alike,
 // converted at one chokepoint — this pins that the pipeline actually carries the
 // second one through to the Profile.
-func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
+func TestThePriorReachesTheProfileWithoutTouchingTheDimensions(t *testing.T) {
 	yes := true
 	dep := 0.516
 	an := WindowAnalysis{
-		Workstreams: map[string]Labeled{"language": {Value: "Python", Confidence: 0.571}},
+		Dimensions: map[string]Labeled{"language": {Value: "Python", Confidence: 0.571}},
 		Prior: map[string]Prior{
 			"language": {Value: "TypeScript", Share: 0.886, Evidence: 271,
 				Status: "attributed", Departure: &dep},
@@ -109,7 +109,7 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 				Status: "attributed", Novel: &yes},
 		},
 	}
-	ex := WorkstreamsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
+	ex := DimensionsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 		return an, true
 	}}
 	out, err := ex.Run(&JobContext{TranscriptPath: "/tmp/t.jsonl", PromptID: "p1"})
@@ -141,8 +141,8 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 // downstream as "we looked at the session and it said nothing", which is a
 // different fact from a sidecar too old to have looked at all.
 func TestNoPriorPublishesNoKey(t *testing.T) {
-	ex := WorkstreamsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
-		return WindowAnalysis{Workstreams: map[string]Labeled{"branch": {Value: "main"}}}, true
+	ex := DimensionsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
+		return WindowAnalysis{Dimensions: map[string]Labeled{"branch": {Value: "main"}}}, true
 	}}
 	out, err := ex.Run(&JobContext{TranscriptPath: "/tmp/t.jsonl", PromptID: "p1"})
 	if err != nil {

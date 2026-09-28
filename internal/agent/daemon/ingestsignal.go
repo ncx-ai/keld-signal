@@ -141,7 +141,7 @@ func (q *ingestQueue) stats() (int, int) {
 //
 // SCOPED TO THE SOURCES THE ANALYSIS CAN SERVE. /analyze cannot resolve a Codex
 // or a Gemini prompt id (they key prompts differently over differently-shaped
-// files — see enrich.WorkstreamsEligible), so the workstreams pass never asks
+// files — see enrich.DimensionsEligible), so the workstreams pass never asks
 // for a window on them. Ingesting their transcripts would buy a whole-file parse
 // and permanent store rows for a question nobody can ask. The gate is the SAME
 // predicate the pass is gated on, deliberately: extending the analysis to a new
@@ -174,7 +174,7 @@ func ingestSignalHook(ctx context.Context,
 		return signal(path, facts.forTranscript(path).resolved())
 	})
 	return func(source, path string) bool {
-		if !enrich.WorkstreamsEligible(source) {
+		if !enrich.DimensionsEligible(source) {
 			// Not eligible is not a refusal: nothing will ever signal this
 			// source, so a caller holding a backlog must drop it, not retry.
 			return true

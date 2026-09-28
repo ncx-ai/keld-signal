@@ -77,7 +77,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
-from app.analysis import COMPONENT_DEPTH, magnitude, window, workstreams   # noqa: E402
+from app.analysis import COMPONENT_DEPTH, magnitude, window, dimensions   # noqa: E402
 from app.analysis.levels import events_for_turns, quantize                 # noqa: E402
 from app.analysis.reconcile import reconcile                              # noqa: E402
 from app.analysis.store import open_store                                 # noqa: E402
@@ -95,7 +95,7 @@ MAX_ANCHORS = 40
 # two implementations agree, and that is a property of the code, not of the corpus.
 SQL_CHECK_WINDOWS = 200
 
-DIMENSIONS = [(name, level) for name, level, _floor in workstreams.ALLOCATION]
+DIMENSIONS = [(name, level) for name, level, _floor in dimensions.ALLOCATION]
 
 
 # --- parsing one transcript ------------------------------------------------------------------

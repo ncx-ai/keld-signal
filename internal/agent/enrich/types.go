@@ -30,7 +30,7 @@ type Labeled struct {
 	// only; 0 (omitted) means "not a counted facet", never "counted zero" — an
 	// absent dimension says so in Status.
 	Evidence int `json:"evidence,omitempty"`
-	// Status is the attribution outcome, from WorkstreamStatuses. Workstreams
+	// Status is the attribution outcome, from DimensionStatuses. Projects
 	// only; empty (omitted) on every ML facet. A consumer that renders `thin`
 	// identically to `attributed` is misreporting — the uncertainty travels with
 	// the value precisely so it does not have to be inferred from a null.
@@ -144,11 +144,11 @@ type Profile struct {
 	FunctionGuess    Labeled   `json:"function_guess"`
 	Subcategory      Labeled   `json:"subcategory"`
 	SubcategoryAlt   []Labeled `json:"subcategory_alt,omitempty"`
-	// Workstreams are the deterministic window dimensions (project, branch,
+	// Dimensions are the deterministic window dimensions (project, branch,
 	// model, ...) counted from tool-call metadata rather than classified — see
-	// WorkstreamsExtractor. Keyed by dimension; a dimension the window could not
+	// DimensionsExtractor. Keyed by dimension; a dimension the window could not
 	// attribute is ABSENT rather than present-and-empty.
-	Workstreams map[string]Labeled `json:"workstreams,omitempty"`
+	Dimensions map[string]Labeled `json:"workstreams,omitempty"`
 	// Dynamics is the same window's DERIVATIVE, keyed by dimension: how the
 	// recent slice differs from the baseline before it (see Dynamic). It comes
 	// from the same /analyze call Workstreams does and is likewise model-free, so
@@ -182,7 +182,7 @@ type Profile struct {
 	// member of a table — so the caps that bound them are measured rather than
 	// structural: 40/24/16 respectively, each set just above that level's own
 	// p90 over 70 corpus transcripts / 165 one-hour windows (see
-	// sidecar/app/analysis/workstreams.py's INVENTORY). Absent, never an empty
+	// sidecar/app/analysis/dimensions.py's INVENTORY). Absent, never an empty
 	// list, when the analysis produced none.
 	Files       []PathCount `json:"files,omitempty"`
 	Directories []PathCount `json:"directories,omitempty"`
@@ -321,7 +321,7 @@ type JobContext struct {
 	// TranscriptPath and PromptID are the job's COORDINATES (never text): the
 	// transcript file and the prompt within it. Model-free passes that
 	// characterise the surrounding window rather than this prompt's text (see
-	// WorkstreamsExtractor) need them; the daemon threads them from queue.Job
+	// DimensionsExtractor) need them; the daemon threads them from queue.Job
 	// via WithCoordinates. They are empty for callers with no transcript
 	// (inline text, the eval harness), which such a pass must tolerate.
 	TranscriptPath string

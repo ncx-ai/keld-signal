@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"path/filepath"
 	"sort"
 	"sync/atomic"
 
@@ -9,7 +8,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
-	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // projectMatchesFor answers, for one block about to be published, which
@@ -47,7 +45,7 @@ func setRemoteProjects(fn func() []settings.RemoteProject) {
 }
 
 func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
-	store := projects.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
+	store := projects.NewStore(projects.DefaultPath())
 	d, err := store.Load()
 	if err != nil {
 		return nil
@@ -61,8 +59,8 @@ func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 			candidates = projects.MergeCandidates(candidates, remote)
 		}
 	}
-	matches := projects.MatchesFor(b.Analysis.Workstreams, candidates,
-		projects.WorkstreamOffFunc(settings.Load()))
+	matches := projects.MatchesFor(b.Analysis.Dimensions, candidates,
+		projects.GroupOffFunc(settings.Load()))
 	if len(matches) == 0 {
 		return nil
 	}

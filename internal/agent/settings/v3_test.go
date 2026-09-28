@@ -44,14 +44,14 @@ func TestDevBlocksRefusedWhileAtlasOn(t *testing.T) {
 	}
 }
 
-func TestWorkstreamOff(t *testing.T) {
-	s := Settings{WorkstreamsOff: []string{"marketing", " Sales "}}
+func TestGroupOff(t *testing.T) {
+	s := Settings{GroupsOff: []string{"marketing", " Sales "}}
 	for _, k := range []string{"marketing", "Marketing", "sales"} {
-		if !s.WorkstreamOff(k) {
+		if !s.GroupOff(k) {
 			t.Fatalf("%q should be off", k)
 		}
 	}
-	if s.WorkstreamOff("development") {
+	if s.GroupOff("development") {
 		t.Fatal("development should be on")
 	}
 }

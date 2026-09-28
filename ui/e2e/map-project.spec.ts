@@ -17,7 +17,7 @@ import { test, expect } from "./support/fixtures";
 
 /** The page's own /v1/projects, read through the page so it carries the same
  *  secret the page was handed. */
-async function readProjects(page: any): Promise<any> {
+async function readCatalog(page: any): Promise<any> {
   return await page.evaluate(async () =>
     (await fetch("/v1/projects", {
       headers: { "x-keld-agent-secret": new URLSearchParams(location.search).get("secret")! },
@@ -37,7 +37,7 @@ test.describe("Map a local project", () => {
       // and — the one that matters — NOTHING becomes unattributed, because a
       // block is attributed by a RULE and the rule moves with it.
       await signal.open("projects");
-      const before = await readProjects(page);
+      const before = await readCatalog(page);
       const local = (before.projects || []).filter(
         (p: any) => p.origin !== "atlas" && (p.repos || []).length > 0);
       test.skip(local.length < 2, "needs two local projects with rules to map between");
@@ -55,7 +55,7 @@ test.describe("Map a local project", () => {
       await picker.selectOption(dst.id);
       await expect(page.getByText(APPLIED).first()).toBeVisible();
 
-      const after = await readProjects(page);
+      const after = await readCatalog(page);
       const target = (after.projects || []).find((p: any) => p.id === dst.id);
       expect(target).toBeTruthy();
       for (const repo of src.repos) expect(target.repos).toContain(repo);
@@ -74,7 +74,7 @@ test.describe("Map a local project", () => {
   test('NEGATIVE: an Atlas project offers no "Same as" — it is not ours to fold away',
     async ({ signal, page }) => {
       await signal.open("projects");
-      const d = await readProjects(page);
+      const d = await readCatalog(page);
       const org = (d.projects || []).filter((p: any) => p.origin === "atlas");
       test.skip(org.length === 0, "no org projects on this daemon (Send to Atlas is off)");
       for (const p of org.slice(0, 3)) {

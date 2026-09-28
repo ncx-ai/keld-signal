@@ -177,8 +177,8 @@ func TestAnEffortBlockWithAnUnknownVocabularyValueIsDropped(t *testing.T) {
 			t.Errorf("%s: forwarded anyway: %+v", c.name, got.Effort)
 		}
 		// The rest of the response still publishes: the gate drops a block, not a call.
-		if got.Workstreams["project"].Value != "keld-signal" {
-			t.Errorf("%s: the digest half was collateral damage: %+v", c.name, got.Workstreams)
+		if got.Dimensions["project"].Value != "keld-signal" {
+			t.Errorf("%s: the digest half was collateral damage: %+v", c.name, got.Dimensions)
 		}
 	}
 }

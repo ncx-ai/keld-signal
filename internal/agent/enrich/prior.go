@@ -64,7 +64,7 @@ type Prior struct {
 	// merely missing.
 	Share float64 `json:"share"`
 	// Evidence is how much session the prior rests on. It is the one thing this
-	// block deliberately carries that sidecar/workstreams.go drops from a
+	// block deliberately carries that sidecar/dimensions.go drops from a
 	// Labeled, and the design asks for it by name: a window is a fixed 60
 	// minutes, but a session's length is unbounded, so a prior over 6
 	// observations and one over 600 are not the same frame of reference and no

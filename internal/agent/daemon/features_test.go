@@ -35,7 +35,7 @@ func (fakeFeatureClient) FeatureRowsFor(path, source, sessionID string,
 // subsystem must be ABSENT — never registered, so it appears in neither
 // facets_skipped nor extractor_versions, which is this codebase's existing
 // distinction between a pass that was SKIPPED and one that was NEVER WIRED
-// (WithWorkstreams is the precedent).
+// (WithDimensions is the precedent).
 //
 // The mechanism is that facetsFor — which runs in BOTH modes that have a
 // service — does not probe for the capability at all; only deterministicBackend

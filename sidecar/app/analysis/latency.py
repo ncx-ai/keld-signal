@@ -101,7 +101,7 @@ count. So `tempo` states the conclusion and ships WITH the share it was computed
 the shape `dynamics.py` settled on for the same measured reason.
 
 The conclusion is COMPUTED from a floor already in the code, never guessed: `MAJORITY` is the
-0.50 that `workstreams.ALLOCATION` and `window.dominant` already use, and the two readings are
+0.50 that `dimensions.ALLOCATION` and `window.dominant` already use, and the two readings are
 the two sides of it. No third band, because no measurement supplies a second cut point, and
 inventing one would be the fabricated-vocabulary failure this package keeps paying for.
 """
@@ -117,7 +117,7 @@ FAST_GAP_S = 5.0
 # a change to that derivation moves this with it.
 MIN_GAPS = MIN_EVIDENCE
 
-# The share at which the reading flips. The same 0.50 majority floor `workstreams.ALLOCATION` and
+# The share at which the reading flips. The same 0.50 majority floor `dimensions.ALLOCATION` and
 # `window.dominant` already apply, and for the same reason: a side holding under half the
 # observations is not what the window was.
 MAJORITY = 0.50

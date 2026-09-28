@@ -57,7 +57,7 @@ from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, ana
 from app.analysis.dynamics import DEFAULT_SIZER  # noqa: E402
 from app.analysis.ingest import ingest_file, is_current  # noqa: E402
 from app.analysis.store import open_store  # noqa: E402
-from app.analysis.workstreams import ALLOCATION  # noqa: E402
+from app.analysis.dimensions import ALLOCATION  # noqa: E402
 
 
 import numpy as np
@@ -720,7 +720,7 @@ def _attributed(ws, name):
 
 
 def _work_summary(payload):
-    """One clause per ALLOCATION dimension, in `workstreams.ALLOCATION` order. An unattributed
+    """One clause per ALLOCATION dimension, in `dimensions.ALLOCATION` order. An unattributed
     dimension is NAMED (`skill unattributed`), never silently dropped -- the ALLOCATION set is
     fixed at 7, so a reader can always tell "the pipeline didn't say" from "this wasn't asked"."""
     ws = payload.get("workstreams") or {}
@@ -733,7 +733,7 @@ def _work_summary(payload):
 
 def _hotspots(payload):
     """Inventory counts + the hottest couple of values, with the top-N cut named rather than
-    silently absorbed (`inventory_omitted` -- see `workstreams.payload`'s own "dropping must be
+    silently absorbed (`inventory_omitted` -- see `dimensions.payload`'s own "dropping must be
     visible" note, one level up)."""
     inv = payload.get("inventory") or {}
     omitted = payload.get("inventory_omitted") or {}

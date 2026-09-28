@@ -169,7 +169,7 @@ func TestAnUnattributedWindowIsNeverFilledInFromItsPrior(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if l, present := got.Workstreams["skill"]; present {
+	if l, present := got.Dimensions["skill"]; present {
 		t.Errorf("the window's skill was filled in from the session prior: %+v — "+
 			"an unattributed window stays unattributed", l)
 	}
@@ -177,8 +177,8 @@ func TestAnUnattributedWindowIsNeverFilledInFromItsPrior(t *testing.T) {
 		t.Errorf("the prior itself was dropped: %+v (present=%v)", p, present)
 	}
 	// ... and the dimensions the window DID attribute are untouched by any of it.
-	if got.Workstreams["language"].Value != "Python" {
-		t.Errorf("digest half mangled: %+v", got.Workstreams)
+	if got.Dimensions["language"].Value != "Python" {
+		t.Errorf("digest half mangled: %+v", got.Dimensions)
 	}
 }
 
@@ -237,8 +237,8 @@ func TestAnalyzeLabeledDropsAnUnknownPriorStatus(t *testing.T) {
 	}
 	// The digest half is unaffected: prior vocabulary skew must not cost the
 	// facet that has been publishing since before this block existed.
-	if got.Workstreams["branch"].Value != "feat/ledger" {
-		t.Errorf("workstreams half dropped with the prior: %+v", got.Workstreams)
+	if got.Dimensions["branch"].Value != "feat/ledger" {
+		t.Errorf("workstreams half dropped with the prior: %+v", got.Dimensions)
 	}
 }
 
@@ -256,8 +256,8 @@ func TestASidecarWithNoPriorBlockPublishesNoPrior(t *testing.T) {
 	if got.Prior != nil {
 		t.Errorf("Prior = %+v, want nil for a sidecar that sent no block", got.Prior)
 	}
-	if got.Workstreams["branch"].Value != "feat/ledger" {
-		t.Errorf("the digest was lost with the missing block: %+v", got.Workstreams)
+	if got.Dimensions["branch"].Value != "feat/ledger" {
+		t.Errorf("the digest was lost with the missing block: %+v", got.Dimensions)
 	}
 }
 

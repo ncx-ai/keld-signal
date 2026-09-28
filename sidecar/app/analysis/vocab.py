@@ -230,7 +230,7 @@ def action_for(tool=None, exe=None, verb=None, args=()):
 # THE PUBLISHED VOCABULARY of the `action` level, enumerated. Every return path in `action_for`
 # above is a literal or a lookup into TOOL_ACTION / EXE_TO_ACTION, so the level is CLOSED — it
 # can emit these 22 values and nothing else, however long the window or however odd the shell
-# command. That is not a detail: `workstreams.INVENTORY` publishes this level with NO top-N cut
+# command. That is not a detail: `dimensions.INVENTORY` publishes this level with NO top-N cut
 # (see the cap column there), which is only defensible because the payload it can produce is
 # bounded by this tuple, and `enrich.Acts` mirrors it Go-side as the gate that keeps a
 # separately-shipped sidecar from publishing a label no consumer's vocabulary contains.

@@ -9,7 +9,7 @@ import (
 )
 
 func localProject(id, title string, repos ...string) Project {
-	return Project{ID: id, Title: title, Repos: repos, Workstream: "development", Origin: OriginUser}
+	return Project{ID: id, Title: title, Repos: repos, Group: "development", Origin: OriginUser}
 }
 
 func orgValues() []Project {
@@ -58,7 +58,7 @@ func TestNEGATIVEBlocksKeepAttributingAfterTheMove(t *testing.T) {
 		localProject("p_signal", "keld-signal", "github.com/ncx-ai/keld-signal"),
 	}}
 	dims := map[string]enrich.Labeled{
-		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.WorkstreamAttributed},
+		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
 	}
 
 	got := Attribute(dims, MergeCandidates(before.Projects, orgValues()), noneOff, nil)
@@ -87,7 +87,7 @@ func TestNEGATIVEKeepingBothWouldConflictWhichIsWhyOneIsRemoved(t *testing.T) {
 			Repos: []string{"github.com/ncx-ai/keld-signal"}, Origin: OriginAtlas},
 	}}
 	got := Attribute(map[string]enrich.Labeled{
-		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.WorkstreamAttributed},
+		DimRepo: {Value: "github.com/ncx-ai/keld-signal", Status: enrich.DimensionAttributed},
 	}, both.Projects, noneOff, nil)
 	if got.Reason != ReasonConflict {
 		t.Fatalf("reason = %q, want %q — if this ever stops being a conflict, "+

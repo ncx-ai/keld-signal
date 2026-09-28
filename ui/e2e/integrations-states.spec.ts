@@ -178,7 +178,7 @@ async function startShell(): Promise<Shell> {
       }
       return json(res, settings);
     }
-    if (p === "/v1/projects") return json(res, { projects: [] });
+    if (p === "/v1/projects") return json(res, { groups: [], projects: [] });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
     const file = p === "/" ? "index.html" : p.slice(1);

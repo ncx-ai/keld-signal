@@ -10,7 +10,7 @@ const APPLIED = "Applied on this machine";
 
 /** The page's own /v1/projects, read through the page so it carries the same
  *  secret the page was handed. */
-async function readProjects(page: any): Promise<any> {
+async function readCatalog(page: any): Promise<any> {
   return await page.evaluate(async () =>
     (await fetch("/v1/projects", {
       headers: { "x-keld-agent-secret": new URLSearchParams(location.search).get("secret")! },
@@ -24,7 +24,7 @@ test.describe("Projects", () => {
     await expect(page.getByText(/^\d+ of \d+ focus blocks$/)).toBeVisible();
     await expect(page.getByText(/^\d+%/)).toBeVisible();
     await expect(page.getByText("Left over", { exact: true })).toBeVisible();
-    await expect(page.getByText("Workstreams on", { exact: true })).toBeVisible();
+    await expect(page.getByText("Groups on", { exact: true })).toBeVisible();
 
     const heading = page.getByText(/^Suggested by your activity · \d+$/);
     await expect(heading).toBeVisible();
@@ -75,7 +75,7 @@ test.describe("Projects", () => {
     //
     // Asserted explicitly rather than left implicit: this suite ALWAYS runs with
     // no workstreams, so without naming it a reader would not know the case is
-    // covered — and the earlier version of this test asserted `.workstream-card`
+    // covered — and the earlier version of this test asserted `.group-card`
     // while believing the fixture had org workstreams it never had.
     // ⚠️ **EVERY WORKSTREAM HERE IS `origin: "local"`, AND THAT IS THE ASSERTION
     // THAT MATTERS.** This suite always runs with Send to Atlas off, so the org
@@ -92,8 +92,8 @@ test.describe("Projects", () => {
     // before-assertion pass only when this test ran first — which is not a test.
     // An org-declared workstream would show `origin: "atlas"`, so this still
     // fails if the machine's own bucket is ever mislabelled as the org's.
-    const afterCreate = await readProjects(page);
-    const origins = (afterCreate.workstreams || []).map((w: any) => w.origin);
+    const afterCreate = await readCatalog(page);
+    const origins = (afterCreate.groups || []).map((w: any) => w.origin);
     expect(origins.length).toBeGreaterThan(0);
     expect([...new Set(origins)]).toEqual(["local"]);
 
@@ -104,7 +104,7 @@ test.describe("Projects", () => {
     // projects' titles — and an <option> is HIDDEN, so a card-wide text match
     // resolved to one of those and failed `toBeVisible` on a page that was
     // rendering perfectly.
-    const yours = page.locator(".workstream-card .project-row .row-title");
+    const yours = page.locator(".group-card .project-row .row-title");
     await expect(yours.getByText(firstValue).first()).toBeVisible();
     await expect(yours.getByText(`repo ${firstValue}`)).toBeVisible();
   });
@@ -146,7 +146,7 @@ test.describe("Projects", () => {
       // something the design never promised.
       await signal.open("projects");
       const cards = await page.evaluate(() =>
-        [...document.querySelectorAll(".workstream-card")].map((card) => {
+        [...document.querySelectorAll(".group-card")].map((card) => {
           const cr = card.getBoundingClientRect();
           const rows = [...card.querySelectorAll(".project-row")];
           const r = (el: Element | null) => (el ? Math.round(el.getBoundingClientRect().right) : null);
@@ -155,7 +155,7 @@ test.describe("Projects", () => {
             name: card.querySelector(".name")?.textContent ?? "",
             pickerLefts: [...new Set(rows.map((x) => l(x.querySelector("select"))).filter(Boolean))],
             pillRights: [...new Set(rows.map((x) => r(x.querySelector(".pill"))).filter(Boolean))],
-            switchRight: r(card.querySelector(".workstream-head .switch")),
+            switchRight: r(card.querySelector(".group-head .switch")),
             overflowing: [...card.querySelectorAll("*")]
               .filter((e) => e.getBoundingClientRect().right > cr.right + 0.5).length,
           };
@@ -179,7 +179,7 @@ test.describe("Projects", () => {
     const heading = page.getByText(/^Suggested by your activity · \d+$/);
     const before = Number(/\d+$/.exec((await heading.innerText()).trim())![0]);
     expect(before, "a suggestion left over to place").toBeGreaterThanOrEqual(1);
-    const projectRows = page.locator(".workstream-card .project-row");
+    const projectRows = page.locator(".group-card .project-row");
     expect(await projectRows.count(), "a project to place it in").toBeGreaterThanOrEqual(1);
     const rulesBefore = await projectRows.first().locator("small").innerText();
 
@@ -198,14 +198,14 @@ test.describe("Projects", () => {
     expect(rulesAfter).toMatch(/repo \S+ \+\d+/);
   });
 
-  test("switching a workstream off changes its row and the 'workstreams on' tile, and back", async ({ signal, page }) => {
+  test("switching a group off changes its row and the 'groups on' tile, and back", async ({ signal, page }) => {
     await signal.open("projects");
     // ⚠️ Read the tile's VALUE element and match its WHOLE text. The count and
     // the "of N" caption are adjacent with no whitespace, so the value renders
     // as "1of 1" — every word-boundary assertion around the digit fails, twice
     // over: "Workstreams on1of 1" for the tile, "1of 1" for the value. Anchoring
     // the whole string is unambiguous and says what a person reads.
-    const onTileValue = page.getByText("Workstreams on", { exact: true }).locator("..").locator(".value, .v").first();
+    const onTileValue = page.getByText("Groups on", { exact: true }).locator("..").locator(".value, .v").first();
     await expect(onTileValue).toHaveText(/^1of \d+$/);
 
     await signal.setSwitch(/^counts for my work/, false);

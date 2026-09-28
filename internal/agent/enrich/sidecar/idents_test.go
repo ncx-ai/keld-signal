@@ -94,7 +94,7 @@ func TestABadIdentifierEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 
 // The structural gate for external_systems: a bare IP literal, v4 or v6, is
 // dropped without dropping the rest of the inventory. LOOPBACK is already
-// filtered sidecar-side (workstreams.payload); this is the client-side
+// filtered sidecar-side (dimensions.payload); this is the client-side
 // decode-boundary defence-in-depth for any OTHER address.
 func TestABareIPServiceEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 	for name, bad := range map[string]string{

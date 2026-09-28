@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"log"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/ui"
 	"github.com/ncx-ai/keld-signal/internal/atlas"
-	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // v3 is everything the Keld Signal page needs, assembled once at startup: the
@@ -51,7 +49,7 @@ type v3 struct {
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	l := ledger.New()
-	p := projects.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
+	p := projects.NewStore(projects.DefaultPath())
 
 	// The projects document needs two things this package owns: the blocks
 	// this machine has closed, and the org's vocabulary. Both are injected as
@@ -128,7 +126,7 @@ func (v *v3) reconcileWithRemote() {
 	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
 		// Read fresh, not captured: the exclusion list is a local setting a
 		// person can change between polls.
-		next, rm, tr := projects.Reconcile(d, remote, projects.WorkstreamOffFunc(settings.Load()))
+		next, rm, tr := projects.Reconcile(d, remote, projects.GroupOffFunc(settings.Load()))
 		removed, trimmed = rm, tr
 		return next, nil
 	}); err != nil {

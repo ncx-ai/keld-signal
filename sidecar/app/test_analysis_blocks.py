@@ -30,7 +30,7 @@ from app.analysis import blocks
 from app.analysis.dynamics import DETECT_LEVEL
 from app.analysis.store import BIN_SECONDS, open_store
 from app.analysis.window import MIN_EVIDENCE
-from app.analysis.workstreams import ALLOCATION
+from app.analysis.dimensions import ALLOCATION
 
 # One session name for every fixture. The cutter is per-session by construction (`active_bins`,
 # `rollup_window` and `EwmaSizer.observations` all take one), so a second name would only test

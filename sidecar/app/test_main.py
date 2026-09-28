@@ -726,7 +726,7 @@ def test_resolved_facts_default_to_none_and_change_nothing():
     assert without["workstreams"]["repo"]["status"] == "absent", without["workstreams"]["repo"]
     # `session` is a digest of the transcript's ABSOLUTE path, so two fixtures in two temp dirs
     # differ there by construction -- window metadata, not part of the answer (see
-    # sidecar/workstreams.go, which keeps it local and never publishes it). Everything else must
+    # sidecar/dimensions.go, which keeps it local and never publishes it). Everything else must
     # match key for key.
     assert {k: v for k, v in without.items() if k != "session"} \
         == {k: v for k, v in explicit_none.items() if k != "session"}, \
@@ -806,7 +806,7 @@ def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
     every dimension's prior is `absent` — and the block is still emitted, still says `absent` out
     loud, and supplies nothing. 45.1% of real windows look exactly like this; a suppressed block
     reads as an oversight, and an oversight is what someone eventually "fixes"."""
-    from app.analysis import prior, workstreams
+    from app.analysis import prior, dimensions
 
     m = _reload_main(None)
     _wire(m)
@@ -827,7 +827,7 @@ def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
     # ... and the window itself is answered exactly as it was before the block existed, which
     # on this two-turn fixture means honestly unattributed rather than filled in from a session
     # that has nothing to fill it from either.
-    assert set(body["workstreams"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, body
+    assert set(body["workstreams"]) == {n for n, _lv, _f in dimensions.ALLOCATION}, body
     # `skill` never fired on this fixture, and as of SCHEMA 16 the dimension SAYS SO rather than
     # being deleted -- `absent` with no value and no count. The rule under test is unchanged:
     # nothing from the session reaches it.

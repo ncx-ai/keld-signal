@@ -145,7 +145,7 @@ func newTickState(file string) *tickState {
 // covered hour publishes a window over ground a prompt row already describes and
 // counts the spend twice.
 func (s *tickState) observe(j queue.Job) {
-	if j.TranscriptPath == "" || j.PromptID == "" || !enrich.WorkstreamsEligible(j.Source) {
+	if j.TranscriptPath == "" || j.PromptID == "" || !enrich.DimensionsEligible(j.Source) {
 		return
 	}
 	s.mu.Lock()

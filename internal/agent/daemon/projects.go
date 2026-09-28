@@ -3,7 +3,6 @@ package daemon
 import (
 	"encoding/json"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
@@ -49,11 +48,11 @@ type projectsResolution struct {
 // projectsResolution's doc comment for why that must NOT collapse into the
 // same answer as "the file says there are no projects".
 func resolveProjects(remote *settings.Remote) projectsResolution {
-	if p := os.Getenv(settings.EnvProjectsFile); p != "" {
+	if p, name := settings.ProjectsFileFromEnv(); p != "" {
 		list, err := settings.LoadProjectsFile(p)
 		if err != nil {
 			log.Printf("keld-agent: %s=%s could not be read: %v — leaving the previously known project list in place",
-				settings.EnvProjectsFile, p, err)
+				name, p, err)
 			return projectsResolution{ok: false}
 		}
 		return projectsResolution{list: list, ok: true}

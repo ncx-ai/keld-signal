@@ -18,7 +18,7 @@ func TestLoadMissingFileIsAnEmptyDocumentNotAnError(t *testing.T) {
 	if d.Version != CurrentVersion {
 		t.Fatalf("version = %d, want %d", d.Version, CurrentVersion)
 	}
-	if len(d.Projects) != 0 || len(d.Workstreams) != 0 {
+	if len(d.Projects) != 0 || len(d.Groups) != 0 {
 		t.Fatalf("fresh document not empty: %+v", d)
 	}
 }
@@ -44,13 +44,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	atlasID := "atlas_123"
 	doc := Document{
 		Version: CurrentVersion,
-		Workstreams: []Workstream{
-			{Key: "development", Name: "Development", Origin: WorkstreamOriginLocal},
+		Groups: []Group{
+			{Key: "development", Name: "Development", Origin: GroupOriginLocal},
 		},
 		Projects: []Project{
 			{
 				ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal},
-				Workstream: "development", Origin: OriginUser, AtlasValueID: &atlasID,
+				Group: "development", Origin: OriginUser, AtlasValueID: &atlasID,
 			},
 		},
 	}
@@ -116,7 +116,7 @@ func TestProjectsFileByteCompatibleWithKeldProjectsFile(t *testing.T) {
 				Keywords:    []string{"sdk"},
 				TicketKey:   "SDK",
 				// v3-only fields the settings loader must ignore, not choke on.
-				Workstream:   "development",
+				Group:        "development",
 				Origin:       OriginUser,
 				Hidden:       false,
 				AtlasValueID: &atlasID,

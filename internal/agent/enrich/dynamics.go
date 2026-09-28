@@ -75,8 +75,8 @@ type Dynamic struct {
 // published as an empty object: "we looked and found nothing" is a different
 // fact from "nobody looked".
 type WindowAnalysis struct {
-	Workstreams map[string]Labeled
-	Dynamics    map[string]Dynamic
+	Dimensions map[string]Labeled
+	Dynamics   map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

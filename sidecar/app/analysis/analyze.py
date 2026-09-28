@@ -86,7 +86,7 @@ only when a turn falls in the same 0.1s bucket as a boundary. Measured over 103 
 across 30 transcripts (313 MB): 9 prompts see one such turn move, changing an `evidence` count
 by 1 and the share derived from it; 3 see a VALUE change, all of them in `inventory.harness_tools`,
 where the published set is a fixed top-12 cut by POSITION, so a ±1 count reorders the pair
-straddling the cut — the unrepresented-tie effect `workstreams.payload` already documents. No
+straddling the cut — the unrepresented-tie effect `dimensions.payload` already documents. No
 allocation dimension changed value in the sample.
 """
 import collections
@@ -96,7 +96,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
 from app.analysis import blocks as blocks_mod
-from app.analysis import latency, magnitude, prior as prior_mod, window, workstreams
+from app.analysis import latency, magnitude, prior as prior_mod, window, dimensions
 from app.analysis.dynamics import dynamics_for
 from app.analysis.ingest import (RECONCILE_SLOT, ingest_file, is_current, pending_in,
                                  session_of)
@@ -350,7 +350,7 @@ def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None, resolved
 
 
 def _payload(rl, path, start, end, effort):
-    out = workstreams.payload(rl)
+    out = dimensions.payload(rl)
     out.update(
         schema=SCHEMA,
         session=session_of(path),

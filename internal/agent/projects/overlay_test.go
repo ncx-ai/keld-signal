@@ -17,7 +17,7 @@ func atlasValues() []Project {
 
 func blockOn(repo string) map[string]enrich.Labeled {
 	return map[string]enrich.Labeled{
-		DimRepo: {Value: repo, Status: enrich.WorkstreamAttributed},
+		DimRepo: {Value: repo, Status: enrich.DimensionAttributed},
 	}
 }
 
@@ -120,7 +120,7 @@ func TestSameAsRefusalsStillHold(t *testing.T) {
 		t.Fatalf("unknown target must be ErrProjectNotFound, got %v", err)
 	}
 	off := func(k string) bool { return k == "Keld Projects" }
-	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "keld_projects:signal", sugs, off); err != ErrWorkstreamOff {
-		t.Fatalf("a value in a switched-off workstream must be refused, got %v", err)
+	if _, err := PlaceSameAsWithRemote(Document{}, remote, sugs[0].ID, "keld_projects:signal", sugs, off); err != ErrGroupOff {
+		t.Fatalf("a value in a switched-off group must be refused, got %v", err)
 	}
 }

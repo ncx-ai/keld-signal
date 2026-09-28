@@ -11,7 +11,7 @@ import (
 // attributed builds an enrich.Labeled the way a real block's workstreams map
 // carries a dimension that reached the attribution floor.
 func attributed(value string) enrich.Labeled {
-	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.WorkstreamAttributed}
+	return enrich.Labeled{Value: value, Confidence: 1, Status: enrich.DimensionAttributed}
 }
 
 func dimsWith(pairs map[string]string) map[string]enrich.Labeled {
@@ -35,7 +35,7 @@ const (
 // all — Attribute is called with a nil Vector throughout this file — and the
 // method it reports is "repo".
 func TestRepoRuleAttributesWithoutAnyEncoder(t *testing.T) {
-	p := Project{ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal}, Workstream: "development"}
+	p := Project{ID: "p_signal", Title: "Keld Signal", Repos: []string{repoKeldSignal}, Group: "development"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{p}, nil, nil)
@@ -204,27 +204,27 @@ func TestTwoProjectsClaimingOneRepoConflicts(t *testing.T) {
 
 // T22: a workstream switched off excludes its projects from matching AND
 // from the "place same as" candidate list.
-func TestWorkstreamOffExcludesFromMatchingAndSameAs(t *testing.T) {
+func TestGroupOffExcludesFromMatchingAndSameAs(t *testing.T) {
 	off := func(key string) bool { return key == "marketing" }
-	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Workstream: "marketing"}
+	p := Project{ID: "p_mkt", Title: "Marketing site", Repos: []string{repoKeldSignal}, Group: "marketing"}
 	dims := dimsWith(map[string]string{DimRepo: repoKeldSignal})
 
 	res := Attribute(dims, []Project{p}, off, nil)
 	if res.ProjectID != "" || res.Reason != ReasonNoRuleMatched {
-		t.Fatalf("workstream-off project still matched: %+v", res)
+		t.Fatalf("group-off project still matched: %+v", res)
 	}
 
 	same := SameAsCandidates(Document{Projects: []Project{p}}, off)
 	for _, c := range same {
 		if c.ID == p.ID {
-			t.Fatalf("workstream-off project appeared in same-as candidates: %+v", same)
+			t.Fatalf("group-off project appeared in same-as candidates: %+v", same)
 		}
 	}
 
 	doc := Document{Projects: []Project{p}}
 	suggestions := []Suggestion{{ID: "s1", Kind: SuggestKindRepo, Value: normalizeRepo(repoKeldSignal)}}
-	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions, off); err != ErrWorkstreamOff {
-		t.Fatalf("PlaceSameAs onto an off-workstream project: err = %v, want ErrWorkstreamOff", err)
+	if _, err := PlaceSameAs(doc, "s1", p.ID, suggestions, off); err != ErrGroupOff {
+		t.Fatalf("PlaceSameAs onto an off-project project: err = %v, want ErrGroupOff", err)
 	}
 }
 

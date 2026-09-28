@@ -24,6 +24,15 @@ type RemoteProject struct {
 // local run is reproducible regardless of org state.
 const EnvProjectsFile = "KELD_PROJECTS_FILE"
 
+// ProjectsFileFromEnv returns the project-list file the environment names and
+// the variable that named it, or ("", "") when it is unset.
+func ProjectsFileFromEnv() (path, name string) {
+	if p := os.Getenv(EnvProjectsFile); p != "" {
+		return p, EnvProjectsFile
+	}
+	return "", ""
+}
+
 // LoadProjectsFile reads a strict JSON array of project definitions.
 // A missing or malformed file is an error, never an empty list — silence
 // here would make "attribution never ran" indistinguishable from "no

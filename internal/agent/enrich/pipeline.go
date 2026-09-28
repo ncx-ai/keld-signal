@@ -24,7 +24,7 @@ type runCfg struct {
 	parent         context.Context
 	customW1       []Extractor
 	customW2       []Extractor
-	analyze        WorkstreamAnalyzer
+	analyze        DimensionAnalyzer
 	piiScan        PIIScanner
 	transcriptPath string
 	promptID       string
@@ -73,13 +73,13 @@ func WithResolvedFacts(r ResolvedFacts) Option {
 	return func(c *runCfg) { c.resolved = r }
 }
 
-// WithWorkstreams enables the deterministic workstream pass, backed by fn (the
+// WithDimensions enables the deterministic workstream pass, backed by fn (the
 // daemon wires sidecar.Client.AnalyzeLabeled). Without it the pass does not run
 // at all — rather than run and fail — so callers with no analysis backend
 // (eval harness, localagent, tests) keep their previous facet set and are not
 // downgraded to pipeline_status "partial" by a facet they never asked for. It
-// is likewise ignored for sources the analysis cannot read (WorkstreamsEligible).
-func WithWorkstreams(fn WorkstreamAnalyzer) Option {
+// is likewise ignored for sources the analysis cannot read (DimensionsEligible).
+func WithDimensions(fn DimensionAnalyzer) Option {
 	return func(c *runCfg) { c.analyze = fn }
 }
 
@@ -88,7 +88,7 @@ func WithWorkstreams(fn WorkstreamAnalyzer) Option {
 // GLiNER2, off the inference single-flight, so it is wired in ml_backend
 // "deterministic" too).
 //
-// Unlike WithWorkstreams, its absence does NOT unregister a pass: sensitivity
+// Unlike WithDimensions, its absence does NOT unregister a pass: sensitivity
 // still runs on its credential layer. What absence changes is honesty — the
 // pass reports itself in facets_degraded, because ssn/credit_card/email/phone/
 // person/address then have no source at all and sensitivity:"none" would
@@ -143,7 +143,7 @@ type degradedExtractor interface {
 // FAILED on purpose: "partial" must keep meaning "something that should have
 // worked did not". A pass that needs a Model under ml_backend "deterministic"
 // is not a degraded pass, it is a pass this mode structurally does not have —
-// the same distinction WithWorkstreams already draws one level up, where an
+// the same distinction WithDimensions already draws one level up, where an
 // unwired analysis backend means the pass does not run at all rather than runs
 // and fails. Conflating the two made every deterministic-mode job report
 // "partial", which left an operator unable to tell a healthy deterministic
@@ -249,9 +249,9 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	// Registered only when an analysis backend exists AND the analysis can read
 	// this source's transcripts: an ineligible source would fail the pass on
 	// every job and downgrade the profile to "partial" for a facet that was
-	// never obtainable (see WorkstreamsEligible).
-	if cfg.analyze != nil && WorkstreamsEligible(source) {
-		exs = append(exs, WorkstreamsExtractor{Analyze: cfg.analyze})
+	// never obtainable (see DimensionsEligible).
+	if cfg.analyze != nil && DimensionsEligible(source) {
+		exs = append(exs, DimensionsExtractor{Analyze: cfg.analyze})
 	}
 
 	// Partition Wave1 into always-run (governance + gate signal) and gated
@@ -352,7 +352,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		FunctionGuess:     labeledFrom(ctx.Get("function_guess"), "function_guess", "function_guess"),
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
-		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
+		Dimensions:        dimensionsFrom(ctx.Get("workstreams")),
 		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
 		Effort:            effortFrom(ctx.Get("workstreams")),
 		PhysicalActs:      actsFrom(ctx.Get("workstreams")),
@@ -430,10 +430,10 @@ func labeledFrom(out map[string]any, key, producer string) Labeled {
 	return Labeled{Value: "", Confidence: 0, Producer: producer}
 }
 
-// workstreamsFrom reads the committed workstream pass output. An empty set
+// dimensionsFrom reads the committed workstream pass output. An empty set
 // (the analysis ran and found no dominant value anywhere) yields nil, so the
 // facet is omitted from the wire rather than published as an empty object.
-func workstreamsFrom(out map[string]any) map[string]Labeled {
+func dimensionsFrom(out map[string]any) map[string]Labeled {
 	if out != nil {
 		if ws, ok := out["workstreams"].(map[string]Labeled); ok && len(ws) > 0 {
 			return ws

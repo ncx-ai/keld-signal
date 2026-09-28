@@ -19,7 +19,7 @@ New keys, all local, all optional, defined in `internal/agent/settings/settings.
 | `send_to_atlas` | bool | true (absent = on) | `KELD_ATLAS=0/1` | the connector is constructed or not |
 | `dev_blocks` | `""` \| `prompt` \| `bin` \| `minute` | `""` | `KELD_DEV_BLOCKS` | developer granularity; **refused unless `send_to_atlas` is false** |
 | `show_breaks` | bool | false | — | page preference |
-| `workstreams_off` | [string] | [] | — | workstream keys excluded from attribution locally |
+| `workstreams_off` | [string] | [] | — | group keys whose projects are excluded from attribution locally. 3.0.6's name, kept on purpose so a rollback keeps them off; the local `/v1/settings` route calls it `groups_off` |
 | `tool_otlp` | bool | **false** | `KELD_TOOL_OTLP` (both directions) | whether keld writes the TOOL'S OWN OTLP export into its config. Off: no OTEL block is written and one an earlier keld left is removed. A Developer row while the lane's removal is evaluated — Signal reads the same usage off the transcript, and this is the only lane needing a credential inside a file the tool reads once at startup. No remote override. |
 
 Existing keys this build reads: `attribution` (vector attribution toggle, already sets
@@ -169,6 +169,12 @@ file touched. Refused with 409 while `send_to_atlas` is false.
 
 ## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
 
+⚠️ **Words since 2026-09-23 (amended 2026-09-25):** a GROUP holds PROJECTS. This file keeps
+3.0.6's stored names — the groups under `workstreams`, each project's group under
+`workstream` — so a machine auto-updated back to 3.0.6 reads exactly what it wrote. The code
+and the routes say group; `projects.Load`/`Save` translate. The one-time move to
+`workstreams.json` that the 2026-09-23 rename briefly shipped on dev builds is gone.
+
 The file is the **`KELD_PROJECTS_FILE` shape attribution already reads**, extended with
 fields the daemon ignores when it reads it as a project list:
 
@@ -246,12 +252,12 @@ Routes (all behind the secret):
 
 | route | body | effect |
 |---|---|---|
-| `GET /v1/projects` | — | `{workstreams, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
-| `POST /v1/projects/bundle` | `{"title","workstream","suggestions":[ids]}` | one project with those rules; re-attributes |
+| `GET /v1/projects` | — | `{groups, projects, suggestions, coverage}` where `suggestions[]` = `{id, kind: "repo"\|"ticket"\|"workspace", value, blocks, minutes, tokens}` and `coverage` = `{attributed, total, since}` for the current week |
+| `POST /v1/projects/bundle` | `{"title","group","suggestions":[ids]}` | `{"project": …}` — one project with those rules; re-attributes |
 | `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
 | `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
-| `PUT /v1/workstreams/{key}/off` | `{"off":true}` | writes `workstreams_off` |
+| `PUT /v1/groups/{key}/off` | `{"off":true}` | writes `workstreams_off` (3.0.6's key) |
 
 Every one of these edits is local to this machine. The response carries
 `{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so

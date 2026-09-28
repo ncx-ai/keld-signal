@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { findConflicts, reasonText, projectTitle, projectCellInfo } from "../app.js";
 
 function project(id, repos, opts = {}) {
-  return { id, title: id, repos, ticket_key: opts.ticket_key || "", workstream: opts.workstream || "development", hidden: !!opts.hidden };
+  return { id, title: id, repos, ticket_key: opts.ticket_key || "", group: opts.group || "development", hidden: !!opts.hidden };
 }
 
 test("two projects claiming the same repo conflict with each other", () => {
@@ -37,9 +37,9 @@ test("a hidden project never conflicts with anything", () => {
   assert.equal(c.p2, undefined);
 });
 
-test("a project in a switched-off workstream never conflicts with anything", () => {
-  const a = project("p1", ["github.com/org/repo"], { workstream: "marketing" });
-  const b = project("p2", ["github.com/org/repo"], { workstream: "development" });
+test("a project in a switched-off group never conflicts with anything", () => {
+  const a = project("p1", ["github.com/org/repo"], { group: "marketing" });
+  const b = project("p2", ["github.com/org/repo"], { group: "development" });
   const c = findConflicts([a, b], ["marketing"]);
   assert.equal(c.p1, undefined);
   assert.equal(c.p2, undefined);

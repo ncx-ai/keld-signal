@@ -982,7 +982,7 @@ step_c_repair_pairing() {
 #
 # ⚠️ **THIS STEP HAS NEVER EXECUTED.** There is no tool-OTLP switch on this
 # branch: `GET /v1/settings` publishes send_to_atlas, dev_blocks, show_breaks,
-# workstreams_off, attribution, dev_generate and dev_repos, and none of them is
+# groups_off, attribution, dev_generate and dev_repos, and none of them is
 # it. The guard asks the daemon's own contract surface rather than hard-coding
 # the answer, so the step un-blocks the day the key lands — and if it lands
 # under a name this list does not hold, the blocked line says exactly which

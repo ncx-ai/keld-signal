@@ -223,7 +223,7 @@ def match_text(text, compiled, budget_s=DEFAULT_BUDGET_S):
     Returns `{key: {"value", "confidence", "count", "alternates"}}`. A key with no match is
     ABSENT from the dict — never present with an empty or zero value — so a caller can tell
     "nothing matched" apart from "this key wasn't even in scope" only by key presence, matching
-    the rest of this package's convention (see `window.dominant`, `workstreams.payload`).
+    the rest of this package's convention (see `window.dominant`, `dimensions.payload`).
 
     Confidence is always `1.0`, meaning the string was PRESENT, not that it is the right answer —
     this pass makes no claim about correctness, only about occurrence.

@@ -81,7 +81,7 @@ from app.analysis.levels import quantize                          # noqa: E402
 from app.analysis.reconcile import reconcile                      # noqa: E402
 from app.analysis.store import open_store                         # noqa: E402
 from app.analysis.window import REASONS, attribution, rollup      # noqa: E402
-from app.analysis.workstreams import ALLOCATION                   # noqa: E402
+from app.analysis.dimensions import ALLOCATION                   # noqa: E402
 
 # --- PRE-REGISTERED, fixed before any result was looked at --------------------------------
 SLICE_MINUTES = (5, 10, 15, 30, 60)
