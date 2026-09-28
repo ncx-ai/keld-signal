@@ -907,3 +907,94 @@ is a wording study on THIS corpus, not another arm.
   positive claim about the code family.
 - The engineering 100-window gold set is single-label and cut at 60 minutes. It is **not
   poolable** with these 60 multi-label blocks and was not pooled.
+
+## 2026-09-28 — TWO refutations: coarsening the vocabulary, and feeding the model user text
+
+Both arms were run to test proposals made in the same session. Both proposals were wrong.
+Recording them because each closes a direction that looks obviously right from the outside.
+
+### Refutation 1 — paring the vocabulary down buys NOTHING
+
+Retrospective remap of the SAME 60 predictions into six candidate vocabularies, 17 classes
+down to 2. Zero extra inference: this isolates exactly how much error is confusion between
+classes a merge would join.
+
+| vocabulary | k | accuracy | constant | **lift** |
+|---|---|---|---|---|
+| atv1 verbs (as scored) | 17 | 0.350 | 0.233 | **+0.117** |
+| generate/transform/analyze/explore/decide/other | 6 | 0.417 | 0.417 | **+0.000** |
+| as above, plan->generate, converse alone | 6 | 0.400 | 0.417 | **−0.017** |
+| explore folded into analyze | 5 | 0.433 | 0.417 | **+0.017** |
+| produce / comprehend / reason / other | 4 | 0.467 | 0.483 | **−0.017** |
+| artifact vs no-artifact | 2 | 0.617 | 0.517 | **+0.100** |
+| atv1 family (control) | 7 | 0.417 | 0.317 | +0.100 |
+
+**Accuracy climbs 0.350 -> 0.617 as classes merge and the majority constant climbs exactly as
+fast.** Every merged vocabulary lands at lift ~0; the two coarsest are BELOW their constant.
+
+⚠️ **This is the trap a coarser taxonomy is designed to walk into**, and the standing rule
+catches it: a facet scoring below a constant is strictly worse than publishing nothing. The
+68-entry list is not the failure and a 5-entry list is not the fix.
+
+**The distinction that survives:** merging classes moves the constant with it, so it cannot
+help. Narrowing the REACHABLE SET PER BLOCK from other evidence is a different operation — it
+cuts effective k on each instance without changing the published vocabulary, so the constant
+does not move. Fine vocabulary + narrow per-block candidate set is therefore still live;
+coarse vocabulary is not.
+
+### Refutation 2 — user text is 7% of the input and contributes NOTHING
+
+The hypothesis: block prose is 93% assistant narration (paths, SHAs, PR numbers, test counts),
+which is the lexical material driving `code.edit` over-prediction. The shipped `task_type`
+facet measures 0.733 on PROMPTS, so feed the model prompts.
+
+Three arms, same 60 blocks, same committed labels, only the input differs:
+
+| arm | input | scored | abstained | acc | in-set | const | **lift** |
+|---|---|---|---|---|---|---|---|
+| **U** | user turns only | 50 | **10** | **0.140** | 0.260 | 0.260 | **−0.120** |
+| **A** | assistant turns only | 60 | 0 | 0.350 | **0.550** | 0.233 | **+0.117** |
+| **L** | all turns | 60 | 0 | 0.350 | 0.517 | 0.233 | **+0.117** |
+
+**A ≡ L.** Identical accuracy, and assistant-only is slightly BETTER on in-set (0.550 vs
+0.517). The 7% of user text is not being read at all — removing it changes nothing.
+
+**U is catastrophic**, and the mechanism is the corpus, not the model: it predicted `other`
+**32 times in 50 blocks**. Median user turn is **47.5 chars**; **44% are under 40 chars** —
+`yes`, `1`, `add that`, `publish it`, `Continue from where you left off.` In an agentic
+transcript the user turn is a STEERING token, not a statement of intent. 10 of 60 blocks have
+no user turn at all.
+
+⚠️ **This reproduces a finding already in the record on a different question and I should have
+weighted it.** Project attribution measured user text alone at **28%** of 61 labelled blocks
+against **92%** whole-block mean-pooled, with **24 of 25 blocks having no user text** being
+agent continuations. Two independent measurements, two different questions, one conclusion:
+**user text alone is the wrong unit for any BLOCK-level question on agentic transcripts.**
+
+### What the two refutations jointly establish
+
+Fourteen measurements now bracket GLiNER2 on block prose: 6 vocabularies x granularity, 3
+input variants, 2 family derivations. **Every one lands in +0.000 to +0.117.** Against that,
+the deterministic file-extension arm (G) measured **+0.247**.
+
+That is a ceiling for *this model on this task*, robust to vocabulary and to input selection.
+It says nothing about other model classes — GLiNER2 is a bi-encoder trained on
+GPT-4o-annotated news/law/wiki/pubmed/arxiv with **zero developer text**, and whether a small
+generative model reading the same prose clears the ceiling is UNMEASURED and open.
+
+**Consequence for any fusion design:** the model half must NOT be specified as
+`P(intent | user text)` — that is arm U, the worst result on record. If a fusion is built, the
+model reads assistant prose and carries the SMALLER weight, because the deterministic side has
+twice its measured lift.
+
+### Also confirmed, from the earlier arms — fuse at the SCORE level, never in the prompt
+
+Arm A (2026-09-25) already combined the two sources by feeding raw act counts into the prompt
+as a hint: **0.640 against 0.660 for prose alone at matched `rich` wording.** Augmentation
+through the prompt HURT — the same read-swamping, injected deliberately. Any combination must
+happen over scores, after both passes, never as text the model reads.
+
+The three-source arm did it correctly and is the only positive evidence for decomposition so
+far: modality proposes candidates at one sub-window's weight, **recall 0.476 -> 0.548 with 11
+candidates added and top-1 never displaced** — but n=7. That is the arm worth re-running at
+n=60, and `propose, never gate` is its load-bearing rule.
