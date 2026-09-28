@@ -45,7 +45,7 @@ from app.analysis import blocks as blocks_mod
 from app.analysis import blockdigest
 from app.analysis.ingest import ingest_file, session_of
 from app.analysis.store import open_store
-from app.analysis.workstreams import ALLOCATION, INVENTORY
+from app.analysis.dimensions import ALLOCATION, INVENTORY
 
 _TMP = tempfile.mkdtemp(prefix="keld-blockdigest-test-")
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
@@ -333,7 +333,7 @@ def test_the_digest_carries_the_same_dimension_shape_analyze_produces():
     session.
 
     Compared against `/analyze`'s real output on the same transcript rather than against a list
-    restated here, which is what makes this catch a change made in `workstreams.py`.
+    restated here, which is what makes this catch a change made in `dimensions.py`.
     """
     from app.analysis.analyze import analyze_window     # v1, imported by the TEST only
 

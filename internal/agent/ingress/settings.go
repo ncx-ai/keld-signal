@@ -47,21 +47,21 @@ func SettingsRoute(restart func() error) Route {
 // with env), plus which keys an env var currently pins so the page can grey
 // them out rather than let a person "change" a setting that cannot move.
 type settingsView struct {
-	SendToAtlas    bool     `json:"send_to_atlas"`
-	DevBlocks      string   `json:"dev_blocks"`
-	ShowBreaks     bool     `json:"show_breaks"`
-	WorkstreamsOff []string `json:"workstreams_off"`
-	Attribution    bool     `json:"attribution"`
-	ToolOTLP       bool     `json:"tool_otlp"`
-	Readonly       []string `json:"readonly"`
-	DevGenerate    bool     `json:"dev_generate"`
-	DevRepos       []string `json:"dev_repos"`
+	SendToAtlas bool     `json:"send_to_atlas"`
+	DevBlocks   string   `json:"dev_blocks"`
+	ShowBreaks  bool     `json:"show_breaks"`
+	GroupsOff   []string `json:"groups_off"`
+	Attribution bool     `json:"attribution"`
+	ToolOTLP    bool     `json:"tool_otlp"`
+	Readonly    []string `json:"readonly"`
+	DevGenerate bool     `json:"dev_generate"`
+	DevRepos    []string `json:"dev_repos"`
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	set := settings.Load()
 	devBlocks, _ := set.DevBlocksMode() // GET reports the effective value, not a refusal
-	off := set.WorkstreamsOff
+	off := set.GroupsOff
 	if off == nil {
 		off = []string{}
 	}
@@ -70,15 +70,15 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		devRepos = []string{}
 	}
 	writeJSON(w, http.StatusOK, settingsView{
-		DevGenerate:    set.DevGenerate,
-		DevRepos:       devRepos,
-		SendToAtlas:    set.AtlasEnabled(),
-		DevBlocks:      devBlocks,
-		ShowBreaks:     set.ShowBreaks,
-		WorkstreamsOff: off,
-		Attribution:    attrib.Enabled(set.Attribution),
-		ToolOTLP:       set.ToolOTLPEnabled(),
-		Readonly:       readonlySettingsKeys(),
+		DevGenerate: set.DevGenerate,
+		DevRepos:    devRepos,
+		SendToAtlas: set.AtlasEnabled(),
+		DevBlocks:   devBlocks,
+		ShowBreaks:  set.ShowBreaks,
+		GroupsOff:   off,
+		Attribution: attrib.Enabled(set.Attribution),
+		ToolOTLP:    set.ToolOTLPEnabled(),
+		Readonly:    readonlySettingsKeys(),
 	})
 }
 
@@ -150,14 +150,14 @@ func toolOTLPEnvPins() bool {
 // key is distinguishable from an explicit zero value — decodeJSONBody feeds
 // this struct directly, so a key the JSON omits leaves its pointer nil.
 type settingsPatch struct {
-	SendToAtlas    *bool     `json:"send_to_atlas"`
-	DevBlocks      *string   `json:"dev_blocks"`
-	ShowBreaks     *bool     `json:"show_breaks"`
-	WorkstreamsOff *[]string `json:"workstreams_off"`
-	Attribution    *bool     `json:"attribution"`
-	ToolOTLP       *bool     `json:"tool_otlp"`
-	DevGenerate    *bool     `json:"dev_generate"`
-	DevRepos       *[]string `json:"dev_repos"`
+	SendToAtlas *bool     `json:"send_to_atlas"`
+	DevBlocks   *string   `json:"dev_blocks"`
+	ShowBreaks  *bool     `json:"show_breaks"`
+	GroupsOff   *[]string `json:"groups_off"`
+	Attribution *bool     `json:"attribution"`
+	ToolOTLP    *bool     `json:"tool_otlp"`
+	DevGenerate *bool     `json:"dev_generate"`
+	DevRepos    *[]string `json:"dev_repos"`
 }
 
 func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() error) {
@@ -192,14 +192,14 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 	}
 
 	err := settings.WriteV3Settings(settings.V3Patch{
-		SendToAtlas:    patch.SendToAtlas,
-		DevBlocks:      patch.DevBlocks,
-		ShowBreaks:     patch.ShowBreaks,
-		WorkstreamsOff: patch.WorkstreamsOff,
-		Attribution:    patch.Attribution,
-		ToolOTLP:       patch.ToolOTLP,
-		DevGenerate:    patch.DevGenerate,
-		DevRepos:       patch.DevRepos,
+		SendToAtlas: patch.SendToAtlas,
+		DevBlocks:   patch.DevBlocks,
+		ShowBreaks:  patch.ShowBreaks,
+		GroupsOff:   patch.GroupsOff,
+		Attribution: patch.Attribution,
+		ToolOTLP:    patch.ToolOTLP,
+		DevGenerate: patch.DevGenerate,
+		DevRepos:    patch.DevRepos,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_write_failed")

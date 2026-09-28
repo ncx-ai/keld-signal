@@ -1,0 +1,8 @@
+{
+  "attribution": false,
+  "blocks": true,
+  "ml_backend": "deterministic",
+  "workstreams_off": [
+    "marketing"
+  ]
+}

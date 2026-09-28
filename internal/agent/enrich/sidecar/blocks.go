@@ -83,12 +83,12 @@ type BlockResult struct {
 	// has it DROPPED here — an unmodelled key is ignored by encoding/json — for
 	// the reason no other unforwardable key is modelled: a field this binary
 	// names is a field a publish path can forward.
-	Workstreams      map[string]*Workstream `json:"workstreams"`
-	Inventory        InventoryBlock         `json:"inventory"`
-	InventoryOmitted map[string]int         `json:"inventory_omitted"`
-	Dynamics         DynamicsBlock          `json:"dynamics"`
-	Effort           *EffortBlock           `json:"effort"`
-	Prior            PriorBlock             `json:"prior"`
+	Dimensions       map[string]*Dimension `json:"workstreams"`
+	Inventory        InventoryBlock        `json:"inventory"`
+	InventoryOmitted map[string]int        `json:"inventory_omitted"`
+	Dynamics         DynamicsBlock         `json:"dynamics"`
+	Effort           *EffortBlock          `json:"effort"`
+	Prior            PriorBlock            `json:"prior"`
 	// Tokens and Requests are the block's own spend, added by sidecar SCHEMA
 	// 18. A POINTER because absent and zero are different facts: a sidecar
 	// older than 18 sends no `tokens` key at all, and reporting that machine's
@@ -217,7 +217,7 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string,
 			},
 			StartTS: b.Start,
 			EndTS:   b.End,
-			Analysis: analysisFrom(b.Workstreams, b.Inventory, b.InventoryOmitted,
+			Analysis: analysisFrom(b.Dimensions, b.Inventory, b.InventoryOmitted,
 				b.Dynamics, b.Effort, b.Prior),
 			Tokens:   tokensFrom(b.Tokens),
 			Requests: b.Requests,

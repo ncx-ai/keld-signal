@@ -27,7 +27,7 @@ func TestPostProjectsSendsTheDeclaredList(t *testing.T) {
 
 	projects := []settings.RemoteProject{{ID: "proj_pay", Title: "Payments", Description: "billing"}}
 	if err := New(srv.URL, 5*time.Second).PostProjects(projects); err != nil {
-		t.Fatalf("PostProjects failed: %v", err)
+		t.Fatalf("PostWorkstreams failed: %v", err)
 	}
 	ps, ok := got["projects"].([]any)
 	if !ok || len(ps) != 1 {

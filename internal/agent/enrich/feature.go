@@ -21,7 +21,7 @@ import "strings"
 // It is registered under ml_backend "deterministic" ONLY. Under "auto" it is
 // ABSENT — never wired, so it appears in neither facets_skipped nor
 // extractor_versions, which is this codebase's existing distinction between a
-// pass that was skipped and one that never existed (see WithWorkstreams).
+// pass that was skipped and one that never existed (see WithDimensions).
 
 // FeatureCorrScheme is the correlation scheme a feature row carries.
 //

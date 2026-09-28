@@ -349,7 +349,7 @@ package enrich
 //
 // v21 PUBLISHES EVERY WORKSTREAM DIMENSION, ATTRIBUTED OR NOT, and states which
 // it was. Labeled gains `evidence` (the observation count) and `status`
-// (WorkstreamStatuses — a new five-value closed vocabulary a consumer must know,
+// (DimensionStatuses — a new five-value closed vocabulary a consumer must know,
 // which is what makes this contract-affecting rather than cosmetic). Both are
 // omitempty and set only by the workstreams pass, so every ML facet's payload is
 // byte-identical to v20.

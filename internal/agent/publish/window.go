@@ -129,7 +129,7 @@ func WindowCorrID(sessionID, end string) string {
 // carry, because it is the same analysis over the same kind of window. A reader
 // comparing the two must not have to learn a second name for one producer.
 func windowExtractorVersions() map[string]string {
-	var e enrich.WorkstreamsExtractor
+	var e enrich.DimensionsExtractor
 	return map[string]string{e.Name(): e.Version()}
 }
 

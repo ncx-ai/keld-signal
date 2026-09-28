@@ -29,7 +29,7 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 // something this binary is willing to name. Do not add a second, weaker copy of
 // those checks here, and do not add a field that has not been through them.
 type AnalysisFacets struct {
-	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	Dimensions map[string]enrich.Labeled `json:"workstreams,omitempty"`
 	// Tokens is this block's own spend, by class, and Requests how many
 	// requests produced it. Both omitempty and both nil-able: a sidecar older
 	// than SCHEMA 18 sends neither, and a machine running one must publish a
@@ -95,7 +95,7 @@ type AnalysisFacets struct {
 // itself exists.
 func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 	return AnalysisFacets{
-		Workstreams:      a.Workstreams,
+		Dimensions:       a.Dimensions,
 		Dynamics:         a.Dynamics,
 		Effort:           a.Effort,
 		PhysicalActs:     a.PhysicalActs,

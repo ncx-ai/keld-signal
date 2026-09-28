@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { validProjectTitle, projectGroups, workstreamDisplayName } from "../app.js";
+import { validProjectTitle, groupsForProjects, groupDisplayName } from "../app.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_JS = fs.readFileSync(path.join(HERE, "..", "app.js"), "utf8");
@@ -84,9 +84,9 @@ test("THE STORY: a project is grouped even when the org declared no workstreams"
   // The real shape from a machine with Send to Atlas off: workstreams empty,
   // projects present. Before this the render loop had nothing to iterate and
   // both projects were invisible.
-  const groups = projectGroups([], [
-    { id: "p1", title: "keld-atlas", workstream: "development" },
-    { id: "p2", title: "keld-signal", workstream: "development" },
+  const groups = groupsForProjects([], [
+    { id: "p1", title: "keld-atlas", group: "development" },
+    { id: "p2", title: "keld-signal", group: "development" },
   ]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].key, "development");
@@ -95,9 +95,9 @@ test("THE STORY: a project is grouped even when the org declared no workstreams"
 });
 
 test("NEGATIVE: org workstreams are kept as they are, and not duplicated", () => {
-  const groups = projectGroups(
+  const groups = groupsForProjects(
     [{ key: "development", name: "Engineering", off: false }],
-    [{ id: "p1", title: "web", workstream: "development" }]
+    [{ id: "p1", title: "web", group: "development" }]
   );
   assert.equal(groups.length, 1);
   assert.equal(groups[0].name, "Engineering", "the org's own label must win");
@@ -105,9 +105,9 @@ test("NEGATIVE: org workstreams are kept as they are, and not duplicated", () =>
 });
 
 test("a project filed under an undeclared key gets its own group beside the org's", () => {
-  const groups = projectGroups(
+  const groups = groupsForProjects(
     [{ key: "marketing", name: "Marketing", off: false }],
-    [{ id: "p1", title: "web", workstream: "development" }]
+    [{ id: "p1", title: "web", group: "development" }]
   );
   assert.deepEqual(groups.map((g) => g.key), ["marketing", "development"]);
   assert.deepEqual(groups.map((g) => g.synthetic), [false, true]);
@@ -116,12 +116,12 @@ test("a project filed under an undeclared key gets its own group beside the org'
 test("NEGATIVE: a hidden project does not conjure a group of its own", () => {
   // Hidden means local-only and excluded from matching; it must not create a
   // visible bucket that then renders as empty.
-  assert.deepEqual(projectGroups([], [{ id: "p1", workstream: "development", hidden: true }]), []);
+  assert.deepEqual(groupsForProjects([], [{ id: "p1", group: "development", hidden: true }]), []);
 });
 
-test("workstreamDisplayName matches the Go side", () => {
-  assert.equal(workstreamDisplayName("development"), "Development");
-  assert.equal(workstreamDisplayName("product_design"), "Product design");
-  assert.equal(workstreamDisplayName("go-to-market"), "Go to market");
-  assert.equal(workstreamDisplayName(""), "");
+test("groupDisplayName matches the Go side", () => {
+  assert.equal(groupDisplayName("development"), "Development");
+  assert.equal(groupDisplayName("product_design"), "Product design");
+  assert.equal(groupDisplayName("go-to-market"), "Go to market");
+  assert.equal(groupDisplayName(""), "");
 });

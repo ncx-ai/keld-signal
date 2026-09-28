@@ -34,8 +34,8 @@ import "strings"
 // record that it once held it, because the whole point is that it stopped
 // holding it. The work returns as a suggestion instead, which is the honest
 // outcome: nothing claims it, so it is unplaced again.
-func Reconcile(d Document, remote []Project, workstreamOff func(key string) bool) (Document, []Removed, []Trimmed) {
-	covered := coveredRules(remote, workstreamOff)
+func Reconcile(d Document, remote []Project, groupOff func(key string) bool) (Document, []Removed, []Trimmed) {
+	covered := coveredRules(remote, groupOff)
 	if len(covered) == 0 {
 		// No org projects at all — Send to Atlas off, or a first run before any
 		// poll. An ABSENT list is not an empty one, and treating it as coverage
@@ -110,10 +110,10 @@ type Trimmed struct {
 // excluded from matching entirely, so counting their rules as coverage would
 // delete a local project and leave its blocks in no project at all — the exact
 // opposite of what coverage is supposed to guarantee.
-func coveredRules(remote []Project, workstreamOff func(key string) bool) map[string]bool {
+func coveredRules(remote []Project, groupOff func(key string) bool) map[string]bool {
 	out := map[string]bool{}
 	for _, p := range remote {
-		if p.Hidden || projectWorkstreamOff(p, workstreamOff) {
+		if p.Hidden || projectGroupOff(p, groupOff) {
 			continue
 		}
 		for _, r := range EffectiveRepos(p) {

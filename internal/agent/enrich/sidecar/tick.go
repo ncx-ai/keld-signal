@@ -137,7 +137,7 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 				SpanMinutes: spanBetween(w.WindowStart, w.WindowEnd),
 				Evidence:    w.Evidence,
 			},
-			Analysis: analysisFrom(w.Workstreams, w.Inventory, w.InventoryOmitted,
+			Analysis: analysisFrom(w.Dimensions, w.Inventory, w.InventoryOmitted,
 				w.Dynamics, w.Effort, w.Prior),
 		})
 	}

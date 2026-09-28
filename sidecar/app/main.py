@@ -1057,7 +1057,7 @@ async def features(body: FeaturesIn):
     `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`. NOTHING IS PUBLISHED BY THIS
     ROUTE: it computes and returns, and the daemon's emitter (`internal/agent/features`) owns the
     cursor, the batching and the wire. See app/analysis/features.py for the disjoint shell ladder,
-    the frozen vocabulary manifest, the normalisation transforms and why `workstreams.payload` is
+    the frozen vocabulary manifest, the normalisation transforms and why `dimensions.payload` is
     the wrong input; app/analysis/featuretext.py for the text half.
 
     Returns `{"schema", "feature_spec", "spec_sha", "dims", "session", "rows": [...],
@@ -1403,11 +1403,13 @@ def install_vocabulary(body: VocabularyIn):
 
 
 class ProjectsIn(BaseModel):
+    # The body key stays `projects`: a daemon and a sidecar ship on separate
+    # cadences, and an older daemon posts `{"projects": [...]}`.
     projects: list[dict]
 
 
 @app.post("/projects")
-async def projects(body: ProjectsIn):
+async def post_projects(body: ProjectsIn):
     """Org project definitions for block attribution. A cache write, not
     inference — bypasses _dispatch for the same reason /vocabulary does.
     Embedding happens lazily on the first /attribute that needs vectors."""
@@ -1677,7 +1679,7 @@ def _verify_call(block_text, dims, project):
     decision (AC-6)."""
     try:
         result = _verifier_manager().call({
-            "op": "verify", "block_text": block_text, "dims": dims or {}, "project": project,
+            "op": "verify", "block_text": block_text, "dims": dims or {}, "workstream": project,
         })
     except (WorkerTimeout, WorkerUnavailable, WorkerError):
         raise _VerifierUnavailable() from None

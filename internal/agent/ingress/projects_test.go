@@ -20,7 +20,7 @@ type fakeBlocks struct{ rows []projects.BlockSummary }
 func (f fakeBlocks) SinceWeekStart() ([]projects.BlockSummary, error) { return f.rows, nil }
 
 func attributedDim(v string) enrich.Labeled {
-	return enrich.Labeled{Value: v, Confidence: 1, Status: enrich.WorkstreamAttributed}
+	return enrich.Labeled{Value: v, Confidence: 1, Status: enrich.DimensionAttributed}
 }
 
 func newTestStore(t *testing.T) *projects.Store {
@@ -142,7 +142,7 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 
 	// Bundle it.
 	res = doRequest(t, srv, http.MethodPost, "/v1/projects/bundle", "s3cret", map[string]any{
-		"title": "SDK work", "workstream": "development", "suggestions": []string{sugID},
+		"title": "SDK work", "group": "development", "suggestions": []string{sugID},
 	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("bundle status = %d", res.StatusCode)
@@ -195,12 +195,12 @@ func TestBundleRulesHidePlaceAreLocalOnly(t *testing.T) {
 	}
 }
 
-func TestWorkstreamOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
+func TestGroupOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	s := newTestStore(t)
 	srv := httptest.NewServer(DiscardHandler("s3cret", ProjectsRoute(s)))
 	defer srv.Close()
 
-	res := doRequest(t, srv, http.MethodPut, "/v1/workstreams/marketing/off", "s3cret", map[string]any{"off": true})
+	res := doRequest(t, srv, http.MethodPut, "/v1/groups/marketing/off", "s3cret", map[string]any{"off": true})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
@@ -213,9 +213,9 @@ func TestWorkstreamOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 	// confirm GET reflects the off flag AND excludes the project's repo from
 	// attribution.
 	doc := projects.Document{
-		Workstreams: []projects.Workstream{{Key: "marketing", Name: "Marketing"}},
+		Groups: []projects.Group{{Key: "marketing", Name: "Marketing"}},
 		Projects: []projects.Project{
-			{ID: "p_mkt", Title: "Site", Repos: []string{"github.com/ncx-ai/keld-signal"}, Workstream: "marketing"},
+			{ID: "p_mkt", Title: "Site", Repos: []string{"github.com/ncx-ai/keld-signal"}, Group: "marketing"},
 		},
 	}
 	if err := s.Save(doc); err != nil {
@@ -227,13 +227,13 @@ func TestWorkstreamOffRouteWritesSettingsAndIsLocalOnly(t *testing.T) {
 
 	res = doRequest(t, srv, http.MethodGet, "/v1/projects", "s3cret", nil)
 	got := decodeBody(t, res)
-	ws := got["workstreams"].([]any)[0].(map[string]any)
+	ws := got["groups"].([]any)[0].(map[string]any)
 	if ws["off"] != true {
-		t.Fatalf("workstream off flag not reflected: %+v", ws)
+		t.Fatalf("group off flag not reflected: %+v", ws)
 	}
 	cov := got["coverage"].(map[string]any)
 	if cov["attributed"].(float64) != 0 {
-		t.Fatalf("a project in an off workstream still attributed: %+v", cov)
+		t.Fatalf("a project in an off group still attributed: %+v", cov)
 	}
 }
 

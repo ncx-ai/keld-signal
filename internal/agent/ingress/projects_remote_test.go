@@ -42,9 +42,9 @@ func TestGetProjectsReturnsTheOrgValuesAndTheirBuckets(t *testing.T) {
 	}
 	defer res.Body.Close()
 	var body struct {
-		Workstreams []struct {
+		Groups []struct {
 			Key, Name, Origin string
-		} `json:"workstreams"`
+		} `json:"groups"`
 		Projects []json.RawMessage `json:"projects"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -54,7 +54,7 @@ func TestGetProjectsReturnsTheOrgValuesAndTheirBuckets(t *testing.T) {
 		t.Fatalf("the org's three values must be returned as projects, got %d", len(body.Projects))
 	}
 	var names []string
-	for _, ws := range body.Workstreams {
+	for _, ws := range body.Groups {
 		if ws.Origin != projects.OriginAtlas {
 			t.Fatalf("a derived bucket must carry origin %q, got %+v", projects.OriginAtlas, ws)
 		}
@@ -80,14 +80,14 @@ func TestGetProjectsWithoutAnOrgIsTheLocalDocumentOnly(t *testing.T) {
 	}
 	defer res.Body.Close()
 	var body struct {
-		Workstreams []json.RawMessage `json:"workstreams"`
-		Projects    []json.RawMessage `json:"projects"`
+		Groups   []json.RawMessage `json:"groups"`
+		Projects []json.RawMessage `json:"projects"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Projects) != 0 || len(body.Workstreams) != 0 {
-		t.Fatalf("no org and an empty local document must yield nothing, got %d projects, %d workstreams",
-			len(body.Projects), len(body.Workstreams))
+	if len(body.Projects) != 0 || len(body.Groups) != 0 {
+		t.Fatalf("no org and an empty local document must yield nothing, got %d projects, %d groups",
+			len(body.Projects), len(body.Groups))
 	}
 }

@@ -7,12 +7,12 @@ import "testing"
 // inventory needs no inference at all — it is a count of tool calls against a
 // closed table — so it survives ml_backend "deterministic" for the same reason
 // the other three do.
-func TestWorkstreamsPassCarriesThePhysicalActsInventory(t *testing.T) {
+func TestDimensionsPassCarriesThePhysicalActsInventory(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams:  map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
+		Dimensions:   map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		PhysicalActs: []Act{{"read", 41}, {"edit", 12}, {"run a service", 2}},
 	}}
-	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -32,13 +32,13 @@ func TestWorkstreamsPassCarriesThePhysicalActsInventory(t *testing.T) {
 // An analysis with no acts must publish no key, not an empty list: "we looked and
 // the hour did nothing" is not a fact a window can state, and it is what an empty
 // list reads as. Same rule dynamicsFrom and effortFrom already follow.
-func TestWorkstreamsPassOmitsAnEmptyActsInventory(t *testing.T) {
+func TestDimensionsPassOmitsAnEmptyActsInventory(t *testing.T) {
 	for name, an := range map[string]WindowAnalysis{
-		"nil acts":   {Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}}},
+		"nil acts":   {Dimensions: map[string]Labeled{"branch": {Value: "main", Confidence: 1}}},
 		"empty acts": {PhysicalActs: []Act{}},
 	} {
 		fa := &fakeAnalyze{ok: true, out: an}
-		got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+		got, err := (DimensionsExtractor{Analyze: fa.fn}).Run(coords(t))
 		if err != nil {
 			t.Fatalf("%s: err = %v", name, err)
 		}
@@ -53,9 +53,9 @@ func TestRunPublishesPhysicalActsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
-				Workstreams:  map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				Dimensions:   map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				PhysicalActs: []Act{{"read", 34}, {"test", 9}},
 			}, true
 		}))

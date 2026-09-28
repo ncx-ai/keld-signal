@@ -25,12 +25,12 @@ func (f *fakeAnalyze) fn(path, promptID string, spanMinutes int,
 	return f.out, f.ok
 }
 
-func TestWorkstreamsPassPopulatesTheProfileWithoutAModel(t *testing.T) {
-	f := &fakeAnalyze{out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 0.83}}}, ok: true}
+func TestDimensionsPassPopulatesTheProfileWithoutAModel(t *testing.T) {
+	f := &fakeAnalyze{out: WindowAnalysis{Dimensions: map[string]Labeled{"project": {Value: "acme", Confidence: 0.83}}}, ok: true}
 	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil) // no Model — the point of this pass
 	ctx.TranscriptPath, ctx.PromptID = "/tmp/t.jsonl", "p1"
 
-	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(ctx)
+	got, err := (DimensionsExtractor{Analyze: f.fn}).Run(ctx)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -38,17 +38,17 @@ func TestWorkstreamsPassPopulatesTheProfileWithoutAModel(t *testing.T) {
 	if ws["project"].Value != "acme" || ws["project"].Confidence != 0.83 {
 		t.Errorf("dimension not carried: %+v", got)
 	}
-	if ws["project"].Producer != (WorkstreamsExtractor{}).Version() {
-		t.Errorf("producer = %q, want %q", ws["project"].Producer, (WorkstreamsExtractor{}).Version())
+	if ws["project"].Producer != (DimensionsExtractor{}).Version() {
+		t.Errorf("producer = %q, want %q", ws["project"].Producer, (DimensionsExtractor{}).Version())
 	}
-	if f.path != "/tmp/t.jsonl" || f.prompt != "p1" || f.span != WorkstreamSpanMinutes {
+	if f.path != "/tmp/t.jsonl" || f.prompt != "p1" || f.span != DimensionSpanMinutes {
 		t.Errorf("coordinates not threaded: path=%q prompt=%q span=%d", f.path, f.prompt, f.span)
 	}
 }
 
-func TestWorkstreamsPassOmitsTheKeyWhenAnalysisFails(t *testing.T) {
+func TestDimensionsPassOmitsTheKeyWhenAnalysisFails(t *testing.T) {
 	f := &fakeAnalyze{ok: false}
-	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err == nil {
 		t.Error("a failed analysis must be reported as a failed pass, not a silent empty one")
 	}
@@ -67,13 +67,13 @@ func TestWorkstreamsPassOmitsTheKeyWhenAnalysisFails(t *testing.T) {
 // Nothing is promoted by carrying it. `thin` is still `thin` on the wire, and a
 // consumer that reads it as `attributed` is misreporting a fact the payload
 // states plainly.
-func TestWorkstreamsPassCarriesUnattributedDimensionsWithTheirStatus(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{
+func TestDimensionsPassCarriesUnattributedDimensionsWithTheirStatus(t *testing.T) {
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Dimensions: map[string]Labeled{
 		"project": {Value: "acme", Confidence: 1, Evidence: 30, Status: "attributed"},
 		"branch":  {Value: "feat/x", Confidence: 1, Evidence: 4, Status: "thin"},
 		"skill":   {Status: "absent"},
 	}}}
-	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
+	got, err := (DimensionsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestWorkstreamsPassCarriesUnattributedDimensionsWithTheirStatus(t *testing.
 		t.Errorf("attributed dimension mangled: %+v", pr)
 	}
 	for dim, l := range ws {
-		if l.Producer != (WorkstreamsExtractor{}).Version() {
+		if l.Producer != (DimensionsExtractor{}).Version() {
 			t.Errorf("%s lost its producer stamp: %+v", dim, l)
 		}
 	}
@@ -108,10 +108,10 @@ func TestWorkstreamsPassCarriesUnattributedDimensionsWithTheirStatus(t *testing.
 // so per dimension rather than contributing nothing at all. A blank row that
 // still publishes is deliberate — a suppressed row reads as an oversight, and an
 // oversight is what someone eventually "fixes".
-func TestWorkstreamsPassSucceedsWithNoDominantValues(t *testing.T) {
+func TestDimensionsPassSucceedsWithNoDominantValues(t *testing.T) {
 	f := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"project": {Status: "absent"}}}}
-	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
+		Dimensions: map[string]Labeled{"project": {Status: "absent"}}}}
+	got, err := (DimensionsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("an empty-but-successful analysis must not fail the pass: %v", err)
 	}
@@ -123,9 +123,9 @@ func TestWorkstreamsPassSucceedsWithNoDominantValues(t *testing.T) {
 
 // Without coordinates there is nothing to analyze: fail fast rather than issue
 // a call that can only 404.
-func TestWorkstreamsPassNeedsCoordinates(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme"}}}}
-	if _, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(NewJobContext("t", "s", Meta{}, nil)); err == nil {
+func TestDimensionsPassNeedsCoordinates(t *testing.T) {
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Dimensions: map[string]Labeled{"project": {Value: "acme"}}}}
+	if _, err := (DimensionsExtractor{Analyze: f.fn}).Run(NewJobContext("t", "s", Meta{}, nil)); err == nil {
 		t.Error("missing coordinates must fail the pass")
 	}
 	if f.calls != 0 {
@@ -133,8 +133,8 @@ func TestWorkstreamsPassNeedsCoordinates(t *testing.T) {
 	}
 }
 
-func TestWorkstreamsPassIsModelFreeAndAlwaysRuns(t *testing.T) {
-	var ex Extractor = WorkstreamsExtractor{}
+func TestDimensionsPassIsModelFreeAndAlwaysRuns(t *testing.T) {
+	var ex Extractor = DimensionsExtractor{}
 	mf, ok := ex.(modelFreeExtractor)
 	if !ok || !mf.ModelFree() {
 		t.Error("the pass needs no Model; gating it on inference readiness defeats its purpose")
@@ -147,18 +147,18 @@ func TestWorkstreamsPassIsModelFreeAndAlwaysRuns(t *testing.T) {
 
 // End-to-end through the pipeline with NO Model at all (deterministic mode):
 // the profile must carry the dimensions.
-func TestRunPublishesWorkstreamsWithoutAModel(t *testing.T) {
+func TestRunPublishesDimensionsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			if path != "/tmp/t.jsonl" || promptID != "p1" {
 				t.Errorf("coordinates not threaded into the pipeline: %q %q", path, promptID)
 			}
-			return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
+			return WindowAnalysis{Dimensions: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 		}))
-	if p.Workstreams["project"].Value != "acme" {
-		t.Fatalf("profile missing workstreams: %+v", p.Workstreams)
+	if p.Dimensions["project"].Value != "acme" {
+		t.Fatalf("profile missing workstreams: %+v", p.Dimensions)
 	}
 	if p.ExtractorVersions["workstreams"] == "" {
 		t.Error("the pass must be attributable in extractor_versions")
@@ -167,10 +167,10 @@ func TestRunPublishesWorkstreamsWithoutAModel(t *testing.T) {
 
 // Callers that never wire an analyzer (eval harness, localagent, tests) must be
 // unaffected: no pass, no facet, no downgrade to "partial".
-func TestRunWithoutAnAnalyzerRunsNoWorkstreamsPass(t *testing.T) {
+func TestRunWithoutAnAnalyzerRunsNoDimensionsPass(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil, WithPassTimeout(0))
-	if p.Workstreams != nil {
-		t.Errorf("want no workstreams, got %+v", p.Workstreams)
+	if p.Dimensions != nil {
+		t.Errorf("want no workstreams, got %+v", p.Dimensions)
 	}
 	if _, ran := p.ExtractorVersions["workstreams"]; ran {
 		t.Error("the pass must not run when no analyzer is wired")
@@ -190,24 +190,24 @@ func coords(t *testing.T) *JobContext {
 // mode. The pass must not be registered for those sources at all.
 //
 // ⚠️ CODEX WAS THE FIRST EXAMPLE HERE AND IS NOW THE COUNTER-EXAMPLE
-// (TestRunRegistersWorkstreamsForCodex below). It moved on 2026-09-15 when
+// (TestRunRegistersDimensionsForCodex below). It moved on 2026-09-15 when
 // readers/codex.py landed. Gemini has not moved: its chat files are a different
 // shape again and nothing reads them.
-func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
+func TestRunSkipsDimensionsForSourcesTheAnalysisCannotRead(t *testing.T) {
 	for _, source := range []string{"gemini_cli", "other"} {
 		called := false
 		p := Run("hello", source, Meta{}, nil,
 			WithPassTimeout(0),
 			WithCoordinates("/tmp/t.jsonl", "sess#3"),
-			WithWorkstreams(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
+			WithDimensions(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 				called = true
-				return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
+				return WindowAnalysis{Dimensions: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 			}))
 		if called {
 			t.Errorf("%s: the analysis cannot read this source's transcripts; it must not be called", source)
 		}
-		if p.Workstreams != nil {
-			t.Errorf("%s: unexpected workstreams %+v", source, p.Workstreams)
+		if p.Dimensions != nil {
+			t.Errorf("%s: unexpected workstreams %+v", source, p.Dimensions)
 		}
 		if _, ran := p.ExtractorVersions["workstreams"]; ran {
 			t.Errorf("%s: the pass must not be registered, so it cannot fail the profile", source)
@@ -215,14 +215,14 @@ func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
 	}
 }
 
-func TestWorkstreamsEligibleSources(t *testing.T) {
+func TestDimensionsEligibleSources(t *testing.T) {
 	for _, s := range []string{"claude_code", "cowork", "codex"} {
-		if !WorkstreamsEligible(s) {
+		if !DimensionsEligible(s) {
 			t.Errorf("%s has a reader in the analysis; its windows can be served", s)
 		}
 	}
 	for _, s := range []string{"gemini_cli", "", "hook"} {
-		if WorkstreamsEligible(s) {
+		if DimensionsEligible(s) {
 			t.Errorf("%s has no reader in the analysis; every one of its jobs would publish partial", s)
 		}
 	}
@@ -232,19 +232,19 @@ func TestWorkstreamsEligibleSources(t *testing.T) {
 // pass IS registered and the analyzer IS called for a Codex job. Codex spent its
 // whole life as a configured source publishing no workstream at all; this is the
 // assertion that would fail first if any half of that chain regressed.
-func TestRunRegistersWorkstreamsForCodex(t *testing.T) {
+func TestRunRegistersDimensionsForCodex(t *testing.T) {
 	called := false
 	p := Run("hello", "codex", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/rollout.jsonl", "01a0a504-72ba-7f80-803f-d847527b0aec#turn-3"),
-		WithWorkstreams(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 			called = true
-			return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
+			return WindowAnalysis{Dimensions: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 		}))
 	if !called {
 		t.Fatal("the analysis was never asked about a Codex transcript")
 	}
-	if p.Workstreams == nil {
+	if p.Dimensions == nil {
 		t.Fatal("a Codex job published no workstreams")
 	}
 	if _, ran := p.ExtractorVersions["workstreams"]; !ran {
@@ -257,19 +257,19 @@ func TestRunRegistersWorkstreamsForCodex(t *testing.T) {
 // GLiNER2 prompt STRING (Meta.PreambleCoding()), and enrich.Meta never reaches
 // publish.Enrichment — so the analysis was blind to them and the payload named
 // the repository from the workspace directory basename instead.
-func TestTheWorkstreamsPassForwardsTheDaemonsResolvedFacts(t *testing.T) {
+func TestTheDimensionsPassForwardsTheDaemonsResolvedFacts(t *testing.T) {
 	want := ResolvedFacts{
 		Repo:      "github.com/ncx-ai/keld-atlas",
 		GitBranch: "feat/ledger",
 		Project:   "keld",
 	}
 	f := &fakeAnalyze{ok: true, out: WindowAnalysis{
-		Workstreams: map[string]Labeled{"repo": {Value: want.Repo, Confidence: 1}}}}
+		Dimensions: map[string]Labeled{"repo": {Value: want.Repo, Confidence: 1}}}}
 	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil)
 	ctx.TranscriptPath, ctx.PromptID = "/tmp/t.jsonl", "p1"
 	ctx.Resolved = want
 
-	if _, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(ctx); err != nil {
+	if _, err := (DimensionsExtractor{Analyze: f.fn}).Run(ctx); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if f.resolved != want {
@@ -288,9 +288,9 @@ func TestWithResolvedFactsReachesTheAnalyzerThroughRun(t *testing.T) {
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
 		WithResolvedFacts(want),
-		WithWorkstreams(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
 			got = r
-			return WindowAnalysis{Workstreams: map[string]Labeled{
+			return WindowAnalysis{Dimensions: map[string]Labeled{
 				"repo": {Value: r.Repo, Confidence: 1}}}, true
 		}))
 	if got != want {
@@ -308,19 +308,19 @@ func TestNoResolvedFactsStillRunsTheAnalysis(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
+		WithDimensions(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
 			calls++
 			if !r.Zero() {
 				t.Errorf("expected the zero value, got %+v", r)
 			}
-			return WindowAnalysis{Workstreams: map[string]Labeled{
+			return WindowAnalysis{Dimensions: map[string]Labeled{
 				"branch": {Value: "main", Confidence: 1}}}, true
 		}))
 	if calls != 1 {
 		t.Fatalf("the analysis ran %d times; an unresolved checkout must not skip it", calls)
 	}
-	if p.Workstreams["branch"].Value != "main" {
-		t.Errorf("the other dimensions must be unaffected: %+v", p.Workstreams)
+	if p.Dimensions["branch"].Value != "main" {
+		t.Errorf("the other dimensions must be unaffected: %+v", p.Dimensions)
 	}
 }
 

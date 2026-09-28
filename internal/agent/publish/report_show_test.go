@@ -20,7 +20,7 @@ func TestShowReportInstances(t *testing.T) {
 		"a busy backend hour, everything attributed": {
 			TaskType: lb("code_generation", 0.81), Domain: lb("software_engineering", 0.74),
 			Sensitivity: lb("none", 1.0),
-			Workstreams: map[string]enrich.Labeled{
+			Dimensions: map[string]enrich.Labeled{
 				"repo": lb("github.com/ncx-ai/keld-atlas", 1.0), "project": lb("keld-atlas", 1.0),
 				"branch": lb("main", 1.0), "model": lb("claude-opus-4-8", 1.0),
 				"output_type": lb("code", 0.964), "language": lb("Python", 0.929),
@@ -54,7 +54,7 @@ func TestShowReportInstances(t *testing.T) {
 		},
 		"a thin window in a directory that is not a repo": {
 			Sensitivity: lb("none", 1.0),
-			Workstreams: map[string]enrich.Labeled{
+			Dimensions: map[string]enrich.Labeled{
 				"project": lb("notes", 1.0), "model": lb("claude-opus-4-8", 1.0),
 			},
 			Dynamics:       map[string]enrich.Dynamic{"branch": {Status: "both_absent", Changed: bp(false)}},
@@ -66,7 +66,7 @@ func TestShowReportInstances(t *testing.T) {
 		},
 		"a degraded sensitivity scan, and a branch that switched": {
 			Sensitivity: lb("none", 1.0),
-			Workstreams: map[string]enrich.Labeled{
+			Dimensions: map[string]enrich.Labeled{
 				"repo": lb("github.com/ncx-ai/keld-signal", 1.0), "project": lb("keld-signal", 1.0),
 				"branch": lb("design-sync", 0.83), "language": lb("TypeScript", 0.85),
 				"output_type": lb("code", 0.83), "model": lb("claude-opus-4-8", 1.0),

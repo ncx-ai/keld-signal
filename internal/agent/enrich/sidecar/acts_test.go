@@ -60,7 +60,7 @@ type enrichAct struct {
 }
 
 // The whole level is published UNTRUNCATED (the sidecar's own decision — the
-// vocabulary is closed at 22 values, see workstreams.INVENTORY's cap column), so
+// vocabulary is closed at 22 values, see dimensions.INVENTORY's cap column), so
 // the client must not reintroduce a cut it was deliberately spared. A window
 // carrying more than the twelve every other inventory dimension is cut at is the
 // case that would expose one.

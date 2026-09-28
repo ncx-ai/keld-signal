@@ -250,7 +250,7 @@ func BlockCorrID(sessionID, start string) string {
 // name for one producer; the row's KIND is already stated, once, in
 // pipeline_status.
 func blockExtractorVersions() map[string]string {
-	var e enrich.WorkstreamsExtractor
+	var e enrich.DimensionsExtractor
 	return map[string]string{e.Name(): e.Version()}
 }
 

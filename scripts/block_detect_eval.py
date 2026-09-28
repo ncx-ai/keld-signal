@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from app.analysis.dynamics import EwmaSizer, FixedSizer                             # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                              # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                           # noqa: E402
-from app.analysis.workstreams import ALLOCATION                                     # noqa: E402
+from app.analysis.dimensions import ALLOCATION                                     # noqa: E402
 from sizer_eval import (CachingStore, DB, MIN_ATTRIBUTED, MIN_TRANSITIONS,          # noqa: E402
                         SEED, SPAN_MINUTES, Transition, active_bins, score)
 

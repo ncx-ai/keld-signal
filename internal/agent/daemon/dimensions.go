@@ -102,7 +102,7 @@ type transcriptIngester interface {
 // registers, and sensitivity reports itself degraded (see
 // enrich.WithPIIScanner).
 type serviceFacets struct {
-	Analyze enrich.WorkstreamAnalyzer
+	Analyze enrich.DimensionAnalyzer
 	ScanPII enrich.PIIScanner
 	// SignalIngest is not consumed by a job at all — it is handed to the
 	// transcript watcher (see ingestSignalHook), which is what makes /analyze's

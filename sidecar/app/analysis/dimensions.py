@@ -158,7 +158,7 @@ ALLOCATION = [
 # of windows, chosen by rollup()'s tie-break order. `None` means publish the level whole.
 # `files`, `directories` and `components` (levels `file`/`dir`/`component`) belong here for the
 # SAME structural reason `named_terms` and `physical_acts` already do: `reconcile()` has
-# extracted and stored all three since this package existed, and workstreams.py published none
+# extracted and stored all three since this package existed, and dimensions.py published none
 # of them -- the ask ("which files were hot this hour") is a frequency distribution over an open
 # vocabulary, not a single dominant owner, so ALLOCATION was never the right shape for them
 # either.
@@ -183,7 +183,7 @@ ALLOCATION = [
 # before this module ever sees them. That is what makes publishing them acceptable.
 # `file_types`, `shell_verbs`, `subagents` and `mcp_servers` (levels `ext`/`verb`/`agent`/
 # `mcp_server`) join for the SAME structural reason `physical_acts` and the path levels did:
-# `events_for_turns` has emitted all four since this package existed and workstreams.py published
+# `events_for_turns` has emitted all four since this package existed and dimensions.py published
 # none of them. With these, thirteen of the levels the extractor emits reach a payload.
 #
 # Each COMPLEMENTS a dimension already published rather than restating it, which is the bar an

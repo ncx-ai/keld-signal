@@ -241,7 +241,7 @@ def test_a_new_language_that_is_also_a_web_or_data_file_keeps_its_artifact_kind(
 
 
 def test_actions_enumerates_everything_action_for_can_emit():
-    """`ACTIONS` is the PUBLISHED vocabulary of the `action` level (workstreams.INVENTORY's
+    """`ACTIONS` is the PUBLISHED vocabulary of the `action` level (dimensions.INVENTORY's
     `physical_acts`), and the level is published UNTRUNCATED precisely because the vocabulary is
     closed — so an act `action_for` can emit but `ACTIONS` omits would be published under a
     contract that does not list it. The union below is `action_for`'s own three sources; the same

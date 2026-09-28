@@ -84,7 +84,7 @@ correct one here.
 Composition, not new analysis. Every part is already span-parameterised and none of them knows
 what a prompt is:
 
-  * `workstreams.payload` over `window.rollup` of the block's own bounds -- the seven ALLOCATION
+  * `dimensions.payload` over `window.rollup` of the block's own bounds -- the seven ALLOCATION
     dimensions and the nine INVENTORY ones, in exactly the shape `/analyze` publishes them.
   * `effort` -- `magnitude.authored` + `latency.tempo` + `latency.percentiles` over the same
     bounds.
@@ -116,7 +116,7 @@ import time
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
 from app.analysis import blocks as blocks_mod
-from app.analysis import latency, magnitude, prior as prior_mod, window, workstreams
+from app.analysis import latency, magnitude, prior as prior_mod, window, dimensions
 from app.analysis.dynamics import DEFAULT_SIZER, dynamics_for
 from app.analysis.ingest import RECONCILE_SLOT, pending_in, session_of
 from app.analysis.levels import quantize
@@ -311,7 +311,7 @@ def digest(store, session, block, path, floor=None, sizer=None, prior=True):
     rl = _rollup_at(store, path, session, lo, hi)
     minutes = max(0.0, (hi - lo) / 60.0)
     tokens, requests = _tokens_at(store, session, lo, hi)
-    out = workstreams.payload(rl)
+    out = dimensions.payload(rl)
     out.update(
         schema=SCHEMA,
         session=session,

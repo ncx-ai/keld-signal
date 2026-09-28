@@ -63,7 +63,7 @@ func aWindow(session, end string) enrich.WindowCharacterisation {
 		Ref: enrich.WindowRef{Start: "2026-08-19T12:52:36Z", End: end,
 			SpanMinutes: 54.1, Evidence: 63},
 		Analysis: enrich.WindowAnalysis{
-			Workstreams: map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 1}},
+			Dimensions: map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 1}},
 		},
 	}
 }

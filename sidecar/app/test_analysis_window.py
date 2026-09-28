@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis import SCHEMA
 from app.analysis.window import (MIN_EVIDENCE, attribution, dominant,
                                  min_evidence_for, rollup)
-from app.analysis.workstreams import ALLOCATION, INVENTORY, payload
+from app.analysis.dimensions import ALLOCATION, INVENTORY, payload
 
 R = [(0, "s", "r", "b", False, "ref", "artifact", "code", 9.0),
      (0, "s", "r", "b", False, "ref", "artifact", "prose", 1.0),
@@ -84,7 +84,7 @@ def test_min_evidence_is_overridable_per_call():
 
 
 def test_the_payload_reports_an_underevidenced_dimension_as_unattributed():
-    """The property that actually reaches Atlas: workstreams.payload must not hand a
+    """The property that actually reaches Atlas: dimensions.payload must not hand a
     one-observation dimension to publish as a real answer.
 
     As of SCHEMA 16 that is done by LABELLING it rather than deleting it. The dimension is
@@ -288,7 +288,7 @@ def test_loopback_is_not_an_external_system():
 #
 # `reconcile()` has written `file`/`dir`/`component` rows since this package existed; these three
 # publish that data for the first time, as INVENTORY (a frequency distribution), not ALLOCATION —
-# see workstreams.INVENTORY's own comment for the corpus measurement that set each cap.
+# see dimensions.INVENTORY's own comment for the corpus measurement that set each cap.
 
 def test_the_three_path_levels_publish_as_inventory_with_correct_counts():
     rl = rollup([_n("file", "internal/agent/daemon/daemon.go", 5),
@@ -347,7 +347,7 @@ def test_a_dimension_under_its_own_cap_is_not_named_in_inventory_omitted():
 
 # The privacy assertion the brief requires: no published file/dir/component value may look
 # absolute, home-relative, a Windows drive path, or escape the workspace via `../`. This is not
-# re-litigating the corpus scan (already done, see workstreams.INVENTORY's comment) — it pins the
+# re-litigating the corpus scan (already done, see dimensions.INVENTORY's comment) — it pins the
 # invariant so a future change to `payload()` that ever let a raw value through unfiltered fails
 # HERE rather than in a privacy review.
 ABS_OR_ESCAPING = re.compile(r"^/|^~|^[A-Za-z]:|\.\.(/|$)")

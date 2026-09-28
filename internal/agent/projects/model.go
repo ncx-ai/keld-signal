@@ -36,7 +36,20 @@ import (
 
 // CurrentVersion is the projects.json document version. Bump it and write a
 // migration in Load if the shape ever changes incompatibly.
+//
+// ⚠️ **THE SHAPE ON DISK IS 3.0.6's, ON PURPOSE (Revision 3, 2026-09-25).** The
+// 2026-09-23 rename briefly moved this file to workstreams.json (version 2, keys // vocab:keep
+// `groups` / `workstreams` / `group`) with a one-time move at daemon start. That
+// move is gone: auto-update can roll a machine back to 3.0.6, which reads only
+// this file in this shape, and a moved file meant the rolled-back daemon found
+// nothing while whatever it saved was ignored after the next upgrade. A test run
+// did exactly that to a developer's real home. So the Go names are group and
+// project, and the stored names stay what every released build reads: the
+// groups under `workstreams`, each project's group under `workstream`.
 const CurrentVersion = 1
+
+// FileName is the document's name under the state dir.
+const FileName = "projects.json"
 
 // Origin values for a Project: how it came to exist.
 const (
@@ -47,23 +60,23 @@ const (
 
 // Origin values for a Workstream.
 const (
-	WorkstreamOriginAtlas = "atlas"
-	WorkstreamOriginLocal = "local"
+	GroupOriginAtlas = "atlas"
+	GroupOriginLocal = "local"
 )
 
-// Workstream is one of the org's declared workstreams (the "which project is
+// Group is one of the org's declared projects (the "which project is
 // this work for" categories a project belongs to), mirroring
 // settings.RemoteProject's Atlas-declared siblings for this document.
 //
 // Off is a DISPLAY MIRROR, not the authority: the authoritative flag is
-// settings.Settings.WorkstreamsOff (agent-config.json's `workstreams_off`),
-// read live via settings.Settings.WorkstreamOff — see attribute.go's
-// workstreamOff parameter and the PUT /v1/workstreams/{key}/off route in
+// settings.Settings.GroupsOff (agent-config.json's `workstreams_off`), // vocab:keep
+// read live via settings.Settings.GroupOff — see attribute.go's
+// groupOff parameter and the PUT /v1/groups/{key}/off route in
 // ingress/projects.go, which writes THAT file, not this one. It is carried
 // here too so a reader of this document alone (a backup, a support bundle)
 // is not missing the fact; ingress/projects.go overwrites it with the live
 // value before every GET /v1/projects response.
-type Workstream struct {
+type Group struct {
 	Key        string `json:"key"`
 	Name       string `json:"name"`
 	Question   string `json:"question,omitempty"`
@@ -89,10 +102,10 @@ type Workstream struct {
 // not distinguish them on the wire (docs/v3/contracts.md, "What Atlas
 // actually offers today", point 1): for a locally-declared project it is a
 // real owning sub-team (informational only, never matched on); for a value
-// converted by FromRemoteProjects it is that value's WORKSTREAM'S NAME
-// whenever the value has no owning team of its own. projectWorkstreamOff
+// converted by FromRemoteProjects it is that value's PROJECT'S NAME
+// whenever the value has no owning team of its own. projectGroupOff
 // checks both Workstream (the local key) and Team (the Atlas name proxy)
-// against settings.Settings.WorkstreamOff, case-insensitively, so a workstream
+// against settings.Settings.GroupOff, case-insensitively, so a project
 // switched off excludes a project however its bucket happens to be spelled.
 type Project struct {
 	ID          string   `json:"id"`
@@ -103,15 +116,15 @@ type Project struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	TicketKey   string   `json:"ticket_key,omitempty"`
 
-	// Workstream is this project's workstream KEY (Workstream.Key above), set
+	// Group is this project's project KEY (Group.Key above), set
 	// for a locally-declared project. An Atlas-sourced value (see
 	// FromRemoteProjects) never carries one — Atlas pools its values across
 	// every workstream and derives the workstream from the value id itself
 	// when a block is later matched server-side (docs/v3/contracts.md,
 	// "What Atlas actually offers today", point 2) — so its bucket is carried
-	// in Team instead (see Team's doc comment) and projectWorkstreamOff checks
+	// in Team instead (see Team's doc comment) and projectGroupOff checks
 	// both.
-	Workstream string `json:"workstream,omitempty"`
+	Group string `json:"group,omitempty"`
 	// Origin says how this project came to exist: "suggested" (never
 	// happens — a suggestion is not persisted until bundled), "user"
 	// (bundled/edited by a person) or "atlas" (pushed down as an org
@@ -131,16 +144,53 @@ type Project struct {
 
 // Document is the whole ~/.keld/state/projects.json file.
 type Document struct {
-	Version     int          `json:"version"`
-	Workstreams []Workstream `json:"workstreams"`
-	Projects    []Project    `json:"projects"`
+	Version  int       `json:"version"`
+	Groups   []Group   `json:"groups"`
+	Projects []Project `json:"projects"`
+}
+
+// storedDocument is a Document in 3.0.6's shape on disk (see CurrentVersion):
+// the groups under `workstreams`, each project's group under `workstream`. Load
+// and Save translate through it so the rest of the code, and the page's JSON,
+// say group.
+type storedDocument struct {
+	Version  int             `json:"version"`
+	Groups   []Group         `json:"workstreams"` // vocab:keep — 3.0.6's stored name
+	Projects []storedProject `json:"projects"`
+}
+
+type storedProject struct {
+	Project
+	StoredGroup string `json:"workstream,omitempty"` // vocab:keep — 3.0.6's stored name
+}
+
+func toStored(d Document) storedDocument {
+	out := storedDocument{Version: d.Version, Groups: d.Groups}
+	for _, p := range d.Projects {
+		g := p.Group
+		p.Group = "" // written once, under 3.0.6's key
+		out.Projects = append(out.Projects, storedProject{Project: p, StoredGroup: g})
+	}
+	return out
+}
+
+func fromStored(s storedDocument) Document {
+	d := Document{Version: s.Version, Groups: s.Groups}
+	for _, sp := range s.Projects {
+		p := sp.Project
+		if sp.StoredGroup != "" {
+			p.Group = sp.StoredGroup
+		}
+		d.Projects = append(d.Projects, p)
+	}
+	return d
 }
 
 // DefaultPath is ~/.keld/state/projects.json (KELD_HOME-relative via
 // internal/paths, so tests isolate it with t.TempDir()+KELD_HOME like every
 // other state file in this codebase).
 func DefaultPath() string {
-	return filepath.Join(paths.StateDir(), "projects.json")
+	return filepath.Join(paths.StateDir(), FileName)
 }
 
 // Load reads and decodes path. A MISSING file is not an error — it is a
@@ -158,10 +208,11 @@ func Load(path string) (Document, error) {
 		}
 		return Document{}, err
 	}
-	var d Document
-	if err := json.Unmarshal(b, &d); err != nil {
+	var sd storedDocument
+	if err := json.Unmarshal(b, &sd); err != nil {
 		return Document{}, fmt.Errorf("projects file %s: %w", path, err)
 	}
+	d := fromStored(sd)
 	if d.Version == 0 {
 		d.Version = CurrentVersion
 	}
@@ -176,7 +227,7 @@ func Save(path string, d Document) error {
 	if d.Version == 0 {
 		d.Version = CurrentVersion
 	}
-	b, err := json.MarshalIndent(d, "", "  ")
+	b, err := json.MarshalIndent(toStored(d), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -248,7 +299,7 @@ type Store struct {
 	// Blocks is the optional BlocksSource — see its doc comment. nil until
 	// the daemon wiring sets it.
 	Blocks BlocksSource
-	// RemoteProjects, when set, returns the org's pooled workstream values
+	// RemoteProjects, when set, returns the org's pooled project values
 	// most recently seen on the settings poll (settings.Remote.Projects),
 	// converted at read time via FromRemoteProjects. This package cannot hold
 	// that state itself — the settings poll lives in the daemon, which is

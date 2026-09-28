@@ -41,7 +41,7 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 	end := start.Add(20 * time.Minute)
 	ws := map[string]enrich.Labeled{}
 	if repo != "" {
-		ws[projects.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.WorkstreamAttributed}
+		ws[projects.DimRepo] = enrich.Labeled{Value: repo, Confidence: 1, Status: enrich.DimensionAttributed}
 	}
 	row := publish.BlockEnrichment{
 		SessionID: session,
@@ -50,17 +50,17 @@ func cutBlock(t *testing.T, v *v3, session string, minutesAgo int, repo string) 
 			End:   end.Format(time.RFC3339),
 		},
 	}
-	row.Workstreams = ws
+	row.Dimensions = ws
 	v.recordCut([]publish.BlockEnrichment{row}, "/p/"+session+".jsonl")
 	return ledger.BlockKey{Session: session, Start: start.Unix()}
 }
 
-func declareProject(t *testing.T, v *v3, id, title, repo, workstream string) {
+func declareProject(t *testing.T, v *v3, id, title, repo, group string) {
 	t.Helper()
 	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
 		d.Projects = append(d.Projects, projects.Project{
 			ID: id, Title: title, Repos: []string{repo},
-			Workstream: workstream, Origin: projects.OriginUser,
+			Group: group, Origin: projects.OriginUser,
 		})
 		return d, nil
 	}); err != nil {
@@ -281,10 +281,10 @@ func TestRemovingTheRuleRevertsTheBlockToUnattributedNotAStaleName(t *testing.T)
 	}
 }
 
-// TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
+// TestGroupSwitchedOffHidesItsProjectsFromTheRows — AC2's sibling: the
 // exclusion a person sets on the page applies to what the page then shows
 // them, without a restart.
-func TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
+func TestGroupSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 	v := liveFixture(t)
 	declareProject(t, v, "p_signal", "Keld Signal", "github.com/ncx-ai/keld-signal", "eng")
 	k := cutBlock(t, v, "sess-ac2b", 30, "github.com/ncx-ai/keld-signal")
@@ -292,13 +292,13 @@ func TestWorkstreamSwitchedOffHidesItsProjectsFromTheRows(t *testing.T) {
 	if rows, _ := rowProjects(t, v.ledgerReader()); rows[k] != "p_signal" {
 		t.Fatalf("precondition: block should attribute, got %q", rows[k])
 	}
-	if err := projects.SetWorkstreamOff("eng", true); err != nil {
-		t.Fatalf("workstream off: %v", err)
+	if err := projects.SetGroupOff("eng", true); err != nil {
+		t.Fatalf("group off: %v", err)
 	}
 
 	rows, _ := rowProjects(t, v.ledgerReader())
 	if rows[k] != "" {
-		t.Fatalf("a project in a switched-off workstream must not name a block, got %q", rows[k])
+		t.Fatalf("a project in a switched-off group must not name a block, got %q", rows[k])
 	}
 	// And the pane says the same thing, which is the whole point.
 	if attributed, total := paneCoverage(t, v.projects); attributed != 0 || total != 1 {

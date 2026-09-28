@@ -14,14 +14,14 @@ import (
 // "unset is distinguishable from false/empty" idiom Settings.SendToAtlas
 // already uses, extended to every key this endpoint can write.
 type V3Patch struct {
-	SendToAtlas    *bool
-	DevGenerate    *bool
-	DevRepos       *[]string
-	DevBlocks      *string
-	ShowBreaks     *bool
-	WorkstreamsOff *[]string
-	Attribution    *bool
-	ToolOTLP       *bool
+	SendToAtlas *bool
+	DevGenerate *bool
+	DevRepos    *[]string
+	DevBlocks   *string
+	ShowBreaks  *bool
+	GroupsOff   *[]string
+	Attribution *bool
+	ToolOTLP    *bool
 }
 
 // WriteV3Settings merges p onto ~/.keld/agent-config.json.
@@ -35,7 +35,7 @@ type V3Patch struct {
 //
 // ⚠️ UNLIKE WriteInstallDefaults, this touches ONLY the keys p sets. A PUT
 // that means to flip send_to_atlas alone must not also rewrite
-// dev_blocks/show_breaks/workstreams_off/attribution back to whatever the
+// dev_blocks/show_breaks/workstreams_off/attribution // vocab:keep back to whatever the
 // file already held — harmless today because every key here already lives in
 // the same file, but exactly the mistake that would silently reintroduce a
 // stale value the day one of these keys gains an independent writer (a
@@ -100,14 +100,14 @@ func WriteV3Settings(p V3Patch) error {
 			return err
 		}
 	}
-	if p.WorkstreamsOff != nil {
-		v := *p.WorkstreamsOff
+	if p.GroupsOff != nil {
+		v := *p.GroupsOff
 		if v == nil {
 			v = []string{}
 		}
-		if err := set("workstreams_off", v); err != nil {
+		if err := set("workstreams_off", v); err != nil { // vocab:keep — 3.0.6's stored key
 			return err
-		}
+		} // vocab:keep
 	}
 	if p.Attribution != nil {
 		if err := set("attribution", *p.Attribution); err != nil {

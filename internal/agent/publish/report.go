@@ -38,7 +38,7 @@ import (
 // prompt row and the window row render through ONE implementation — a second copy would drift,
 // and the window row is the one nobody looks at until it is wrong.
 type reportSource struct {
-	Workstreams      map[string]enrich.Labeled
+	Dimensions       map[string]enrich.Labeled
 	Dynamics         map[string]enrich.Dynamic
 	Prior            map[string]enrich.Prior
 	Effort           *enrich.Effort
@@ -67,7 +67,7 @@ type reportSource struct {
 
 func (e Enrichment) reportSource() reportSource {
 	return reportSource{
-		Workstreams: e.Workstreams, Dynamics: e.Dynamics, Prior: e.Prior, Effort: e.Effort,
+		Dimensions: e.Dimensions, Dynamics: e.Dynamics, Prior: e.Prior, Effort: e.Effort,
 		PhysicalActs: e.PhysicalActs, Files: e.Files, Directories: e.Directories,
 		Components: e.Components, HarnessTools: e.HarnessTools, Programs: e.Programs,
 		ExternalSystems: e.ExternalSystems, Integrations: e.Integrations,
@@ -81,7 +81,7 @@ func (e Enrichment) reportSource() reportSource {
 
 func (w WindowEnrichment) reportSource() reportSource {
 	return reportSource{
-		Workstreams: w.Workstreams, Dynamics: w.Dynamics, Prior: w.Prior, Effort: w.Effort,
+		Dimensions: w.Dimensions, Dynamics: w.Dynamics, Prior: w.Prior, Effort: w.Effort,
 		PhysicalActs: w.PhysicalActs, Files: w.Files, Directories: w.Directories,
 		Components: w.Components, HarnessTools: w.HarnessTools, Programs: w.Programs,
 		ExternalSystems: w.ExternalSystems, Integrations: w.Integrations,
@@ -93,7 +93,7 @@ func (w WindowEnrichment) reportSource() reportSource {
 
 func renderReport(e reportSource) (summary, report string) {
 	ws := func(dim string) string {
-		if l, ok := e.Workstreams[dim]; ok && l.Value != "" {
+		if l, ok := e.Dimensions[dim]; ok && l.Value != "" {
 			return l.Value
 		}
 		return ""
@@ -178,7 +178,7 @@ func workClause(e reportSource, language, outputType, branch string) string {
 		parts = append(parts, outputType)
 	}
 	if language != "" {
-		if l, ok := e.Workstreams["language"]; ok {
+		if l, ok := e.Dimensions["language"]; ok {
 			parts = append(parts, fmt.Sprintf("in %s (%.0f%%)", language, 100*l.Confidence))
 		}
 	}
@@ -196,9 +196,9 @@ func workClause(e reportSource, language, outputType, branch string) string {
 		// Nothing descriptive was attributed. Still name the identity rather than dropping
 		// the bullet: "we know where, not what" is a different and more useful statement
 		// than silence, and the unattributed list below is the substance of it.
-		if id := e.Workstreams["repo"].Value; id != "" {
+		if id := e.Dimensions["repo"].Value; id != "" {
 			parts = append(parts, "in "+id)
-		} else if p := e.Workstreams["project"].Value; p != "" {
+		} else if p := e.Dimensions["project"].Value; p != "" {
 			parts = append(parts, "in "+p)
 		} else {
 			return ""
@@ -210,7 +210,7 @@ func workClause(e reportSource, language, outputType, branch string) string {
 	// the window never had.
 	var missing []string
 	for _, dim := range []string{"project", "branch", "model", "output_type", "language", "skill", "tooling"} {
-		if l, ok := e.Workstreams[dim]; !ok || l.Value == "" {
+		if l, ok := e.Dimensions[dim]; !ok || l.Value == "" {
 			missing = append(missing, dim)
 		}
 	}

@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import workstreams
+from app.analysis import dimensions
 from app.analysis.analyze import analyze_window, analyze_window_by_parse
 from app.analysis.ingest import RECONCILE_SLOT, ingest_file, session_of
 from app.analysis.prior import ENABLED, PRIOR_DIMENSIONS, compare, prior_at
@@ -70,7 +70,7 @@ def test_the_prior_never_supplies_a_value_the_window_lacks():
     # The window's OWN answer stays sub-floor. It publishes (labelled `thin`, with its count of
     # 3) but it is still the window's own top value, never the session's -- inheriting is what
     # this test forbids, and publishing-with-a-label is not inheriting.
-    win = workstreams.payload(thin)["workstreams"]["language"]
+    win = dimensions.payload(thin)["workstreams"]["language"]
     assert win["status"] == "thin" and win["evidence"] == 3, win
     assert win["value"] == "Python" != got["value"], (win, got)
 
@@ -84,7 +84,7 @@ def test_a_window_below_the_floor_is_not_rescued_by_an_agreeing_session():
     # Here the window's top value HAPPENS to equal the session's, which is exactly the tempting
     # case: it is still below the share floor and still says so, and `agrees` above is still
     # None. A matching value is not an attribution.
-    win = workstreams.payload(mixed)["workstreams"]["skill"]
+    win = dimensions.payload(mixed)["workstreams"]["skill"]
     assert win["status"] == "no_majority", win
     assert win["value"] == got["value"] == "brainstorming", (win, got)
 
@@ -203,7 +203,7 @@ def test_the_enabled_set_is_a_list_and_holds_only_the_four_that_measured_a_contr
         assert dead not in compare(_rl("workspace", keld=9), _rl("workspace", keld=90)), dead
     # DERIVED from the published allocation set, so an INVENTORY level cannot enter it: the
     # `term` level is drawn from message text and has held real person names.
-    by_name = {n: (lv, f) for n, lv, f in workstreams.ALLOCATION}
+    by_name = {n: (lv, f) for n, lv, f in dimensions.ALLOCATION}
     for name, level, floor in PRIOR_DIMENSIONS:
         assert by_name[name] == (level, floor), (name, level, floor)
     assert "term" not in {lv for _n, lv, _f in PRIOR_DIMENSIONS}
@@ -221,7 +221,7 @@ def test_output_type_is_carried_by_the_prior_where_the_window_cannot_attribute_i
     other dimension 0/7.
 
     That shape matters more than the aggregate suggested because it is the SKILL-FREE session --
-    and 61.6% of corpus transcripts are skill-free (see workstreams.ALLOCATION). With `skill`
+    and 61.6% of corpus transcripts are skill-free (see dimensions.ALLOCATION). With `skill`
     empty for most sessions, `output_type` is what makes the block worth emitting for them.
 
     AND IT IS STILL A CONTRAST, NEVER A FALLBACK. The window stays honestly unattributed and
@@ -237,7 +237,7 @@ def test_output_type_is_carried_by_the_prior_where_the_window_cannot_attribute_i
     assert got["evidence"] == 192, got
     assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
     # THE RULE: the window keeps its own blank. Nothing here fills `workstreams`.
-    win = workstreams.payload(window)["workstreams"]["output_type"]
+    win = dimensions.payload(window)["workstreams"]["output_type"]
     assert win["status"] != "attributed", win
     assert win["value"] != got["value"], (win, got)
     # ... and the fourth dimension arrives beside the other three rather than instead of one.

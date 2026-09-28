@@ -248,7 +248,7 @@ def counts(rl):
 def activity(rl, min_evidence=MIN_EVIDENCE):
     """The window's `activity_type`, or None with the reason why — see `REASONS`.
 
-    `rl` is the ROLLUP (`window.rollup`'s output), matching `workstreams.payload` and
+    `rl` is the ROLLUP (`window.rollup`'s output), matching `dimensions.payload` and
     `window.dominant`: production computes the rollup once and asks it several questions.
     """
     items = rl.get("action") or []

@@ -226,9 +226,9 @@ export function attributionOf(block) {
  *  /v1/projects never returned (a real, if unlikely, disagreement between
  *  the two routes — not the common "no rule matched" case, which is a block
  *  whose project_id is empty, not one that names an id nobody knows). */
-export function projectTitle(projectId, projects) {
+export function projectTitle(projectId, catalog) {
   if (!projectId) return null;
-  const list = (projects && projects.projects) || [];
+  const list = (catalog && catalog.projects) || [];
   const match = list.find((p) => p.id === projectId);
   return match ? match.title : null;
 }
@@ -246,11 +246,11 @@ export function projectTitle(projectId, projects) {
  *                    attributed project — showing an id at all here is
  *                    already the degraded case.
  */
-export function projectCellInfo(block, projects) {
+export function projectCellInfo(block, catalog) {
   const attr = attributionOf(block);
   if (!attr) return { kind: "unknown" };
   if (!attr.project_id) return { kind: "none" };
-  const title = projectTitle(attr.project_id, projects);
+  const title = projectTitle(attr.project_id, catalog);
   if (title) return { kind: "attributed", text: title, method: attr.method || "" };
   return { kind: "unresolved", text: attr.project_id };
 }
@@ -263,10 +263,10 @@ export function projectCellInfo(block, projects) {
 export const RHYTHM_PALETTE = ["var(--green)", "var(--sage)", "var(--indigo)", "var(--amber)"];
 export const RHYTHM_UNATTRIBUTED_COLOR = "var(--rule-strong)";
 
-export function rhythmColorFor(block, projects) {
+export function rhythmColorFor(block, catalog) {
   const attr = attributionOf(block);
   if (!attr || !attr.project_id) return RHYTHM_UNATTRIBUTED_COLOR;
-  const info = projectCellInfo(block, projects);
+  const info = projectCellInfo(block, catalog);
   if (info.kind !== "attributed") return RHYTHM_UNATTRIBUTED_COLOR;
   if (attr.method === "embedding") return "var(--indigo)";
   let h = 0;
@@ -277,8 +277,8 @@ export function rhythmColorFor(block, projects) {
 /** The rhythm strip's hover text for one block: its time range and whatever
  *  the Project column itself would show, so a square never explains itself
  *  in words the table doesn't also stand behind. */
-export function rhythmTitleFor(block, projects) {
-  const info = projectCellInfo(block, projects);
+export function rhythmTitleFor(block, catalog) {
+  const info = projectCellInfo(block, catalog);
   const label = info.kind === "attributed" || info.kind === "unresolved" ? info.text : "no project";
   return `${formatRange(block.key.start, block.end)} · ${label}`;
 }
@@ -321,9 +321,9 @@ export function focusStats(blocks) {
  *  their rules conflict — computable from the projects list alone, with no
  *  extra field the contract doesn't already define. Hidden projects and
  *  projects in a switched-off workstream never conflict with anything. */
-export function findConflicts(projects, offWorkstreams) {
-  const off = new Set(offWorkstreams || []);
-  const live = projects.filter((p) => !p.hidden && !off.has(p.workstream));
+export function findConflicts(projects, offGroups) {
+  const off = new Set(offGroups || []);
+  const live = projects.filter((p) => !p.hidden && !off.has(p.group));
   const byRepo = new Map();
   const byTicket = new Map();
   for (const p of live) {
@@ -373,7 +373,7 @@ export function projectRulesSummary(p) {
   return bits.join(" · ") || "no rules yet";
 }
 
-/** Every mutating /v1/projects (or /v1/workstreams) route answers
+/** Every mutating /v1/projects (or /v1/projects) route answers
  *  `{local_only: true, atlas_editor_url: "..."}` (docs/v3/contracts.md's
  *  verified note: a machine cannot write to Atlas's vocabulary today). This
  *  is the ONE sentence the page ever shows for that fact — one function so
@@ -408,7 +408,7 @@ export function sameAsOptions(projects) {
  *  "edit it in Atlas" advice is the real next step. */
 export function sameAsConfirmationText(targetOrigin) {
   if (targetOrigin === "atlas") {
-    return "Applied on this machine. The org's project is unchanged.";
+    return "Applied on this machine. The org's workstream is unchanged.";
   }
   return localOnlyConfirmationText();
 }
@@ -445,7 +445,7 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
-/** projectGroups is what "Your projects" iterates: the org's workstreams, plus
+/** groupsForProjects is what "Your projects" iterates: the org's workstreams, plus
  *  one group for any project whose workstream is in none of them.
  *
  *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
@@ -466,23 +466,23 @@ export const SETTINGS_ENV = {
  *  caller can decline to offer an org-level control on a bucket the org never
  *  declared.
  */
-export function projectGroups(workstreams, projects) {
-  const groups = (workstreams || []).map((w) => ({ ...w, synthetic: false }));
-  const known = new Set(groups.map((w) => w.key));
+export function groupsForProjects(groups, projects) {
+  const out = (groups || []).map((w) => ({ ...w, synthetic: false }));
+  const known = new Set(out.map((w) => w.key));
   const extra = new Map();
   for (const p of projects || []) {
     if (p.hidden) continue;
-    const key = p.workstream || "development";
+    const key = p.group || "development";
     if (known.has(key) || extra.has(key)) continue;
-    extra.set(key, { key, name: workstreamDisplayName(key), off: false, synthetic: true });
+    extra.set(key, { key, name: groupDisplayName(key), off: false, synthetic: true });
   }
-  return groups.concat([...extra.values()]);
+  return out.concat([...extra.values()]);
 }
 
-/** workstreamDisplayName turns a key into something a person reads. Mirrors the
+/** groupDisplayName turns a key into something a person reads. Mirrors the
  *  Go side's function of the same name so a locally-seeded workstream is
  *  labelled identically whether the page or the daemon named it. */
-export function workstreamDisplayName(key) {
+export function groupDisplayName(key) {
   const out = String(key || "").replace(/[_-]+/g, " ").trim();
   if (!out) return String(key || "");
   return out[0].toUpperCase() + out.slice(1);
@@ -1535,7 +1535,7 @@ if (typeof document !== "undefined") {
     pane: "today",
     ledger: null,
     settings: null,
-    projects: null,
+    catalog: null,
     // engine: GET /v1/engine — see engineNotice. Null until the first load,
     // which renders as no card rather than as "not installed".
     engine: null,
@@ -1564,7 +1564,7 @@ if (typeof document !== "undefined") {
     // an input would be lost the moment anything else refreshed.
     naming: null,
     // confirmations: rowKey -> {url}. Set after any /v1/projects (or
-    // /v1/workstreams) mutation whose response carries local_only — read by
+    // /v1/groups) mutation whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
     // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
     // doesn't persist must not make the confirmation flicker away on the next
@@ -1616,7 +1616,7 @@ if (typeof document !== "undefined") {
 
   async function loadAll() {
     try {
-      const [ledger, settings, projects] = await Promise.all([
+      const [ledger, settings, catalog] = await Promise.all([
         // ⚠️ **BOUNDED TO TODAY, AND IT USED TO BE UNBOUNDED.** This asked for
         // the whole ledger and the pane drew all of it: measured on a real
         // machine, 108 blocks across FOUR days under a heading reading
@@ -1628,7 +1628,7 @@ if (typeof document !== "undefined") {
       ]);
       state.ledger = ledger;
       state.settings = settings;
-      state.projects = projects;
+      state.catalog = catalog;
       state.offline = false;
       writeJSONStorage(LEDGER_CACHE_KEY, ledger);
     } catch (err) {
@@ -1716,7 +1716,7 @@ if (typeof document !== "undefined") {
   // ---- Today ----
 
   function renderToday(root) {
-    const { ledger, settings, projects } = state;
+    const { ledger, settings, catalog } = state;
     root.innerHTML = "";
     if (!ledger) {
       root.appendChild(el("p", { class: "loading" }, "No focus blocks yet. Once Signal has watched some work, they'll show up here."));
@@ -1760,8 +1760,8 @@ if (typeof document !== "undefined") {
         .map((b) =>
           el("span", {
             class: "sq",
-            style: `background:${rhythmColorFor(b, projects)}`,
-            title: rhythmTitleFor(b, projects),
+            style: `background:${rhythmColorFor(b, catalog)}`,
+            title: rhythmTitleFor(b, catalog),
           })
         );
       root.appendChild(
@@ -1797,7 +1797,7 @@ if (typeof document !== "undefined") {
       }
       const b = item.block;
       const measured = measuredOf(b);
-      const info = projectCellInfo(b, projects);
+      const info = projectCellInfo(b, catalog);
 
       let projectCell;
       if (info.kind === "attributed") {
@@ -2135,17 +2135,17 @@ if (typeof document !== "undefined") {
   // ---- Projects ----
 
   function renderProjects(root) {
-    const { projects, settings } = state;
+    const { catalog, settings } = state;
     root.innerHTML = "";
-    if (!projects) {
+    if (!catalog) {
       root.appendChild(el("p", { class: "loading" }, "No project data yet."));
       return;
     }
-    const workstreams = projects.workstreams || [];
-    const allProjects = projects.projects || [];
-    const suggestions = projects.suggestions || [];
-    const coverage = projects.coverage || { attributed: 0, total: 0 };
-    const offKeys = workstreams.filter((w) => w.off).map((w) => w.key);
+    const groups = catalog.groups || [];
+    const allProjects = catalog.projects || [];
+    const suggestions = catalog.suggestions || [];
+    const coverage = catalog.coverage || { attributed: 0, total: 0 };
+    const offKeys = groups.filter((w) => w.off).map((w) => w.key);
     const conflicts = findConflicts(allProjects, offKeys);
 
     const leftOverBlocks = Math.max(0, (coverage.total || 0) - (coverage.attributed || 0));
@@ -2157,7 +2157,7 @@ if (typeof document !== "undefined") {
         { class: "tiles three" },
         el("div", { class: "tile" }, el("div", { class: "l" }, "Attributed"), el("div", { class: "v" }, `${pct}%`, el("small", {}, `${coverage.attributed || 0} of ${coverage.total || 0} focus blocks`))),
         el("div", { class: "tile" }, el("div", { class: "l" }, "Left over"), el("div", { class: "v", style: "color:var(--amber-strong)" }, `${leftOverBlocks} blocks`)),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Workstreams on"), el("div", { class: "v" }, `${workstreams.length - offKeys.length}`, el("small", {}, `of ${workstreams.length}`)))
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Groups on"), el("div", { class: "v" }, `${groups.length - offKeys.length}`, el("small", {}, `of ${groups.length}`)))
       )
     );
 
@@ -2183,11 +2183,11 @@ if (typeof document !== "undefined") {
                     value: state.naming.title,
                     oninput: (e) => { state.naming.title = e.target.value; },
                     onkeydown: (e) => {
-                      if (e.key === "Enter") bundleSuggestion(s, workstreams, state.naming.title);
+                      if (e.key === "Enter") bundleSuggestion(s, groups, state.naming.title);
                       if (e.key === "Escape") cancelNamingProject();
                     },
                   }),
-                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, workstreams, state.naming.title) }, "Create"),
+                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, groups, state.naming.title) }, "Create"),
                   el("button", { class: "btn btn-quiet", onclick: cancelNamingProject }, "Cancel")
                 )
               : el(
@@ -2205,14 +2205,14 @@ if (typeof document !== "undefined") {
     }
 
     root.appendChild(el("div", { class: "section-label" }, "Your projects"));
-    for (const w of projectGroups(workstreams, allProjects)) {
-      const inThis = allProjects.filter((p) => p.workstream === w.key && !p.hidden);
+    for (const w of groupsForProjects(groups, allProjects)) {
+      const inThis = allProjects.filter((p) => p.group === w.key && !p.hidden);
       const card = el(
         "div",
-        { class: "workstream-card" + (w.off ? " off" : "") },
+        { class: "group-card" + (w.off ? " off" : "") },
         el(
           "div",
-          { class: "workstream-head" },
+          { class: "group-head" },
           el("span", { class: "name" }, `${w.name}`),
           // A synthetic group is this machine's own bucket, not one the org
           // declared, so it offers no "counts for my work" switch: that flag is
@@ -2222,15 +2222,15 @@ if (typeof document !== "undefined") {
             ? null
             : el("label", {}, "counts for my work ", switchEl({
                 checked: !w.off,
-                onChange: (v) => setWorkstreamOff(w.key, !v),
+                onChange: (v) => setGroupOff(w.key, !v),
               }))
         )
       );
-      appendConfirmation(card, `workstream:${w.key}`);
+      appendConfirmation(card, `group:${w.key}`);
       if (w.off) {
-        card.appendChild(el("div", { class: "workstream-off-note" }, "Your work never lands here. Turn on if you work in this area."));
+        card.appendChild(el("div", { class: "group-off-note" }, "Your work never lands here. Turn on if you work in this area."));
       } else if (!inThis.length) {
-        card.appendChild(el("div", { class: "workstream-off-note" }, "No projects yet."));
+        card.appendChild(el("div", { class: "group-off-note" }, "No projects yet."));
       } else {
         for (const p of inThis) {
           const conflictIds = conflicts[p.id] || [];
@@ -2324,7 +2324,7 @@ if (typeof document !== "undefined") {
    *  real one fires immediately and resets, so the control never shows a
    *  stale "current value" for something that is not a value. */
   function sameAsSelect(suggestion) {
-    const opts = sameAsOptions(state.projects.projects || []);
+    const opts = sameAsOptions(state.catalog.projects || []);
     const sel = el(
       "select",
       { class: "btn", "aria-label": `Same as an existing project, for ${suggestion.value}` },
@@ -2348,8 +2348,8 @@ if (typeof document !== "undefined") {
    *  It offers every project except this one, so a person cannot map a project
    *  onto itself — which the daemon also refuses, since doing it would delete
    *  the entry and then put its rules back on the one just removed. */
-  function mapProjectSelect(project) {
-    const opts = sameAsOptions(state.projects.projects || []).filter((o) => o.id !== project.id);
+  function mapProjectSelect(ws) {
+    const opts = sameAsOptions(state.catalog.projects || []).filter((o) => o.id !== ws.id);
     const sel = el(
       "select",
       // ⚠️ A DISTINCT ACCESSIBLE NAME from the suggestion picker's "Same as an
@@ -2358,7 +2358,7 @@ if (typeof document !== "undefined") {
       // pattern made a spec counting suggestion pickers find these too. A name
       // is an identity; two controls with one identity is a bug for a screen
       // reader before it is a bug for a test.
-      { class: "btn", "aria-label": `Map ${project.title} onto another project` },
+      { class: "btn", "aria-label": `Map ${ws.title} onto another project` },
       el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (nothing to map to)")
     );
     for (const o of opts) sel.appendChild(el("option", { value: o.id }, o.label));
@@ -2366,15 +2366,15 @@ if (typeof document !== "undefined") {
     sel.onchange = async () => {
       const target = sel.value;
       sel.selectedIndex = 0;
-      if (target) await mapProject(project, target);
+      if (target) await mapProject(ws, target);
     };
     return sel;
   }
 
-  async function mapProject(project, target) {
+  async function mapProject(ws, target) {
     if (!target) return;
-    const chosen = (state.projects.projects || []).find((p) => p.id === target);
-    const res = await sendJSON(`/v1/projects/${encodeURIComponent(project.id)}/same-as`, "POST", { same_as: target });
+    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
+    const res = await sendJSON(`/v1/projects/${encodeURIComponent(ws.id)}/same-as`, "POST", { same_as: target });
     // The confirmation is placed on the TARGET row, because the source row is
     // about to stop existing — a note under a row that disappears is a note
     // nobody reads.
@@ -2385,7 +2385,7 @@ if (typeof document !== "undefined") {
 
   async function placeSuggestion(suggestion, target) {
     if (!target) return;
-    const chosen = (state.projects.projects || []).find((p) => p.id === target);
+    const chosen = (state.catalog.projects || []).find((p) => p.id === target);
     const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
     // The sentence depends on WHOSE project it was: an Atlas-origin target gets
     // "the org's project is unchanged", a local one gets the general advice.
@@ -2433,7 +2433,7 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function bundleSuggestion(suggestion, workstreams, title) {
+  async function bundleSuggestion(suggestion, groups, title) {
     // NEGATIVE 1: an empty name creates nothing and leaves the suggestion where
     // it was. Said out loud rather than silently ignored — silence here is the
     // exact defect this replaced.
@@ -2443,9 +2443,9 @@ if (typeof document !== "undefined") {
       route();
       return;
     }
-    const workstream = (workstreams[0] && workstreams[0].key) || "development";
+    const group = (groups[0] && groups[0].key) || "development";
     const res = await sendJSON("/v1/projects/bundle", "POST",
-      { title: name, workstream, suggestions: [suggestion.id] });
+      { title: name, group, suggestions: [suggestion.id] });
     if (res.ok && res.body && res.body.project && res.body.project.id) {
       noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
       state.naming = null;
@@ -2458,9 +2458,9 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function setWorkstreamOff(key, off) {
-    const res = await sendJSON(`/v1/workstreams/${encodeURIComponent(key)}/off`, "PUT", { off });
-    if (res.ok) noteLocalConfirmation(`workstream:${key}`, res.body);
+  async function setGroupOff(key, off) {
+    const res = await sendJSON(`/v1/groups/${encodeURIComponent(key)}/off`, "PUT", { off });
+    if (res.ok) noteLocalConfirmation(`group:${key}`, res.body);
     await loadAll();
     route();
   }
@@ -2616,7 +2616,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's workstreams. Off: nothing leaves this machine.")),
+        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's groups. Off: nothing leaves this machine.")),
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),

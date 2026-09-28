@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "workstreams": [
+    {
+      "key": "development",
+      "name": "Development",
+      "origin": "local"
+    },
+    {
+      "key": "marketing",
+      "name": "Marketing",
+      "origin": "local",
+      "off": true
+    }
+  ],
+  "projects": [
+    {
+      "id": "p_signal_client",
+      "title": "Signal client",
+      "repos": [
+        "ncx-ai/keld-signal"
+      ],
+      "ticket_key": "SIG",
+      "workstream": "development",
+      "origin": "user",
+      "atlas_value_id": null
+    },
+    {
+      "id": "p_site",
+      "title": "Website",
+      "repos": [
+        "ncx-ai/keld-site"
+      ],
+      "workstream": "marketing",
+      "origin": "user",
+      "hidden": true,
+      "atlas_value_id": null
+    },
+    {
+      "id": "keld_projects:atlas_platform",
+      "title": "Atlas Platform",
+      "repos": [
+        "ncx-ai/keld-atlas"
+      ],
+      "workstream": "development",
+      "origin": "atlas",
+      "atlas_value_id": "keld_projects:atlas_platform"
+    }
+  ]
+}

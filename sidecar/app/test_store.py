@@ -3,7 +3,7 @@
   cd sidecar && PYTHONPATH=. ~/.keld/sidecar-venv/bin/python app/test_store.py
 
 The contract these tests exist for is ONE property: `Store.rollup_window` must return exactly
-what `window.rollup` returns over the same rows. Everything downstream — `workstreams.payload`,
+what `window.rollup` returns over the same rows. Everything downstream — `dimensions.payload`,
 the seven allocation dimensions, the six inventory lists, the published enrichment — consumes
 that shape and nothing else. So the assertions compare against `window.rollup` directly rather
 than against hand-written counts: a hand-written expectation would test this file's arithmetic,
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import magnitude, window, workstreams
+from app.analysis import magnitude, window, dimensions
 from app.analysis.store import (BIN_SECONDS, BUSY_TIMEOUT_MS, PRECOMPUTED_LEVELS, default_path,
                                 open_store)
 
@@ -180,13 +180,13 @@ def test_ties_break_alphabetically_exactly_as_window_rollup_does():
 
 
 def test_the_payload_consumes_the_store_rollup_unchanged():
-    """The consumer that actually ships. `workstreams.payload` must not be able to tell whether
+    """The consumer that actually ships. `dimensions.payload` must not be able to tell whether
     its rollup came from a transcript parse or from the store."""
     with tempfile.TemporaryDirectory() as tmp:
         st, rows = _loaded(tmp)
         start, end = T0 + 137.0, T0 + 3737.0
-        assert (workstreams.payload(st.rollup_window(SESSION, start, end))
-                == workstreams.payload(_expected(rows, start, end)))
+        assert (dimensions.payload(st.rollup_window(SESSION, start, end))
+                == dimensions.payload(_expected(rows, start, end)))
         st.close()
 
 
@@ -256,7 +256,7 @@ def test_the_bin_path_and_the_event_path_agree_on_a_newly_precomputed_level():
         start, end = T0 + 71.3, T0 + 3671.3
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
         assert "action" in PRECOMPUTED_LEVELS, (
-            "`action` is published as inventory.physical_acts, so workstreams.INVENTORY must "
+            "`action` is published as inventory.physical_acts, so dimensions.INVENTORY must "
             "put it in the precomputed set: an unbinned published level under-counts the "
             "interior of every historical window")
         assert want["action"], "premise: the fixture must exercise the action level"
@@ -274,7 +274,7 @@ def test_the_bin_path_and_the_event_path_agree_on_the_newly_precomputed_path_lev
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
         for level in ("file", "dir", "component"):
             assert level in PRECOMPUTED_LEVELS, (
-                f"`{level}` is published as inventory.{level}s, so workstreams.INVENTORY must "
+                f"`{level}` is published as inventory.{level}s, so dimensions.INVENTORY must "
                 "put it in the precomputed set: an unbinned published level under-counts the "
                 "interior of every historical window")
             assert want[level], f"premise: the fixture must exercise the {level} level"
@@ -293,7 +293,7 @@ def test_the_bin_path_and_the_event_path_agree_on_the_four_newly_precomputed_lev
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
         for level in ("ext", "verb", "agent", "mcp_server"):
             assert level in PRECOMPUTED_LEVELS, (
-                f"`{level}` is published as an inventory dimension, so workstreams.INVENTORY "
+                f"`{level}` is published as an inventory dimension, so dimensions.INVENTORY "
                 "must put it in the precomputed set: an unbinned published level under-counts "
                 "the interior of every historical window")
             assert want[level], f"premise: the fixture must exercise the {level} level"
