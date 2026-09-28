@@ -1167,3 +1167,79 @@ labeller who has not seen `request_route_vocab.py` is still owed. Two holdout la
 H079) are cases where I bent my own rule 2 and said so in the labels file rather than quietly
 picking whichever side scored better; a third (H066) is the same ambiguity from the other
 direction.
+
+### 2026-09-28 — `operate` was TWO things, and splitting them fixed it
+
+**Diagnosis first.** 57.5% of all `operate` predictions came from `classify_bash`'s final
+`return "operate"` — not from a rule match. 23.8% were a real `SIDE_FX` match, 18.8% a
+non-Bash tool. So **14.4% of the whole corpus was published as a confident `operate` when no
+rule had matched at all**, and every gap in the `retrieve` and `verify` rules surfaced as an
+`operate` false positive rather than as a gap. That is this project's standing failure mode —
+*never let a check that did not run publish a confident negative* — wearing a positive label.
+
+**The fix is structural, not more patterns.** `operate` now requires a positive `SIDE_FX`
+match; unmatched requests return **`unclassified`**. Coverage becomes an OBSERVABLE rather
+than an assertion, and — the part that matters methodologically — **the residual's size needs
+no hand labels, so driving it down cannot overfit to them**, which is exactly what the
+previous round risked.
+
+⚠️ **This retires the "full coverage, no `other` bucket" property asserted two sections
+above. That property was wrong as stated:** making one real class double as the default does
+not achieve coverage, it hides the gap inside a class that then looks weak.
+
+Three mechanism fixes went in alongside it, all read off the residual:
+
+| fix | share of residual it addressed |
+|---|---|
+| `sed` **without** `-i` is a read, not an edit → `retrieve` (plus `awk`/`cut`/`sort`/`uniq`/`tr`) | 19.5% |
+| `strip_lead` also strips `VAR="..."` assignments and quoted `cd` paths — ⚠️ the THIRD time a hidden-prefix bug has surfaced here, after `cd &&` and `echo "==="` | ~10% |
+| loop and conditional headers stripped so `for f in *; do <VERB>; done` classifies on `<VERB>` | 13.5% |
+
+Plus `SIDE_FX` gained program execution (`python3 x.py`, `uv run`, `npx`, `npm run`), which
+`CODE_CMD` correctly still pre-empts for inline `-c` programs.
+
+**Residual: 14.4% → 8.2% of all requests.**
+
+#### Holdout, before and after the split
+
+| | before | **after** |
+|---|---|---|
+| macro F1 | 0.881 | **0.913** |
+| accuracy when it answers | — | **0.935** (72/77) |
+| abstention rate | 0 (it guessed) | 3.8% of sample, 8.2% of population |
+| population-weighted, answered only | — | **0.958** |
+| population-weighted, all requests | 0.856 | 0.879 |
+
+| class | F1 before | **F1 after** |
+|---|---|---|
+| **operate** | 0.625 | **0.833** ↑ |
+| retrieve | 0.870 | **0.917** ↑ |
+| author_code | 1.000 | 1.000 |
+| delegate | 1.000 | 1.000 |
+| synthesize | 0.909 | 0.909 |
+| author_prose | 0.900 | 0.900 |
+| verify | 0.857 | 0.857 |
+| acknowledge | 0.889 | 0.889 |
+
+`operate` gained 0.21 F1 by *losing* the work it was never doing. `retrieve` gained because
+`sed` stopped being misfiled. Nothing regressed.
+
+#### What is left, and why it is not a wall
+
+675 requests, 104 distinct heads, **30 of which cover 80%** — so the next round is mechanical,
+not a long tail:
+
+    python3 11.3%   git -C <path> <cmd> 8.9%   echo 8.3%   path fragments 8.5%
+    npm --prefix 5.3%   curl 5.0%   printf 4.4%   for 4.0%
+    non-Bash tools with no home (SendMessage, resize_window, RemoteTrigger) ~6%
+
+`git -C <path> log` is the same shape as every hidden-prefix bug so far: the pattern expects
+the verb where a flag now sits. The path fragments (`review-package"`) say `strip_lead` still
+has a form it does not know.
+
+⚠️ **The abstention is the feature, not the leftover.** A classifier that answers 91.8% of
+requests at 0.958 precision is a different and better instrument than one that answers 100% at
+0.879 — a router can defer on `unclassified`, and it cannot defer on a confident wrong answer.
+If the residual ever stalls at a floor, THAT bounded, well-posed set is where a small model
+would earn its place: a 205-character median command, an 8-way choice, and a deterministic
+prior. Not on blocks, and not as the decider.
