@@ -248,6 +248,17 @@ grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
   fail ".goreleaser.yaml does not build keld-wizard-host - the RELEASE path would stage a binary the archive lacks"
 # The archive it rides must be the one the workflow unzips (keld_windows_amd64.zip),
 # so the id has to appear in an archive's `ids:` list, not merely under `builds:`.
+# ⚠️ AND A WINDOWS-ONLY BINARY IN A SHARED ARCHIVE NEEDS
+#    `allow_different_binary_count`. Without it GoReleaser refuses to build at
+#    all — "archive has different count of binaries for each platform" — because
+#    the Windows archive holds three binaries and the others hold two.
+#    ⚠️ THIS GUARD USED TO REQUIRE ONLY THE FIRST HALF, so it enforced exactly
+#    the thing that breaks the release. Nothing caught it: `goreleaser check`
+#    lints the CONFIG (valid), the installer dry run uses `go build` natively,
+#    and only a REAL release runs GoReleaser — so it first fired on the v3.1.0
+#    tag and took the release down at its first step.
+awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'allow_different_binary_count' || \
+  fail "the shared archive lacks allow_different_binary_count - GoReleaser refuses a windows-only binary beside cross-platform ones"
 awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
   fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
 

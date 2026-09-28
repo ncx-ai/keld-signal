@@ -69,6 +69,19 @@ archives:
       - keld
       - keld-agent
       - keld-wizard-host
+    # ⚠️ **REQUIRED, AND ITS ABSENCE FAILED A RELEASE RATHER THAN A CHECK.**
+    # keld-wizard-host is windows-only by design (it hosts the WebView2 approval
+    # panel; macOS has a native Installer.app pane and Linux has no wizard), so
+    # the Windows archive holds three binaries and the others hold two.
+    # GoReleaser rejects that by default — "archive has different count of
+    # binaries for each platform" — and refuses to build anything.
+    #
+    # ⚠️ NOTHING IN CI COULD HAVE CAUGHT IT. `goreleaser-check` lints the CONFIG,
+    # which is valid; the installer dry run builds the binaries with `go build`
+    # natively and only a REAL release runs GoReleaser. So this first ran on the
+    # v3.1.0 tag and took the release down at the first step. A dry run cannot
+    # cover this, and pretending otherwise is how it would happen again.
+    allow_different_binary_count: true
     name_template: "keld_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
