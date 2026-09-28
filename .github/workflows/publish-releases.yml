@@ -51,6 +51,10 @@ jobs:
       PREFIX: ${{ contains(inputs.tag, '-') && 'prereleases' || 'releases' }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # For scripts/verify-mirror.sh, the step after the upload.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
       - name: Download every asset of the release
         run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D out
 
@@ -76,3 +80,17 @@ jobs:
             | jq -R . | jq -s --arg tag "$TAG" '{tag_name: $tag, assets: .}' > latest.json
           aws s3 cp latest.json "s3://${BUCKET}/latest.json" --endpoint-url "$R2_ENDPOINT" \
             --content-type application/json --cache-control no-cache
+
+      # ⚠️ The upload reporting success is not users being able to download. A wrong
+      # prefix, a stale latest.json or a CDN/R2 misconfiguration passes every other test
+      # and fails the first real install — so ask the mirror the way installers do:
+      # every asset answers 200 at the same size, every checksum file is byte-identical,
+      # and latest.json names this tag when this tag is GitHub's latest.
+      - name: Verify the mirror serves what the installers fetch
+        run: |
+          latest=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          if [ "$latest" = "$TAG" ]; then
+            bash scripts/verify-mirror.sh out "$TAG" --latest
+          else
+            bash scripts/verify-mirror.sh out "$TAG"
+          fi
