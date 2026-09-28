@@ -49,3 +49,63 @@
 #  6. `other` is abstention. Use it when no verb fits, never as a tiebreak.
 #
 # index  verbs, most prominent first
+V001 text.transform > converse
+V002 review > text.transform > research
+V003 review
+V004 research
+V005 text.create > text.transform
+V006 research > text.summarize
+V007 text.transform
+V008 research > code.edit
+V009 code.edit > research
+V010 converse > research
+V011 converse > code.edit
+V012 text.transform > review > code.edit
+V013 text.transform > research > review
+V014 code.edit > review
+V015 research > converse
+V016 text.transform
+V017 research > text.create
+V018 converse > research
+V019 code.edit > research
+V020 review > plan
+V021 code.edit > research
+V022 text.transform > plan
+V023 text.transform > research
+V024 plan > review > text.create
+V025 review > text.transform
+V026 research > text.create > text.transform
+V027 review > code.edit
+V028 review > plan
+V029 research > code.edit > text.transform
+V030 text.transform
+V031 code.edit > research > converse
+V032 plan > code.write
+V033 text.transform > converse > code.edit
+V034 code.edit
+V035 text.transform > code.edit > research
+V036 code.edit > image.create
+V037 text.transform > review > research
+V038 research > text.summarize
+V039 code.write > converse
+V040 code.edit
+V041 code.edit > text.transform
+V042 text.transform > plan
+V043 plan > text.create
+V044 review > plan
+V045 code.edit > converse > research
+V046 text.transform > plan
+V047 review > plan
+V048 research > code.edit
+V049 plan > text.create
+V050 research
+V051 text.transform > research > converse
+V052 review > plan
+V053 review
+V054 text.transform
+V055 code.edit
+V056 research > code.edit > text.transform
+V057 converse > research
+V058 text.transform > review > research
+V059 other
+V060 plan > review > text.create

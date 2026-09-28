@@ -18,10 +18,23 @@ import json, os, re, glob, random, collections, datetime as dt
 
 D=os.path.expanduser("~/keld/john-projects/projects")
 OUT="/tmp/claude-1000/vf"
-SPAN,STRIDE=60,50
+# ⚠️ BLOCKS, not 60-minute windows. Signal cuts blocks at MAX_BLOCK_MINUTES=20 or IDLE_BINS=3
+# (15 min of silence) over 5-minute bins, and the facet being designed is BLOCK-scope. An
+# earlier draft of this frame used the prior study's 60/50 window grid — inherited for
+# comparability with the engineering gold and then carried into a fresh frame without being
+# re-decided. Cost was already measured on blocks; accuracy was not. They now agree.
+BIN_SECONDS=300; MAX_BLOCK_MINUTES=20; IDLE_BINS=3
 BUDGET=1400
 FENCE=re.compile(r"```.*?```", re.S)
 OBS=re.compile(r"MESSAGE FROM NON-USER SOURCE|observed_from_primary_session")
+# ⚠️ TURN-LEVEL contamination, found by READING a blind view before labelling it. The file-level
+# observer filter above drops whole meta-transcripts; this drops harness-injected turns INSIDE
+# otherwise legitimate files — subagent hand-backs, cross-session messages, system reminders.
+# They are protocol boilerplate, not work, and V001 was 9/14 of them before this existed.
+INJECT=re.compile(r"Another Claude session sent a message|\[Subagent hand-back\]|"
+                  r"It is model output, NOT a message from the user|"
+                  r"MESSAGE FROM NON-USER SOURCE|<agent-message|<system-reminder|"
+                  r"\[Request interrupted|Caveat: The messages below")
 SENT=re.compile(r"(?<![0-9A-Z])[.!?]+\s+(?=[A-Z\"'(\[])")
 
 # how many windows to draw from each project group
@@ -51,6 +64,7 @@ def load(f):
         if OBS.search(raw): obs+=1
         t=re.sub(r"\s+"," ",FENCE.sub(" ",raw)).strip()
         if not t or t.startswith(("<","Base directory","Caveat:")): continue
+        if INJECT.search(t): continue
         turns.append((dt.datetime.fromisoformat(o["timestamp"].replace("Z","+00:00")),
                       "USER" if o["type"]=="user" else "ASSISTANT", t))
     if n and obs/n>0.2: return None
@@ -58,10 +72,23 @@ def load(f):
     return turns
 
 def windows_of(f, turns):
-    out=[]; start=turns[0][0]; tN=turns[-1][0]
-    while start<tN:
-        sl=[x for x in turns if start<=x[0]<start+dt.timedelta(minutes=SPAN)]
-        here,start=start,start+dt.timedelta(minutes=STRIDE)
+    """Blocks, cut the way `analysis/blocks.py` cuts them: tile the ACTIVE 5-minute bins,
+    terminate on 3 idle bins or a 20-minute budget. Blocks tile the active part of a session,
+    never the whole span."""
+    bins=sorted({int(x[0].timestamp())//BIN_SECONDS for x in turns})
+    groups=[]; cur=[bins[0]]
+    for b in bins[1:]:
+        over = (b - cur[0])*BIN_SECONDS >= MAX_BLOCK_MINUTES*60
+        idle = (b - cur[-1]) >= IDLE_BINS
+        if over or idle: groups.append(cur); cur=[b]
+        else: cur.append(b)
+    groups.append(cur)
+    out=[]
+    for g in groups:
+        lo=dt.datetime.fromtimestamp(g[0]*BIN_SECONDS, dt.timezone.utc)
+        hi=dt.datetime.fromtimestamp((g[-1]+1)*BIN_SECONDS, dt.timezone.utc)
+        sl=[x for x in turns if lo<=x[0]<hi]
+        here=lo
         if not sl: continue
         prompts=[bound(t,700) for r,t in ((x[1],x[2]) for x in sl) if r=="USER"]
         prose=[bound(t,400) for r,t in ((x[1],x[2]) for x in sl) if r=="ASSISTANT"]
