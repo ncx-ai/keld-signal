@@ -1,5 +1,50 @@
 # Can blocks be mapped to `atv1` activity types? — results, 2026-09-24
 
+> ## ⚠️ READ THIS FIRST — where four days of this landed, 2026-09-28
+>
+> **The question changed twice, and the second change is the one that worked.** This page
+> opens on "map a BLOCK to an `atv1` activity type" and answers yes at 0.660. That answer
+> does not survive contact with a second corpus, and the framing itself was wrong for the
+> stated purpose. The live result is at the END of this file.
+>
+> **What was refuted, each with a mechanism and a number:**
+> - **Coarsening the vocabulary buys nothing.** 17 classes down to 2: accuracy climbs
+>   0.350 → 0.617 and the majority constant climbs exactly as fast. Lift ~0 at every
+>   granularity, negative at the two coarsest.
+> - **Feeding the model user text is catastrophic.** User text is 7.0% of a block;
+>   assistant-only scores *identically* to all-turns, and user-only collapses to 0.140
+>   (lift −0.120). Median user turn is 47.5 chars — `yes`, `1`, `publish it`.
+> - **GLiNER2 has a ceiling on block prose of +0.117 lift**, across 14 measurements
+>   spanning 6 vocabularies, 3 input variants and 2 family derivations. On 13 blocks of
+>   real document work it predicted the `language` family **zero times**.
+> - **`atv1`'s verbs cannot describe the population**: 38.8% of inference requests fall to
+>   `other` under them — git, docker, mkdir, curl, running scripts.
+>
+> **The unit was the problem.** Routing substitutes a *request*, not a 20-minute block, and
+> the asked-for output was always a distribution over what a block contains. At the request
+> level (`requestId`), classified **deterministically with no model at all**:
+>
+> | check | result |
+> |---|---|
+> | holdout, independent sample, 80 blind labels | acc **0.925**, macro F1 **0.920** |
+> | inter-labeller reliability (independent agent) | Cohen's **κ = 0.885** |
+> | cross-person residual, identical rules | corpus A **1.7%**, corpus B **1.6%** |
+> | tool-free negative control (11,575 WildChat turns) | **passes** — zero leakage |
+> | cost concentration | `retrieve` = **32–42%** of modelled cost, F1 0.92–1.00 |
+>
+> **Two corrections to claims made earlier in this very file**, both found by measurement:
+> - "Routing optimises 0.4% of token flow" was **wrong by ~30x**. 97–98.6% of input is
+>   *cache reads* at ~1/10 the price; output is 10–14% of modelled cost, and model choice
+>   scales the whole request anyway.
+> - "Full coverage, no `other` bucket" was **wrong as stated**. Making one class the default
+>   hides the gap inside it: 57.5% of `operate` was a silent fallthrough.
+>
+> **Open:** a third person's corpus; and a complexity axis for finer-grain code routing,
+> scoped 2026-09-28 as separate work rather than a threat.
+>
+> Everything above this line is the earlier, superseded framing. It is kept, not deleted,
+> because the refutations are the result.
+
 **Provenance:** measured 2026-09-24 on one developer machine. Pre-registration
 `docs/superpowers/specs/2026-09-24-activity-atv1-preregistration.md` (committed `fde3297`
 BEFORE any label); labels `scripts/activity-atv1-hand-labels.txt` (`ea4c6a5`, committed
