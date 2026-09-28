@@ -297,6 +297,24 @@ grep -q '{uninstallexe}' "$iss" || \
 printf '%s\n' "$onb_line" | grep -q 'unchecked' || \
   fail "onboard.cmd is a ticked-by-default postinstall action - it will open a console at every unpaired install"
 
+# 9c. ⚠️ THE APPROVAL PANEL BELONGS TO THE SIGN-IN RUN ONLY, AND WITHOUT THAT
+#     SCOPE IT COMES BACK OVER THE NEXT STEP. DrainRun evaluates its "show the
+#     panel" condition for EVERY event of EVERY run. EvApprovalURL is cleared
+#     only when a sign-in STARTS, and HideApproval resets ApprovalShown to False
+#     — so after a successful sign-in both halves were true again and the first
+#     `tool` event of the NEXT run launched a second WebView2 re-navigating to
+#     the sign-in page, behind the tool checkboxes. Reported as the checklist
+#     drawn "on top of the old sign in page"; the page underneath was live.
+show_cond="$(printf '%s\n' "$code" | grep -n 'ShowApproval(EvApprovalURL)' -B4 || true)"
+printf '%s\n' "$show_cond" | grep -q 'Mode = RunSignIn' || \
+  fail "the approval panel is shown without checking Mode - it will relaunch over the tools step"
+# And the URL must be retired once used: a spent device code cannot be approved,
+# so any later reader (the browser fallback, a retry) would send someone nowhere.
+after_login="$(sed -n '/^procedure AfterLogin/,/^end;/p' "$iss" || true)"
+[ -n "$after_login" ] || fail "cannot find procedure AfterLogin - this guard would pass vacuously"
+printf '%s\n' "$after_login" | grep -qF "EvApprovalURL :=" || \
+  fail "AfterLogin does not clear EvApprovalURL - a spent approval URL stays live for later readers"
+
 # 10a. ⚠️ ONLY A KNOWN FAILURE MAY FALL BACK TO A BROWSER. DrainPanel used to end
 #      in an unconditional else, so ANY panel status the script did not
 #      recognise tore down a working embed and launched a browser. Adding one

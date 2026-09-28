@@ -712,7 +712,21 @@ begin
       HandleEvent(Lines[0]);
       // A device_code arrives MID-RUN and the panel must go up now, not when the
       // run finishes — the run does not finish until the person has approved.
-      if (EvApprovalURL <> '') and not ApprovalShown then
+      //
+      // ⚠️ **SCOPED TO THE SIGN-IN RUN, AND WITHOUT THAT IT RESURRECTS THE PANEL
+      // OVER THE NEXT STEP.** This condition is evaluated for EVERY event of
+      // EVERY run. `EvApprovalURL` is only cleared when a sign-in STARTS, and
+      // HideApproval sets `ApprovalShown` back to False — so once sign-in
+      // succeeded, both halves were true again and the first `tool` event of the
+      // NEXT run re-launched the whole approval panel: a second WebView2,
+      // re-navigating to the sign-in page, behind the tool checkboxes.
+      //
+      // Reported as the checklist "on top of the old sign in page as if the
+      // video memory wasn't cleared" — which is exactly what it looks like, and
+      // is not a repaint bug at all: the page underneath was live. It also ate
+      // the 5-10 seconds before Next came back, because the panel was starting
+      // a browser while the tools run was still going.
+      if (Mode = RunSignIn) and (EvApprovalURL <> '') and not ApprovalShown then
       begin
         SetStatus('Sign in to approve this device.');
         ShowApproval(EvApprovalURL);
@@ -957,6 +971,13 @@ begin
 
   if Paired then
   begin
+    // ⚠️ RETIRE THE APPROVAL URL ONCE IT HAS BEEN USED. The Mode guard in
+    // DrainRun is the structural fix for the panel coming back; this is the
+    // other half, and it matters on its own: a spent device code is no longer
+    // approvable, so anything that later reached for this URL — the no-WebView2
+    // browser fallback, a retry — would send someone to a page that cannot work.
+    EvApprovalURL := '';
+    EvUserCode := '';
     MarkConnected;
     StartTools;
     exit;
