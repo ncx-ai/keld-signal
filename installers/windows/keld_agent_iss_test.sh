@@ -346,6 +346,32 @@ grep -q 'VerifyCatalog' "$wf" || \
 [ "$(grep -c 'timestamp-rfc3161:' "$wf")" -eq 2 ] || \
   fail "expected both signing steps to set timestamp-rfc3161; short-lived certs make this mandatory, not optional"
 
+# 13a. ⚠️ THE UNINSTALLER MUST BE SIGNED DURING THE COMPILE — nothing before or
+#      after can reach it. Inno extracts unins000.exe on the target machine at
+#      install time, so an unsigned one is refused on exactly the machines
+#      installing was refused on, leaving people unable to remove the product.
+#      Only Inno can sign it, and only via a COMMAND LINE, which is why this one
+#      path uses the signtool dlib rather than the signing Action.
+grep -q 'SignedUninstaller=yes' "$iss" || \
+  fail "SignedUninstaller is gone - the uninstaller would ship unsigned and be blocked on SAC machines"
+grep -q 'name: Prepare the uninstaller signer' "$wf" || \
+  fail "nothing builds the uninstaller signing command; SignedUninstaller would have no SignTool and iscc HALTS"
+prep_sign="$(sed -n '/name: Prepare the uninstaller signer/,/name: Package Windows installer/p' "$wf")"
+printf '%s\n' "$prep_sign" | grep -q 'Azure.CodeSigning.Dlib.dll' || \
+  fail "the uninstaller signer does not use the Trusted Signing dlib"
+printf '%s\n' "$prep_sign" | grep -q 'timestamp.acs.microsoft.com' || \
+  fail "the uninstaller signature is not timestamped - short-lived certs make it invalid within weeks"
+# ⚠️ `$f` is INNO's placeholder for the file being signed; without it signtool
+# gets no file and every signature fails, which HALTS the compile.
+printf '%s\n' "$prep_sign" | grep -q 'dmdf' || \
+  fail "no /dmdf metadata file - the dlib cannot resolve the account or certificate profile"
+# And the compile must PROVE it happened rather than trust the directive.
+pkg_step="$(sed -n '/name: Package Windows installer/,/name: Sign the Windows installer/p' "$wf")"
+printf '%s\n' "$pkg_step" | grep -q 'Signing uninstaller' || \
+  fail "the build never checks that iscc actually signed the uninstaller"
+printf '%s\n' "$pkg_step" | grep -q 'Skeldsign' || \
+  fail "iscc is not given the keldsign SignTool; SignedUninstaller would halt the compile"
+
 # 13b. ⚠️ THE ACTION'S `files:` INPUT REQUIRES AN ABSOLUTE PATH AND REFUSES A
 #      RELATIVE ONE ("The file path '...' is not rooted." — measured, run
 #      36144191695, which signed all 111 payload binaries and then failed on the

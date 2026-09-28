@@ -44,27 +44,22 @@ OutputBaseFilename=keld-setup
 ; thing the macOS job's no-secrets path is careful to avoid. The preprocessor
 ; check keeps an unsigned build byte-identical to today's.
 ;
-; ⚠️ AND AS OF THE AZURE ARTIFACT SIGNING WIRING THIS IS INERT — THE UNINSTALLER
-; SHIPS UNSIGNED. Signing moved to `Azure/artifact-signing-action`, a GitHub
-; Action, and an Action cannot be what iscc shells out to: `SignTool` needs a
-; COMMAND LINE, and the uninstaller stub exists only during the compile, so no
-; before-or-after step can reach it. Nothing sets KELD_SIGN_COMMAND any more,
-; so this block is skipped and the compile is unchanged.
+; ⚠️ THIS IS NOW WIRED, AND THE MECHANISM IS DELIBERATELY NOT THE ONE USED FOR
+; EVERYTHING ELSE. The payload and keld-setup.exe are signed by
+; `Azure/artifact-signing-action`, but an Action cannot be what iscc shells out
+; to — `SignTool` needs a COMMAND LINE, and the uninstaller stub exists only
+; during this compile, so no before-or-after step can reach it.
 ;
-; The consequence, stated rather than discovered: on a Smart App Control machine
-; installing will work and UNINSTALLING will be refused. That is strictly better
-; than today (where both are refused) and strictly worse than complete.
+; Microsoft ships the same service as a signtool plugin for exactly this case:
+; `Microsoft.Trusted.Signing.Client` carries bin\x64\Azure.CodeSigning.Dlib.dll,
+; authenticating with the SAME four AZURE_* credentials (it bundles
+; Azure.Identity, so DefaultAzureCredential reads them from the environment).
+; The workflow's "Prepare the uninstaller signer" step builds the command and
+; exports it as KELD_SIGN_COMMAND; iscc receives it as /Skeldsign=.
 ;
-; The fix is a command-line signer, which Azure does publish: the
-; `Microsoft.Trusted.Signing.Client` NuGet package (1.0.95 at time of writing)
-; carries a signtool dlib, used as
-;   signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 \
-;     /dlib <pkg>\bin\x64\Azure.CodeSigning.Dlib.dll /dmdfile <metadata.json> $f
-; with the same four AZURE_* credentials the Action uses. Setting
-; KELD_SIGN_COMMAND to that re-enables this block with no other change — which
-; is why the seam is kept rather than deleted. It is deliberately NOT wired
-; today: an unproven SignTool HALTS the compile (see the measurement above), and
-; that is the whole Windows release, so it wants its own dry run first.
+; ⚠️ signtool must come from Windows SDK 10.0.22621.0 or newer — the vendor's own
+; README requires it — which is why the workflow installs SDK BuildTools rather
+; than using whatever signtool happens to be on the runner.
 ;
 ; CI supplies the tool with `iscc /Skeldsign=<command with $f>`; see
 ; .github/workflows/installers.yml.

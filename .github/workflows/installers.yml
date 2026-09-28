@@ -567,6 +567,59 @@ jobs:
           ./installers/windows/sign-payload.ps1 -PayloadDir installers\windows -VerifyCatalog installers\windows\sign-catalog.txt
           if ($LASTEXITCODE -ne 0) { throw "payload signature verification failed" }
 
+      # ⚠️ THE UNINSTALLER IS THE ONE BINARY NO BEFORE-OR-AFTER STEP CAN REACH.
+      # Inno extracts unins000.exe onto the target machine at install time, so
+      # signing the payload misses it and signing keld-setup.exe misses it — and
+      # an unsigned uninstaller is refused on exactly the machines installing was
+      # refused on, leaving people unable to remove the product. Only Inno can
+      # sign it, via SignedUninstaller, and Inno needs a COMMAND LINE.
+      #
+      # `Azure/artifact-signing-action` is an Action, so it cannot be that
+      # command. Microsoft ships the same service as a signtool plugin instead —
+      # `Microsoft.Trusted.Signing.Client`, whose bin/x64/Azure.CodeSigning.Dlib.dll
+      # authenticates with the SAME four AZURE_* credentials (it bundles
+      # Azure.Identity, so DefaultAzureCredential reads them from the environment).
+      #
+      # signtool itself must come from Windows SDK 10.0.22621.0 or newer — the
+      # vendor's own README says so — hence the SDK BuildTools package rather than
+      # whatever happens to be on the runner.
+      - name: Prepare the uninstaller signer
+        if: matrix.os == 'windows-latest' && env.KELD_WINDOWS_SIGNING == '1'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force tools | Out-Null
+          Invoke-WebRequest -Uri https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -OutFile tools\nuget.exe
+          & tools\nuget.exe install Microsoft.Trusted.Signing.Client -Version 1.0.95 -OutputDirectory tools -ExcludeVersion | Out-Null
+          & tools\nuget.exe install Microsoft.Windows.SDK.BuildTools -Version 10.0.22621.3233 -OutputDirectory tools -ExcludeVersion | Out-Null
+
+          # ⚠️ RESOLVE BOTH BY SEARCH, AND FAIL LOUDLY IF EITHER IS ABSENT. A
+          # missing path here would otherwise reach iscc as a SignTool that
+          # cannot run, and Inno HALTS the compile on a failed signature — the
+          # whole Windows release, for a packaging slip.
+          $dlib = Get-ChildItem tools -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+                  Where-Object FullName -match '\\x64\\' | Select-Object -First 1
+          if (-not $dlib) { throw "Azure.CodeSigning.Dlib.dll (x64) not found under tools\" }
+          $signtool = Get-ChildItem tools -Recurse -Filter signtool.exe |
+                      Where-Object FullName -match '\\x64\\' | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe (x64) not found under tools\" }
+
+          # Same account and profile the Action uses; not secrets.
+          $meta = Join-Path (Get-Location) 'tools\signing-metadata.json'
+          @{
+            Endpoint               = 'https://eus.codesigning.azure.net/'
+            CodeSigningAccountName = 'keld'
+            CertificateProfileName = 'keld-public-trust'
+          } | ConvertTo-Json | Set-Content -LiteralPath $meta -Encoding ascii
+
+          # ⚠️ `$f` IS INNO'S PLACEHOLDER and must survive into the .iss unexpanded;
+          # it is single-quoted here so PowerShell does not read it as a variable.
+          # Quoted, because a path with a space otherwise splits into two files.
+          $cmd = '"{0}" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "{1}" /dmdf "{2}" $f' -f `
+                 $signtool.FullName, $dlib.FullName, $meta
+          "KELD_SIGN_COMMAND=$cmd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "uninstaller signer ready: $($signtool.FullName)"
+
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -576,8 +629,34 @@ jobs:
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc "installers\windows\keld-agent.iss"
+
+          # The .iss enables SignTool/SignedUninstaller only when KELD_SIGN_COMMAND
+          # is set, and then REQUIRES a SignTool named `keldsign` to exist — the two
+          # must be supplied together or iscc halts.
+          #
+          # ⚠️ THE /S ARGUMENT MUST BE ONE QUOTED TOKEN. A signing command contains
+          # spaces, and unquoted, iscc reads each word after the first as another
+          # script filename and fails with "You may not specify more than one script
+          # filename" — measured, not guessed.
+          $isccArgs = @()
+          if ($env:KELD_SIGN_COMMAND) {
+            $isccArgs += '"/Skeldsign=' + $env:KELD_SIGN_COMMAND + '"'
+          }
+          $isccArgs += "installers\windows\keld-agent.iss"
+          & $iscc @isccArgs 2>&1 | Tee-Object -Variable isccOut
           if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+
+          # ⚠️ ASSERT THE UNINSTALLER WAS ACTUALLY SIGNED, rather than trusting
+          # that a directive was set. unins000.exe is compressed inside
+          # keld-setup.exe and cannot be inspected here, so the compile log is the
+          # only evidence available at build time — and a silently unsigned
+          # uninstaller is exactly the failure this step exists to remove.
+          if ($env:KELD_SIGN_COMMAND) {
+            if (-not ($isccOut -match 'Signing uninstaller')) {
+              throw "iscc never signed the uninstaller - SignedUninstaller did not engage"
+            }
+            Write-Host "uninstaller: signed during compile"
+          }
 
       # The installer itself, last — it does not exist until iscc has run.
       - name: Sign the Windows installer
