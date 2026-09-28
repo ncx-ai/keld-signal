@@ -27,7 +27,7 @@ test.describe("Overview", () => {
     const tiles = page.locator(".ov-tile");
     await expect(tiles).toHaveCount(4);
     await expect(tiles.nth(0).locator(".l")).toHaveText("Tokens");
-    await expect(tiles.nth(0).locator(".v")).toContainText(/^\d+(\.\d)?[KM]?/);
+    await expect(tiles.nth(0).locator(".v")).toContainText(/^\d+(\.\d)?[KMB]?/);
     await expect(tiles.nth(1).locator(".v")).toContainText(/^\$\d+\.\d{2}/);
     await expect(tiles.nth(3).locator(".v")).toContainText(/^\d+/);
     // The chart's summary carries "est." on its dollar figure, like every

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { overviewStats, topN, repoLabel, NO_REPO_LABEL } from "../app.js";
+import { overviewStats, topN, repoLabel, formatVolume, NO_REPO_LABEL } from "../app.js";
 import { block } from "./overview-fixture.js";
 
 // THE STORY: the four Overview tiles are sums of the ledger's own blocks —
@@ -78,4 +78,11 @@ test("a repository is shown by its last path segment", () => {
   assert.equal(repoLabel("github.com/ncx-ai/keld-signal"), "keld-signal");
   assert.equal(repoLabel(""), NO_REPO_LABEL);
   assert.equal(repoLabel(undefined), NO_REPO_LABEL);
+});
+
+test("the Overview names a billion tokens as B, where Focus blocks would say 6707.2M", () => {
+  assert.equal(formatVolume(6_707_200_000), "6.7B");
+  assert.equal(formatVolume(804_500_000), "804.5M");
+  assert.equal(formatVolume(12_300), "12.3K");
+  assert.equal(formatVolume(0), "0");
 });

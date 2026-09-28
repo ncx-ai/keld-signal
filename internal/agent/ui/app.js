@@ -714,6 +714,15 @@ export const NOT_ATTRIBUTED_LABEL = "not attributed yet";
 export const SEVERAL_PROJECTS_LABEL = "several projects";
 export const OTHER_LABEL = "other";
 
+/** Token counts at the Overview's scale. A month is billions of tokens, and
+ *  formatTokens (shared with Focus blocks, which never sees a range) stops at
+ *  M — "6707.2M" is a number a person has to count digits in. */
+export function formatVolume(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  return formatTokens(v);
+}
+
 /** A repository remote as the page names it: its last path segment. */
 export function repoLabel(remote) {
   const s = String(remote || "");
@@ -2238,7 +2247,7 @@ if (typeof document !== "undefined") {
     const summary = el(
       "div",
       { class: "ov-summary mono" },
-      `${formatTokens(stats.tokens)} tokens · ${formatEstUSD(stats.usd)}${perM}${split === "tokens" ? "" : ` · ${splitLabel.toLowerCase()}`} · ${win.dates}`
+      `${formatVolume(stats.tokens)} tokens · ${formatEstUSD(stats.usd)}${perM}${split === "tokens" ? "" : ` · ${splitLabel.toLowerCase()}`} · ${win.dates}`
     );
 
     // ⚠️ A range with blocks but no measured tokens has no scale to draw
@@ -2248,7 +2257,7 @@ if (typeof document !== "undefined") {
     }
 
     const ticks = [1, 2 / 3, 1 / 3];
-    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatTokens(series.maxTokens * t))), el("span", {}, "0"));
+    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatVolume(series.maxTokens * t))), el("span", {}, "0"));
     const rightAxis = el(
       "div",
       { class: "ov-axis right mono" },
@@ -2263,7 +2272,7 @@ if (typeof document !== "undefined") {
         bars.appendChild(el("div", { class: "ov-col not-loaded", title: `${c.label} · not loaded` }));
         continue;
       }
-      const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatTokens(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
+      const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatVolume(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
       for (const s of c.segments) {
         if (!s.value) continue;
         stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.maxTokens) * 100}%;background:${colors.get(s.key)}` }));
@@ -2292,7 +2301,7 @@ if (typeof document !== "undefined") {
       "div",
       { class: "ov-legend mono" },
       el("span", {}, el("i", { class: "ov-key line" }), "spend (est.)"),
-      ...series.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatTokens(totals.get(c.key))}`))
+      ...series.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatVolume(totals.get(c.key))}`))
     );
 
     return el(
@@ -2410,7 +2419,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "tiles ov-tiles" },
-        overviewTile("Tokens", formatTokens(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatTokens, NO_MODEL_LABEL),
+        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatTokens, NO_MODEL_LABEL),
         overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD, NO_MODEL_LABEL),
         overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes, NO_REPO_LABEL),
         overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count, NO_REPO_LABEL)
