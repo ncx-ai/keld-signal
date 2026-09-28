@@ -19,6 +19,23 @@ page.** The corpus is 100% software engineering: all 100 gold labels carry conte
 
 ## MASTER METRICS TABLE — kept current as arms land
 
+⚠️ **TWO CORPORA, NOT ONE. The tables below are NOT comparable and must never be pooled.**
+
+| | frame A — engineering | frame B — colleague transcripts |
+|---|---|---|
+| unit | 60-minute WINDOWS | 20-minute BLOCKS (the shipped cutter) |
+| labels | single-label | multi-label, prominence-ordered |
+| n | 100 | 60 |
+| constant | `code.edit` 0.370 | verb 0.233 / family 0.317 |
+| `text.*` gold | **zero** | 13 blocks |
+| verbs with support | 7 of 17 | 9 of 17 |
+
+Frame A is everything down to the 2026-09-27 sections. **Frame B is the 2026-09-28 section
+at the end, and it is where the verb/family answer lives.** Re-labelling A at block scale is
+owed work, not done.
+
+### Frame A — engineering windows
+
 Last updated 2026-09-24. 100 blind hand labels; majority constant `code.edit` = 0.370.
 `code.*` = accuracy restricted to the 45 windows whose gold verb is `code.write`/`code.edit`.
 
@@ -55,6 +72,19 @@ never read the `code.*` column without the accuracy column beside it.
 | 4 — wording spread vs arm gaps | Spread 0.160 overall / 0.378 `code.*`. H's refutation survives; the P-vs-F claim was withheld at `gloss` and is made at `rich`. |
 | 5 — context, with shuffled control | **NOT RUN** — corpus has no non-engineering work. Study 4. |
 | 6 — proportions denominator | **NOT RUN.** |
+
+### Frame B — 60 real blocks, verb and family (2026-09-28)
+
+| axis | accuracy | constant | lift | the number that decides it |
+|---|---|---|---|---|
+| VERB top-1 vs gold primary | 0.350 | 0.233 | +0.117 | `text.transform` R **0.091** on 11 blocks |
+| FAMILY, direct 7-way | 0.383 | 0.317 | +0.067 | `language` R **0.000** on 13 blocks |
+| FAMILY, derived via verb | **0.417** | 0.317 | +0.100 | same |
+
+**Clears bar 1 and is still not shippable** — the lift is carried by `code.edit`/`plan`/
+`review`, and the `language` family is never predicted once. Full per-class tables, the
+read-swamping diagnosis and the F-derived > F-direct inversion are in the 2026-09-28 section
+at the end of this file.
 
 ## The arms
 
@@ -759,3 +789,121 @@ Quality numbers now run on GPU (`map_location="cuda"`), after a CPU run was kill
 minutes having produced nothing readable. CPU timing is only measured when CPU cost *is* the
 measurement — the on-device budget question — and that is a separate arm with its own
 conditions.
+
+## 2026-09-28 — RESULT: verb and family on 60 real BLOCKS. The language family scores ZERO.
+
+Run: GPU (`map_location="cuda"`), 60 blocks, untruncated views byte-identical to the
+labeller's. Labels committed at `79b279c` **before** the arm ran. Wording is `DOCS` — the
+style that won the engineering frame at 0.700.
+
+| axis | what | accuracy | constant | lift |
+|---|---|---|---|---|
+| **VERB** | top-1 == gold **primary** | **0.350** | 0.233 | **+0.117** |
+| VERB | top-1 anywhere in the gold set | 0.517 | — | — |
+| VERB | gold-set recall (multi-label) | 0.503 | — | — |
+| **FAMILY** | **F-direct** — one 7-way call | **0.383** | 0.317 | **+0.067** |
+| **FAMILY** | **F-derived** — 17-way verb, mapped up | **0.417** | 0.317 | **+0.100** |
+
+Every arm clears **bar 1** (beat the constant). That is the whole of the good news, and the
+per-class tables are what the aggregate is hiding.
+
+### ⚠️ `language` has 13 gold blocks and ZERO predictions
+
+FAMILY, direct 7-way call:
+
+| family | gold | pred | hit | P | R |
+|---|---|---|---|---|---|
+| agentic | 19 | 22 | 10 | 0.455 | 0.526 |
+| code | 16 | 24 | 10 | 0.417 | **0.625** |
+| **language** | **13** | **0** | **0** | **0.000** | **0.000** |
+| understanding | 9 | 11 | 3 | 0.273 | 0.333 |
+| fallback | 3 | 2 | 0 | 0.000 | 0.000 |
+| media | 0 | 1 | 0 | — | — |
+
+VERB, top-1 against gold primary:
+
+| verb | gold | pred | hit | P | R |
+|---|---|---|---|---|---|
+| code.edit | 14 | **26** | 10 | 0.385 | **0.714** |
+| **text.transform** | **11** | **2** | 1 | 0.500 | **0.091** |
+| research | 10 | 5 | 1 | 0.200 | **0.100** |
+| review | 9 | 8 | 5 | 0.625 | 0.556 |
+| plan | 5 | 6 | 3 | 0.500 | 0.600 |
+| **converse** | **4** | **0** | 0 | — | **0.000** |
+| other | 3 | **12** | 1 | 0.083 | 0.333 |
+| **code.write** | **2** | **0** | 0 | — | **0.000** |
+| **text.create** | **2** | **0** | 0 | — | **0.000** |
+| text.summarize | 0 | 1 | 0 | — | — |
+
+**The aggregate is carried entirely by `code.edit` (R 0.714), `plan` (0.600) and `review`
+(0.556).** Those are three classes a deterministic signal can already reach — a coding tool
+editing files. **Every class this corpus was selected to measure scores at or near zero:**
+`text.create` 0.000, `text.transform` 0.091, `converse` 0.000, and the whole `language`
+family 0.000 on 13 real blocks.
+
+This corpus was oversampled 20/60 toward `keld-website` specifically so the language family
+would be reachable. It is reachable by a human labeller — 13 blocks of Notion document
+editing, lint-and-republish, and doc restructuring. **GLiNER2 called none of them language.**
+
+### Read-swamping, in a third place
+
+`code.edit` is predicted **26 times against 14 gold**; `other` **12 against 3**. The model
+reads the *mechanism* — file paths, commits, PR numbers, test counts, all of which appear in
+a Notion-publishing block because the publisher is a repo — and answers `code.edit`. The
+labelling rubric's rule 3 names this exactly ("Judge by the ARTIFACT and INTENT, not the
+mechanism. Writing a script to publish a doc is publishing, not coding, IF the doc is the
+point"), and the model cannot make that distinction.
+
+That is the same shape as Amendment 1's read-swamping (tool events rolled up by dominance
+gave `researching` 95.4%) and the naive act-count augmentation, now reached through prose
+rather than through counts. **Three different routes, one failure.**
+
+### The one genuinely new finding: F-derived BEATS F-direct
+
+**0.417 via the 17-way verb call, against 0.383 asking the 7-way question directly.**
+
+This inverts what the domain probe suggested — that coarser, better-separated vocabularies
+classify markedly better (the general-type-of-work arm reached 0.700 on 6 classes). It does
+**not** rehabilitate the hierarchical cascade, which is a different mechanism and stays
+refuted at 0.350: **H constrains the verb pass to the family already chosen**, so a wrong
+family is unrecoverable. Deriving runs the unconstrained 17-way call and maps *up*, where a
+wrong verb inside the right family still lands correctly. The gap is 2 blocks of 60, so it
+is directional, not established.
+
+### Confusions
+
+    verb    research->other 6  review->code.edit 3  research->code.edit 3
+            text.transform->code.edit 3  text.transform->plan 2
+    family  agentic->code 6  understanding->code 6  language->agentic 6
+            language->understanding 5  code->agentic 4
+
+`language` does not fail toward one wrong answer — it disperses into `agentic` (6) and
+`understanding` (5). The model is not mistaking document work for a specific other thing;
+it does not represent the category at all on this text.
+
+### Adjudication
+
+| bar | verdict |
+|---|---|
+| 1 — beat the majority constant | **PASS, marginally.** verb +0.117, family +0.067 / +0.100. |
+| per-class honesty (not a pre-registered bar, but the one that decides this) | **FAIL.** `language` R = 0.000 on 13 blocks; `text.*` R = 0.091 pooled. |
+
+**Bar 1 is necessary, not sufficient, and this is the case that shows why.** An arm can beat
+the constant while being blind to a third of the taxonomy, because the constant is itself a
+code-heavy corpus. A facet that publishes `code.edit` for document work is worse than one
+that publishes nothing, and this project's standing rule — never let a check that did not run
+publish a confident negative — applies to a class that is never predicted just as much.
+
+**So the family axis is NOT shippable from GLiNER2 prose classification, and the reason is
+specific rather than general:** the `DOCS` wording that fixed `text.*` on the engineering
+frame (0.660 -> 0.700) **does not transfer to this corpus**. That is the second time a
+wording fix has been corpus-local. It is the live alternative to abandoning the axis, and it
+is a wording study on THIS corpus, not another arm.
+
+### What was NOT measured
+
+- **No shuffled-label control was run on this frame.** Bar 5's discipline applies here too:
+  without it, `code`'s 0.625 could be register rather than content. It is owed before any
+  positive claim about the code family.
+- The engineering 100-window gold set is single-label and cut at 60 minutes. It is **not
+  poolable** with these 60 multi-label blocks and was not pooled.
