@@ -405,62 +405,23 @@ jobs:
       - name: Provide a sidecar
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           if [ -x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" ]; then
             echo "sidecar already present"; exit 0
           fi
-          case "$RUNNER_OS" in
-            Linux) asset="keld-agent-sidecar_linux_amd64.tar.gz" ;;
-            macOS) asset="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
-          esac
-          mkdir -p "$HOME/.local/bin"
-          # ⚠️ RETRIED. The sidecar asset is ~440 MB and a single GET of it
-          # failed mid-stream on 2026-09-16 ("read: connection reset by peer"),
-          # which left the runner with no sidecar and turned a green leg red for
-          # a reason that had nothing to do with the code. A gate that fails on
-          # someone else's TCP reset is a gate people learn to re-run without
-          # reading, which is the same as not having one.
-          # ⚠️ **"THE LATEST RELEASE" CAN BE ONE THAT IS STILL BEING BUILT.**
-          # Measured 2026-09-16: v3.0.2 was tagged at 17:13 and its release
-          # workflow was still running; the tag was already `latest` and
-          # non-prerelease while carrying only the six Go archives — no sidecar
-          # for any platform, no pkg, no exe. Every cell in the matrix went red
-          # at once on "no analysis sidecar", for something nobody had broken.
-          #
-          # So the release is chosen by what it CARRIES, not by its position:
-          # walk the published non-prereleases newest-first and take the first
-          # one that actually has this runner's sidecar. A release mid-publish
-          # is simply skipped until it is complete.
-          tag=""
-          for cand in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
-                          --json tagName,isPrerelease,isDraft \
-                          --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'); do
-            if gh release view "$cand" --repo "$GITHUB_REPOSITORY" --json assets \
-                 --jq '[.assets[].name]' | grep -q "$asset"; then
-              tag=$cand; break
-            fi
-            echo "  $cand carries no $asset (mid-publish, or an incomplete release) — skipping"
-          done
-          [ -n "$tag" ] || { echo "::warning::no published release carries $asset"; exit 0; }
-          echo "sidecar release: $tag"
-          for attempt in 1 2 3; do
-            rm -rf /tmp/sc; mkdir -p /tmp/sc
-            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc; then
-              break
-            fi
-            echo "::warning::sidecar download attempt $attempt failed; retrying"
-            sleep $((attempt * 10))
-          done
-          if [ -f "/tmp/sc/$asset" ]; then
-            tar -xzf "/tmp/sc/$asset" -C "$HOME/.local/bin"
-            chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" || true
-            echo "sidecar $(cat "$HOME/.local/bin/keld-agent-sidecar/VERSION" 2>/dev/null || echo 'no VERSION')"
-          else
-            echo "::warning::no frozen sidecar available; the chain will say so and stop"
-          fi
+          # ⚠️ FROM THE MIRROR, THE WAY USERS GET IT. This step used to walk the
+          # GitHub releases and `gh release download` the newest one carrying this
+          # runner's sidecar — so nothing in CI ever downloaded from dl.keld.co,
+          # where every installer has fetched since the repo went private, and a
+          # broken mirror would have been found by a user's failed install.
+          # scripts/fetch-sidecar.sh takes the tag from latest.json (which moves
+          # only after a release passed verify-release and was uploaded whole, so
+          # it never names a release still being built — the mid-publish trap the
+          # old walk existed for), verifies the .sha256, and retries the ~440 MB
+          # GET (a single one failed mid-stream on 2026-09-16).
+          # A mirror users cannot download from is a FAILURE here, not a warning.
+          bash scripts/fetch-sidecar.sh "$HOME/.local/bin"
 
       # --- the Windows sidecar ----------------------------------------------
       #

@@ -138,5 +138,12 @@ jobs:
     uses: ./.github/workflows/publish-releases.yml
     with:
       tag: ${{ needs.staple.outputs.tag }}
+    # ⚠️ secrets: inherit, although the R2 keys are ENVIRONMENT secrets the called
+    # job fetches itself: on the first tag-triggered release through this path
+    # (v3.0.7-rc.1, 2026-09-28) the job was attached to `releases` — a deployment
+    # was recorded — and still saw both keys EMPTY ("Unable to locate
+    # credentials"), while a workflow_dispatch of the same file read them. The one
+    # difference is the nested call, and this call passed no secrets at all.
+    secrets: inherit
     permissions:
       contents: read
