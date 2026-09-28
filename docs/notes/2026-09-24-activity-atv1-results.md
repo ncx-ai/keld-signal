@@ -557,3 +557,57 @@ Three readings worth keeping:
 NEITHER corpus as ground truth, so this says only that the model does not hallucinate them
 here — never that it finds them when they are real. Ground truth is CORPUS-level and therefore
 coarse. John's side is 7 windows.
+
+## 2026-09-27 — SYNTHETIC transcripts cannot validate the domain classifier
+
+No real legal/medical/finance/support/operations transcript exists anywhere on this machine
+(`john-projects` in the frozen corpus is the SAME deck session already used). So six sessions
+per domain were written synthetically — **by TWO independent generators from ONE brief**,
+because the confound was stated in advance: if one model writes the data and another classifies
+it, the test may measure whether two models share a prior about what "legal work" sounds like.
+Running both makes that confound MEASURABLE instead of invisible.
+
+`scripts/activity_domain_synth.py`. Transcripts under `/tmp/claude-1000/synth_{fable,sonnet}/`
+(not committed — synthetic, and regenerable from the brief in this note's commit message).
+
+| | Fable | Sonnet |
+|---|---|---|
+| correct | 2/6 | 3/6 |
+| **generator agreement** | **2/6** | |
+
+```
+eng_billing   fable=finance      sonnet=engineering   DIVERGE
+legal         fable=finance      sonnet=legal         DIVERGE
+operations    fable=sales        sonnet=marketing     DIVERGE
+support       fable=support      sonnet=engineering   DIVERGE
+finance       fable=finance      sonnet=finance       agree
+medical       fable=general      sonnet=general       agree
+```
+
+**THE VERDICT IS ON THE METHOD, NOT THE CLASSIFIER.** The generators disagree on two thirds of
+sessions, so the label depends more on WHO WROTE THE TRANSCRIPT than on the domain. ⚠️ **Had
+only one generator been run, either "2/6 — does not work" or "3/6 — promising" would have been
+reported, and both would have been artifacts.** Do not use single-generator synthetic data to
+validate this facet.
+
+⚠️ **THE HARD NEGATIVE FAILED ON ONE GENERATOR: `eng_billing` -> `finance` at 75% (Fable).**
+Every turn in that session is `pytest`, `alembic`, `Edit`, `gh pr checks` — unambiguously
+engineering — and it read as finance because it discusses accruals and GL codes. Sonnet's
+version of the same brief scored `engineering` 100%. **The vocabulary-vs-activity confusion is
+now DEMONSTRATED rather than hypothetical, and whether it fires is luck.**
+
+**One finding survives the disagreement, and only one:** `medical` -> `general` on BOTH
+generators. Clinical-ops work reads as generic document work to this classifier, or the
+`medical` label description is bad. It is the single cross-generator signal here and the only
+result worth following up.
+
+### What this does NOT overturn
+
+The real-corpus result stands on its own evidence: 40 engineering windows -> engineering+product
+93% with 0% sales/marketing; 7 John windows -> sales 71% with 0% engineering. That is REAL data
+with REAL ground truth and two corpora that separate completely.
+
+⚠️ **What is now blocked is EXTENDING it.** Legal, medical, support and operations cannot be
+covered by synthesis. And the `eng_billing` failure gives a concrete reason to re-examine the
+**5% `finance`** seen in the engineering windows — that corpus contains real billing, seat-cost
+and capex work, which is exactly the shape that just fooled one generator's hard negative.
