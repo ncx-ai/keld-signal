@@ -1,0 +1,105 @@
+# SECOND LABELLER — the same 80 holdout requests, labelled by an independent agent.
+#
+# Produced by a fresh general-purpose agent given ONLY the blind data and the eight class
+# definitions. It was explicitly denied request_route_vocab.py (the classifier), both of the
+# first labeller's label files, the results doc, and the prediction keys, and it reported
+# reading none of them. It had no knowledge of the rules, the first labeller's conventions,
+# or any score.
+#
+# RESULT: raw agreement 72/80 = 0.900, Cohen's kappa 0.885.
+#   classifier vs labeller A (its own author) : acc 0.925  macro F1 0.920
+#   classifier vs labeller B (this file)      : acc 0.825  macro F1 0.815
+#   >>> 0.100 of the headline number was SHARED CONVENTION, not correctness.
+#   On the 72 requests both labellers agree on, the classifier scores 66/72 = 0.917.
+#
+# ⚠️ SIX OF THE EIGHT DISAGREEMENTS ARE ONE AXIS, AND IT IS A RULE I WROTE UNILATERALLY.
+# My rule 2 says "an authored program in a tool argument is `author_code` whatever the program
+# DOES". The independent labeller arrived at the opposite convention without prompting: "an
+# inline script that only reads and prints -> retrieve; one that writes or changes something
+# -> author_code/author_prose/operate by what it wrote." Both are defensible. I wrote mine
+# into the classifier AND into my labels, so they agreed with each other by construction.
+#
+# Population size of the dispute: 398 requests = 29.6% of `author_code`, 4.9% of all requests.
+# Resolving it toward `retrieve` moves author_code 16.4% -> 11.6% and retrieve 39.2% -> 44.1%.
+#
+# Independent second labelling — 80 requests, H001..H080
+H001 retrieve
+H002 verify
+H003 operate
+H004 author_prose
+H005 synthesize
+H006 retrieve
+H007 verify
+H008 retrieve
+H009 verify
+H010 delegate
+H011 synthesize
+H012 retrieve
+H013 synthesize
+H014 synthesize
+H015 acknowledge
+H016 verify
+H017 verify
+H018 retrieve
+H019 acknowledge
+H020 retrieve
+H021 retrieve
+H022 verify
+H023 operate
+H024 retrieve
+H025 synthesize
+H026 verify
+H027 retrieve
+H028 delegate
+H029 delegate
+H030 verify
+H031 synthesize
+H032 retrieve
+H033 author_prose
+H034 acknowledge
+H035 acknowledge
+H036 verify
+H037 author_code
+H038 author_code
+H039 retrieve
+H040 operate
+H041 operate
+H042 retrieve
+H043 acknowledge
+H044 synthesize
+H045 retrieve
+H046 acknowledge
+H047 acknowledge
+H048 author_prose
+H049 acknowledge
+H050 retrieve
+H051 operate
+H052 operate
+H053 author_prose
+H054 author_prose
+H055 delegate
+H056 verify
+H057 synthesize
+H058 delegate
+H059 retrieve
+H060 delegate
+H061 synthesize
+H062 delegate
+H063 synthesize
+H064 author_prose
+H065 author_prose
+H066 author_code
+H067 synthesize
+H068 delegate
+H069 author_prose
+H070 delegate
+H071 retrieve
+H072 author_code
+H073 delegate
+H074 retrieve
+H075 retrieve
+H076 retrieve
+H077 verify
+H078 verify
+H079 author_prose
+H080 synthesize
