@@ -47,11 +47,10 @@ def text_of(c):
     if not isinstance(c,list): return ""
     return "\n".join(b.get("text","") for b in c if isinstance(b,dict) and b.get("type")=="text")
 
-def bound(t,n):
-    t=" ".join(t.split())
-    if len(t)<=n: return t
-    cut=t[:n]; i=max(cut.rfind(". "),cut.rfind("! "),cut.rfind("? "))
-    return (cut[:i+1] if i>n*0.4 else cut)+f" [... {len(t)-n} chars omitted]"
+# ⚠️ NO TRUNCATION. There was a `bound(t, n)` here that cut turns at 700/400 runes and
+# appended "[... N chars omitted]". It meant the LABELLER read a third of the text the MODEL
+# scored, which invalidates the comparison outright — and it re-broke AGENTS.md's standing rule
+# for the third time in this project. Text is cut at a TURN boundary or not at all.
 
 def load(f):
     turns=[]; obs=0; n=0
@@ -90,8 +89,8 @@ def windows_of(f, turns):
         sl=[x for x in turns if lo<=x[0]<hi]
         here=lo
         if not sl: continue
-        prompts=[bound(t,700) for r,t in ((x[1],x[2]) for x in sl) if r=="USER"]
-        prose=[bound(t,400) for r,t in ((x[1],x[2]) for x in sl) if r=="ASSISTANT"]
+        prompts=[t for r,t in ((x[1],x[2]) for x in sl) if r=="USER"]
+        prose=[t for r,t in ((x[1],x[2]) for x in sl) if r=="ASSISTANT"]
         if not prompts and not prose: continue
         out.append({"file":f,"proj":os.path.basename(os.path.dirname(f)),
                     "start":here.isoformat(),"prompts":prompts,"prose":prose,

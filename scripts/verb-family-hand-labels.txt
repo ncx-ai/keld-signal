@@ -48,7 +48,19 @@
 #  5. `code.write` = authoring code that did not exist. `code.edit` = changing code that did.
 #  6. `other` is abstention. Use it when no verb fits, never as a tiebreak.
 #
-# index  verbs, most prominent first
+# ⚠️⚠️ THE 60 LABELS BELOW ARE SUPERSEDED AND MUST NOT BE SCORED AGAINST. ⚠️⚠️
+#
+# They were assigned from views whose turns were TRUNCATED at 700/400 runes with
+# "[... N chars omitted]" markers — so the labeller read 131k chars while the model would have
+# scored 333k. A label made from a third of the input is not an answer key for that input.
+# The frame generator's `bound()` was removed; views and model input are now byte-identical.
+#
+# This is the THIRD time a rune-count cut broke something in this project (truncation markers
+# fed to GLiNER2; list enumerators split as sentence ends; now this). Retained rather than
+# deleted so the failure is visible instead of quietly overwritten. Replacement labels follow
+# under a second header below.
+#
+# index  verbs, most prominent first   [SUPERSEDED]
 V001 text.transform > converse
 V002 review > text.transform > research
 V003 review
