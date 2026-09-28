@@ -611,3 +611,58 @@ with REAL ground truth and two corpora that separate completely.
 covered by synthesis. And the `eng_billing` failure gives a concrete reason to re-examine the
 **5% `finance`** seen in the engineering windows — that corpus contains real billing, seat-cost
 and capex work, which is exactly the shape that just fooled one generator's hard negative.
+
+## 2026-09-27 — Is there a public dataset of professional domain work? NO. Searched, recorded.
+
+After synthesis failed the generator-agreement check, the remaining option was real public data.
+**WildChat** (`allenai/WildChat-1M`, ungated, 838k conversations; 4.8M version also ungated) is
+the best available: real people, real work, no awareness it would ever be classified, so the
+generator confound that sank synthesis is absent by construction.
+
+**One 230 MB shard = 59,857 real English conversations** was downloaded and filtered locally
+(`scripts/wildchat_filter.py`; the HF search API 500s constantly on this dataset, so shard +
+local filter is the reliable route). Filter: >=2 distinct professional terms for a domain AND
+>=4 turns AND >=800 chars — deliberately loose.
+
+**It returned 28 candidates. 0.05% of the corpus.**
+`legal 2 · medical 5 · finance 2 · support 5 · marketing 9 · sales 6`
+
+All 28 were then read BLIND and labelled. What they actually are:
+
+| what they really are | n | examples |
+|---|---|---|
+| students / coursework | 8 | lease-accounting textbook problems, an accounting exam, a thesis lit review, a security-cert quiz |
+| job seekers | 3 | writing a sales CV, interview answers |
+| consumer questions | 3 | "what is a non disclosure agreement?"; anxiety about signing an NDA with no expiry |
+| content generation | ~5 | print-ad ideas, SMART objectives, cold outreach emails |
+| **engineering in domain clothing** | 2 | R scraping clinical-trial registries; an Ansible/Liquibase failure |
+| **genuine professional work** | **~1** | isolating a VPlex performance issue |
+
+⚠️ **PUBLIC CHAT DATA CONTAINS DOMAIN VOCABULARY IN ABUNDANCE AND DOMAIN WORK ALMOST NOT AT
+ALL.** Two "finance" hits were homework problems about lease accounting — maximum finance
+vocabulary, zero finance work. This is exactly the vocabulary-vs-activity confusion that fooled
+the synthetic hard negative, occurring naturally in the wild.
+
+**The reason is structural and will not be fixed by looking harder.** Professional legal,
+medical and finance work with AI happens INSIDE organisations, on enterprise tools, under
+confidentiality. The closest thing found is Microsoft's study of ~105,000 enterprise M365
+Copilot conversations WITH INDUSTRY LABELS (arXiv 2605.23958) — a research paper, not a
+download. The right data exists and is behind an enterprise wall.
+
+### The one thing worth keeping
+
+**W004** (R code scraping clinical-trial registries) and **W025** (an Ansible/Liquibase
+deployment failure) are NATURALLY-OCCURRING HARD NEGATIVES: real engineering work dense in
+medical and infrastructure vocabulary, written by people with no idea it would be classified.
+**These are worth more than any synthetic hard negative**, because they test the
+vocabulary-vs-activity confusion on real text. Two is not a corpus, but it is two more than
+existed before.
+
+### Consequence for the domain facet
+
+The real-corpus result stands (engineering 93% / John 71%, clean separation). **It cannot be
+extended to legal, medical, finance or support by ANY route currently available** — not
+synthesis (generators disagree 2/3 of the time), not public chat data (the work is not in it).
+Validating those domains requires transcripts from people doing that work, i.e. real Keld
+users in those functions. ⚠️ **Until then, a published domain facet is measured on engineering
+and product only, and must say so.**
