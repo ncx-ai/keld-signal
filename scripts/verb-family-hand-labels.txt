@@ -1,0 +1,51 @@
+# Hand labels — VERB and FAMILY, multi-label, prominence-ordered.
+# Corpus: a colleague's REAL Claude Code transcripts (~/keld/john-projects), 60 windows.
+#
+# THIS HEADER IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN, and the labels before any arm is
+# scored. Both orderings are provable from git, which is what makes the numbers falsifiable.
+#
+# REFRAME (repo owner, 2026-09-28): VERB and FAMILY only. Context/domain is DEFERRED — it could
+# not be validated by any available route: synthesis failed its generator-agreement check (two
+# generators disagreed on 2 of 3 sessions), and public chat data does not contain the work
+# (28 candidates in 59,857 real conversations, of which ~1 was genuine professional work).
+#
+# WHY THIS CORPUS. The engineering frame has ZERO text.* gold and 7 of 17 verbs with any
+# support. This one contains real document/publishing work (Notion docs, a publish skill,
+# review) alongside real engineering, so the language and understanding families are reachable.
+#
+# ⚠️ 146 of 218 files EXCLUDED as observer sessions — an agent's meta-transcripts whose every
+# turn is `[MESSAGE FROM NON-USER SOURCE]` / `<observed_from_primary_session>`. Not human work.
+# Rule applied: drop a file if >20% of its turns carry that marker.
+#
+# ⚠️ SAMPLING IS STRATIFIED, NOT RANDOM: 30 from `keld`, 20 from `keld-website`, 10 from the
+# rest. `keld-website` is OVERSAMPLED on purpose because it is the only source of language-family
+# work; a proportional draw would be ~85% code/agentic and could not measure the family axis at
+# all. **The label distribution below is therefore NOT the population's** and no base rate may
+# be read off it.
+#
+# VERBS (17) and their FAMILY, from keld-activity-types-v1.csv — the vocabulary is FIXED:
+#   language       text.create  text.transform  text.summarize  transcribe
+#   understanding  classify  extract  review
+#   agentic        research  plan  converse
+#   media          image.create  video.create  audio.create
+#   code           code.write  code.edit
+#   infra          embed
+#   fallback       other
+#
+# FORMAT — verbs only, most prominent first. Family is DERIVED from the verb, never labelled
+# separately, so the two axes cannot disagree by clerical error:
+#
+#     <index>  <verb> > <verb> > <verb>
+#
+# RULES, fixed before labelling:
+#  1. Order by prominence within the window, not by what came first.
+#  2. Include a verb if that activity genuinely occupies part of the window. Two or three is
+#     normal. This is the requested output shape, not hedging.
+#  3. Judge by the ARTIFACT and INTENT, not the mechanism. Writing a script to publish a doc is
+#     publishing, not coding, IF the doc is the point. Writing the publisher itself is coding.
+#  4. `review` = checking work for ERRORS, including the assistant's own QA. Reading code to
+#     understand it is `research`.
+#  5. `code.write` = authoring code that did not exist. `code.edit` = changing code that did.
+#  6. `other` is abstention. Use it when no verb fits, never as a tiebreak.
+#
+# index  verbs, most prominent first
