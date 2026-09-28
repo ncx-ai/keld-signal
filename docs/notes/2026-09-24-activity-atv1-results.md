@@ -666,3 +666,96 @@ synthesis (generators disagree 2/3 of the time), not public chat data (the work 
 Validating those domains requires transcripts from people doing that work, i.e. real Keld
 users in those functions. ⚠️ **Until then, a published domain facet is measured on engineering
 and product only, and must say so.**
+
+## 2026-09-28 — the REFRAME to verb+family, and a gold set thrown away for truncation
+
+Two things happened here and only one of them is a result. Recording both, because the
+discarded one cost more.
+
+### The reframe
+
+Repo owner, 2026-09-28: *"we should reframe the investigation we are doing so that we
+primarily focus not on the domain or 'context' as it is called in the activity types
+spreadsheet but just on verb and family detection. We will approach 'context'/domain
+separately later."*
+
+That follows directly from the two refutations above it — synthesis failed its
+generator-agreement control (two generators agreed on 2 of 6 dimensions) and public chat
+data does not contain the work (28 candidates in 59,857 real WildChat conversations, of
+which ~1 was genuine professional work). **Domain is not measurable on any corpus in
+hand**, so it is deferred rather than guessed at.
+
+### The corpus, and why it is not the engineering one
+
+A colleague's real Claude Code transcripts (`~/keld/john-projects`). The engineering frame
+this doc has been scoring against has **zero `text.*` gold and support for 7 of 17 verbs**,
+so it structurally cannot measure the language or understanding families. This corpus
+carries real Notion document work, a publishing pipeline, and lint/review passes alongside
+real engineering.
+
+- **146 of 218 files EXCLUDED** as observer sessions — agent meta-transcripts whose turns
+  are `[MESSAGE FROM NON-USER SOURCE]` / `<observed_from_primary_session>`. Rule: drop a
+  file if >20% of its turns carry the marker. Not human work.
+- **Sampling is STRATIFIED, not random** — 30 `keld`, 20 `keld-website`, 10 rest.
+  `keld-website` is oversampled deliberately; a proportional draw is ~85% code/agentic and
+  could not measure the family axis at all. ⚠️ **The label distribution is therefore NOT
+  the population's and no base rate may be read off it.**
+- **Blocks are cut by the SHIPPED rule** — 20-minute budget, 15-minute idle (`IDLE_BINS=3`
+  over 300s bins) — after the repo owner caught that cost had been measured on blocks while
+  accuracy was measured on 60-minute windows. ⚠️ **The engineering gold set is 60-minute
+  windows and single-label; the two are NOT poolable.** Re-labelling that set at block scale
+  is owed work, not done.
+
+### ⚠️ The first 60 labels were thrown away, and the cause was a rune-count cut
+
+The blind-view generator capped each turn at 700/400 runes with `[... N chars omitted]`
+markers. So **the labeller read 131k chars while the model would have scored 333k** — a
+label made from 39% of the input is not an answer key for that input. 60 labels were
+assigned, then discarded unscored.
+
+**This is the THIRD instance of the same defect class in this project**, each in a new
+place:
+
+| # | Where | Consequence |
+|---|---|---|
+| 1 | Truncation markers fed to GLiNER2 | 36% of sub-windows carried `[... N chars omitted]`; recall 0.190 |
+| 2 | Splitter treated `1.` / `2.` as sentence ends | numbered procedures shredded mid-item; fixing both took recall 0.190 → 0.310 |
+| 3 | Blind-view turns capped at 700/400 runes | 60 labels discarded before scoring |
+
+Each time the *consequence* was noticed and reasoned about instead of the *cause* being
+removed. AGENTS.md already carried the rule ("Never cut text mid-sentence... a conversation
+window handed to a model"). `bound()` is now deleted rather than tuned, and the fix is
+verified by equality rather than inspection: `view text 333k  turn text 333k  identical:
+True`, `markers in views: 0`.
+
+The superseded labels are **kept in `scripts/verb-family-hand-labels.txt` under a warning
+header** rather than deleted, and the scorer now cuts at an explicit `# LIVE LABELS` marker
+rather than relying on later-wins dict assignment — which would have silently scored the
+wrong set the moment anyone reordered the file.
+
+⚠️ **V-ids do not correspond between the two sets.** The frame was regenerated after the fix
+and more windows clear the minimum-length filter untruncated, so the sample itself differs.
+
+### What is being scored
+
+60 blocks, multi-label, prominence-ordered, committed to git **before** any arm ran — the
+ordering is provable from `git log`, which is what makes the numbers falsifiable.
+
+Two derivations of FAMILY, because they can disagree:
+
+- **F-direct** — one 7-way call against family descriptions.
+- **F-derived** — ask for the verb (17-way), map to family via the CSV.
+
+FAMILY is a different question from the refuted hierarchical cascade (0.350, below constant).
+That arm failed because a wrong family pick is **unrecoverable** when the verb pass can only
+choose inside it. Nothing about that says a 7-way family label is a bad *output* — and the
+domain probe above showed coarser, better-separated vocabularies classify markedly better.
+
+Results land in the next section when the run finishes.
+
+### Method note: GPU
+
+Quality numbers now run on GPU (`map_location="cuda"`), after a CPU run was killed at 21
+minutes having produced nothing readable. CPU timing is only measured when CPU cost *is* the
+measurement — the on-device budget question — and that is a separate arm with its own
+conditions.
