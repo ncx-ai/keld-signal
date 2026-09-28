@@ -998,3 +998,108 @@ The three-source arm did it correctly and is the only positive evidence for deco
 far: modality proposes candidates at one sub-window's weight, **recall 0.476 -> 0.548 with 11
 candidates added and top-1 never displaced** — but n=7. That is the arm worth re-running at
 n=60, and `propose, never gate` is its load-bearing rule.
+
+## 2026-09-28 — THE UNIT WAS THE PROBLEM. Per-request, deterministic, macro F1 0.824.
+
+Repo owner, twice, emphatically: *"WE WANT TO KNOW THE ACTIVITY TYPES ***INSIDE*** BLOCKS, NOT
+UNIQUELY ATTRIBUTE ONE TYPE TO A BLOCK"*, and the routing unit is **per-request**.
+
+Every arm above scored one top-1 label per 20-minute block against a hand-assigned "primary".
+That was wrong twice over: a router substitutes a REQUEST, and the asked-for output was always
+a DISTRIBUTION over what a block contains. The requests are grouped by `requestId` — thinking,
+text and tool_use blocks of one inference share it and share one `usage`.
+
+### The population, 298 transcripts / 8,193 requests
+
+| routing class | %req | %out tok | %in tok | med out | med in | %think |
+|---|---|---|---|---|---|---|
+| operate | 31.7% | 26.9% | 39.7% | 410 | 179,554 | 25.7% |
+| retrieve | 29.3% | 16.2% | 19.0% | 241 | 75,778 | 32.9% |
+| author_code | 12.1% | 15.0% | 9.4% | 576 | 94,952 | 26.8% |
+| author_prose | 8.7% | 18.1% | 11.8% | 776 | 208,498 | 18.1% |
+| synthesize | 7.2% | 14.1% | 8.8% | 942 | 132,390 | 19.8% |
+| verify | 5.1% | 3.4% | 5.2% | 189 | 96,178 | 20.0% |
+| acknowledge | 2.9% | 0.7% | 1.7% | 232 | 65,592 | 12.2% |
+| delegate | 2.9% | 5.6% | 4.3% | 1,395 | 274,381 | 21.8% |
+
+**41.5% of requests are subagent sidechain** — included, and they were in the hand-labelled
+block prose too (`verb_family_frame.load()` has no `isSidechain` filter), so labels and
+requests cover the same population. 44% of subagent tool calls are Read/Edit/Write.
+
+⚠️ **atv1's verbs were abandoned here, measured rather than assumed:** 38.8% of requests fall
+to `other` under them — git, docker, mkdir, cp, rm, curl, running scripts, killing servers.
+atv1 names knowledge work; the request population is dominated by mechanical operations. The
+eight classes above assert **full coverage** instead; there is no `other` bucket.
+
+⚠️ **INPUT:OUTPUT IS 235:1** — median 113,286 in, 403 out, 1.71 billion against 7.3 million
+corpus-wide. Choosing a model by activity type optimizes the **0.4%** of token flow that is
+generation. Whatever the routing taxonomy ends up being, the money is in the context.
+
+### Result: 120 blind hand-labelled requests
+
+Stratified 15/class (a proportional draw gives single digits for the classes that decide
+routing quality, so **no base rate may be read off the labels**). Sample committed at `e1df5e6`
+and labels at the commit after, both before scoring.
+
+| class | gold | pred | hit | prec | rec | F1 |
+|---|---|---|---|---|---|---|
+| delegate | 15 | 15 | 15 | **1.000** | **1.000** | **1.000** |
+| author_code | 18 | 15 | 15 | 1.000 | 0.833 | 0.909 |
+| synthesize | 18 | 15 | 15 | 1.000 | 0.833 | 0.909 |
+| acknowledge | 12 | 15 | 12 | 0.800 | 1.000 | 0.889 |
+| retrieve | 18 | 15 | 14 | 0.933 | 0.778 | 0.848 |
+| verify | 15 | 15 | 12 | 0.800 | 0.800 | 0.800 |
+| author_prose | 14 | 15 | 11 | 0.733 | 0.786 | 0.759 |
+| **operate** | 10 | 15 | 6 | **0.400** | 0.600 | **0.480** |
+
+**macro F1 0.824**, 100/120 agreement, **with no model at all.** Against the block-level arm on
+the same corpus: top-1 0.350 against a 0.233 constant.
+
+Population-weighted (per-class precision x that class's real share): **expected accuracy on a
+random request 0.751**. `operate` alone costs 0.19 of it — lifting its precision to 0.80 takes
+the estimate to **0.878**, and it is the single highest-leverage fix in the whole project.
+
+Confusions are almost entirely *into* `operate`: `retrieve->operate` 4, `verify->operate` 2,
+`author_code->operate` 2, plus `operate->author_prose` 3. It is the residual and it absorbs
+everything the Bash rules do not name.
+
+### ⚠️ THE LIMITATION THAT BOUNDS THIS NUMBER
+
+**I wrote the classifier, then labelled the sample.** The blind file carried no class, the order
+was shuffled, the key was held back and the sample was committed first — but knowing the rules
+means the labels may reproduce the classifier's logic rather than judge independently.
+**0.824 is therefore an upper bound, not an estimate.** A second labeller who has not seen
+`request_route_vocab.py` is the fix, and it is owed before this number is quoted anywhere.
+
+Two rule edges are where that bias would bite hardest, both written down during labelling:
+an authored program in a tool argument is `author_code` whatever the program does; a real
+commit message or PR body is `author_prose` while `git add` plus a one-liner is `operate`.
+
+### What a block publishes
+
+Not one label — the mix, in both calls and output tokens, which disagree and should both ship:
+
+    V047   55 requests, 42,007 output tokens
+      operate      50.9% of calls / 37.9% of output
+      author_code  27.3%          / 45.1%
+      retrieve     10.9%          / 11.8%
+
+    V043   53 requests, 68,413 output tokens
+      operate      47.2% / 42.4%      author_prose  9.4% / 25.8%
+      retrieve     18.9% /  5.5%      synthesize    3.8% / 14.2%
+      author_code  17.0% / 10.8%
+
+`author_prose` is 9.4% of V043's calls and **25.8% of its output tokens**. A router reading
+call-share alone would under-weight it by a factor of nearly three.
+
+### Two data defects found by reading examples, not by checking totals
+
+1. **Session forks copy history.** 6.8% of requestIds appear in more than one transcript file,
+   so the collector concatenated every copy — one Bash call counted three times, narration
+   tripled. 1.15x overall, 2-3x on affected requests. A global check for duplicate tool_use
+   block IDs returned **0.0%**, because the duplicates are across files. Only reading a sampled
+   record showed it. Fixed by deduping on record `uuid`.
+2. **`cd <path> &&` prefixes 56.7% of Bash calls** and hid the real command from a rule that
+   read the first token, so `cd` looked like the dominant activity. And **a Bash heredoc is
+   usually authored PROSE, not code** — 24.9% of Bash calls carry one, median 945 chars against
+   178, and the bulk are `git commit -m "$(cat <<EOF...)"` and `gh pr create --body`.
