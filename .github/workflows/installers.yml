@@ -612,10 +612,24 @@ jobs:
             CertificateProfileName = 'keld-public-trust'
           } | ConvertTo-Json | Set-Content -LiteralPath $meta -Encoding ascii
 
-          # ⚠️ `$f` IS INNO'S PLACEHOLDER and must survive into the .iss unexpanded;
-          # it is single-quoted here so PowerShell does not read it as a variable.
-          # Quoted, because a path with a space otherwise splits into two files.
-          $cmd = '"{0}" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "{1}" /dmdf "{2}" $f' -f `
+          # ⚠️ **NO QUOTES AROUND THE PATHS, AND THAT IS A CONSTRAINT RATHER THAN
+          # A STYLE.** The whole command is passed to iscc as ONE argument
+          # (/Skeldsign=<command>), so any quote inside it collides with the
+          # quoting of the argument itself. The first attempt produced
+          #     "/Skeldsign="D:\...\signtool.exe" sign ... $f"
+          # and iscc answered by printing its banner and exiting 1 with no
+          # message at all — a parse failure that looks exactly like a compile
+          # failure. Unquoted only works while no path contains a space, so that
+          # is ASSERTED rather than assumed: a space here would otherwise split
+          # the command silently and the uninstaller would go unsigned.
+          foreach ($p in @($signtool.FullName, $dlib.FullName, $meta)) {
+            if ($p -match '\s') {
+              throw "signing tool path contains a space and cannot be passed to iscc unquoted: $p"
+            }
+          }
+          # `$f` IS INNO'S PLACEHOLDER and must survive unexpanded, hence the
+          # single-quoted format string.
+          $cmd = '{0} sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib {1} /dmdf {2} $f' -f `
                  $signtool.FullName, $dlib.FullName, $meta
           "KELD_SIGN_COMMAND=$cmd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "uninstaller signer ready: $($signtool.FullName)"
@@ -634,17 +648,29 @@ jobs:
           # is set, and then REQUIRES a SignTool named `keldsign` to exist — the two
           # must be supplied together or iscc halts.
           #
-          # ⚠️ THE /S ARGUMENT MUST BE ONE QUOTED TOKEN. A signing command contains
-          # spaces, and unquoted, iscc reads each word after the first as another
-          # script filename and fails with "You may not specify more than one script
-          # filename" — measured, not guessed.
+          # ⚠️ THE /S ARGUMENT MUST REACH iscc AS ONE TOKEN. The command contains
+          # spaces, and split, iscc reads each word after the first as another
+          # script filename and fails with "You may not specify more than one
+          # script filename" — measured, not guessed.
+          #
+          # ⚠️ BUT DO NOT ADD THE QUOTES BY HAND. The command already contains no
+          # quotes (see the signer step), and hand-wrapping it produced nested
+          # quotes that iscc could not parse at all: banner, exit 1, no message.
+          # Passing it as ONE array element lets PowerShell quote it correctly.
           $isccArgs = @()
           if ($env:KELD_SIGN_COMMAND) {
-            $isccArgs += '"/Skeldsign=' + $env:KELD_SIGN_COMMAND + '"'
+            $isccArgs += "/Skeldsign=$($env:KELD_SIGN_COMMAND)"
           }
           $isccArgs += "installers\windows\keld-agent.iss"
-          & $iscc @isccArgs 2>&1 | Tee-Object -Variable isccOut
-          if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+          $isccOut = & $iscc @isccArgs 2>&1
+          $isccOut | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) {
+            # ⚠️ ECHO THE OUTPUT BEFORE THROWING. iscc reports a bad command line
+            # by printing its banner and nothing else, so a bare "iscc failed"
+            # leaves nothing to diagnose from — which is how the first attempt at
+            # this step was read as a compile error rather than a quoting bug.
+            throw "iscc failed (exit $LASTEXITCODE); output above"
+          }
 
           # ⚠️ ASSERT THE UNINSTALLER WAS ACTUALLY SIGNED, rather than trusting
           # that a directive was set. unins000.exe is compressed inside
