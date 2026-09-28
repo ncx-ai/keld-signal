@@ -1243,3 +1243,44 @@ requests at 0.958 precision is a different and better instrument than one that a
 If the residual ever stalls at a floor, THAT bounded, well-posed set is where a small model
 would earn its place: a 205-character median command, an 8-way choice, and a deterministic
 prior. Not on blocks, and not as the decider.
+
+### 2026-09-28 — the residual, round two: a RESOLVER instead of a fifth pattern
+
+⚠️ **CORPUS: all of this is JOHN'S transcripts** (`~/keld/john-projects`), 298 files. The 60
+blocks, the 120 labels and the 80 holdout labels all come from there. The only frame measured
+on the repo owner's own transcripts is the engineering one (100 windows, 60-minute,
+single-label) — already recorded as not poolable with these. **None of these numbers has been
+checked against a second person's work**, and that is the open generalisation question.
+
+The residual's top 30 command heads turned out not to be 30 rules but ~6 mechanisms, and four
+were the same bug a fourth time: `git -C "$MAIN" worktree list`, `npm --prefix x test`,
+`"$SKILL/scripts/review-package"`, `.venv/bin/uvicorn` — a **flag or a path standing where the
+verb belongs**, after `cd &&`, `echo "==="` and `VAR="…"` had each been patched in turn.
+
+So `strip_lead` became a resolver plus `canonical()`: walk past every prefix, assignment, loop
+header, path and value-taking flag, then read the verb. `VALUE_FLAGS` is per program, because
+`-C` consumes its argument for `git` and nothing else does.
+
+**Residual 8.2% → 2.8%.** Holdout macro F1 0.913 → **0.920**, accuracy 74/80 = **0.925**, zero
+abstentions in the sample. Fitted 0.936 → 0.945. Errors are down to 6 on each set and no
+longer share a mechanism: `synthesize->acknowledge` 2, then five singletons.
+
+#### ⚠️ Two self-inflicted defects in this round, both caught by measuring rather than by tests
+
+**1. The resolver broke `CODE_CMD`.** `canonical()` strips flags — including the `-c` in
+`python3 -c '...'`, which is not noise, it IS the verb. 171 requests silently stopped being
+`author_code`. `classify_bash` now holds **two views** of the command: `c` with flags intact
+for the regexes where a flag identifies the class, and `canon` with flags resolved for the
+ones where a flag hides the verb. Each pattern is tried on the form that can answer it.
+
+**2. A catch-all came back wearing a new name, and lasted one commit.** `SCRIPTISH =
+^[a-z][a-z0-9_-]*$` was meant for path-invoked scripts; it matches *every bare lowercase
+program*, so it absorbed **29% of `operate`** — reinstating, under a different label, exactly
+the fallback the previous commit had removed. It was found by re-running the composition check
+(`what fraction of operate came from a positive match?`) that the previous round introduced
+for this purpose, not by any test. The replacement is `was_path` from `canonical()`: a script
+invoked **by path** that matched no rule is being run; a bare unknown verb stays unknown.
+
+`operate` composition now: 65.5% `SIDE_FX`, 26.4% a tool in `OPERATE_TOOLS`, 6.8% path-invoked
+script, 1.2% `echo` redirect, **1 request unaccounted**. That is the number that says it is a
+class again and not a bucket.

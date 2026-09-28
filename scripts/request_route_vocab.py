@@ -31,37 +31,77 @@ def split_heredocs(c):
     bodies=[m.group(3) for m in HEREDOC_RE.finditer(c)]
     return HEREDOC_RE.sub(" <<BODY> ", c), bodies
 
+# Flags that CONSUME the next token, per program. Without these, `git -C "$MAIN" worktree`
+# reads as the verb `-C`, and `npm --prefix x test` as the verb `--prefix`.
+VALUE_FLAGS = {
+    "git":  {"-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace"},
+    "npm":  {"--prefix", "-w", "--workspace", "--registry"},
+    "pnpm": {"--prefix", "-w", "--filter"}, "yarn": {"--cwd"},
+    "docker": {"-H", "--host", "--context", "-f", "--file"},
+    "kubectl": {"-n", "--namespace", "--context", "-f"},
+    "uv": {"--python", "--with", "--directory"}, "uvx": {"--from", "--python", "--with"},
+}
+TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|\$\([^)]*\)|\S+')
+
 def strip_lead(c):
-    """Strip leading hops that hide the real verb.
+    """Walk past everything that is not a verb.
 
-    ⚠️ THIS IS THE THIRD TIME THE SAME DEFECT HAS BEEN FOUND HERE. `cd <path> &&` prefixed
-    56.7% of Bash calls; then `echo "=== header ===";` prefixed many more; now `WS="/long/
-    path"` assignments and `cd "a quoted path with spaces"` account for ~10% of what still
-    falls through, surfacing as command heads like `scratchpad"` and `progress.md` -- i.e.
-    fragments of a path, which is what a hidden verb always looks like. Each round the fix
-    was written for the form in front of me rather than for the shape of the problem, which
-    is: the real verb is not the first token until every prefix is gone.
-
-    A loop header is the same thing one level up: `for f in *.py; do <VERB>; done` is a
-    request about <VERB>, not about `for`."""
-    prev=None
-    while c!=prev:
-        prev=c
+    FOURTH ITERATION OF THE SAME BUG, AND THE REASON THIS IS A RESOLVER RATHER THAN A PATTERN.
+    Each previous round fixed the form in front of me: `cd <path> &&` (56.7% of Bash calls),
+    then `echo "=== header ===";`, then `VAR="/long/path"` -- and the residual still showed
+    heads like `review-package"` and `git -C`, a path fragment or a flag standing where the
+    verb belongs. The shape of the problem was never "this prefix": the verb is not the first
+    token until every prefix, assignment, loop header, path and value-taking flag has been
+    walked past. A fifth pattern would have repeated the mistake a fourth time.
+    """
+    prev = None
+    while c != prev:
+        prev = c
         for pat in (
-            # cd / pushd, quoted or bare
-            r"^\(?\s*(?:cd|pushd)\s+(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]+)\s*(?:&&|\|\||;|\n)\s*(.*)$",
-            # echo header line
+            r"^\(?\s*(?:cd|pushd)\s+(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]+)"
+            r"(?:\s+2>[^\s;&|\n]+)?\s*(?:&&|\|\||;|\n)\s*(.*)$",
             r"^\s*echo\s+(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]*)\s*(?:&&|;|\n)\s*(.*)$",
-            # VAR=value / VAR="value with spaces" / export VAR=...
-            r"^\s*(?:export\s+|local\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\$\([^)]*\)|[^\s;&|\n]*)\s*(?:&&|;|\n)\s*(.*)$",
+            r"^\s*(?:export\s+|local\s+)?[A-Za-z_][A-Za-z0-9_]*="
+            r"(?:\"[^\"]*\"|'[^']*'|\$\([^)]*\)|[^\s;&|\n]*)\s*(?:&&|;|\n)\s*(.*)$",
             r"^\s*(?:source|\.|set|shopt|umask)\s+[^\n;&]*(?:&&|;|\n)\s*(.*)$",
-            # loop / conditional header -> classify the BODY
-            r"^\s*(?:for|while|until)\b[^\n;]*?;?\s*do\s+(.*?)(?:;\s*done|\s*done)\s*$",
-            r"^\s*if\b[^\n;]*?;?\s*then\s+(.*?)(?:;\s*fi|\s*fi)\s*$",
+            # loop / conditional headers, MULTI-LINE as well as one-line
+            r"^\s*(?:for|while|until)\b.*?\bdo\b\s*(.*?)(?:\n|;)\s*done\b",
+            r"^\s*if\b.*?\bthen\b\s*(.*?)(?:\n|;)\s*fi\b",
         ):
-            m=re.match(pat, c, re.S)
-            if m: c=m.group(1).strip(); break
+            m = re.match(pat, c, re.S)
+            if m:
+                c = m.group(1).strip()
+                break
     return c.strip()
+
+def canonical(c):
+    """`<prefixes> /long/path/prog --flag val sub ...`  ->  `prog sub ...`
+
+    Resolves the two shapes that survive the prefix strip: a program invoked by PATH (the head
+    is `"$SKILL/scripts/review-package"` or `.venv/bin/pytest`, so no name-based rule can
+    fire), and a value-taking flag sitting between the program and its subcommand.
+    """
+    c = strip_lead(c)
+    tk = TOKEN.findall(c)
+    if not tk:
+        return c, "", ""
+    head = tk[0].strip("\"'")
+    prog = head.rsplit("/", 1)[-1] if ("/" in head or head.startswith("$")) else head
+    vf = VALUE_FLAGS.get(prog, set())
+    i = 1
+    while i < len(tk):
+        if tk[i] in vf:            i += 2; continue   # flag plus its value
+        if tk[i].startswith("-"):  i += 1; continue   # bare flag or --flag=value
+        break
+    rest = " ".join(tk[i:]) if i < len(tk) else ""
+    was_path = ("/" in head) or head.startswith("$")
+    return (prog + " " + rest).strip(), prog, was_path
+
+# ⚠️ A `SCRIPTISH` regex lived here for one commit and was a CATCH-ALL WEARING A NAME:
+# `^[a-z][a-z0-9_-]*$` matches every bare lowercase program, so it absorbed 29% of `operate`
+# including 171 `python3 -c` calls -- reinstating, under a new label, exactly the fallback
+# the previous commit removed. The replacement is `was_path` from canonical(): a script
+# invoked BY PATH and matching no rule is being run; a bare unknown verb is still unknown.
 
 # A commit message or PR body is AUTHORED PROSE -- but only when there IS one. `git add x &&
 # git commit -m "fix(engine): one line"` is a mechanical checkpoint, not authoring; the same
@@ -71,7 +111,7 @@ PR_BODY   =re.compile(r"gh\s+(?:pr|issue|release)\s+\w+[^\n]*--(?:body|notes)|gh
 # An inline interpreter program, in every form that appears in this corpus: -c, -e, and the
 # heredoc-to-stdin forms `python3 - <<PY` / `python3 << EOF` (which `-c` matching missed).
 CODE_CMD  =re.compile(r"(python3?\s+-c\s+['\"]|node\s+-e\s+['\"]|perl\s+-e\s|ruby\s+-e\s"
-                      r"|(?:python3?|node|ruby|perl)\s*-?\s*<<BODY>"
+                      r"|(?:python3?|node|ruby|perl)\b[^;&|\n]*<<BODY>"
                       r"|cat\s*>\s*\S+\.(?:py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
                       r"|tee\s+\S+\.(?:py|go|ts|js|sh|rs|java|rb|css|html|sql)\b"
                       r"|sed\s+-i|perl\s+-[pi])", re.S)
@@ -83,7 +123,7 @@ DOC_WRITE =re.compile(r"(?:cat|tee)\s*>>?\s*\S+\.(?:md|mdx|txt|rst|adoc)\b", re.
 SIDE_FX   =re.compile(r"\b(docker\s+compose|docker\s+run|docker\s+build|kubectl|terraform|pulumi"
                       r"|(?:python3?|node|ruby|bun|deno)\s+\S+\.(?:py|js|mjs|cjs|rb|ts)\b"
                       r"|uv\s+run|uvx|npx|(?:npm|pnpm|yarn|bun)(?:\s+--?\S+)*\s+run\b"
-                      r"|sleep|unzip|zip|tar|curl\s+-[Xd]|scp|rsync|launchctl|systemctl|security\s+(?:add|delete)"
+                      r"|sleep|unzip|zip|tar|curl\s+-[Xd]|git\s+(fetch|clone|worktree\s+(add|remove))|gh\s+repo\s+clone|brew\s+(install|uninstall|upgrade)|make\b|uvicorn|launchctl|open\s+-a|pdftoppm|pdftotext|ffmpeg|sips|magick|scp|rsync|launchctl|systemctl|security\s+(?:add|delete)"
                       r"|npm\s+(?:i|install|ci)\b|pip\s+install|bun\s+install|uv\s+sync"
                       r"|git\s+(?:add|commit|push|checkout|switch|merge|rebase|stash|reset|restore|tag)"
                       r"|gh\s+(?:pr|release)\s+(?:create|merge|edit)"
@@ -97,21 +137,26 @@ VERIFY=re.compile(r"\b(pytest|go\s+test|(?:npm|yarn|pnpm|bun)(?:\s+--?\S+)*\s+(?
 RETRIEVE=re.compile(r"^(ls|cat|head|tail|find|grep|rg|wc|stat|tree|du|which|file|diff|jq|lsof|ps|env|pwd|printenv"
                     r"|sed(?!\s+-i)|awk|cut|sort|uniq|tr|column|xxd|od|base64\s+-d|unzip\s+-l|open\s+-R"
                     r"|curl\s+(?:-[sSLkI]+\s+)*(?:-o\s+\S+\s+)?https?://"
-                    r"|git\s+(log|show|diff|status|branch|remote|rev-parse|merge-base|blame|ls-files)"
+                    r"|git\s+(log|show|diff|status|branch|remote|rev-parse|merge-base|blame|ls-files|grep|ls-tree|cat-file|describe|shortlog|rev-list|worktree\s+list|config\s+--get)|docker\s+(ps|images|logs|inspect)|printf\b"
                     r"|gh\s+(pr\s+(view|list|diff|checks)|api|run\s+(view|list)|issue\s+(view|list))"
                     r"|curl\s+-s?I?\s*http)\b")
 CODE_TOOLS={"javascript_tool","evaluate_script","javascript_exec"}
 # SendUserFile DELIVERS an existing artifact; its caption is a sentence, not a document.
 OPERATE_TOOLS={"SendUserFile","TodoWrite","TaskUpdate","TaskCreate","ExitPlanMode",
+               "resize_window","tabs_close","tabs_create","EnterWorktree","ExitWorktree",
+               "TaskStop","CronCreate","CronDelete","ScheduleWakeup","form_input",
                "EnterPlanMode","mark_chapter","AskUserQuestion","SubagentHandback",
                "preview_start","navigate","computer"}
 RETRIEVE_TOOLS={"Read","Glob","Grep","LS","NotebookRead","WebFetch","WebSearch","ToolSearch",
                 "notion-fetch","notion-search","notion-ai-search","get_page_text","read_page",
+                "notion-get-users","notion-get-teams","CronList","ListAgents","find",
                 "list_network_requests","read_console_messages","notion-query-data-sources"}
 AUTHOR_TOOLS={"Write","Edit","MultiEdit","NotebookEdit"}
-PROSE_TOOLS={"notion-update-page","notion-create-pages","Artifact","ArtifactData",
+PROSE_TOOLS={"notion-update-page","notion-create-pages","Artifact","ArtifactData","ReportFindings",
              "notion-create-comment","mcp__claude_ai_Claude_Docs__update","update","create"}
-DELEG={"Agent","Task","Skill"}
+# SendMessage / RemoteTrigger dispatch instruction to another agent -- the same act as
+# Agent, over a different transport.
+DELEG={"Agent","Task","Skill","SendMessage","RemoteTrigger"}
 
 def ext(p): return os.path.splitext(str(p or ""))[1].lower()
 
@@ -126,27 +171,34 @@ def is_report(t):
     return False
 
 def classify_bash(raw):
+    """Two views of the command, and BOTH are needed.
+
+    ⚠️ `c` keeps the flags; `canon` resolves them away. Matching only `canon` broke
+    CODE_CMD outright -- `python3 -c '...'` had the `-c` stripped as "just a flag", so 171
+    requests stopped being author_code and fell through. The flag IS the verb for some
+    programs and HIDES the verb for others (`git -C <path> log`), so each regex is tried on
+    the form that can answer it, and the flag-resolved form is only a fallback.
+    """
     skel, bodies = split_heredocs(raw)
     body = "\n".join(bodies)
-    c = strip_lead(skel)
-    if VERIFY.search(c):                              return "verify"
+    c = strip_lead(skel)                          # prefixes gone, flags intact
+    canon, prog, was_path = canonical(skel)       # flags resolved, for a flag-hidden verb
+    both = (c, canon)
+
+    if any(VERIFY.search(t) for t in both):           return "verify"
     if COMMIT_MSG.search(c) or PR_BODY.search(c):
-        # authored only if there IS a message: a heredoc/$() body, or a -m string with a
-        # newline or real length. A one-line conventional-commit subject is a checkpoint.
-        m=re.search(r"-m\s*(\"|')(.*?)\1", raw, re.S)
+        m = re.search(r"-m\s*(\"|')(.*?)\1", raw, re.S)
         msg = body if body else (m.group(2) if m else "")
         return "author_prose" if ("\n" in msg or len(msg) > 120) else "operate"
     if CODE_CMD.search(c):                            return "author_code"
     if DOC_WRITE.search(c):                           return "author_prose"
-    if SIDE_FX.search(c):                             return "operate"
-    if RETRIEVE.match(c):                             return "retrieve"
-    # ⚠️ NO FALLBACK TO `operate`. It used to end here with `return "operate"`, which made one
-    # real class double as the default: 57.5% of all `operate` predictions -- 14.4% of the
-    # whole corpus -- were requests no rule had matched, published as a confident answer. That
-    # is this project's standing failure mode (never let a check that did not run publish a
-    # confident negative) wearing a positive label. Coverage is now an OBSERVABLE, not an
-    # assertion, and the size of `unclassified` is the metric to drive down. It needs no hand
-    # labels, so driving it down cannot overfit to them.
+    if any(SIDE_FX.search(t) for t in both):          return "operate"
+    if any(RETRIEVE.match(t) for t in both):          return "retrieve"
+    # A one-line `echo 'x' >> file` appends a token, not a message.
+    if re.match(r"^echo\b[^\n]*>>?", c):              return "operate"
+    # A script invoked BY PATH that matched nothing is being run -- a side effect.
+    if was_path:                                      return "operate"
+    # ⚠️ NO FALLBACK. See the note on `unclassified` below.
     return "unclassified"
 
 def route_class(r):
