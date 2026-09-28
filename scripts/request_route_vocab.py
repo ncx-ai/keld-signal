@@ -88,7 +88,13 @@ for f in glob.glob(os.path.join(ROOT,"**","*.jsonl"), recursive=True):
         if OBS.search(line): obs+=1
     if tot and obs/tot<=0.20: files.append(f)
 
-reqs={}
+# ⚠️ DEDUPE ON RECORD `uuid`, NOT requestId. A resumed or forked session COPIES the earlier
+# history into the new transcript file, so 6.8% of requestIds appear in more than one file
+# (1.15x inflation overall, 2-3x on the affected requests). Without this, one Bash call was
+# counted three times and its narration concatenated three times -- caught by eye in the blind
+# sample, not by any count, because the totals still looked plausible. uuids are stable across
+# copies, so they are the record identity; requestId is the INFERENCE identity and spans them.
+reqs={}; seen_uuid=set()
 for f in files:
     for line in open(f,errors="ignore"):
         try: d=json.loads(line)
@@ -96,6 +102,9 @@ for f in files:
         if d.get("type")!="assistant": continue
         rid=d.get("requestId")
         if not rid: continue
+        u=d.get("uuid")
+        if u in seen_uuid: continue
+        seen_uuid.add(u)
         m=d.get("message",{}); u=m.get("usage") or {}
         r=reqs.setdefault(rid,{"file":f,"ts":d.get("timestamp"),"side":bool(d.get("isSidechain")),
                                "tools":[],"text":"","think":0,"out":0,"inp":0,"model":m.get("model")})
