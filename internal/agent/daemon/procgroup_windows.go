@@ -6,8 +6,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"syscall"
 	"strconv"
+	"syscall"
 )
 
 // ⚠️ WINDOWS IS THE PARTIAL FIX, AND THIS COMMENT IS THE DISCLOSURE.
