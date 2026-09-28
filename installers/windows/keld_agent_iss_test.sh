@@ -367,8 +367,12 @@ printf '%s\n' "$prep_sign" | grep -q 'dmdf' || \
   fail "no /dmdf metadata file - the dlib cannot resolve the account or certificate profile"
 # And the compile must PROVE it happened rather than trust the directive.
 pkg_step="$(sed -n '/name: Package Windows installer/,/name: Sign the Windows installer/p' "$wf")"
-printf '%s\n' "$pkg_step" | grep -q 'Signing uninstaller' || \
-  fail "the build never checks that iscc actually signed the uninstaller"
+# ⚠️ The check must key on the ARTIFACT (uninst.e32), not on a log phrase. Inno
+#    never prints "Signing uninstaller"; it runs the tool and names the file. The
+#    first version guessed the wording and failed a build whose uninstaller had
+#    been signed correctly — a false negative on the one thing being verified.
+printf '%s\n' "$pkg_step" | grep -qF 'uninst\.e32' || \
+  fail "the build does not verify the uninstaller stub (uninst.e32) was signed"
 printf '%s\n' "$pkg_step" | grep -q 'Skeldsign' || \
   fail "iscc is not given the keldsign SignTool; SignedUninstaller would halt the compile"
 # ⚠️ THE SIGNTOOL DLIB AUTHENTICATES FROM THE ENVIRONMENT, unlike the Action,

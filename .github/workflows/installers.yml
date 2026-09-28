@@ -715,10 +715,18 @@ jobs:
           # only evidence available at build time — and a silently unsigned
           # uninstaller is exactly the failure this step exists to remove.
           if ($env:KELD_SIGN_COMMAND) {
-            if (-not ($isccOut -match 'Signing uninstaller')) {
-              throw "iscc never signed the uninstaller - SignedUninstaller did not engage"
+            # ⚠️ ASSERT ON THE ARTIFACT, NOT ON A PHRASE. Inno never prints
+            # "Signing uninstaller" — it runs the tool and names the file, which
+            # is `uninst.e32.tmp`, the uninstaller stub that gets embedded in
+            # keld-setup.exe and extracted onto the target machine as
+            # unins000.exe. The first version of this check guessed at wording
+            # and failed a build in which the uninstaller HAD been signed
+            # correctly. The file name is the evidence, and it is also stronger:
+            # a phrase can change with an Inno release, the artifact cannot.
+            if (-not ($isccOut -match 'Successfully signed.*uninst\.e32')) {
+              throw "iscc did not sign the uninstaller stub (uninst.e32) - SignedUninstaller did not engage; output above"
             }
-            Write-Host "uninstaller: signed during compile"
+            Write-Host "uninstaller: signed during compile (uninst.e32)"
           }
 
       # The installer itself, last — it does not exist until iscc has run.
