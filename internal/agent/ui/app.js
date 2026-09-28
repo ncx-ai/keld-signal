@@ -615,6 +615,366 @@ export function todayLedgerURL(now) {
   return `/v1/ledger?since=${startOfLocalDay(now)}`;
 }
 
+// ---- Overview: pure ----
+//
+// The Overview (docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html)
+// reads the same GET /v1/ledger Focus blocks does, over a range the person
+// picks. Everything it draws is computed here from the blocks alone, with the
+// helpers the Focus blocks table already uses — totalTokens for a headline
+// token count, measuredOf for money, projectsOf for projects — so a number on
+// the Overview can always be checked against the list.
+
+export const RANGE_KEYS = ["today", "7d", "1m", "custom"];
+/** Only when nothing is remembered: the page otherwise reopens on the last
+ *  range the viewer picked (decided 2026-09-28). */
+export const DEFAULT_RANGE = "7d";
+/** The daemon's own clamp on `limit` (daemon/servicehealth_route.go). The
+ *  ledger answers newest-first, so a range holding more blocks than this
+ *  loses its OLDEST ones — see ledgerTruncated. */
+export const LEDGER_LIMIT = 2000;
+
+const RANGE_DAYS = { today: 1, "7d": 7, "1m": 30 };
+const RANGE_TITLES = { today: "Today", "7d": "Last 7 days", "1m": "Last 30 days", custom: "Custom range" };
+
+/** A remembered range, or the default when what was stored is not one the
+ *  control knows. Custom's dates are kept as given; rangeWindow judges them. */
+export function resolveRange(stored) {
+  if (!stored || typeof stored !== "object" || !RANGE_KEYS.includes(stored.key)) return { key: DEFAULT_RANGE };
+  if (stored.key === "custom") return { key: "custom", from: String(stored.from || ""), to: String(stored.to || "") };
+  return { key: stored.key };
+}
+
+function parseLocalDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ""));
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+  const date = new Date(y, mo, d);
+  return date.getFullYear() === y && date.getMonth() === mo && date.getDate() === d ? date : null;
+}
+
+const unixOf = (date) => Math.floor(date.getTime() / 1000);
+const dayAfter = (date, n) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+
+function shortDay(unix) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(unix * 1000));
+}
+
+/** The range as local days: `start` (inclusive) and `end` (exclusive) are
+ *  local midnights, and `days` holds each day's midnight. Local for the same
+ *  reason startOfLocalDay is: a day is the one the person is having. Days are
+ *  built by calendar arithmetic, never by adding 86400, so a DST day is still
+ *  one day. */
+export function rangeWindow(range, now) {
+  const r = resolveRange(range);
+  let first;
+  let count;
+  if (r.key === "custom") {
+    let a = parseLocalDate(r.from);
+    let b = parseLocalDate(r.to);
+    if (!a || !b) return rangeWindow({ key: DEFAULT_RANGE }, now);
+    if (a > b) [a, b] = [b, a];
+    first = a;
+    count = Math.round((b - a) / 86_400_000) + 1;
+  } else {
+    const t = new Date(now);
+    count = RANGE_DAYS[r.key];
+    first = new Date(t.getFullYear(), t.getMonth(), t.getDate() - (count - 1));
+  }
+  const days = Array.from({ length: count }, (_, i) => unixOf(dayAfter(first, i)));
+  const dates =
+    count === 1
+      ? new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(first)
+      : `${shortDay(days[0])} – ${shortDay(days[count - 1])}`;
+  return { key: r.key, range: r, start: days[0], end: unixOf(dayAfter(first, count)), days, title: RANGE_TITLES[r.key], dates };
+}
+
+export function rangeLedgerURL(win) {
+  return `/v1/ledger?since=${win.start}&limit=${LEDGER_LIMIT}`;
+}
+
+/** `since` bounds only the start of a range; Custom's end is applied here. */
+export function blocksInWindow(blocks, win) {
+  return (blocks || []).filter((b) => b.key.start >= win.start && b.key.start < win.end);
+}
+
+/** A response holding exactly the row cap may have lost blocks — always the
+ *  OLDEST, since the ledger answers newest-first. `loadedFrom` is the oldest
+ *  block that did arrive; anything drawn before it must read "not loaded",
+ *  never zero. */
+export function ledgerTruncated(blocks, limit = LEDGER_LIMIT) {
+  const list = blocks || [];
+  if (list.length < limit) return { truncated: false, loadedFrom: null };
+  return { truncated: true, loadedFrom: Math.min(...list.map((b) => b.key.start)) };
+}
+
+export const NO_REPO_LABEL = "no repository";
+export const NO_MODEL_LABEL = "no model";
+export const NO_PROJECT_LABEL = "no project";
+export const NOT_ATTRIBUTED_LABEL = "not attributed yet";
+export const SEVERAL_PROJECTS_LABEL = "several projects";
+export const OTHER_LABEL = "other";
+
+/** A repository remote as the page names it: its last path segment. */
+export function repoLabel(remote) {
+  const s = String(remote || "");
+  if (!s) return NO_REPO_LABEL;
+  const parts = s.split("/");
+  return parts[parts.length - 1] || s;
+}
+
+const byValueThenLabel = (a, b) => b.value - a.value || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+
+/** The `n` largest entries, the rest summed as `other`, and the `noneKey`
+ *  bucket kept apart — "no repository" is not a repository, so it never
+ *  competes for a top-three place. Ties break by label so a re-render cannot
+ *  reorder them. */
+export function topN(map, { n = 3, noneKey } = {}) {
+  const entries = [...map]
+    .filter(([label, value]) => label !== noneKey && value > 0)
+    .map(([label, value]) => ({ label, value }))
+    .sort(byValueThenLabel);
+  return {
+    top: entries.slice(0, n),
+    other: entries.slice(n).reduce((s, e) => s + e.value, 0),
+    none: noneKey === undefined ? 0 : map.get(noneKey) || 0,
+  };
+}
+
+function addTo(map, key, v) {
+  map.set(key, (map.get(key) || 0) + v);
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** The four Overview tiles and their hover breakdowns, from `blocks` alone.
+ *  Active time counts every block, measured or not; tokens and money count
+ *  only what was measured. A session's span runs from its first block's start
+ *  to its last block's end within the blocks given. */
+export function overviewStats(blocks) {
+  let tokens = 0;
+  let cache = 0;
+  let usd = 0;
+  let activeMinutes = 0;
+  const tokByModel = new Map();
+  const usdByModel = new Map();
+  const minByRepo = new Map();
+  const sessions = new Map();
+  for (const b of blocks || []) {
+    const minutes = (b.end - b.key.start) / 60;
+    activeMinutes += minutes;
+    const repo = repoLabel(b.dims && b.dims.repo);
+    addTo(minByRepo, repo, minutes);
+    const s = sessions.get(b.key.session) || { start: b.key.start, end: b.end, repos: new Map() };
+    s.start = Math.min(s.start, b.key.start);
+    s.end = Math.max(s.end, b.end);
+    addTo(s.repos, repo, minutes);
+    sessions.set(b.key.session, s);
+    const m = measuredOf(b);
+    if (!m) continue;
+    const t = totalTokens(m.tokens);
+    tokens += t;
+    cache += (m.tokens && m.tokens.cache_read) || 0;
+    usd += m.estimate_usd || 0;
+    const model = m.model || NO_MODEL_LABEL;
+    addTo(tokByModel, model, t);
+    addTo(usdByModel, model, m.estimate_usd || 0);
+  }
+  // One repository per session — the one it spent longest in — so the
+  // breakdown sums to the headline count instead of past it.
+  const sessByRepo = new Map();
+  for (const s of sessions.values()) {
+    const [main] = [...s.repos].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
+    addTo(sessByRepo, main.label, 1);
+  }
+  return {
+    tokens,
+    cacheShare: tokens ? cache / tokens : null,
+    usd,
+    usdPerMillion: tokens ? usd / (tokens / 1e6) : null,
+    activeMinutes,
+    blockCount: (blocks || []).length,
+    sessions: sessions.size,
+    medianSessionMinutes: median([...sessions.values()].map((s) => (s.end - s.start) / 60)),
+    byModel: {
+      tokens: topN(tokByModel, { noneKey: NO_MODEL_LABEL }),
+      usd: topN(usdByModel, { noneKey: NO_MODEL_LABEL }),
+    },
+    byRepo: {
+      minutes: topN(minByRepo, { noneKey: NO_REPO_LABEL }),
+      sessions: topN(sessByRepo, { noneKey: NO_REPO_LABEL }),
+    },
+  };
+}
+
+export const SPLITS = [
+  { key: "tokens", label: "Tokens" },
+  { key: "model", label: "By model" },
+  { key: "repo", label: "By repo" },
+  { key: "project", label: "By project" },
+];
+
+const TOP_COLORS = ["var(--ov-c1)", "var(--ov-c2)", "var(--ov-c3)"];
+const TOKEN_CATEGORIES = [
+  { key: "cache", label: "cached tokens", color: "var(--ov-cache)", kind: "cache" },
+  { key: "fresh", label: "fresh tokens", color: "var(--ov-fresh)", kind: "fresh" },
+];
+const NONE_LABELS = { model: NO_MODEL_LABEL, repo: NO_REPO_LABEL, project: NO_PROJECT_LABEL };
+
+/** Where one block falls under a categorical split, before ranking. A block
+ *  in several projects is ONE category, "several projects" — stacking it
+ *  under each would count its tokens once per project in a single column. A
+ *  block whose attribution never ran is "not attributed yet", kept apart from
+ *  "no project", the same distinction the Focus blocks table draws. */
+function rawCategory(b, split, catalog) {
+  if (split === "model") {
+    const m = measuredOf(b);
+    return m && m.model ? { kind: "named", label: m.model } : { kind: "none" };
+  }
+  if (split === "repo") {
+    const repo = b.dims && b.dims.repo;
+    return repo ? { kind: "named", label: repoLabel(repo) } : { kind: "none" };
+  }
+  const list = projectsOf(b);
+  if (list === null) return { kind: "unknown" };
+  if (!list.length) return { kind: "none" };
+  if (list.length > 1) return { kind: "several" };
+  return { kind: "named", label: projectTitle(list[0].id, catalog) || list[0].id };
+}
+
+/** The categories a split draws, and which one each block belongs to. ONE
+ *  model for the chart, its legend and the histogram, so a colour means the
+ *  same thing in all three. The three largest named values by tokens keep
+ *  their own colour; the rest fold into "other". */
+export function splitModel(blocks, split, catalog) {
+  if (split === "tokens") return { categories: TOKEN_CATEGORIES, keyOf: () => "active" };
+  const raw = new Map();
+  const tokensOf = new Map();
+  const present = new Set();
+  for (const b of blocks || []) {
+    const c = rawCategory(b, split, catalog);
+    raw.set(b, c);
+    present.add(c.kind);
+    if (c.kind === "named") {
+      const m = measuredOf(b);
+      addTo(tokensOf, c.label, m ? totalTokens(m.tokens) : 0);
+    }
+  }
+  const ranked = [...tokensOf].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
+  const top = ranked.slice(0, 3);
+  const topKey = new Map(top.map((e) => [e.label, `n:${e.label}`]));
+  const categories = top.map((e, i) => ({ key: `n:${e.label}`, label: e.label, color: TOP_COLORS[i], kind: "named" }));
+  if (ranked.length > 3) categories.push({ key: "other", label: OTHER_LABEL, color: "var(--ov-other)", kind: "other" });
+  if (present.has("several")) categories.push({ key: "several", label: SEVERAL_PROJECTS_LABEL, color: "var(--ov-several)", kind: "several" });
+  if (present.has("none")) categories.push({ key: "none", label: NONE_LABELS[split], color: "var(--ov-none)", kind: "none" });
+  if (present.has("unknown")) categories.push({ key: "unknown", label: NOT_ATTRIBUTED_LABEL, color: "var(--ov-unknown)", kind: "unknown" });
+  const keyOf = (b) => {
+    const c = raw.get(b) || rawCategory(b, split, catalog);
+    if (c.kind === "named") return topKey.get(c.label) || "other";
+    return c.kind;
+  };
+  return { categories, keyOf };
+}
+
+function hourBuckets(win, blocks) {
+  const day = new Date(win.start * 1000);
+  const hours = Array.from({ length: 24 }, (_, h) => {
+    const start = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h));
+    const end = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h + 1));
+    return { start, end, label: `${String(h).padStart(2, "0")}:00` };
+  });
+  const busy = hours.map((hr) => blocks.some((b) => b.key.start >= hr.start && b.key.start < hr.end));
+  const first = busy.indexOf(true);
+  if (first < 0) return [];
+  return hours.slice(first, busy.lastIndexOf(true) + 1);
+}
+
+function dayBuckets(win) {
+  const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
+  return win.days.map((start, i) => {
+    const d = new Date(start * 1000);
+    return {
+      start,
+      end: win.days[i + 1] || win.end,
+      label: win.days.length <= 7 ? weekday.format(d) : String(d.getDate()),
+    };
+  });
+}
+
+/** The cost & volume chart: one column per hour (a one-day range, trimmed to
+ *  the hours that had work) or per local day, each stacked by `split`. A
+ *  block lands in the column its START falls in — the rule the Focus blocks
+ *  table uses for a block that runs across midnight. A column's `tokens` is
+ *  exactly the sum of its segments. Columns starting at or before
+ *  `loadedFrom` are `loaded: false`: the row cap cut some of their blocks. */
+export function volumeSeries(blocks, win, split, catalog, { loadedFrom = null } = {}) {
+  const list = blocks || [];
+  const model = splitModel(list, split, catalog);
+  const buckets = win.days.length === 1 ? hourBuckets(win, list) : dayBuckets(win);
+  const columns = buckets.map((bk) => {
+    const seg = new Map(model.categories.map((c) => [c.key, 0]));
+    let tokens = 0;
+    let usd = 0;
+    for (const b of list) {
+      if (b.key.start < bk.start || b.key.start >= bk.end) continue;
+      const m = measuredOf(b);
+      if (!m) continue;
+      const t = totalTokens(m.tokens);
+      tokens += t;
+      usd += m.estimate_usd || 0;
+      if (split === "tokens") {
+        const cached = (m.tokens && m.tokens.cache_read) || 0;
+        addTo(seg, "cache", cached);
+        addTo(seg, "fresh", t - cached);
+      } else {
+        addTo(seg, model.keyOf(b), t);
+      }
+    }
+    return {
+      ...bk,
+      tokens,
+      usd,
+      segments: model.categories.map((c) => ({ key: c.key, value: seg.get(c.key) || 0 })),
+      loaded: loadedFrom === null || bk.start > loadedFrom,
+    };
+  });
+  return {
+    columns,
+    categories: model.categories,
+    maxTokens: Math.max(0, ...columns.map((c) => c.tokens)),
+    maxUsd: Math.max(0, ...columns.map((c) => c.usd)),
+  };
+}
+
+export const SLOTS_PER_DAY = 72;
+const SLOT_SECONDS = 1200;
+const ACTIVE_CATEGORY = [{ key: "active", label: "active time", color: "var(--ov-active)", kind: "active" }];
+
+/** The histogram: one row per local day of 72 twenty-minute cells. A cell
+ *  holds the category key of the block covering its MIDPOINT, or null — so a
+ *  five-minute block that misses every midpoint colours nothing, rather than
+ *  a whole cell claiming twenty minutes of work. Under Tokens a cell is just
+ *  "active time"; otherwise it uses the chart's own categories. */
+export function slotGrid(blocks, win, split, catalog, { loadedFrom = null } = {}) {
+  const list = blocks || [];
+  const model = splitModel(list, split, catalog);
+  const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric" });
+  const rows = win.days.map((day) => {
+    const cells = new Array(SLOTS_PER_DAY).fill(null);
+    for (const b of list) {
+      const i0 = Math.max(0, Math.ceil((b.key.start - day) / SLOT_SECONDS - 0.5));
+      const i1 = Math.min(SLOTS_PER_DAY - 1, Math.ceil((b.end - day) / SLOT_SECONDS - 0.5) - 1);
+      for (let i = i0; i <= i1; i++) if (cells[i] === null) cells[i] = model.keyOf(b);
+    }
+    return { day, label: label.format(new Date(day * 1000)), cells, loaded: loadedFrom === null || day > loadedFrom };
+  });
+  return { rows, categories: split === "tokens" ? ACTIVE_CATEGORY : model.categories };
+}
+
 /** How many taps on the version turns developer mode on or off. Seven, because
  *  that is the number people already know from Android's build-number gesture —
  *  a hidden control is only useful if someone can be TOLD how to reach it, and
