@@ -72,10 +72,11 @@ type AnalysisFacets struct {
 	// dimension that says work was DELEGATED, and the SERVER where Integrations
 	// is the tool. Absent when the span used nothing in that dimension; never
 	// an empty list.
-	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
-	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
-	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
-	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
+	FileTypes       []enrich.NameCount `json:"file_types,omitempty"`
+	ShellVerbs      []enrich.NameCount `json:"shell_verbs,omitempty"`
+	Subagents       []enrich.NameCount `json:"subagents,omitempty"`
+	McpServers      []enrich.NameCount `json:"mcp_servers,omitempty"`
+	ActivityClasses []enrich.NameCount `json:"activity_classes,omitempty"`
 	// InventoryOmitted is the cut-visibility map beside the inventories above —
 	// same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`

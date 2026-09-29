@@ -237,10 +237,11 @@ type Profile struct {
 	// the server where Integrations is the tool, which is the grain an org
 	// governs. Same OPEN vocabulary and same per-entry identifier-shape gate as
 	// HarnessTools/Integrations. Absent, never an empty list.
-	FileTypes  []NameCount `json:"file_types,omitempty"`
-	ShellVerbs []NameCount `json:"shell_verbs,omitempty"`
-	Subagents  []NameCount `json:"subagents,omitempty"`
-	McpServers []NameCount `json:"mcp_servers,omitempty"`
+	FileTypes       []NameCount `json:"file_types,omitempty"`
+	ShellVerbs      []NameCount `json:"shell_verbs,omitempty"`
+	Subagents       []NameCount `json:"subagents,omitempty"`
+	McpServers      []NameCount `json:"mcp_servers,omitempty"`
+	ActivityClasses []NameCount `json:"activity_classes,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — visibility for a cut that used to be
 	// silent for every one of the six pre-existing inventory dimensions (the

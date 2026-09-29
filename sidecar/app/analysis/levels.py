@@ -16,6 +16,7 @@ from app.analysis.shell import bash_refs
 from app.analysis.text import is_command_echo
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
+from . import reqclass
 
 LEVELS = ["workspace", "workspace_evidence", "repo", "repo_from_text", "repo_mentioned", "vcs",
           "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
@@ -314,6 +315,42 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     # sums above, so a request that happens to be zero in every class but one
                     # still counts as one request.
                     add("mag", magnitude.REQUESTS, "", 1)
+
+        # `activity_class` — what CAPABILITY this one inference request stressed.
+        # ⚠️ ONE ROW PER ASSISTANT TURN, which is one inference request: the unit is
+        # the whole point (see reqclass's docstring on why the rolled-up `action`
+        # mapping in activity.py beside it was refuted four times). It is emitted
+        # BEFORE the per-call loop below so it counts the request once, never once
+        # per tool call — a turn with six Bash calls is one request, and counting it
+        # six times would make a long tool-using turn dominate every distribution.
+        # ⚠️ ONLY WHEN THE TURN ALREADY CONTRIBUTES EVIDENCE. Emitting this
+        # unconditionally made a turn with neither text nor tool calls produce a row
+        # where it produced none before -- which makes its 5-minute bin ACTIVE, and
+        # since blocks TILE THE ACTIVE BINS that silently moves block boundaries and
+        # every number derived from them. Caught by
+        # `test_a_prompt_that_falls_in_dead_air_is_in_no_block`, which is exactly the
+        # shape it was written to catch. A new level may describe existing evidence;
+        # it may never CREATE evidence where there was none.
+        # ⚠️ ASSISTANT TURNS ONLY, and only when the turn already contributes evidence.
+        #
+        # This classifies one INFERENCE REQUEST, and a user turn is not one -- it is the
+        # thing a request answers. Emitting it here (this code is common to both roles)
+        # put a row on a bare user turn, which is what
+        # `test_a_prompt_that_falls_in_dead_air_is_in_no_block` caught: that fixture's
+        # premise is a prompt "contributing no reference event of its own", and a row
+        # makes its 5-minute bin ACTIVE. Blocks TILE THE ACTIVE BINS, so the prompt
+        # landed inside a block that should not exist, and every number derived from
+        # those boundaries would have shifted silently.
+        #
+        # The rule the two conditions encode: a new level may DESCRIBE existing
+        # evidence; it may never CREATE evidence where a turn produced none.
+        if o.role != "user" and (o.tool_calls or (o.text or "").strip()):
+            add("ref", "activity_class", reqclass.route_class({
+                "tools": [(c.name, c.input) for c in o.tool_calls],
+                "text":  o.text or "",
+                "think": o.think_chars or 0,
+                "out":   int((o.usage or {}).get("output_tokens") or 0),
+            }), 1)
 
         paths = []
         for call in o.tool_calls:

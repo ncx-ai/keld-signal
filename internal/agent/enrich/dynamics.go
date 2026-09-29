@@ -75,8 +75,31 @@ type Dynamic struct {
 // published as an empty object: "we looked and found nothing" is a different
 // fact from "nobody looked".
 type WindowAnalysis struct {
-	Dimensions map[string]Labeled
-	Dynamics   map[string]Dynamic
+	// ActivityClasses is the DISTRIBUTION of what CAPABILITY each inference
+	// request in this window stressed: retrieve, operate, verify, author_code,
+	// author_prose, synthesize, delegate, acknowledge, unclassified.
+	//
+	// ⚠️ IT IS A DISTRIBUTION AND MUST STAY ONE. Measured across two people's
+	// corpora, above ~20 requests NO unit -- session, block or subagent run --
+	// is coherent enough for a single label, while the distribution stays
+	// distinctive at every size. Anything reducing this to one winner publishes
+	// a false statement about the unit, which is also why it is an INVENTORY
+	// dimension and not an ALLOCATION one.
+	//
+	// ⚠️ NOT the refuted `activity_type`. That rolled the `action` level up by
+	// precedence -- act to intent -- and failed four measurements. This
+	// classifies one REQUEST by its tool name, arguments and output shape, and
+	// never rolls up. See sidecar/app/analysis/reqclass.py.
+	//
+	// ⚠️ VALIDATED ON DEVELOPER WORK ONLY. 82-95% of tool calls in both measured
+	// corpora are Bash/Read/Edit/Write/Grep/Glob. It degrades sensibly on other
+	// tools, but `verify` has no non-developer referent, and with NO tool calls
+	// the vocabulary collapses to two values (74.8% acknowledge / 25.2%
+	// synthesize across 11,575 chat turns) -- the shape of Claude used through a
+	// web app. The vocabulary is OPEN for exactly that reason.
+	ActivityClasses []NameCount
+	Dimensions      map[string]Labeled
+	Dynamics        map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

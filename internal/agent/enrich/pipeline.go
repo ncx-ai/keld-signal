@@ -367,6 +367,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		FileTypes:         identsFrom(ctx.Get("workstreams"), "file_types"),
 		ShellVerbs:        identsFrom(ctx.Get("workstreams"), "shell_verbs"),
 		Subagents:         identsFrom(ctx.Get("workstreams"), "subagents"),
+		ActivityClasses:   identsFrom(ctx.Get("workstreams"), "activity_classes"),
 		McpServers:        identsFrom(ctx.Get("workstreams"), "mcp_servers"),
 		InventoryOmitted:  inventoryOmittedFrom(ctx.Get("workstreams")),
 		Prior:             priorFrom(ctx.Get("workstreams")),

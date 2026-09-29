@@ -140,10 +140,11 @@ type Enrichment struct {
 	// subagent's turns are a different transcript), and the SERVER where
 	// Integrations is the tool. Absent when the window used nothing in that
 	// dimension; never an empty list.
-	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
-	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
-	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
-	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
+	FileTypes       []enrich.NameCount `json:"file_types,omitempty"`
+	ShellVerbs      []enrich.NameCount `json:"shell_verbs,omitempty"`
+	Subagents       []enrich.NameCount `json:"subagents,omitempty"`
+	McpServers      []enrich.NameCount `json:"mcp_servers,omitempty"`
+	ActivityClasses []enrich.NameCount `json:"activity_classes,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped. It is the visibility the truncation
 	// lacked before this: the pre-existing inventory dimensions truncated

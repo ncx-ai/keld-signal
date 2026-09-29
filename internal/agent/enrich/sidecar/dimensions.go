@@ -176,6 +176,7 @@ func analysisFrom(ws map[string]*Dimension, inv InventoryBlock, omitted map[stri
 		ShellVerbs:       convertShellVerbInventory(inv.ShellVerbs),
 		Subagents:        convertIdentifierInventory(inv.Subagents),
 		McpServers:       convertIdentifierInventory(inv.McpServers),
+		ActivityClasses:  convertIdentifierInventory(inv.ActivityClasses),
 		InventoryOmitted: convertInventoryOmitted(omitted),
 		Dynamics:         convertDynamics(dyn),
 		Effort:           convertEffort(eff),

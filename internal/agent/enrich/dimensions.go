@@ -229,6 +229,7 @@ func (e DimensionsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	}
 	if len(an.Subagents) > 0 {
 		res["subagents"] = an.Subagents
+		res["activity_classes"] = an.ActivityClasses
 	}
 	if len(an.McpServers) > 0 {
 		res["mcp_servers"] = an.McpServers

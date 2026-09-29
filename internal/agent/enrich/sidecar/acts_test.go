@@ -158,14 +158,32 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		"harness_tools": false, "programs": false, "external_systems": false, "integrations": false,
 		"named_terms": false,
 		"file_types":  false, "shell_verbs": false, "subagents": false, "mcp_servers": false,
+		// THE FOURTEENTH, AND ITS ARGUMENT, since this guard exists to demand one.
+		//
+		// `activity_classes` is not another thing counted from tool-call metadata like
+		// the thirteen above -- it is a DISTRIBUTION over the unit's inference requests
+		// of which model CAPABILITY each one stressed. It earns a key rather than
+		// riding an existing one because no other dimension answers it: `harness_tools`
+		// says WHICH tool ran, `physical_acts` says what kind of act it was, and
+		// neither says whether the model had to AUTHOR the thing it acted on, which is
+		// the only part a router can act on.
+		//
+		// It is here rather than as a facet because it is computed at INGEST from the
+		// same tool-call metadata every other level is, needs no model, and must be a
+		// distribution: measured across two corpora, above ~20 requests no unit is
+		// coherent enough for a single label while the distribution stays distinctive.
+		//
+		// ⚠️ Its cap is the WHOLE vocabulary (9), so unlike every other inventory it can
+		// never be truncated -- a cut distribution is a wrong one, not a shorter one.
+		"activity_classes": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all thirteen inventory keys and no others should be "+
-			"decodable — a fourteenth needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all fourteen inventory keys and no others should be "+
+			"decodable — a fifteenth needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")

@@ -213,7 +213,19 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("files", "file", 40), ("directories", "dir", 24),
              ("components", "component", 16),
              ("file_types", "ext", 12), ("shell_verbs", "verb", 24),
-             ("subagents", "agent", 12), ("mcp_servers", "mcp_server", 12)]
+             ("subagents", "agent", 12), ("mcp_servers", "mcp_server", 12),
+             # `activity_classes` is a DISTRIBUTION over the block's requests, and that is
+             # the design rather than a convenience. Measured: above ~20 requests NO unit --
+             # session, block or subagent run -- is coherent enough for a single label, while
+             # the distribution stays distinctive at every size. So it is an INVENTORY (many
+             # values with counts) and must not be moved to ALLOCATION: that floor (winning
+             # share >= 0.50 and >= MIN_EVIDENCE) would publish `no_majority` on most units
+             # and discard the thing that carries the signal.
+             #
+             # Cap 9 is the WHOLE closed vocabulary, so this level can never be truncated and
+             # `inventory_omitted` can never name it -- a cut distribution is a wrong one, not
+             # a shorter one. `unclassified` is a real value and publishes as itself.
+             ("activity_classes", "activity_class", 9)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
