@@ -54,14 +54,16 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport },
-      // signin/firstrun run under signin.config.ts, against their own unpaired daemons.
-      testIgnore: /(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/,
+      // signin/firstrun run under signin.config.ts, against their own unpaired daemons;
+      // local-atlas/ runs under its own config, against a real local Atlas.
+      testIgnore: [/(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/, /local-atlas[\\/]/],
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport },
-      // signin/firstrun run under signin.config.ts, against their own unpaired daemons.
-      testIgnore: /(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/,
+      // signin/firstrun run under signin.config.ts, against their own unpaired daemons;
+      // local-atlas/ runs under its own config, against a real local Atlas.
+      testIgnore: [/(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/, /local-atlas[\\/]/],
     },
     {
       // The page with NO daemon behind it: a tiny static server serves the
