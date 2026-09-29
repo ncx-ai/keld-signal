@@ -108,3 +108,14 @@ test("category colours come from one model, shared with the histogram", () => {
   const b = volumeSeries(blocks, week, "repo", catalog);
   assert.deepEqual(a.categories, b.categories);
 });
+
+test("Today never draws fewer than four hours: the first hour of work, then the hours after it", () => {
+  const s = volumeSeries([block({ h: 9 })], today, "tokens", catalog);
+  assert.deepEqual(s.columns.map((c) => c.label), ["09:00", "10:00", "11:00", "12:00"]);
+  assert.deepEqual(s.columns.map((c) => c.tokens), [1000, 0, 0, 0]);
+});
+
+test("late in the evening the four hours end at midnight rather than running past it", () => {
+  const s = volumeSeries([block({ h: 22 })], today, "tokens", catalog);
+  assert.deepEqual(s.columns.map((c) => c.label), ["20:00", "21:00", "22:00", "23:00"]);
+});

@@ -889,6 +889,8 @@ export function splitModel(blocks, split, catalog) {
   return { categories, keyOf };
 }
 
+const MIN_HOUR_COLUMNS = 4;
+
 function hourBuckets(win, blocks) {
   const day = new Date(win.start * 1000);
   const hours = Array.from({ length: 24 }, (_, h) => {
@@ -897,9 +899,15 @@ function hourBuckets(win, blocks) {
     return { start, end, label: `${String(h).padStart(2, "0")}:00` };
   });
   const busy = hours.map((hr) => blocks.some((b) => b.key.start >= hr.start && b.key.start < hr.end));
-  const first = busy.indexOf(true);
+  let first = busy.indexOf(true);
   if (first < 0) return [];
-  return hours.slice(first, busy.lastIndexOf(true) + 1);
+  // Never fewer than MIN_HOUR_COLUMNS (decided 2026-09-29): one hour of work
+  // drawn as a single full-width bar reads as a block of colour, not a chart.
+  // The hours after the first one of work are shown empty; late in the day the
+  // extra hours come before it instead, because the day ends at midnight.
+  const last = Math.min(23, Math.max(busy.lastIndexOf(true), first + MIN_HOUR_COLUMNS - 1));
+  first = Math.max(0, Math.min(first, last - MIN_HOUR_COLUMNS + 1));
+  return hours.slice(first, last + 1);
 }
 
 function dayBuckets(win) {
