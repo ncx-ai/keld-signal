@@ -142,6 +142,38 @@ Source: "keld-wizard-host.exe"; Flags: dontcopy
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   ValueData: "{olddata};{app}"; Check: NeedsAddPath('{app}')
 
+[Icons]
+; THE ONLY WAY TO REACH THE APP ONCE THE INSTALLER IS GONE. Before this entry the
+; product shipped a desktop app with no entry point: `DisableProgramGroupPage=yes`
+; and no [Icons] section at all, so after the Finished page closed the app could
+; only be started by `keld signal open` from a terminal — on a product whose whole
+; Windows story is that no terminal ever appears — or by finding the exe under
+; {localappdata}. The postinstall launch entry in [Run] opens it exactly once,
+; which hides the gap rather than closing it.
+;
+; ⚠️ `{userprograms}`, NOT `{group}`, AND NOT BECAUSE THEY DIFFER IN PERMISSION.
+; This is a per-user install (PrivilegesRequired=lowest,
+; DefaultDirName={localappdata}\Programs\keld) so both land in the same Start
+; Menu. The difference is shape: `{group}` is a FOLDER, named by
+; DefaultGroupName, and with DisableProgramGroupPage=yes nobody ever sees or
+; chooses it — so a single shortcut would sit alone inside a folder called
+; "Keld", which Windows 11's All apps list renders as a collapsed group a person
+; has to expand to find the one thing in it. One app, one entry, no folder.
+;
+; ⚠️ THE `Check` IS THE SAME OPTIONALITY [Files] AND [Run] ALREADY CARRY, AND
+; WITHOUT IT A BUILD WITHOUT THE APP SHIPS A DEAD SHORTCUT. The Rust step is
+; `continue-on-error` on the runner, so `Keld Signal.exe` may legitimately be
+; absent (see skipifsourcedoesntexist in [Files] and skipifdoesntexist in [Run]).
+; [Icons] has no `skipifdoesntexist` — an entry whose target is missing is
+; created anyway, pointing at nothing — so the guard has to be a Check, and it
+; runs after [Files], which is what makes FileExists the right question.
+;
+; Inno logs every shortcut it creates and removes it on uninstall, so this needs
+; no [UninstallDelete] companion.
+Name: "{userprograms}\Keld Signal"; Filename: "{app}\Keld Signal.exe"; \
+  Comment: "Your focus blocks, your projects, and whether they reached Atlas"; \
+  Check: AppPresent
+
 [Run]
 ; TWO ENTRIES, AND BOTH ARE LOAD-BEARING. The first ALWAYS runs; the second is now
 ; a FALLBACK that should normally not run at all.
@@ -1174,6 +1206,22 @@ end;
 function NeedsConsoleOnboarding: Boolean;
 begin
   Result := not Paired;
+end;
+
+// The [Icons] entry's Check. The desktop app is optional — its Rust build is
+// continue-on-error on the runner — and [Icons] has no `skipifdoesntexist`, so
+// without this a build that shipped no app would still create a Start Menu
+// shortcut pointing at a file that does not exist.
+//
+// ⚠️ THIS IS ONLY CORRECT BECAUSE [Icons] RUNS AFTER [Files]. Asked any earlier
+// — from PrepareToInstall, say — it would answer False on every FRESH install,
+// because {app}\Keld Signal.exe is not there yet, and the shortcut would be
+// created only on upgrades. Inno processes [Icons] once the payload is on disk,
+// which is what makes FileExists the question rather than a guess about what CI
+// built.
+function AppPresent: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\Keld Signal.exe'));
 end;
 
 // PrepareToInstall stops the running agent BEFORE any file is replaced.

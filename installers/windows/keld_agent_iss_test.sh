@@ -450,6 +450,39 @@ printf '%s\n' "$unkill" | grep -qF 'Keld Signal.exe' || \
 printf '%s\n' "$unkill" | grep -q '/F' || \
   fail "the uninstall taskkill is not /F - the app intercepts WM_CLOSE and would stay alive holding its exe"
 
+# 10f. ⚠️ THE APP NEEDS A START MENU ENTRY, OR IT HAS NO ENTRY POINT AT ALL ONCE
+#      THE INSTALLER CLOSES. DisableProgramGroupPage=yes and, until this guard,
+#      no [Icons] section: after the Finished page the app could only be started
+#      from a terminal (`keld signal open`) or by finding the exe under
+#      {localappdata}. 10d's launch entry opens it exactly once, which HIDES that
+#      gap rather than closing it — which is why this guard is separate from 10d
+#      and must not be folded into it.
+# Anchored on a leading `Name:`, which is what distinguishes an [Icons] entry
+# from 10d's [Run] entry — they share a Filename and nothing else.
+icon_line="$(printf '%s\n' "$unfolded" | grep -F 'Filename: "{app}\Keld Signal.exe"' | grep '^Name:' || true)"
+[ -n "$icon_line" ] || \
+  fail "no Start Menu shortcut for the desktop app - it is unreachable once the installer closes"
+# ⚠️ [Icons] HAS NO `skipifdoesntexist`. The app is optional (see 10c/10d), and an
+#    icon whose target is missing is created anyway, pointing at nothing — so the
+#    optionality has to be a Check, and the Check has to be one that runs AFTER
+#    [Files] or it answers False on every fresh install.
+printf '%s\n' "$icon_line" | grep -q 'Check:' || \
+  fail "the Start Menu shortcut has no Check - a build without the app would ship a shortcut to a missing file"
+chk="$(printf '%s\n' "$icon_line" | sed -n 's/.*Check:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')"
+[ -n "$chk" ] || fail "cannot read the Start Menu shortcut's Check function name"
+# $code is already comment-stripped at the top of this file, which matters here
+# for the reason spelled out in 10e: the prose above AppPresent names FileExists
+# while explaining it, so an unstripped search would find the comment and pass
+# with the function gutted.
+# ⚠️ THE NAME NEEDS A BOUNDARY. `grep "^function $chk"` matches any function
+#    whose name merely STARTS with it, so renaming AppPresent to AppPresentGone
+#    — exactly what a careless refactor does, leaving the [Icons] Check dangling
+#    and iscc failing — passed this assertion. Caught by the mutation test.
+printf '%s\n' "$code" | grep -qE "^function ${chk}[^A-Za-z0-9_]" || \
+  fail "the Start Menu shortcut's Check ($chk) is not defined in [Code] - iscc would fail"
+printf '%s\n' "$code" | sed -n "/^function $chk/,/^end;/p" | grep -q 'FileExists' || \
+  fail "$chk does not test for the app on disk - the shortcut's optionality is not actually guarded"
+
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
 #     LOADS, so an installer signed over an unsigned payload installs fine and
