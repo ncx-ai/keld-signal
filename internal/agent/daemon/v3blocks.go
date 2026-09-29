@@ -273,11 +273,22 @@ func measuredOf(r publish.BlockEnrichment) (ledger.Measured, bool) {
 	return m, true
 }
 
+// dominantModel is the model that served most of the block's requests — the
+// sidecar's leading value, whatever its status.
+//
+// ⚠️ **DELIBERATELY NOT GATED ON `attributed` (changed 2026-09-29).** It used to
+// be, and on one machine that left 130 blocks (41M tokens) with no model and so
+// no price at all, 127 of them under five requests. The evidence floor answers
+// "may this share be published as what the work was about"; a model is not
+// inferred, it is read off each request, so two requests that both went to Opus
+// used Opus. This value is the LEDGER's, for pricing and the page; the block
+// published to Atlas still carries the model dimension with its own status,
+// untouched. Under `tie` the leader is the sidecar's alphabetical pick between
+// equals, and the whole block is priced at it — the same one-model pricing an
+// attributed 60/40 block already gets.
 func dominantModel(ws map[string]enrich.Labeled) string {
-	if l, ok := ws["model"]; ok && l.Value != "" {
-		if l.Status == "" || l.Status == enrich.DimensionAttributed {
-			return l.Value
-		}
+	if l, ok := ws["model"]; ok {
+		return l.Value
 	}
 	return ""
 }

@@ -61,6 +61,12 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
 ```
 
 Rules: a cell that never happened is **absent from `cells`**, never `{"status":"failed"}`.
+`measured.model` is the model that served most of the block's requests — the sidecar's
+leading value **whatever its evidence status** (since 2026-09-29; until then a block under the
+5-observation floor recorded `""` and so no price). A model is read off each request, not
+inferred, so the floor that governs a *published* dimension does not apply to pricing. The
+block published to Atlas still carries its `model` dimension with its own status. `""` now
+means no request named a model, and rows written before the change keep their `""`.
 `estimate_usd` is 0 when no price applies; the page prints "est." on every dollar figure
 regardless. `pending` holds sessions for which blocks could not be asked for at all.
 
