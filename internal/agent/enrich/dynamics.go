@@ -91,12 +91,19 @@ type WindowAnalysis struct {
 	// classifies one REQUEST by its tool name, arguments and output shape, and
 	// never rolls up. See sidecar/app/analysis/reqclass.py.
 	//
-	// ⚠️ VALIDATED ON DEVELOPER WORK ONLY. 82-95% of tool calls in both measured
-	// corpora are Bash/Read/Edit/Write/Grep/Glob. It degrades sensibly on other
-	// tools, but `verify` has no non-developer referent, and with NO tool calls
-	// the vocabulary collapses to two values (74.8% acknowledge / 25.2%
-	// synthesize across 11,575 chat turns) -- the shape of Claude used through a
-	// web app. The vocabulary is OPEN for exactly that reason.
+	// ⚠️ VALIDATED ON CODE AND EDITORIAL WORK THROUGH CLI AGENTS. Measured over
+	// 202 real sessions split by doc-vs-code files: the unclassified residual is
+	// 1.3% on editorial work against 1.1% on engineering, so coverage does NOT
+	// degrade -- and the distribution discriminates (author_prose 15.6% vs 8.3%,
+	// synthesize 13.0% vs 4.4%, verify 3.3% vs 11.2%).
+	//
+	// NOT validated on non-technical users, and that is a CAPTURE question before
+	// it is a vocabulary one: Signal's sources are claude_code/codex/cowork/gemini,
+	// there is no web-app path at all, and Cowork is VM-backed. With no tool calls
+	// the vocabulary reaches only two of nine values (74.8% acknowledge / 25.2%
+	// synthesize over 11,575 tool-free turns). The vocabulary is OPEN for that
+	// reason, and `unclassified` is the instrument: a population it does not fit
+	// announces itself by its residual, with no labels and no transcripts.
 	ActivityClasses []NameCount
 	Dimensions      map[string]Labeled
 	Dynamics        map[string]Dynamic

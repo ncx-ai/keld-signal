@@ -23,20 +23,46 @@ study/activity-type): macro F1 0.920 against its author's blind labels and
 identical rules, and a tool-free negative control that leaks no tool-derived
 class across 11,575 chat turns.
 
-⚠️ THE VOCABULARY IS VALIDATED ON DEVELOPER WORK AND ONLY ON DEVELOPER WORK.
-81.7% and 94.5% of tool calls in the two corpora are Bash/Read/Edit/Write/
-Grep/Glob/LS. On the 2,767 requests that use NO developer tool it degrades
-sensibly rather than breaking -- Notion/Artifact -> author_prose, Agent/Skill
--> delegate, notion-fetch/ToolSearch -> retrieve, all at 100% -- but two gaps
-are real and must not be discovered by a customer:
+⚠️ WHAT IT IS VALIDATED ON, precisely: CODE AND EDITORIAL WORK THROUGH CLI
+AGENTS. Measured on 202 real sessions of >=10 requests, split by whether they
+touched more document files than code files:
 
-  1. `verify` has no non-developer referent. It means "ran the tests"; a
-     finance analyst checking a model or a marketer reviewing copy has no
-     class here at all.
-  2. With NO tool calls the vocabulary collapses to two classes. Measured on
-     11,575 tool-free turns: 74.8% acknowledge, 25.2% synthesize, nothing
-     else. That is the shape of Claude used through a web app or Cowork, and
-     for such a user this dimension currently says almost nothing.
+                     editorial (33 sess)   engineering (59 sess)
+    retrieve                    28.4%              37.3%
+    author_prose                15.6%               8.3%
+    author_code                 15.4%              22.8%
+    operate                     15.0%              13.2%
+    synthesize                  13.0%               4.4%
+    verify                       3.3%              11.2%
+    unclassified                 1.3%               1.1%   <- COVERAGE HOLDS
+
+Two results, and both matter more than the caveat they replaced. COVERAGE does
+not degrade on non-code work -- the unclassified residual is 1.3% against 1.1%.
+And the dimension DISCRIMINATES: author_prose nearly doubles, synthesize triples,
+verify falls to a third. It separates the two kinds of work rather than
+flattening them, which is the whole reason to publish it. `verify` does not die
+on editorial work either; doc pipelines still run linters and builds.
+
+⚠️ WHAT IT IS NOT VALIDATED ON, and cannot be yet. That editorial work is done by
+an ENGINEER, through a CLI, in a git repo. A finance or legal user's day would
+have different tools and may need a class this vocabulary lacks. That population
+is NOT CAPTURABLE TODAY -- Signal's sources are claude_code / codex / cowork /
+gemini, there is no web-app capture path at all, and Cowork is VM-backed with
+`watch.coworkHidden` existing precisely to detect that its transcripts are
+unreachable. So for those users this is a CAPTURE question first and a vocabulary
+question second, and answering the second before the first would be guessing.
+
+⚠️ AND WITH NO TOOL CALLS THE VOCABULARY REACHES ONLY TWO OF ITS NINE VALUES:
+74.8% acknowledge / 25.2% synthesize across 11,575 real tool-free chat turns.
+That is the shape of Claude used through a web app, and for such a user this
+dimension would say almost nothing -- another reason the capture question comes
+first.
+
+⚠️ THE RESIDUAL IS THE INSTRUMENT. `unclassified` publishes honestly per unit, so
+a population this vocabulary does not fit announces itself: a residual running at
+30% instead of 1.3% IS the finding, measured with no labels and no transcripts.
+That is the cheapest validation route that exists for populations nobody here can
+sample, and it is why the residual must never be folded into a default class.
 
 ⚠️ SO THE VOCABULARY IS OPEN, deliberately, exactly as `subagents` and
 `mcp_servers` are: entries are gated per value structurally, never against a
