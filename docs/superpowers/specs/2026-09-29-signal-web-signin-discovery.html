@@ -134,7 +134,7 @@ choice to skip and use Signal locally. This page settles the flow, the security 
 tests. If it is wrong, we ship a login that leaks a credential or breaks without anyone noticing.</p>
 
 <div class="meta">
-  <span class="chip chip-signed">Signed off — 2026-09-29</span>
+  <span class="chip chip-reviewed">Reviewed — 2026-09-29</span>
   <span>Opus 5.5 — thinking: high</span>
   <span class="mono">2026-09-29</span>
   <span>Tickets <a href="https://app.notion.com/p/3e90f0c5fd60814689c7e8b9d33fd1c7">#447</a> + <a href="https://app.notion.com/p/3e40f0c5fd60804d80ebc88da38f093c">#431</a> (now in scope)</span>
@@ -1045,6 +1045,9 @@ changes, so nothing downstream of pairing is affected.</figcaption>
   <tr><td><strong>Changed default:</strong> Windows opens the page instead of <span class="mono">onboard.cmd</span></td><td>yes</td><td>every interactive Windows install</td><td>keld_agent_iss_test.sh · still skipifsilent</td></tr>
   <tr><td><span class="mono">install.sh</span> end-of-install text and action</td><td>yes</td><td>interactive Linux installs without <span class="mono">--code</span></td><td>review</td></tr>
   <tr><td>Canary README scope rule reworded</td><td>yes</td><td>docs only</td><td>review</td></tr>
+  <tr><td><strong>Added during review:</strong> the Windows installer's ~750-line "Set up Keld" <span class="mono">[Code]</span> page (setup code, device sign-in, tool picker) deleted</td><td>yes, revert the release</td><td>every interactive Windows install</td><td>keld_agent_iss_test.sh</td></tr>
+  <tr><td><strong>Added during review:</strong> <span class="mono">install.ps1</span> ends by opening Signal instead of printing login commands</td><td>yes</td><td>interactive PowerShell installs without <span class="mono">--code</span></td><td>review · never run here (no pwsh)</td></tr>
+  <tr><td><strong>Added during review:</strong> keld-wizard-host <span class="mono">--panel</span>/<span class="mono">--clipboard</span> deleted; go-webview2 dropped from go.mod</td><td>yes</td><td>none; only the deleted page used them</td><td>go build GOOS=windows · go test</td></tr>
 </tbody>
 </table>
 </div>
@@ -1086,7 +1089,52 @@ changes, so nothing downstream of pairing is affected.</figcaption>
 <h2 id="s9">9 · Review log</h2>
 <p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match
 the code. A wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
-<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+<p><strong>8/12 criteria met</strong> when graded — not ready: one merge blocker in keld-atlas, three pre-release items. Graded 2026-09-29 by a read-only reviewer agent against <span class="mono">origin/main</span> in all three repos.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#ac-1">AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ingress/signin.go:200-230 · go test -run TestSignInStart PASS · ui/e2e/signin.spec.ts link assertions</td></tr>
+  <tr><td class="mono"><a href="#ac-2">AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">services/api/app/cli_redirect.py:21-33 · tests/test_cli_authorize.py reject table, both routes · api suite 4116 passed</td></tr>
+  <tr><td class="mono"><a href="#ac-3">AC-3</a></td><td><span class="pill p-met">MET</span></td><td class="mono">services/web/app/cli/signal/authorize/page.tsx:79,92 · routers/oauth.py:150 · vitest cli-signal-authorize pass · real-atlas.spec 02/03/04 pass</td></tr>
+  <tr><td class="mono"><a href="#ac-4">AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">routers/cli.py:133 · pytest -k verifier 8 passed · real-atlas.spec 08 · the named test_cli_enroll.py -k verifier selects 0; the tests live in test_cli_authorize.py</td></tr>
+  <tr><td class="mono"><a href="#ac-5">AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">internal/agent/ingress/config.go:72,114 · TestSignInCallback PASS · signin.spec.ts 5 s assertion pass</td></tr>
+  <tr><td class="mono"><a href="#ac-6">AC-6</a></td><td><span class="pill p-met">MET</span></td><td class="mono">signin.go:290-338,386-401 · TestSignInCallbackRefuses (8 rows) · TestMismatchedReturnBurnsTheState</td></tr>
+  <tr><td class="mono"><a href="#ac-7">AC-7</a></td><td><span class="pill p-met">MET</span></td><td class="mono">oauth.py _safe_next · services/web/lib/safe-next.ts · fixtures/safe_next_cases.json · pytest -k safe_next 28 passed · vitest safe-next pass</td></tr>
+  <tr><td class="mono"><a href="#ac-8">AC-8</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">no existing *_test.go edited · go test ./... EXIT 0 · CI conformance.yml not run; local chain A claude_code only PASS</td></tr>
+  <tr><td class="mono"><a href="#ac-9">AC-9</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">.github/workflows/ci.yml:61 ui-e2e-signin · test_round_trip PASSED · no required status checks exist in keld-signal or keld-atlas</td></tr>
+  <tr><td class="mono"><a href="#ac-10">AC-10</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">installers/macos/scripts/postinstall:66,166 · keld-agent.iss:153-154 · scripts/install.sh:408 · guards pass · manual pkg + exe run not done</td></tr>
+  <tr><td class="mono"><a href="#ac-11">AC-11</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">local spec 3/3 · signal-signin.yml:4,9,105 · gh run list 404 (not on the default branch yet) · install.yml real-binary step gated off</td></tr>
+  <tr><td class="mono"><a href="#ac-12">AC-12</a></td><td><span class="pill p-met">MET</span></td><td class="mono">signin.go:268 · go test -run TestAuthState PASS (TestFirstRunChoice does not exist) · ui/e2e/firstrun.spec.ts 2/2</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Findings</h3>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>Finding</th><th>Severity</th><th>Status after review</th></tr></thead>
+<tbody>
+  <tr><td>Merging Atlas would block every prod promotion: the gate failed closed and no canary secret exists.</td><td>blocker</td><td><span class="pill p-met">FIXED</span> gate enforces only when <span class="mono">SIGNIN_CANARY_GATE=enforce</span>; otherwise it reports. 21/21 stub scenarios. keld-atlas e602c0ff</td></tr>
+  <tr><td>The D4 gate reads stale evidence: the dev-deploy dispatch fires at deploy start and the canary does not wait for the new SHA.</td><td>follow-up</td><td><span class="pill p-partial">OPEN</span> the clean trigger belongs in ncx-ai/infrastructure's deploy-atlas-dev.yml</td></tr>
+  <tr><td>"Required checks" is false in both repos, as was this page's "already required".</td><td>follow-up</td><td><span class="pill p-partial">OPEN</span> a GitHub settings change, Gabriel's call</td></tr>
+  <tr><td>AC-10's manual pkg + exe install, including the GUI-install detection, not done.</td><td>follow-up</td><td><span class="pill p-partial">OPEN</span> needs a spare Mac/VM and a Windows VM</td></tr>
+  <tr><td>keld-wizard-host <span class="mono">--panel</span>/<span class="mono">--clipboard</span> became dead code.</td><td>follow-up</td><td><span class="pill p-met">FIXED</span> removed, go mod tidied · keld-signal ac3bf2e7, 70039f8b</td></tr>
+  <tr><td>The deleted Windows <span class="mono">[Code]</span> wizard page and the install.ps1 change were missing from the destructive ledger.</td><td>note</td><td><span class="pill p-met">FIXED</span> added to §7, marked as added during review</td></tr>
+  <tr><td><span class="mono">approve_device</span> now approves only pending grants — a security fix beyond the contract; a double approve answers 410.</td><td>note</td><td><span class="pill p-met">ACCEPTED</span></td></tr>
+  <tr><td>"Use locally only" raises the existing "restart to apply" bar at once.</td><td>note</td><td><span class="pill p-partial">OPEN</span> polish</td></tr>
+  <tr><td>The canary's prod leg fails every 6 h until prod Atlas serves the route.</td><td>note</td><td><span class="pill p-partial">OPEN</span> expected until the Atlas release</td></tr>
+  <tr><td>Stale pane comments and an inert <span class="mono">api_url</span> installer input.</td><td>note</td><td>comments <span class="pill p-met">FIXED</span> · api_url kept as debt</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Evidence gathered after grading</h3>
+<ul>
+  <li><strong>AC-8:</strong> conformance chain A now passes locally for all three tools — claude_code (reviewer), codex 0.156.1 and Gemini CLI 0.37.1. The CI run waits for a push, and CI's tool versions differ from this Mac's.</li>
+  <li><strong>End to end against a real local Atlas:</strong> 15/15 (<span class="mono">ui/e2e/local-atlas/real-atlas.spec.ts</span>), re-run by the lead. Canary spec against the same Atlas: 3/3.</li>
+  <li><strong>After the fixes:</strong> keld-signal <span class="mono">go vet</span> clean, <span class="mono">go test ./...</span> 63 packages ok.</li>
+</ul>
 
 <section class="qa">
 <h2 id="objections">Objections</h2>
