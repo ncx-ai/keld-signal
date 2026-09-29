@@ -49,3 +49,24 @@ export const catalog = {
     { id: "p_atlas", title: "Keld Atlas" },
   ],
 };
+
+/** GET /v1/usage buckets for these blocks, as if each measured block's
+ *  requests had all landed in one 5-minute bucket at its start — so a test
+ *  written against block figures reads the same figures through the
+ *  per-request path. `extra` buckets are appended as given. */
+export function usageFor(blocks, extra = [], sources = null) {
+  const buckets = [];
+  for (const b of blocks) {
+    const m = b.cells.measured;
+    if (!m) continue;
+    const { request, ...tokens } = m.tokens;
+    buckets.push({ at: b.key.start, source: b.source, transcript: b.key.session, model: m.model, requests: 1, tokens, estimate_usd: m.estimate_usd });
+  }
+  buckets.push(...extra);
+  return { bucket_seconds: 300, backfill_done: true, sources: sources || { claude_code: { first_at: 0 } }, buckets };
+}
+
+/** One usage bucket. */
+export function bucket({ d = 28, h = 10, m = 0, source = "claude_code", transcript = "s1", model = "claude-opus-5", tokens = { input: 10, output: 90, cache_read: 800, cache_creation: 100 }, usd = 1, requests = 1 } = {}) {
+  return { at: at(d, h, m), source, transcript, model, requests, tokens, estimate_usd: usd };
+}
