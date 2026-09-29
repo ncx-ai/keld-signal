@@ -6,8 +6,8 @@ func TestSchemaVersion(t *testing.T) {
 	// 22 -> 23: block rows gained `concepts` (enrich.Concept) and the attribution
 	// meta gained `concept_ms`. A published-vocabulary change, so the version moves
 	// with it — that is what this test is for.
-	if SchemaVersion != 23 {
-		t.Fatalf("SchemaVersion = %d, want 23", SchemaVersion)
+	if SchemaVersion != 24 {
+		t.Fatalf("SchemaVersion = %d, want 24", SchemaVersion)
 	}
 }
 

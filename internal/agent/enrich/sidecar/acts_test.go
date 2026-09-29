@@ -147,7 +147,7 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 // `mcp_servers`.
 //
 // WITH NOTHING WITHHELD, THE STRUCT IS STILL THE MECHANISM, and this test is why
-// it keeps working: it asserts the field count EXACTLY, so a fourteenth key the
+// it keeps working: it asserts the field count EXACTLY, so an eighteenth key the
 // sidecar starts emitting cannot be decoded without failing here first and being
 // argued for. "Nothing is withheld today" is not the same as "anything may be
 // added tomorrow".
@@ -194,14 +194,56 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		// ⚠️ It is NOT a cost figure and must not be rendered as one: output is 10-14% of
 		// modelled cost, the rest being cache reads at roughly a tenth the price.
 		"activity_class_tokens": false,
+		// THE SIXTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_categories` says WHICH KIND OF VENDOR PRODUCT the work ran through --
+		// `issue_tracking`, `crm_sales`, `hr_people`. It earns a key because nothing
+		// else on this wire answers it: `activity_classes` says what CAPABILITY was
+		// stressed and is silent about where, `external_systems` says which HOST was
+		// contacted and is a raw string that is mostly loopback, and `integrations`
+		// names an MCP tool without saying what kind of thing it is.
+		//
+		// ⚠️ IT IS A DECLARATIVE LOOKUP, NOT AN INFERENCE, and that is why it may ship
+		// on evidence neither corpus can supply. That Workday is an HR system is true
+		// by construction. Both corpora here are engineering work and one holds zero
+		// MCP calls in 499 sessions, so the orgs this dimension is FOR are exactly the
+		// ones they cannot speak for -- which is also why `unrecognized` is a published
+		// VALUE: a thin answer must read as unknown coverage, never as an org touching
+		// nothing.
+		//
+		// ⚠️ It is strictly LESS identifying than the `external_systems` it sits beside:
+		// a category names no host, no environment and no org. This adds a coarser view
+		// of evidence already crossing, not a new exposure.
+		"system_categories": false,
+		// THE SEVENTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_actions` pairs that category with WHAT WAS DONE inside the system --
+		// `issue_tracking:create` against `issue_tracking:read`. Creating tickets and
+		// reading them are not the same work, and the category alone cannot tell them
+		// apart.
+		//
+		// ⚠️ It is NOT reconstructable by joining `system_categories` with
+		// `activity_classes`, which is the obvious objection to a second key. That class
+		// is ONE label per inference REQUEST, covering every tool the request issued, so
+		// a request that fetches a Notion page and then greps a file has a single class
+		// and no way to say which of its tools the verb belonged to. Pairing at the
+		// reference is what keeps them attached.
+		//
+		// ⚠️ MCP-only, so it is SPARSER than the key above and that is not a defect: a
+		// URL host names a system and no action, and a second verb vocabulary parsed out
+		// of shell commands would start disagreeing with the one `shell.py` already
+		// derives for the same call. An unknown verb publishes the CATEGORY and no
+		// action rather than a guess -- a wrong verb is a false statement about what
+		// someone did in a system of record.
+		"system_actions": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all fifteen inventory keys and no others should be "+
-			"decodable — a sixteenth needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all seventeen inventory keys and no others should be "+
+			"decodable — an eighteenth needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")

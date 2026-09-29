@@ -78,6 +78,8 @@ type AnalysisFacets struct {
 	McpServers          []enrich.NameCount `json:"mcp_servers,omitempty"`
 	ActivityClasses     []enrich.NameCount `json:"activity_classes,omitempty"`
 	ActivityClassTokens []enrich.NameCount `json:"activity_class_tokens,omitempty"`
+	SystemCategories    []enrich.NameCount `json:"system_categories,omitempty"`
+	SystemActions       []enrich.NameCount `json:"system_actions,omitempty"`
 	// InventoryOmitted is the cut-visibility map beside the inventories above —
 	// same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
@@ -115,6 +117,8 @@ func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 		McpServers:          a.McpServers,
 		ActivityClasses:     a.ActivityClasses,
 		ActivityClassTokens: a.ActivityClassTokens,
+		SystemCategories:    a.SystemCategories,
+		SystemActions:       a.SystemActions,
 		InventoryOmitted:    a.InventoryOmitted,
 		Prior:               a.Prior,
 	}

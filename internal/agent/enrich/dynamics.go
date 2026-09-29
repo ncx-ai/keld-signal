@@ -139,8 +139,31 @@ type WindowAnalysis struct {
 	// is cache reads at roughly a tenth the price. A true per-class cost needs
 	// per-class INPUT, which is not measured. This says where the OUTPUT went.
 	ActivityClassTokens []NameCount
-	Dimensions          map[string]Labeled
-	Dynamics            map[string]Dynamic
+
+	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
+	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative
+	// table (sidecar `analysis/systems.py`), never an inference over text.
+	//
+	// ⚠️ It sits beside ExternalSystems and is the COARSER of the two on purpose.
+	// That one publishes raw hosts and has put internal infrastructure names on
+	// the wire; a category names no host, no environment and no org, so this is
+	// strictly less identifying than its neighbour rather than a new exposure.
+	//
+	// `unrecognized` is a real published value, not a gap: an org whose systems
+	// the table does not know yet must read as UNKNOWN COVERAGE, never as an org
+	// that touches nothing.
+	SystemCategories []NameCount
+	// SystemActions pairs that category with WHAT WAS DONE inside the system —
+	// `issue_tracking:create`, `crm_sales:update`. MCP-only, because a URL host
+	// names a system and no action, so this is sparser than its sibling by
+	// design.
+	//
+	// ⚠️ Not reconstructable by joining SystemCategories with the activity class:
+	// that class is ONE label per inference request covering every tool the
+	// request issued, so which tool a verb belonged to is already gone.
+	SystemActions []NameCount
+	Dimensions    map[string]Labeled
+	Dynamics      map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

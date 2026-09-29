@@ -494,6 +494,8 @@ type InventoryBlock struct {
 	McpServers          []InventoryItem `json:"mcp_servers"`
 	ActivityClasses     []InventoryItem `json:"activity_classes"`
 	ActivityClassTokens []InventoryItem `json:"activity_class_tokens"`
+	SystemCategories    []InventoryItem `json:"system_categories"`
+	SystemActions       []InventoryItem `json:"system_actions"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:
