@@ -164,6 +164,9 @@ func onboardingHandler(set settings.Settings, secret string) http.Handler {
 	routes := append(sig.routes(),
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
+		// The browser sign-in pairs through the same pair() /v1/config uses, and
+		// an unpaired machine is exactly where it starts.
+		ingress.SignInRoute(),
 		// Generating work needs no Atlas and no token, and an unpaired machine
 		// is exactly where someone wants to see a block appear before deciding
 		// to pair at all. No drive hook: before configuration there is no block

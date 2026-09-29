@@ -1,0 +1,685 @@
+package ingress
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/paths"
+)
+
+// ---- fixtures ----
+
+// pkceAtlas is a fake Atlas for the browser sign-in: /v1/cli/enroll redeems
+// exactly one code, bound to the challenge the daemon sent, and answers 410
+// when the verifier does not hash to it (C2). Every request is counted, so a
+// refusal can assert Atlas was never asked anything.
+type pkceAtlas struct {
+	*httptest.Server
+	mu        sync.Mutex
+	challenge string // the code's bound challenge; "" = not yet authorized
+	code      string
+	gone      bool // answer every enroll with 410
+	requests  atomic.Int32
+	verifier  string // what the last enroll carried
+}
+
+func newPKCEAtlas(t *testing.T) *pkceAtlas {
+	t.Helper()
+	a := &pkceAtlas{code: "WXYZ-2345"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/cli/enroll", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Code         string `json:"code"`
+			CodeVerifier string `json:"code_verifier"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.verifier = body.CodeVerifier
+		sum := sha256.Sum256([]byte(body.CodeVerifier))
+		if a.gone || body.Code != a.code || a.challenge == "" ||
+			base64.RawURLEncoding.EncodeToString(sum[:]) != a.challenge {
+			w.WriteHeader(http.StatusGone)
+			return
+		}
+		a.challenge = "" // single use
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"access_token": "tok-web", "principal": "ana@acme.test", "org": "Acme",
+		})
+	})
+	mux.HandleFunc("/v1/cli/onboarding", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok-web" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"endpoint": "https://ingest.acme/v1", "ingest_token": "ingest-web", "actor": "ana",
+		})
+	})
+	a.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.requests.Add(1)
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(a.Close)
+	return a
+}
+
+// authorize plays Atlas's /api/cli/authorize: bind the code to the challenge
+// the authorize URL carried, and hand back the pairing code (host/CODE).
+func (a *pkceAtlas) authorize(challenge string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.challenge = challenge
+	return strings.TrimPrefix(a.URL, "http://") + "/" + a.code
+}
+
+type signInHarness struct {
+	t      *testing.T
+	store  *signInStore
+	srv    *httptest.Server
+	atlas  *pkceAtlas
+	now    time.Time
+	opened []string
+	mu     sync.Mutex
+}
+
+// newSignInHarness isolates KELD_HOME, points the API base at a fake Atlas and
+// serves the three routes behind the real secret gate.
+func newSignInHarness(t *testing.T) *signInHarness {
+	t.Helper()
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_ATLAS", "")
+	t.Setenv("KELD_AUTH_NO_BROWSER", "")
+	paths.SetAPIBaseOverride("")
+	h := &signInHarness{t: t, atlas: newPKCEAtlas(t), now: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)}
+	t.Setenv("KELD_API_URL", h.atlas.URL)
+	t.Setenv("KELD_ATLAS_WEB_URL", "http://atlas-web.test")
+	h.store = newSignInStore(func() time.Time {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.now
+	}, func(u string) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.opened = append(h.opened, u)
+		return nil
+	})
+	h.srv = httptest.NewServer(DiscardHandler("s3cret", signInRoute(h.store)))
+	t.Cleanup(h.srv.Close)
+	return h
+}
+
+func (h *signInHarness) advance(d time.Duration) {
+	h.mu.Lock()
+	h.now = h.now.Add(d)
+	h.mu.Unlock()
+}
+
+type startOut struct {
+	AuthorizeURL string `json:"authorize_url"`
+	Opened       bool   `json:"opened"`
+}
+
+func (h *signInHarness) start() (startOut, url.Values) {
+	h.t.Helper()
+	res := doRequest(h.t, h.srv, http.MethodPost, "/v1/auth/start", "s3cret", nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(res.Body)
+		h.t.Fatalf("start: want 200, got %d: %s", res.StatusCode, b)
+	}
+	var out startOut
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		h.t.Fatal(err)
+	}
+	u, err := url.Parse(out.AuthorizeURL)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return out, u.Query()
+}
+
+func (h *signInHarness) callback(rawQuery string) (*http.Response, string) {
+	h.t.Helper()
+	res, err := http.Get(h.srv.URL + "/auth/callback?" + rawQuery)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res, string(b)
+}
+
+type stateOut struct {
+	Paired    bool    `json:"paired"`
+	Principal *string `json:"principal"`
+	Org       *string `json:"org"`
+	FirstRun  bool    `json:"first_run"`
+	Pending   bool    `json:"pending"`
+	LastError *string `json:"last_error"`
+}
+
+func (h *signInHarness) state() stateOut {
+	h.t.Helper()
+	res := doRequest(h.t, h.srv, http.MethodGet, "/v1/auth/state", "s3cret", nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		h.t.Fatalf("state: want 200, got %d", res.StatusCode)
+	}
+	var out stateOut
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		h.t.Fatal(err)
+	}
+	return out
+}
+
+func q(pairingCode, state string) string {
+	return url.Values{"pairing_code": {pairingCode}, "state": {state}}.Encode()
+}
+
+var b64url43 = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+func assertFixedPageHeaders(t *testing.T, res *http.Response) {
+	t.Helper()
+	want := map[string]string{
+		"Content-Type":            "text/html; charset=utf-8",
+		"Cache-Control":           "no-store",
+		"Referrer-Policy":         "no-referrer",
+		"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+	}
+	for k, v := range want {
+		if got := res.Header.Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// ---- AC-1 ----
+
+func TestSignInStart(t *testing.T) {
+	h := newSignInHarness(t)
+
+	out, v := h.start()
+	u, _ := url.Parse(out.AuthorizeURL)
+	if u.Scheme+"://"+u.Host != "http://atlas-web.test" || u.Path != "/cli/signal/authorize" {
+		t.Fatalf("authorize_url = %q, want http://atlas-web.test/cli/signal/authorize?…", out.AuthorizeURL)
+	}
+
+	// The return address is this listener's own port, on 127.0.0.1.
+	srvURL, _ := url.Parse(h.srv.URL)
+	wantRedirect := "http://127.0.0.1:" + srvURL.Port() + "/auth/callback"
+	if v.Get("redirect_uri") != wantRedirect {
+		t.Fatalf("redirect_uri = %q, want %q", v.Get("redirect_uri"), wantRedirect)
+	}
+	if v.Get("code_challenge_method") != "S256" {
+		t.Fatalf("code_challenge_method = %q", v.Get("code_challenge_method"))
+	}
+	state := v.Get("state")
+	if !b64url43.MatchString(state) {
+		t.Fatalf("state %q is not 43 chars of base64url (32 random bytes)", state)
+	}
+	if raw, err := base64.RawURLEncoding.DecodeString(state); err != nil || len(raw) != 32 {
+		t.Fatalf("state does not decode to 32 bytes: %v", err)
+	}
+
+	// The challenge is S256 of the verifier the daemon kept — and the verifier
+	// itself never appears in the URL.
+	h.store.mu.Lock()
+	if len(h.store.entries) != 1 {
+		h.store.mu.Unlock()
+		t.Fatalf("want one pending sign-in, got %d", len(h.store.entries))
+	}
+	e := h.store.entries[0]
+	h.store.mu.Unlock()
+	if !b64url43.MatchString(e.verifier) {
+		t.Fatalf("verifier %q is not 43 chars of base64url", e.verifier)
+	}
+	sum := sha256.Sum256([]byte(e.verifier))
+	if v.Get("code_challenge") != base64.RawURLEncoding.EncodeToString(sum[:]) {
+		t.Fatal("code_challenge is not base64url(sha256(verifier))")
+	}
+	if strings.Contains(out.AuthorizeURL, e.verifier) {
+		t.Fatal("the verifier must never ride the browser URL")
+	}
+	if e.apiBase != h.atlas.URL {
+		t.Fatalf("stored api base = %q, want %q", e.apiBase, h.atlas.URL)
+	}
+	if e.state != state {
+		t.Fatal("stored state differs from the URL's")
+	}
+
+	// The browser was opened, with exactly that URL.
+	if !out.Opened || len(h.opened) != 1 || h.opened[0] != out.AuthorizeURL {
+		t.Fatalf("opened=%v calls=%v, want one call with the authorize URL", out.Opened, h.opened)
+	}
+
+	// Two starts make two independent states.
+	_, v2 := h.start()
+	if v2.Get("state") == state || v2.Get("code_challenge") == v.Get("code_challenge") {
+		t.Fatal("a second start reused the state or the challenge")
+	}
+}
+
+func TestSignInStartHonoursNoBrowser(t *testing.T) {
+	h := newSignInHarness(t)
+	t.Setenv("KELD_AUTH_NO_BROWSER", "1")
+	out, _ := h.start()
+	if out.Opened || len(h.opened) != 0 {
+		t.Fatalf("KELD_AUTH_NO_BROWSER=1: opened=%v calls=%v, want no browser", out.Opened, h.opened)
+	}
+	if out.AuthorizeURL == "" {
+		t.Fatal("the page still needs the link to show")
+	}
+}
+
+func TestSignInStartOpenerFailureIsNotAnError(t *testing.T) {
+	h := newSignInHarness(t)
+	h.store.open = func(string) error { return fmt.Errorf("no display") }
+	out, _ := h.start()
+	if out.Opened {
+		t.Fatal("opened must be false when the opener failed")
+	}
+}
+
+func TestSignInStartRefusedWhileAtlasOff(t *testing.T) {
+	h := newSignInHarness(t)
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"send_to_atlas":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := doRequest(t, h.srv, http.MethodPost, "/v1/auth/start", "s3cret", nil)
+	body := decodeBody(t, res)
+	if res.StatusCode != http.StatusConflict || body["error"] != "send_to_atlas_is_off" {
+		t.Fatalf("want 409 send_to_atlas_is_off, got %d %v", res.StatusCode, body)
+	}
+	if len(h.opened) != 0 || h.state().Pending {
+		t.Fatal("a refused start must open nothing and hold nothing")
+	}
+}
+
+func TestSignInRoutesRequireTheSecretExceptTheCallback(t *testing.T) {
+	h := newSignInHarness(t)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/v1/auth/start"},
+		{http.MethodGet, "/v1/auth/state"},
+	} {
+		res := doRequest(t, h.srv, c.method, c.path, "", nil)
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s %s with no secret: got %d, want 401", c.method, c.path, res.StatusCode)
+		}
+	}
+	// The callback is the one route with no secret — the browser has no page
+	// cookie. It answers (a refusal page), it does not 401.
+	res, _ := h.callback(q("x/ABCD-EFGH", "nope"))
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusNotFound {
+		t.Fatalf("callback must be reachable without the secret, got %d", res.StatusCode)
+	}
+}
+
+// ---- AC-5 ----
+
+func TestSignInCallback(t *testing.T) {
+	h := newSignInHarness(t)
+	_, v := h.start()
+	if !h.state().Pending {
+		t.Fatal("after start, state must report pending")
+	}
+
+	code := h.atlas.authorize(v.Get("code_challenge"))
+	res, body := h.callback(q(code, v.Get("state")))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("callback: want 200, got %d: %s", res.StatusCode, body)
+	}
+	assertFixedPageHeaders(t, res)
+	if !strings.Contains(body, "Signed in. Close this tab.") {
+		t.Fatalf("success page body = %q", body)
+	}
+
+	// The verifier went to Atlas, and pair() wrote both files.
+	h.atlas.mu.Lock()
+	sent := h.atlas.verifier
+	h.atlas.mu.Unlock()
+	if sent == "" {
+		t.Fatal("the enroll carried no code_verifier")
+	}
+	authData, err := os.ReadFile(paths.AuthPath())
+	if err != nil || !strings.Contains(string(authData), "tok-web") {
+		t.Fatalf("auth.json not written by pair(): %v %s", err, authData)
+	}
+	hook, err := os.ReadFile(paths.HookConfigPath())
+	if err != nil || !strings.Contains(string(hook), "ingest-web") {
+		t.Fatalf("hook.json not written by pair(): %v %s", err, hook)
+	}
+
+	st := h.state()
+	if !st.Paired || st.Pending || st.LastError != nil || st.FirstRun {
+		t.Fatalf("after a good return: %+v", st)
+	}
+	if st.Principal == nil || *st.Principal != "ana@acme.test" || st.Org == nil || *st.Org != "Acme" {
+		t.Fatalf("principal/org = %v/%v", st.Principal, st.Org)
+	}
+}
+
+// ---- AC-6 (and the 410 row of the return-route table) ----
+
+func TestSignInCallbackRefuses(t *testing.T) {
+	const script = "<script>alert(1)</script>"
+	cases := []struct {
+		name     string
+		run      func(h *signInHarness) (*http.Response, string)
+		status   int
+		wantPage string
+		lastErr  string
+		// atlasCalled: only the 410 row may reach Atlas — it is Atlas's answer.
+		atlasCalled bool
+	}{
+		{
+			name: "unknown state",
+			run: func(h *signInHarness) (*http.Response, string) {
+				return h.callback(q(strings.TrimPrefix(h.atlas.URL, "http://")+"/WXYZ-2345", strings.Repeat("A", 43)))
+			},
+			status: http.StatusBadRequest, wantPage: "This sign-in was not started here", lastErr: "not_started_here",
+		},
+		{
+			name: "used state (replay)",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				code := h.atlas.authorize(v.Get("code_challenge"))
+				if res, _ := h.callback(q(code, v.Get("state"))); res.StatusCode != http.StatusOK {
+					h.t.Fatalf("first return should pair, got %d", res.StatusCode)
+				}
+				// Undo what the good return wrote, so "nothing written" is measurable.
+				os.Remove(paths.AuthPath())
+				os.Remove(paths.HookConfigPath())
+				h.atlas.requests.Store(0)
+				return h.callback(q(code, v.Get("state")))
+			},
+			status: http.StatusBadRequest, wantPage: "This sign-in was not started here", lastErr: "not_started_here",
+		},
+		{
+			name: "expired state",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				code := h.atlas.authorize(v.Get("code_challenge"))
+				h.advance(10*time.Minute + time.Second)
+				return h.callback(q(code, v.Get("state")))
+			},
+			status: http.StatusGone, wantPage: "This sign-in expired", lastErr: "expired",
+		},
+		{
+			name: "code names a different Atlas",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				h.atlas.authorize(v.Get("code_challenge"))
+				return h.callback(q("evil.example/WXYZ-2345", v.Get("state")))
+			},
+			status: http.StatusBadRequest, wantPage: "different Atlas", lastErr: "atlas_mismatch",
+		},
+		{
+			name: "Send to Atlas off",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				code := h.atlas.authorize(v.Get("code_challenge"))
+				if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"send_to_atlas":false}`), 0o600); err != nil {
+					h.t.Fatal(err)
+				}
+				return h.callback(q(code, v.Get("state")))
+			},
+			status: http.StatusConflict, wantPage: "Send to Atlas is off", lastErr: "atlas_off",
+		},
+		{
+			name: "Atlas answers 410",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				code := h.atlas.authorize(v.Get("code_challenge"))
+				h.atlas.mu.Lock()
+				h.atlas.gone = true
+				h.atlas.mu.Unlock()
+				return h.callback(q(code, v.Get("state")))
+			},
+			status: http.StatusGone, wantPage: "That code expired", lastErr: "expired", atlasCalled: true,
+		},
+		{
+			name: "script in every param, unknown state",
+			run: func(h *signInHarness) (*http.Response, string) {
+				return h.callback(q(script, script) + "&x=" + url.QueryEscape(script))
+			},
+			status: http.StatusBadRequest, wantPage: "This sign-in was not started here", lastErr: "not_started_here",
+		},
+		{
+			name: "script in the pairing code, live state",
+			run: func(h *signInHarness) (*http.Response, string) {
+				_, v := h.start()
+				return h.callback(q(script, v.Get("state")))
+			},
+			status: http.StatusBadRequest, wantPage: "different Atlas", lastErr: "atlas_mismatch",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newSignInHarness(t)
+			res, body := c.run(h)
+			if res.StatusCode != c.status {
+				t.Fatalf("status = %d, want %d; body %s", res.StatusCode, c.status, body)
+			}
+			assertFixedPageHeaders(t, res)
+			if !strings.Contains(body, c.wantPage) {
+				t.Fatalf("page does not say %q: %s", c.wantPage, body)
+			}
+			if strings.Contains(strings.ToLower(body), "<script") || strings.Contains(body, "alert(") ||
+				strings.Contains(body, "evil.example") || strings.Contains(body, "WXYZ") {
+				t.Fatalf("the page echoed something from the URL: %s", body)
+			}
+			if fileExists(paths.AuthPath()) || fileExists(paths.HookConfigPath()) {
+				t.Fatal("a refused return wrote auth.json or hook.json")
+			}
+			if n := h.atlas.requests.Load(); c.atlasCalled != (n > 0) {
+				t.Fatalf("Atlas requests = %d, want called=%v", n, c.atlasCalled)
+			}
+			st := h.state()
+			if st.Paired || st.Pending {
+				t.Fatalf("after a refusal: %+v", st)
+			}
+			if st.LastError == nil || *st.LastError != c.lastErr {
+				t.Fatalf("last_error = %v, want %q", st.LastError, c.lastErr)
+			}
+		})
+	}
+}
+
+// Row 5: a return naming another Atlas burns the state, so the right code
+// arriving afterwards is refused as well.
+func TestMismatchedReturnBurnsTheState(t *testing.T) {
+	h := newSignInHarness(t)
+	_, v := h.start()
+	code := h.atlas.authorize(v.Get("code_challenge"))
+	h.callback(q("evil.example/WXYZ-2345", v.Get("state")))
+	if res, _ := h.callback(q(code, v.Get("state"))); res.StatusCode == http.StatusOK {
+		t.Fatal("a mismatched return must burn the state")
+	}
+	if fileExists(paths.AuthPath()) || h.atlas.requests.Load() != 0 {
+		t.Fatal("nothing may be written or asked of Atlas")
+	}
+}
+
+// A forged return must not cancel a real sign-in the page is waiting on.
+func TestForgedReturnDoesNotDisturbAPendingSignIn(t *testing.T) {
+	h := newSignInHarness(t)
+	_, v := h.start()
+	h.callback(q("x.test/ABCD-EFGH", strings.Repeat("B", 43)))
+	st := h.state()
+	if !st.Pending || st.LastError != nil {
+		t.Fatalf("a forged return disturbed the pending sign-in: %+v", st)
+	}
+	code := h.atlas.authorize(v.Get("code_challenge"))
+	if res, body := h.callback(q(code, v.Get("state"))); res.StatusCode != http.StatusOK {
+		t.Fatalf("the real return should still pair, got %d: %s", res.StatusCode, body)
+	}
+}
+
+// A new start clears the last refusal, so Try again starts clean.
+func TestStartClearsLastError(t *testing.T) {
+	h := newSignInHarness(t)
+	h.callback(q("x.test/ABCD-EFGH", strings.Repeat("C", 43)))
+	if h.state().LastError == nil {
+		t.Fatal("precondition: a refusal sets last_error")
+	}
+	h.start()
+	if st := h.state(); st.LastError != nil || !st.Pending {
+		t.Fatalf("after a new start: %+v", st)
+	}
+}
+
+// ---- first_run (AC-12's decision table, Signal half) ----
+
+func TestAuthState(t *testing.T) {
+	cases := []struct {
+		name     string
+		config   string // agent-config.json; "" = absent
+		atlasEnv string
+		paired   bool
+		want     bool
+	}{
+		{name: "fresh machine", want: true},
+		{name: "empty agent-config", config: `{}`, want: true},
+		{name: "chose local only", config: `{"send_to_atlas":false}`, want: false},
+		{name: "set on by hand", config: `{"send_to_atlas":true}`, want: false},
+		{name: "KELD_ATLAS=0", atlasEnv: "0", want: false},
+		{name: "KELD_ATLAS=1", atlasEnv: "1", want: false},
+		{name: "paired", paired: true, want: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newSignInHarness(t)
+			t.Setenv("KELD_ATLAS", c.atlasEnv)
+			if c.config != "" {
+				if err := os.WriteFile(paths.AgentConfigPath(), []byte(c.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.paired {
+				if err := os.WriteFile(paths.HookConfigPath(), []byte(`{"endpoint":"https://i/v1","ingest_token":"t"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := h.state()
+			if st.FirstRun != c.want {
+				t.Fatalf("first_run = %v, want %v (%+v)", st.FirstRun, c.want, st)
+			}
+			if st.Paired != c.paired {
+				t.Fatalf("paired = %v, want %v", st.Paired, c.paired)
+			}
+			if !c.paired && (st.Principal != nil || st.Org != nil) {
+				t.Fatalf("unpaired must report null principal/org, got %v/%v", st.Principal, st.Org)
+			}
+			if st.Pending || st.LastError != nil {
+				t.Fatalf("nothing started: %+v", st)
+			}
+		})
+	}
+}
+
+// The wire shape the page depends on: every key present, nulls as null.
+func TestAuthStateWireShape(t *testing.T) {
+	h := newSignInHarness(t)
+	res := doRequest(t, h.srv, http.MethodGet, "/v1/auth/state", "s3cret", nil)
+	got := decodeBody(t, res)
+	for _, k := range []string{"paired", "principal", "org", "first_run", "pending", "last_error"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("key %q missing from %v", k, got)
+		}
+	}
+	if got["principal"] != nil || got["org"] != nil || got["last_error"] != nil {
+		t.Fatalf("unpaired nulls must be JSON null: %v", got)
+	}
+}
+
+// ---- the pending store ----
+
+func TestSignInStoreEvictsTheOldestAndIsSingleUse(t *testing.T) {
+	now := time.Now()
+	s := newSignInStore(func() time.Time { return now }, nil)
+	var states []string
+	for i := 0; i < maxPendingSignIns+1; i++ {
+		e, err := s.begin("http://a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		states = append(states, e.state)
+	}
+	if _, ok, _ := s.take(states[0]); ok {
+		t.Fatal("the oldest pending sign-in should have been evicted")
+	}
+	for _, st := range states[1:] {
+		if _, ok, expired := s.take(st); !ok || expired {
+			t.Fatalf("state %q should be pending", st)
+		}
+		if _, ok, _ := s.take(st); ok {
+			t.Fatalf("state %q was usable twice", st)
+		}
+	}
+	if s.pending() {
+		t.Fatal("everything was taken")
+	}
+}
+
+func TestSignInStoreExpiry(t *testing.T) {
+	now := time.Now()
+	s := newSignInStore(func() time.Time { return now }, nil)
+	e, _ := s.begin("http://a")
+	now = now.Add(pendingSignInTTL + time.Nanosecond)
+	if s.pending() {
+		t.Fatal("an expired sign-in is not pending")
+	}
+	if _, ok, expired := s.take(e.state); !ok || !expired {
+		t.Fatalf("take after expiry: ok=%v expired=%v, want found and expired", ok, expired)
+	}
+	if _, ok, _ := s.take(e.state); ok {
+		t.Fatal("an expired entry is still burned on first sight")
+	}
+}
+
+func TestSignInStoreConcurrentTakeWinsOnce(t *testing.T) {
+	s := newSignInStore(time.Now, nil)
+	e, _ := s.begin("http://a")
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, ok, _ := s.take(e.state); ok {
+				wins.Add(1)
+			}
+			_, _ = s.begin("http://b")
+			_ = s.pending()
+		}()
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("a state was taken %d times, want exactly once", wins.Load())
+	}
+	s.mu.Lock()
+	n := len(s.entries)
+	s.mu.Unlock()
+	if n > maxPendingSignIns {
+		t.Fatalf("store holds %d entries, cap is %d", n, maxPendingSignIns)
+	}
+}
