@@ -67,3 +67,40 @@ func TestRepriceNeverTouchesAPricedBlockAnUnknownModelOrNoModel(t *testing.T) {
 		t.Fatal("a row this pass cannot price must be left exactly as it was")
 	}
 }
+
+func TestUnnamedModelBlocksListsOnlyMeasuredBlocksWithNoModel(t *testing.T) {
+	setHome(t)
+	s := New()
+	named := measure(s, "s1", 1000, "known", 1)
+	unnamed := measure(s, "s2", 2000, "", 0)
+	got := s.UnnamedModelBlocks()
+	if len(got) != 1 || got[0].Key != unnamed {
+		t.Fatalf("want only %v, got %+v (named %v must not appear)", unnamed, got, named)
+	}
+	if got[0].CacheRead != 70 {
+		t.Fatalf("the row carries its own token counts for pricing, got %+v", got[0])
+	}
+}
+
+func TestNameModelFillsAnEmptyModelAndItsPriceButNeverOverwrites(t *testing.T) {
+	setHome(t)
+	s := New()
+	unnamed := measure(s, "s1", 1000, "", 0)
+	named := measure(s, "s2", 2000, "known", 1)
+	s.NameModel(unnamed, "claude-opus-5", 2.5)
+	s.NameModel(named, "other", 9)
+	snap, _ := s.Read(time.Time{}, 10)
+	for _, b := range snap.Blocks {
+		m := b.Cells["measured"]
+		switch b.Key.Session {
+		case "s1":
+			if m["model"] != "claude-opus-5" || m["estimate_usd"] != 2.5 {
+				t.Fatalf("unnamed block not filled: %v", m)
+			}
+		case "s2":
+			if m["model"] != "known" || m["estimate_usd"] != 1.0 {
+				t.Fatalf("a block that already had a model must not change: %v", m)
+			}
+		}
+	}
+}
