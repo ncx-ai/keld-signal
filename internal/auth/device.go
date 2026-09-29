@@ -24,7 +24,7 @@ func pollInterval(ds *api.DeviceStart) int {
 
 // Login performs the OAuth2 device-flow login against the Atlas API.
 // sleep and opener are injectable for testing; in production use time.Sleep
-// and openURL respectively. The opener is launched concurrently so it can never
+// and OpenURL respectively. The opener is launched concurrently so it can never
 // block the device-poll loop.
 func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener func(string) error, onStart func(*api.DeviceStart)) (*AuthData, error) {
 	ds, err := c.DeviceStart()
@@ -105,7 +105,14 @@ func persistToken(result map[string]any, apiURL string) (*AuthData, error) {
 // LoginWithCode redeems a one-time setup code (non-interactive; no browser) and
 // persists the resulting credentials.
 func LoginWithCode(c *api.Client, code string) (*AuthData, error) {
-	result, err := c.Enroll(code)
+	return LoginWithCodeVerifier(c, code, "")
+}
+
+// LoginWithCodeVerifier is LoginWithCode for a code bound to a PKCE challenge:
+// the browser sign-in's code is worthless without the verifier the daemon kept.
+// An empty verifier is exactly LoginWithCode.
+func LoginWithCodeVerifier(c *api.Client, code, verifier string) (*AuthData, error) {
+	result, err := c.EnrollWithVerifier(code, verifier)
 	if err != nil {
 		return nil, err
 	}
@@ -165,17 +172,17 @@ func RequireAuthReport(noLogin bool, openBrowser bool, force bool, onStart func(
 		api.NewClient(paths.APIBase(), ""),
 		openBrowser,
 		time.Sleep,
-		openURL,
+		OpenURL,
 		onStart,
 	)
 }
 
-// openURL launches the user's default browser pointed at url. It starts the
+// OpenURL launches the user's default browser pointed at url. It starts the
 // launcher without waiting (so it never blocks the caller) and discards the
 // browser's stdout/stderr (so GPU/driver chatter — e.g. libEGL warnings — does
 // not pollute the terminal). A non-nil error means the launcher failed to start;
 // callers treat browser opening as best-effort.
-func openURL(url string) error {
+func OpenURL(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

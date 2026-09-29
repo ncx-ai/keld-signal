@@ -94,14 +94,30 @@ func (c *Client) DevicePoll(deviceCode string) (map[string]any, error) {
 // Enroll calls POST /v1/cli/enroll to redeem a one-time setup code, returning
 // the same {access_token, principal, org} payload as a successful device poll.
 func (c *Client) Enroll(code string) (map[string]any, error) {
-	body, _ := json.Marshal(map[string]string{"code": code})
+	return c.EnrollWithVerifier(code, "")
+}
+
+// EnrollWithVerifier is Enroll for a code Atlas bound to a PKCE challenge (the
+// browser sign-in). The verifier is sent only when non-empty, so a setup-code
+// redeem puts exactly the bytes on the wire it always did.
+func (c *Client) EnrollWithVerifier(code, verifier string) (map[string]any, error) {
+	req := map[string]string{"code": code}
+	if verifier != "" {
+		req["code_verifier"] = verifier
+	}
+	body, _ := json.Marshal(req)
 	resp, err := c.post("/v1/cli/enroll", body)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone {
-		return nil, errs.New("invalid or expired setup code")
+		// The status rides along so a caller can tell an expired code (410)
+		// from other failures; the message the CLI prints is unchanged.
+		return nil, &refusedError{
+			msg:    errs.New("invalid or expired setup code"),
+			status: &retry.StatusError{Code: resp.StatusCode},
+		}
 	}
 	if err := checkStatus(resp); err != nil {
 		return nil, err
@@ -178,3 +194,14 @@ func checkStatus(resp *http.Response) error {
 		&retry.StatusError{Code: resp.StatusCode},
 	)
 }
+
+// refusedError is a user-facing *errs.Error that also carries the HTTP status.
+// Unlike errors.Join, its Error() is the message alone, so every place that
+// prints a setup-code failure prints exactly what it printed before.
+type refusedError struct {
+	msg    error
+	status *retry.StatusError
+}
+
+func (e *refusedError) Error() string   { return e.msg.Error() }
+func (e *refusedError) Unwrap() []error { return []error{e.msg, e.status} }
