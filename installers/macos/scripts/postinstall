@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
-# Payload staged to /usr/local/keld; symlink the CLIs onto PATH and keep
-# onboard.command beside keld-agent. The ML sidecar is NOT in this payload (Apple
-# notarization scans every one of its ~15k files); onboard.command fetches it into
-# ~/.local/bin, which sidecarBinPath() already searches.
+# Payload staged to /usr/local/keld; symlink the CLIs onto PATH. The ML sidecar
+# is NOT in this payload (Apple notarization scans every one of its ~15k files);
+# the daemon fetches it into ~/.local/bin, which sidecarBinPath() already
+# searches — and on a command-line install this script starts that fetch itself.
 PREFIX="/usr/local/keld"
 # /usr/local/bin isn't guaranteed to exist — on an Apple-Silicon Mac with no
 # Homebrew in /usr/local (Homebrew lives in /opt/homebrew), it's often absent.
@@ -32,74 +32,59 @@ for d in ${userhome:+"$userhome/.local/bin"} /opt/homebrew/bin; do
   done
 done
 
-# ── Finish what the wizard pane started ──────────────────────────────────────
-# The pane (installers/macos/plugin) ran BEFORE this, redeemed the setup code and
-# recorded what it did in a handoff file. This
-# script does everything that rewrites the user's files, which deliberately does
-# NOT happen in the pane: until the install is committed, a person can still
-# cancel, and a cancelled install must not leave rewritten tool configs behind.
-#
+
 # ⚠️ EVERY user-side command runs `launchctl asuser <uid> sudo -u <user> -H`.
 # Without -H, sudo keeps HOME=/var/root, and service_darwin.go builds the
 # LaunchAgent path from os.UserHomeDir() — so the job would be written into
 # root's home and never load, with nothing reporting it.
 asuser() { launchctl asuser "$uid" sudo -u "$user" -H "$@"; }
 
-HANDOFF="$userhome/.keld/state/installer-handoff.json"
-paired=false
-api_url=""
-tools=""
-had_handoff=false
-if [ -f "$HANDOFF" ]; then
-  # ⚠️ A handoff can be LEFT BEHIND by a CANCELLED install: the pane writes it
-  # in shouldExitPane, before the commit point, and this script only deletes it
-  # on a run that reaches the bottom of this file. So a LATER install —
-  # including one whose plugin fails to load silently, which is precisely the
-  # case the fallback below exists for — can find a stale file from a
-  # different build. Trust it only when its own `version` matches THIS build's
-  # $PREFIX/VERSION; otherwise treat it as absent, so a stale "paired: false"
-  # (or a stale tool list) from a cancelled install can never disable the
-  # mandatory fallback or misconfigure this one.
-  hv=$(/usr/bin/plutil -extract version raw -o - "$HANDOFF" 2>/dev/null || echo "")
-  pv=""
-  [ -f "$PREFIX/VERSION" ] && pv=$(tr -d ' \n' < "$PREFIX/VERSION")
-  if [ "$hv" != "$pv" ]; then
-    rm -f "$HANDOFF" || true
-  else
-    had_handoff=true
-    paired=$(/usr/bin/plutil -extract paired raw -o - "$HANDOFF" 2>/dev/null || echo false)
-    api_url=$(/usr/bin/plutil -extract api_url raw -o - "$HANDOFF" 2>/dev/null || echo "")
-    tools=$(/usr/bin/plutil -extract tools json -o - "$HANDOFF" 2>/dev/null \
-            | tr -d '[]"' | tr ',' ' ' || echo "")
-  fi
+# ── The installer only installs (2026-09-29) ─────────────────────────────────
+# There is no Keld screen in this pkg any more: no sign-in, no setup code, no
+# tool picker (docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html,
+# AC-10). Signal asks the one real question the first time it opens, and the
+# daemon's auto-setup (internal/agent/integrations, auto_setup_integrations,
+# default on) configures the AI tools it detects. So this script reads no
+# handoff, configures no tools and opens no Terminal. A silent/MDM install is
+# paired afterwards with `keld-agent install --code <CODE>`, exactly as before.
+#
+# ⚠️ WHAT IT STILL HAS TO KNOW IS WHETHER A PERSON IS WATCHING. That used to be
+# `had_handoff` — the pane had run, so a human had clicked through the wizard.
+# With no pane, the signal is how the install was started:
+#   - `installer -pkg …` sets COMMAND_LINE_INSTALL (man installer, ENVIRONMENT:
+#     "Set when performing an installation using the installer command"). That
+#     is every MDM script, CI run and conformance VM.
+#   - an MDM agent installing through installd directly sets nothing, and runs
+#     no Installer.app either — so a GUI install also requires Installer.app to
+#     be running. Getting this wrong in that direction is the one that matters:
+#     it would open a window on the screen of someone who clicked nothing.
+# A wrong "not GUI" costs little: the engine is fetched in the background (the
+# daemon would fetch it anyway) and Signal is not opened for a person who can
+# open it from /Applications.
+gui_install=false
+if [ -z "${COMMAND_LINE_INSTALL:-}" ] && /usr/bin/pgrep -qx Installer 2>/dev/null; then
+  gui_install=true
 fi
 
 # 1. The analysis sidecar.
 #
-# ⚠️ THE WIZARD NO LONGER DOWNLOADS IT, AND THIS BLOCK NARROWED TO MATCH. The
-# pane used to fetch ~300 MB and hold Continue until it settled; on 2026-09-21 a
-# real install sat on "Downloading the analysis engine" with the download
-# ALREADY finished and staged on disk, because rendering its progress from the
-# XPC-hosted view wedged the plugin's main thread. The page owns it now
-# (GET/POST /v1/engine): the daemon knows whether an engine is needed, which
-# version is on disk, and can fetch it with nothing blocked meanwhile.
+# ⚠️ A GUI INSTALL DOES NOT DOWNLOAD IT HERE. The page owns it
+# (GET/POST /v1/engine): the daemon knows whether an engine is needed and which
+# version is on disk, fetches it automatically once per run, and nothing is
+# blocked meanwhile. (The wizard pane used to fetch ~300 MB and hold Continue;
+# on 2026-09-21 a real install sat on "Downloading the analysis engine" with the
+# download already finished, because rendering its progress wedged the plugin.)
 #
-# So there is no staged tree to commit any more, and a GUI install does NOT
-# fetch here — the page shows a card the moment the daemon reports none, and
-# the person decides.
-#
-# ⚠️ EXCEPT WHERE NOBODY WILL EVER OPEN THE PAGE. A silent/MDM install runs with
-# no pane (had_handoff false), so leaving it to the page means those machines
-# publish no blocks and nothing ever says why. There the background fetch stays,
-# exactly as before. The condition is the SAME one that decides whether to open
-# onboard.command below: "did a human go through the wizard".
-if [ "$had_handoff" = false ]; then
-  # A staging dir left by an older pkg's pane has nothing to commit it now, and
-  # would sit beside the fetch below. Sweep it first, as the user, best-effort.
+# ⚠️ EXCEPT WHERE NOBODY WILL EVER OPEN THE PAGE. On a command-line/MDM install
+# the background fetch stays, exactly as before — the condition is the same one
+# that decides below whether to open Signal: "is a person watching".
+if [ "$gui_install" = false ]; then
+  # A staging dir left by an older pkg's wizard pane has nothing to commit it,
+  # and would sit beside the fetch below. Sweep it first, as the user, best-effort.
   asuser /bin/sh -c "rm -rf \"$userhome\"/.local/bin/.keld-update.* 2>/dev/null" || true
 
-  # ⚠️ PINNED to this pkg's own release, the same way onboard.command's
-  # fetch_sidecar already does. An unpinned call resolves releases/latest,
+  # ⚠️ PINNED to this pkg's own release, the same way the daemon's own
+  # fetch is (internal/sidecarinstall). An unpinned call resolves releases/latest,
   # which lags behind an in-flight pre-release train (see CHANGELOG.md) and
   # would install a STALE sidecar under this daemon — the exact version-skew
   # failure AGENTS.md documents at length (a 2.3.0 daemon against an Aug-11
@@ -116,11 +101,6 @@ if [ "$had_handoff" = false ]; then
   # its previous timestamp. Running the SAME command by hand worked first time,
   # so the fetch is fine — what does not survive is a bare background child of a
   # script PackageKit tears down the moment it exits.
-  #
-  # Who hits it: anyone ALREADY SIGNED IN. They reach Continue in seconds, the
-  # pane's ~190MB download has not finished, so no tree is staged and this is the
-  # only path left. The faster the person, the likelier their sidecar never
-  # updates — and nothing said so, because of the /dev/null.
   #
   # Two changes. The work is handed to LAUNCHD, which owns it independently of
   # this script's lifetime; and it writes a LOG, so the next occurrence is one
@@ -172,51 +152,18 @@ PLIST
   fi
 fi
 
-# 2. The AI tools the person ticked. --bin-path pins the INSTALLED keld: the pane
-#    ran a copy from inside the plugin bundle, and pinning THAT path into hook
-#    commands breaks every hook the moment the wizard closes.
-#
-# ⚠️ AN EMPTY SELECTION MUST CONFIGURE NOTHING, not everything.
-# `tools.Select(nil)` reads "no --tool flags at all" as "configure every
-# detected adapter" — correct when the pane never ran (had_handoff is false,
-# so today's unfiltered `signal setup` behaviour is exactly right), and wrong
-# when the pane DID run and every checkbox was unticked (had_handoff is true
-# and tools is empty): that person made a choice, and without had_handoff the
-# two cases are indistinguishable.
-if [ "$paired" = "true" ] || [ "$paired" = "1" ]; then
-  if [ "$had_handoff" = true ] && [ -z "$tools" ]; then
-    : # every tool was unticked; configure none
-  else
-    set -- signal setup --yes --bin-path "$PREFIX/keld"
-    [ -n "$api_url" ] && set -- "$@" --api-url "$api_url"
-    for t in $tools; do
-      [ -n "$t" ] && set -- "$@" --tool "$t"
-    done
-    asuser "$PREFIX/keld" "$@" || true
-  fi
-fi
-
-# 3. Register and start the agent. This is what used to happen only inside the
-#    Terminal script, which is why a machine that never opened it collected
-#    nothing.
+# 2. Register and start the agent. It comes up unpaired and serves the page;
+#    pairing happens there (or via `keld-agent install --code` on MDM).
 asuser "$PREFIX"/keld-agent install || true
 
-rm -f "$HANDOFF" || true
-
-# ⚠️ FALLBACK — and it is not optional, but it is deliberately NARROW. The
-# wizard plugin can fail to load with NO diagnostic whatsoever (a stale code
-# signature does exactly this; measured 2026-09-14): the pane never ran, the
-# handoff file was never written, and a machine in that state has installed
-# cleanly and been asked for nothing — so without this it would sit idle
-# forever. That is the ONLY case this is for. Gating on hook.json alone would
-# also fire for someone who ran the pane and deliberately clicked "Set up
-# later": that person made a choice, and opening a Terminal at them is exactly
-# what this branch exists to stop. So both halves are required: the pane never
-# ran (had_handoff is false, captured above before the handoff file was
-# deleted) AND the machine ended up unconfigured (no hook.json).
-if [ "$had_handoff" = false ] && [ ! -f "$userhome/.keld/hook.json" ] && [ -f "$PREFIX/onboard.command" ]; then
-  chmod +x "$PREFIX/onboard.command" || true
-  launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/onboard.command" || true
+# 3. Open Signal — on a GUI install only, and AFTER registration, so the app's
+#    first frame finds a daemon rather than "not running" (it follows agent.json
+#    either way, see app/src-tauri/src/main.rs follow_agent). This replaces the
+#    onboard.command Terminal fallback: the question it asked in a Terminal is
+#    now asked by Signal itself, with a real "use locally only" answer.
+#    A command-line/MDM install opens nothing — nobody may be at the screen.
+if [ "$gui_install" = true ] && [ -d "/Applications/Keld Signal.app" ]; then
+  asuser /usr/bin/open -a "/Applications/Keld Signal.app" || true
 fi
 
 exit 0
