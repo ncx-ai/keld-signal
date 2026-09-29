@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/conform/mockatlas"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -681,5 +682,39 @@ func TestSignInStoreConcurrentTakeWinsOnce(t *testing.T) {
 	s.mu.Unlock()
 	if n > maxPendingSignIns {
 		t.Fatalf("store holds %d entries, cap is %d", n, maxPendingSignIns)
+	}
+}
+
+// The whole round trip in one process: the daemon's start route, the mock
+// Atlas's authorize redirect, the browser following it back to /auth/callback,
+// and pair() redeeming with the verifier the mock enforces (C2). This is the
+// Go twin of the Playwright spec, with an http.Client for a browser.
+func TestSignInRoundTripThroughMockAtlas(t *testing.T) {
+	h := newSignInHarness(t)
+	mock, err := mockatlas.New(mockatlas.Options{StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms := httptest.NewServer(mock)
+	defer ms.Close()
+	t.Setenv("KELD_API_URL", ms.URL)
+	t.Setenv("KELD_ATLAS_WEB_URL", ms.URL)
+
+	out, _ := h.start()
+	res, err := http.Get(out.AuthorizeURL) // follows the 302 back to the daemon
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "Signed in. Close this tab.") {
+		t.Fatalf("round trip ended at %d: %s", res.StatusCode, body)
+	}
+	hook, err := os.ReadFile(paths.HookConfigPath())
+	if err != nil || !strings.Contains(string(hook), mockatlas.DefaultIngestToken) {
+		t.Fatalf("hook.json after the round trip: %v %s", err, hook)
+	}
+	if st := h.state(); !st.Paired || st.Principal == nil {
+		t.Fatalf("state after the round trip: %+v", st)
 	}
 }
