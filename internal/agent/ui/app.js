@@ -508,6 +508,140 @@ export function configErrorText(status, body) {
   return "Couldn't reach Signal to set that — try again.";
 }
 
+// ---- Web sign-in (contract C6 of docs/superpowers/plans/2026-09-29-signal-web-signin-plan.md) ----
+//
+// The page asks the daemon to start a sign-in (POST /v1/auth/start), the
+// daemon opens the system browser at Atlas, and the browser comes back to the
+// daemon's own /auth/callback — never to this page, which has no way to be
+// told. So the page learns the outcome the only way it can: by polling
+// GET /v1/auth/state. Everything that decides what to show or when to stop
+// lives here, as pure functions, so the rules are tested rather than read out
+// of a click handler.
+
+/** Every sentence the sign-in UI shows, in one place. The first four are the
+ *  spec's wireframe ("What the first open looks like") verbatim. */
+export const SIGNIN_TEXT = {
+  signIn: "Sign in with Atlas",
+  localOnly: "Use locally only",
+  later: "You can sign in later from Settings.",
+  localNote: "Local only: nothing leaves this computer.",
+  firstRunTitle: "Welcome to Signal",
+  firstRunLead: "Signal is already collecting on this computer.",
+  firstRunBody: "Sign in to send it to your company's Atlas, or keep everything here.",
+  starting: "Starting sign-in…",
+  waiting: "Finish signing in in your browser",
+  // The link is ALWAYS shown (AC-1: "the page always shows the link too"); only
+  // the sentence in front of it changes with whether the daemon managed to
+  // open a browser. A Linux service with no display is the common `false`.
+  linkOpened: "Browser didn't open? Use this link:",
+  linkNotOpened: "Your browser didn't open. Open this link to finish:",
+  linkLabel: "Open the Atlas sign-in page",
+  tryAgain: "Try again",
+  notSignedIn: "Not signed in to Atlas.",
+  notSignedInBody: "Signal is collecting on this machine and sends it once you sign in.",
+  notSignedInSettings: "Not signed in.",
+  turnsAtlasOn: "Signing in turns Send to Atlas on.",
+  account: "Atlas account",
+};
+
+/** One plain sentence per reason a sign-in can end without pairing: the five
+ *  `last_error` codes contract C5 names, the start route's 409, and the two
+ *  the page itself concludes (the daemon stopped answering; the attempt
+ *  vanished with no reason). */
+export const SIGNIN_ERROR_TEXT = {
+  not_started_here: "Signal did not recognise that sign-in. Start it again from this page.",
+  expired: "That sign-in expired before it finished.",
+  atlas_mismatch: "The browser came back from a different Atlas than the one this sign-in started with.",
+  atlas_off: "Send to Atlas was turned off, so Signal refused the sign-in.",
+  atlas_error: "Atlas could not finish the sign-in.",
+  send_to_atlas_is_off: "Send to Atlas is off. Turn it on in Settings to sign in.",
+  unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
+  abandoned: "This sign-in is no longer waiting.",
+};
+
+/** How often the page asks /v1/auth/state while a sign-in is in flight. 1 s,
+ *  so the page shows "signed in" well inside AC-5's 5 seconds of the callback. */
+export const SIGNIN_POLL_MS = 1000;
+/** The daemon forgets a pending sign-in after 10 minutes (C5); past that the
+ *  browser's return cannot succeed, so the page stops waiting for it. */
+export const SIGNIN_GIVE_UP_MS = 10 * 60 * 1000;
+/** Consecutive failed polls before the page concludes the daemon is gone —
+ *  e.g. it restarted mid-flow onto a new port. One missed poll is noise. */
+export const SIGNIN_MAX_POLL_FAILURES = 5;
+/** How long the "Signed in as …" confirmation stays in the bar. */
+export const SIGNIN_DONE_LINGER_MS = 8000;
+
+/** Does the first-open choice show? True only when the daemon says so and the
+ *  machine is not paired — the spec's decision table, whose rows 2, 3 and 5
+ *  the daemon folds into `first_run` itself. No answer (an older daemon
+ *  without the route) is never a yes: a person who already chose must not be
+ *  asked again because a request failed. */
+export function showFirstRun(auth) {
+  return !!auth && auth.first_run === true && auth.paired !== true;
+}
+
+/** What the bar above every pane shows: "flow" (a sign-in in progress or just
+ *  failed, from wherever it was started), "done" (a confirmation that lingers),
+ *  "prompt" (not signed in while Send to Atlas is on) or null. Local only is a
+ *  choice, not a fault, so it gets no bar; Settings keeps Sign in. */
+export function signinBarMode(auth, settings, flow, now) {
+  const status = (flow && flow.status) || "idle";
+  if (status === "starting" || status === "waiting" || status === "failed") return "flow";
+  if (status === "done" && now - (flow.doneAt || 0) < SIGNIN_DONE_LINGER_MS) return "done";
+  if (!auth || auth.paired || showFirstRun(auth)) return null;
+  return atlasEnabled(settings) ? "prompt" : null;
+}
+
+/** One poll's verdict: keep polling, or stop as done/failed with a reason.
+ *  `auth` is null when the poll itself failed; `failures` counts consecutive
+ *  failed polls including this one.
+ *
+ *  ⚠️ A `last_error` ends the attempt only once the daemon no longer holds a
+ *  pending sign-in. While one is pending, an error belongs to some OTHER
+ *  return — a forged callback with a made-up state, or an older attempt — and
+ *  letting it cancel the real sign-in would hand anyone who can open a URL on
+ *  this machine a way to keep a person from ever signing in. */
+export function signinPollStep(auth, { startedAt, now, failures = 0 }) {
+  if (auth && auth.paired) return { stop: true, status: "done", error: null };
+  if (now - startedAt >= SIGNIN_GIVE_UP_MS) return { stop: true, status: "failed", error: "expired" };
+  if (!auth) {
+    if (failures >= SIGNIN_MAX_POLL_FAILURES) return { stop: true, status: "failed", error: "unreachable" };
+    return { stop: false, status: "waiting", error: null };
+  }
+  if (auth.pending) return { stop: false, status: "waiting", error: null };
+  return { stop: true, status: "failed", error: auth.last_error || "abandoned" };
+}
+
+export function signinErrorText(code) {
+  if (!code) return "Signing in did not finish.";
+  return SIGNIN_ERROR_TEXT[code] || code;
+}
+
+/** POST /v1/auth/start's refusals. 404 is a daemon older than the route. */
+export function signinStartErrorText(status, body) {
+  const code = body && body.error;
+  if (code) return signinErrorText(code);
+  if (!status) return "Couldn't reach Signal to start signing in — try again.";
+  if (status === 404) return "This version of Signal can't sign in from the page. Paste a setup code in Settings instead.";
+  return "Signal couldn't start signing in just now — try again.";
+}
+
+export function signedInText(auth) {
+  const who = auth && auth.principal;
+  const org = auth && auth.org;
+  if (who && org) return `Signed in as ${who} · ${org}`;
+  if (who) return `Signed in as ${who}`;
+  return "Signed in to Atlas";
+}
+
+/** The authorize URL as an href, or "" when it is not http(s). It comes from
+ *  this machine's own daemon, but an href is the one place a string becomes
+ *  executable (`javascript:`), so the page checks rather than trusts. */
+export function safeAuthorizeURL(u) {
+  const s = String(u || "");
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
 /** The restart-bar state machine. `PUT /v1/settings` answers
  *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
  *  answers it on every success (a new host always needs one). Either landing
