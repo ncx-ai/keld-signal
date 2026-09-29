@@ -168,6 +168,25 @@ type BlockEnrichment struct {
 	// (`agent-<id>.jsonl`). It is what makes a run's blocks groupable into one
 	// delegated task; a run spans several blocks whenever it outlives the cutter's
 	// 20-minute budget, measured at 20% of runs on one corpus.
+	//
+	// ⚠️ IT IS NOT GLOBALLY UNIQUE, and this comment used to imply it was by
+	// calling it "the run's identity" with no qualification. A consumer read that
+	// as licence to fetch a whole run by this id alone, which merges two unrelated
+	// runs when the id repeats.
+	//
+	// Measured across 632 subagent transcripts from two machines: 631 distinct
+	// ids, with one id appearing under TWO different parent sessions — and both of
+	// those on the SAME machine and org, so an org scope does not separate them.
+	// The id is 17 hex characters, so this is not random collision; whatever
+	// Claude Code derives it from can repeat. (One of the two colliding files is
+	// unreadable on disk, so the collision is established at the filename level
+	// and 1-in-632 is an upper bound on how often it bites, not a rate.)
+	//
+	// So the key for a run is (ParentSessionID, SubagentID). A run belongs to
+	// exactly one parent session, which is what makes that pair sound. ⚠️ And the
+	// pair is unavailable precisely when ParentSessionID is empty, where this id
+	// alone is the only key there is and merging is the accepted risk — a strict
+	// two-part key would instead drop those runs silently, which is worse.
 	SubagentID string `json:"subagent_id,omitempty"`
 	// ParentSessionID is the session that LAUNCHED this run, recovered from the
 	// transcript's path. Empty and omitted on a main-line block, and also on a
