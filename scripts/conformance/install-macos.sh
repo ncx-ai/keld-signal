@@ -11,16 +11,15 @@
 #   3. VERIFY, from OBSERVED STATE: the binaries run, launchd knows the job, and
 #      hook.json holds an ingest token. Never from an exit code.
 #
-# ⚠️ **THE SILENT PATH MUST NOT DEPEND ON THE WIZARD PANE.** macOS onboarding
-# now happens inside an Installer.app plugin pane ordered BEFORE the install
-# step (installers/macos/plugin/, AGENTS.md → "macOS onboarding UI"): it redeems
-# the setup code, fetches the sidecar, and collects which tools to configure.
-# `installer -pkg` runs no UI at all, so the pane never runs, no handoff file is
-# written, `postinstall` sees `paired=false` and configures no tools — and its
-# `onboard.command` fallback is a Terminal script that cannot onboard anybody
-# unattended either. That is not a defect: it is exactly why AC-12 requires a
-# COMMAND equivalent for every onboarding step, and phase 2 is that equivalent.
-# An MDM push is in the same position and runs the same three commands.
+# ⚠️ **THE SILENT PATH ONBOARDS BY COMMAND, AND THAT IS THE DESIGN.** Since
+# 2026-09-29 the pkg asks nothing about Keld on ANY path — the Installer.app
+# pane that used to sign people in is gone
+# (docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html, AC-10).
+# `installer -pkg` sets COMMAND_LINE_INSTALL, so `postinstall` treats this as a
+# silent install: it fetches the engine, registers the agent unpaired, and opens
+# nothing. Phase 2 is how such a machine gets paired, which is exactly why AC-12
+# requires a COMMAND equivalent for every onboarding step. An MDM push is in the
+# same position and runs the same three commands.
 #
 # ⚠️ This rewrites the machine it runs on — see iv_require_disposable.
 set -uo pipefail

@@ -344,10 +344,10 @@ end;
 // stops the console being created, and Pascal Script cannot pass it.
 //
 // keld-wizard-host can: it is built -H windowsgui and applies CREATE_NO_WINDOW
-// to every child (cmd/keld-wizard-host/nowindow_windows.go). The wizard page
-// already drives four or five `keld` runs through it with no flash at all,
-// which is the evidence this is the mechanism that works here. `--run` waits
-// for the child and returns ITS exit code, so this stays synchronous.
+// to every child (cmd/keld-wizard-host/nowindow_windows.go). The installer's
+// former wizard page drove four or five `keld` runs through it with no flash at
+// all, which is the evidence this is the mechanism that works here. `--run`
+// waits for the child and returns ITS exit code, so this stays synchronous.
 //
 // Falls back to a direct Exec if the helper is missing, because an install that
 // skips these steps is worse than one that flashes.

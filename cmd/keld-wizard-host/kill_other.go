@@ -7,7 +7,8 @@ import (
 	"syscall"
 )
 
-// The helper only ever runs on Windows — it exists for an Inno wizard page. These
+// The helper only ever runs on Windows — the Inno installer and the KeldAgent
+// logon task call it. These
 // stubs keep `go test ./...` and `go build ./...` working on the Linux and macOS
 // machines this repo is also developed on, so a change here cannot be discovered
 // broken only in the Windows CI job.

@@ -9,11 +9,10 @@ import (
 
 // relay runs the child and publishes each stdout line as its own event file.
 //
-// ⚠️ **EVENTS MUST APPEAR AS THEY ARRIVE, NOT ON EXIT.** The wizard page watches
-// the directory to move a status label and to raise the approval panel the moment
-// a `device_code` event lands. A relay that published only when the child exited
-// would leave the page frozen for the whole of a device flow — minutes — with
-// nothing on screen to explain why.
+// ⚠️ **EVENTS MUST APPEAR AS THEY ARRIVE, NOT ON EXIT.** A caller watching the
+// directory must see progress while the child runs. (The installer's removed
+// wizard page raised its sign-in panel off a `device_code` event mid-run; a
+// relay that published only on exit froze it for a whole device flow.)
 func relay(o options) int {
 	em, err := newEmitter(o.EventsDir)
 	if err != nil {
