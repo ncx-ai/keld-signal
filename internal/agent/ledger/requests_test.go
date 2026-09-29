@@ -213,3 +213,47 @@ func TestFirstRequestAtPerSource(t *testing.T) {
 		t.Fatalf("first-at %v", got)
 	}
 }
+
+// UsageBuckets sums requests per 5-minute bucket, per source, transcript and
+// model: exact for the page, since block edges and every timezone offset fall
+// on 5-minute boundaries.
+func TestUsageBucketsSumPerFiveMinutes(t *testing.T) {
+	setHome(t)
+	s := New()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	a := req("a", base.Add(10*time.Second), "m")
+	a.Transcript = "t1"
+	b := req("b", base.Add(4*time.Minute+59*time.Second), "m")
+	b.Transcript = "t1"
+	c := req("c", base.Add(5*time.Minute), "m") // next bucket
+	c.Transcript = "t1"
+	d := req("d", base.Add(time.Minute), "other")
+	d.Transcript = "t1"
+	e := req("e", base.Add(time.Minute), "m")
+	e.Transcript = "agent-x" // a subagent's transcript, same session id
+	for _, r := range []*RequestRow{&a, &b, &c, &d, &e} {
+		r.EstimateUSD = 0.5
+	}
+	s.InsertRequests([]RequestRow{a, b, c, d, e})
+	got, err := s.UsageBuckets(base, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type k struct {
+		at         int64
+		transcript string
+		model      string
+	}
+	m := map[k]UsageBucket{}
+	for _, u := range got {
+		m[k{u.At.Unix(), u.Transcript, u.Model}] = u
+	}
+	first := m[k{base.Unix(), "t1", "m"}]
+	if len(got) != 4 || first.Requests != 2 || first.Input != 20 || first.CacheRead != 120 || first.EstimateUSD != 1.0 {
+		t.Fatalf("buckets %+v", got)
+	}
+	if m[k{base.Add(5 * time.Minute).Unix(), "t1", "m"}].Requests != 1 ||
+		m[k{base.Unix(), "t1", "other"}].Requests != 1 || m[k{base.Unix(), "agent-x", "m"}].Requests != 1 {
+		t.Fatalf("buckets %+v", got)
+	}
+}

@@ -2,6 +2,7 @@ package usage
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -126,4 +127,41 @@ func TestRecorderIgnoresUnknownSources(t *testing.T) {
 	if n := r.Flush(); n != 0 {
 		t.Fatalf("added %d for an unknown source", n)
 	}
+}
+
+// A request is joined to its block by the transcript's own name — for a
+// subagent that is its `agent-…` file, not the parent's session id it carries.
+func TestRecorderNamesTheTranscriptLikeABlock(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, flatPrice)
+	b, err := os.ReadFile(fixture("claude_code_session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(t.TempDir(), "parent", "subagents", "agent-a583879c32a156d30.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sub, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range bytesLines(b) {
+		r.Observe("claude_code", sub, l)
+	}
+	r.Flush()
+	for _, row := range sink.rows {
+		if row.Transcript != "agent-a583879c32a156d30" || row.Session == row.Transcript {
+			t.Fatalf("transcript %q session %q", row.Transcript, row.Session)
+		}
+	}
+}
+
+func bytesLines(b []byte) [][]byte {
+	var out [][]byte
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		out = append(out, append([]byte(nil), sc.Bytes()...))
+	}
+	return out
 }

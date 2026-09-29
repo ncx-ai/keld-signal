@@ -204,6 +204,8 @@ func (v *v3) routes() []ingress.Route {
 		// Projects pane cannot answer differently about the same block (see
 		// liveAttribution in v3blocks.go). Nothing stored is rewritten.
 		ledgerRoute(v.ledgerReader(), func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
+		// Per-request tokens and spend, summed per 5 minutes (usageroute.go).
+		usageRoute(v.ledger),
 		// The restart control the page offers. It reads the health owner live,
 		// so an unconfigured machine (the onboarding handler mounts these too)
 		// answers 409 not_applicable rather than pretending to restart nothing.

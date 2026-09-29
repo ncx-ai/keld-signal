@@ -169,6 +169,34 @@ Rules:
 
 Spec: `docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html`.
 
+## `GET /v1/usage?since=<unix>&until=<unix>` — per-request usage, added 2026-09-29
+
+```json
+{
+  "since": 1790000000, "until": 1790604800, "bucket_seconds": 300,
+  "backfill_done": true,
+  "sources": {"claude_code": {"first_at": 1788000000}, "codex": {"first_at": 1789000000}},
+  "buckets": [
+    {"at": 1790000100, "source": "claude_code", "transcript": "2a3adbf8-…", "model": "claude-opus-5",
+     "requests": 3, "tokens": {"input": 12, "output": 900, "cache_read": 81000, "cache_creation": 4000},
+     "estimate_usd": 0.41}
+  ]
+}
+```
+
+The `requests` table summed per **5-minute bucket**, per source, transcript and model,
+for `since <= ts < until` (both required, unix seconds). Sums rather than rows because a
+month here is ~25,000 requests; the sums are exact for the page, since every block edge
+sits on a 5-minute epoch boundary and every timezone offset is a multiple of 15 minutes.
+
+- `transcript` is the file's own name, the way a block row names its session
+  (`blocks.SessionIDFor`). The page joins a bucket to the block of that session whose
+  `[start, end)` holds `at`, for repo and projects; no such block means none.
+- `sources[s].first_at` is the source's earliest request ever held. The page shows no
+  usage for a source before it (D2).
+- `backfill_done` is false while the one-time read of transcripts on disk is running.
+- `model` is `""` when the transcript named none. Loopback only, secret-gated.
+
 ## The page's own conventions — settled 2026-09-05, after lane D asked
 
 Four things the page needs that the routes above do not specify. Each is answered here so a

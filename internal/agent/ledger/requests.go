@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS requests (
   source                TEXT    NOT NULL,
   session               TEXT    NOT NULL,
   request_key           TEXT    NOT NULL,
+  transcript            TEXT    NOT NULL DEFAULT '',
   ts                    INTEGER NOT NULL,
   model                 TEXT    NOT NULL DEFAULT '',
   input_tokens          INTEGER NOT NULL DEFAULT 0,
@@ -55,10 +56,15 @@ var requestKeyShape = regexp.MustCompile(`^[A-Za-z0-9._:@#+-]{1,200}$`)
 // input, disjoint cache classes, output including reasoning).
 type RequestRow struct {
 	Source  string
-	Session string
+	Session string // the tool's session id: half of the request's identity
 	Key     string
-	At      time.Time
-	Model   string
+	// Transcript names the file the request was read from the way a block row
+	// does (blocks.SessionIDFor). It is what joins a request to its block, and
+	// NOT part of its identity: one request measured in two transcripts is
+	// still one request (1 of 25,563 here, 2026-09-29).
+	Transcript string
+	At         time.Time
+	Model      string
 
 	Input, Output, CacheRead, CacheCreation int64
 	EstimateUSD                             float64
@@ -77,9 +83,9 @@ func (s *Store) InsertRequests(rows []RequestRow) int {
 	}
 	n := 0
 	s.tx("InsertRequests", func(txn *sql.Tx) error {
-		stmt, err := txn.Prepare(`INSERT OR IGNORE INTO requests(source, session, request_key, ts, model,
+		stmt, err := txn.Prepare(`INSERT OR IGNORE INTO requests(source, session, request_key, transcript, ts, model,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimate_usd)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
 		if err != nil {
 			return err
 		}
@@ -89,7 +95,8 @@ func (s *Store) InsertRequests(rows []RequestRow) int {
 			if !ok || !requestSources[r.Source] || !requestKeyShape.MatchString(r.Key) || r.At.IsZero() {
 				continue
 			}
-			res, err := stmt.Exec(r.Source, session, r.Key, r.At.UnixMilli(), validModelID(r.Model),
+			transcript, _ := validSession(r.Transcript)
+			res, err := stmt.Exec(r.Source, session, r.Key, transcript, r.At.UnixMilli(), validModelID(r.Model),
 				r.Input, r.Output, r.CacheRead, r.CacheCreation, r.EstimateUSD)
 			if err != nil {
 				return err
@@ -109,7 +116,7 @@ func (s *Store) UsageRows(since, until time.Time) ([]RequestRow, error) {
 	if db == nil {
 		return nil, errUnavailable
 	}
-	rows, err := db.Query(`SELECT source, session, request_key, ts, model, input_tokens, output_tokens,
+	rows, err := db.Query(`SELECT source, session, request_key, transcript, ts, model, input_tokens, output_tokens,
 		cache_read_tokens, cache_creation_tokens, estimate_usd
 		FROM requests WHERE ts >= ? AND ts < ? ORDER BY ts, source, session, request_key`,
 		since.UnixMilli(), until.UnixMilli())
@@ -121,7 +128,7 @@ func (s *Store) UsageRows(since, until time.Time) ([]RequestRow, error) {
 	for rows.Next() {
 		var r RequestRow
 		var ms int64
-		if err := rows.Scan(&r.Source, &r.Session, &r.Key, &ms, &r.Model, &r.Input, &r.Output,
+		if err := rows.Scan(&r.Source, &r.Session, &r.Key, &r.Transcript, &ms, &r.Model, &r.Input, &r.Output,
 			&r.CacheRead, &r.CacheCreation, &r.EstimateUSD); err != nil {
 			return nil, err
 		}
@@ -244,4 +251,54 @@ func (s *Store) MarkRequestsBackfillDone(at time.Time) {
 	s.exec("MarkRequestsBackfillDone",
 		`INSERT INTO ledger_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 		metaRequestsBackfillDone, at.UTC().Format(time.RFC3339))
+}
+
+// UsageBucket is the sum of the requests one source made in one transcript, on
+// one model, within one 5-minute bucket.
+type UsageBucket struct {
+	At         time.Time // the bucket's start
+	Source     string
+	Transcript string
+	Model      string
+	Requests   int64
+
+	Input, Output, CacheRead, CacheCreation int64
+	EstimateUSD                             float64
+}
+
+// UsageBucketSeconds is the bucket width. Five minutes because it is exact for
+// everything the page does with the sums: every block edge sits on a 5-minute
+// epoch boundary (the sidecar's bins; 1,339 of 1,339 blocks here, 2026-09-29)
+// and every timezone offset is a multiple of 15 minutes, so no page column and
+// no block ever splits a bucket. Summing here keeps a month to a few thousand
+// rows rather than tens of thousands of requests.
+const UsageBucketSeconds = 300
+
+// UsageBuckets sums requests with since <= ts < until into 5-minute buckets.
+func (s *Store) UsageBuckets(since, until time.Time) ([]UsageBucket, error) {
+	db := s.handle()
+	if db == nil {
+		return nil, errUnavailable
+	}
+	rows, err := db.Query(`SELECT (ts / 1000 / ?) * ? AS bucket, source, transcript, model, COUNT(*),
+		SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_creation_tokens), SUM(estimate_usd)
+		FROM requests WHERE ts >= ? AND ts < ?
+		GROUP BY bucket, source, transcript, model ORDER BY bucket, source, transcript, model`,
+		UsageBucketSeconds, UsageBucketSeconds, since.UnixMilli(), until.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageBucket
+	for rows.Next() {
+		var u UsageBucket
+		var at int64
+		if err := rows.Scan(&at, &u.Source, &u.Transcript, &u.Model, &u.Requests,
+			&u.Input, &u.Output, &u.CacheRead, &u.CacheCreation, &u.EstimateUSD); err != nil {
+			return nil, err
+		}
+		u.At = time.Unix(at, 0)
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }

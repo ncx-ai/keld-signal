@@ -115,7 +115,7 @@ func (s *state) note(source, session, path string, now time.Time) {
 }
 
 // pathOf is the transcript a session id belongs to, and its source. A session
-// is one transcript (sessionIDFor is the file stem), so the first match is the
+// is one transcript (SessionIDFor is the file stem), so the first match is the
 // only one.
 func (s *state) pathOf(session string) (path, source string, ok bool) {
 	s.mu.Lock()

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 )
@@ -50,21 +51,21 @@ func New(sink Sink, price Price) *Recorder {
 
 // Observe is the watcher's per-line hook.
 func (r *Recorder) Observe(source, path string, line []byte) {
-	r.add(r.parser.Line(source, path, line))
+	r.add(path, r.parser.Line(source, path, line))
 }
 
 // ObserveFile is the watcher's whole-document hook (Gemini).
 func (r *Recorder) ObserveFile(source, path string) {
-	r.add(r.parser.File(source, path))
+	r.add(path, r.parser.File(source, path))
 }
 
-func (r *Recorder) add(reqs []promptlog.Request) {
+func (r *Recorder) add(path string, reqs []promptlog.Request) {
 	if len(reqs) == 0 {
 		return
 	}
 	rows := make([]ledger.RequestRow, 0, len(reqs))
 	for _, q := range reqs {
-		rows = append(rows, r.row(q))
+		rows = append(rows, r.row(path, q))
 	}
 	r.mu.Lock()
 	r.buf = append(r.buf, rows...)
@@ -78,10 +79,11 @@ func (r *Recorder) add(reqs []promptlog.Request) {
 // row converts a parsed request. An instant the tool wrote in a shape we cannot
 // read leaves At zero, which the ledger refuses: a request with no instant
 // cannot be placed on any day.
-func (r *Recorder) row(q promptlog.Request) ledger.RequestRow {
+func (r *Recorder) row(path string, q promptlog.Request) ledger.RequestRow {
 	at, _ := time.Parse(time.RFC3339Nano, q.TS)
 	row := ledger.RequestRow{
-		Source: q.Source, Session: q.Session, Key: q.Key, At: at, Model: q.Model,
+		Source: q.Source, Session: q.Session, Key: q.Key, Transcript: blocks.SessionIDFor(path),
+		At: at, Model: q.Model,
 		Input: q.Input, Output: q.Output, CacheRead: q.CacheRead, CacheCreation: q.CacheCreation,
 	}
 	if q.Model != "" && r.price != nil {
