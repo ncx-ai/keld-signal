@@ -2241,12 +2241,11 @@ if (typeof document !== "undefined") {
   }
 
   /** One tile: the headline, and on hover or keyboard focus the breakdown
-   *  behind it — top three, then "other", then the no-value bucket, each as
-   *  its own row so "no repository" never hides inside "other". */
-  function overviewTile(label, value, sub, breakdown, fmt, noneLabel) {
-    const rows = [...breakdown.top.map((e) => ({ label: e.label, value: e.value }))];
-    if (breakdown.other > 0) rows.push({ label: OTHER_LABEL, value: breakdown.other, muted: true });
-    if (breakdown.none > 0) rows.push({ label: noneLabel, value: breakdown.none, muted: true });
+   *  behind it — the top three only (decided 2026-09-29), drawn inside the
+   *  tile's own box so the row never changes height. The rest of the range is
+   *  in the chart below, split the same way. */
+  function overviewTile(label, value, sub, breakdown, fmt) {
+    const rows = breakdown.top.slice(0, 3).map((e) => ({ label: e.label, value: e.value }));
     const max = Math.max(0, ...rows.map((r) => r.value));
     const detail = rows.length
       ? el(
@@ -2255,7 +2254,7 @@ if (typeof document !== "undefined") {
           ...rows.map((r) =>
             el(
               "div",
-              { class: "ov-brow" + (r.muted ? " muted" : "") },
+              { class: "ov-brow" },
               el("span", { class: "ov-blabel", title: r.label }, r.label),
               el("span", { class: "ov-track" }, el("span", { class: "ov-fill", style: `width:${max ? (r.value / max) * 100 : 0}%` })),
               el("span", { class: "ov-bval" }, fmt(r.value))
@@ -2501,10 +2500,10 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "tiles ov-tiles" },
-        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatVolume, NO_MODEL_LABEL),
-        overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD, NO_MODEL_LABEL),
-        overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes, NO_REPO_LABEL),
-        overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count, NO_REPO_LABEL)
+        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatVolume),
+        overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD),
+        overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes),
+        overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count)
       )
     );
     wrap.appendChild(renderVolumeChart(volumeSeries(blocks, win, split, catalog, opts), split, stats, win));

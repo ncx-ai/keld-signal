@@ -729,24 +729,22 @@ fieldset:disabled { opacity: .55; }
 .ov-empty p { max-width: 52ch; margin: 0 auto; font-size: 13.5px; }
 
 /* Tiles: the headline at rest, the breakdown on hover or keyboard focus. The
-   breakdown OVERLAYS the tile, growing downward over the chart if it needs
-   to, so nothing below it moves when a pointer passes over the row. */
+   breakdown OVERLAYS the tile at exactly the tile's own size — three rows fit,
+   and nothing on the page moves when a pointer passes over the row. */
 .ov-tile { position: relative; min-height: 86px; cursor: default; }
 .ov-tile .l { position: relative; z-index: 4; }
 .ov-breakdown {
-  display: none; gap: 4px; position: absolute; z-index: 3; top: -1px; left: -1px; right: -1px;
-  min-height: calc(100% + 2px); padding: 34px 14px 12px; box-sizing: border-box;
+  display: none; gap: 3px; position: absolute; z-index: 3; inset: -1px; overflow: hidden;
+  padding: 31px 14px 8px; box-sizing: border-box;
   background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 12px; box-shadow: var(--shadow);
   align-content: start;
 }
 .ov-tile:hover .ov-breakdown, .ov-tile:focus-within .ov-breakdown { display: grid; }
-.ov-brow { display: grid; grid-template-columns: minmax(0, 88px) minmax(0, 1fr) auto; gap: 6px; align-items: center; font: 10.5px var(--mono); color: var(--ink-2); }
-.ov-brow.muted { color: var(--muted); }
+.ov-brow { display: grid; grid-template-columns: minmax(0, 108px) minmax(0, 1fr) auto; gap: 6px; align-items: center; font: 10.5px/1.25 var(--mono); color: var(--ink-2); }
 .ov-blabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ov-bval { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .ov-track { height: 6px; border-radius: 4px; background: var(--deep); position: relative; overflow: hidden; }
 .ov-fill { position: absolute; inset: 0 auto 0 0; background: var(--sage); border-radius: 4px; }
-.ov-brow.muted .ov-fill { background: var(--rule-strong); }
 
 .ov-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .ov-section-title { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
