@@ -390,3 +390,51 @@ func (s *Store) MarkFileBackfilled(path string) error {
 	}
 	return err
 }
+
+// NameBlockModelsFromRequests names every measured block stored with no model
+// from its OWN requests: the model most of the requests in that transcript,
+// within the block's span, used. The block is then priced from its stored
+// tokens, as RepriceUnpriced would. Returns how many blocks it named.
+//
+// This is what the engine re-query (daemon/model_repair.go) could not do for
+// Codex: the engine takes a model only from an assistant message, while Codex
+// names it in `turn_context`, which the request reader does read. Measured on
+// the maintainer's Mac (2026-09-29): 16 of 24 unnamed Codex blocks named this
+// way; the other 8 are Sep 2025 rollouts whose requests name no model either,
+// and the 55 Claude Code blocks from 26–28 Aug have no transcript left, so
+// they stay unnamed rather than guessed.
+func (s *Store) NameBlockModelsFromRequests(price func(model string, input, output, cacheRead, cacheCreation int64) (float64, bool)) int {
+	db := s.handle()
+	if db == nil {
+		return 0
+	}
+	rows, err := db.Query(`SELECT b.session, b.start, b.input_tokens, b.output_tokens, b.cache_read_tokens, b.cache_creation_tokens,
+		(SELECT r.model FROM requests r
+		  WHERE r.transcript = b.session AND r.ts >= b.start * 1000 AND r.ts < b."end" * 1000 AND r.model != ''
+		  GROUP BY r.model ORDER BY COUNT(*) DESC, r.model LIMIT 1)
+		FROM blocks b WHERE b.measured_status = ? AND b.model = '' AND b."end" IS NOT NULL`, string(StatusOK))
+	if err != nil {
+		s.logFailure("NameBlockModelsFromRequests", err)
+		return 0
+	}
+	type named struct {
+		k               BlockKey
+		model           string
+		in, out, cr, cc int64
+	}
+	var todo []named
+	for rows.Next() {
+		var n named
+		var m sql.NullString
+		if err := rows.Scan(&n.k.Session, &n.k.Start, &n.in, &n.out, &n.cr, &n.cc, &m); err == nil && m.Valid && m.String != "" {
+			n.model = m.String
+			todo = append(todo, n)
+		}
+	}
+	rows.Close()
+	for _, n := range todo {
+		usd, _ := price(n.model, n.in, n.out, n.cr, n.cc)
+		s.NameModel(n.k, n.model, usd)
+	}
+	return len(todo)
+}

@@ -1414,7 +1414,16 @@ func Run(ctx context.Context) error {
 		// requests table only. Started after watch.New on purpose: the watcher
 		// replays every line written after its start, the backfill reads every
 		// file whole, and together they leave no gap (see usage.Backfill).
-		go newUsageBackfill(sig.ledger, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
+		go func() {
+			newUsageBackfill(sig.ledger, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
+			// The backfill is what fills the requests an unnamed block's model
+			// can be read from, so name them again once it is done.
+			if ctx.Err() == nil {
+				if n := sig.ledger.NameBlockModelsFromRequests(priceStored); n > 0 {
+					log.Printf("keld-agent: named the model of %d earlier block(s) from their own requests", n)
+				}
+			}
+		}()
 		// Third use of the same detection: the watcher already knows when a
 		// transcript grew, so it tells the sidecar, which brings its
 		// reference-series store up to date from its own byte offset. That is

@@ -62,6 +62,9 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	if n := l.RepriceUnpricedRequests(priceStored); n > 0 {
 		log.Printf("keld-agent: priced %d earlier request(s) whose model has a rate now", n)
 	}
+	if n := l.NameBlockModelsFromRequests(priceStored); n > 0 {
+		log.Printf("keld-agent: named the model of %d earlier block(s) from their own requests", n)
+	}
 	p := projects.NewStore(projects.DefaultPath())
 
 	// The projects document needs two things this package owns: the blocks

@@ -257,3 +257,53 @@ func TestUsageBucketsSumPerFiveMinutes(t *testing.T) {
 		t.Fatalf("buckets %+v", got)
 	}
 }
+
+// A block stored with no model is named from its own requests — the majority
+// model inside its span, in its transcript — and priced from its tokens. A
+// block whose requests name nothing stays unnamed rather than guessed.
+func TestNameBlockModelsFromRequests(t *testing.T) {
+	setHome(t)
+	s := New()
+	base := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	cut := func(session string, model string) BlockKey {
+		k := BlockKey{Session: session, Start: base.Unix()}
+		s.Cut(k, base.Add(20*time.Minute).Unix(), "idle", "budget", "codex", time.Now())
+		s.Measure(k, Measured{Model: model, InputTokens: 10, OutputTokens: 10, CacheReadTokens: 70, CacheCreationTokens: 10}, time.Now())
+		return k
+	}
+	named := cut("rollout-a", "")
+	blank := cut("rollout-b", "")
+	kept := cut("rollout-c", "gpt-6-astra")
+	row := func(transcript, key, model string, at time.Time) RequestRow {
+		return RequestRow{Source: "codex", Session: "s", Key: key, Transcript: transcript, At: at, Model: model}
+	}
+	s.InsertRequests([]RequestRow{
+		row("rollout-a", "a1", "gpt-5.5", base.Add(time.Minute)),
+		row("rollout-a", "a2", "gpt-5.5", base.Add(2*time.Minute)),
+		row("rollout-a", "a3", "gpt-6-astra", base.Add(3*time.Minute)),
+		row("rollout-a", "a4", "other", base.Add(25*time.Minute)), // after the block
+		row("rollout-b", "b1", "", base.Add(time.Minute)),
+		row("rollout-c", "c1", "gpt-5.5", base.Add(time.Minute)),
+	})
+	if n := s.NameBlockModelsFromRequests(priceAt(0.01)); n != 1 {
+		t.Fatalf("named %d blocks, want 1", n)
+	}
+	snap, _ := s.Read(time.Time{}, 10)
+	for _, b := range snap.Blocks {
+		m := b.Cells["measured"]
+		switch b.Key.Session {
+		case named.Session:
+			if m["model"] != "gpt-5.5" {
+				t.Fatalf("named block: %v", m)
+			}
+		case blank.Session:
+			if m["model"] != nil && m["model"] != "" {
+				t.Fatalf("a block whose requests name no model was given %v", m["model"])
+			}
+		case kept.Session:
+			if m["model"] != "gpt-6-astra" {
+				t.Fatalf("a named block was renamed: %v", m)
+			}
+		}
+	}
+}
