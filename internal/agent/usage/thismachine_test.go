@@ -26,8 +26,10 @@ func TestBackfillThisMachine(t *testing.T) {
 		func() []watch.Root { return roots })
 	b.PerStep = 1 << 30
 	began := time.Now()
-	b.Step()
+	finished := b.Step()
 	took := time.Since(began)
+	done, _ := store.BackfilledFiles()
+	t.Logf("step finished=%v remaining=%d files recorded=%d held=%d", finished, b.Remaining(), len(done), b.rec.Held())
 	st, err := store.RequestStats()
 	if err != nil {
 		t.Fatal(err)
