@@ -72,7 +72,27 @@ fn keld_home() -> PathBuf {
             return PathBuf::from(h);
         }
     }
+    // ⚠️ **$HOME IS NOT SET ON WINDOWS, AND READING ONLY IT SENT THE APP TO A
+    // RELATIVE `.keld`.** Windows uses USERPROFILE; `HOME` exists only if
+    // something (a shell, a dev tool) happens to have set it. With it unset this
+    // returned the bare relative path `.keld`, so `agent.json` was never found,
+    // `read_agent()` answered None, and the app opened its "daemon not running"
+    // frame on a machine whose daemon was running perfectly well — measured
+    // 2026-09-29, agent.json present with port 61154 and a 64-char secret.
+    //
+    // This could only ever surface once the app was built for Windows, which is
+    // why it survived: the shell had only ever shipped on macOS.
+    //
+    // The order mirrors Go's os.UserHomeDir, which is what every other part of
+    // Keld resolves ~/.keld with — so the two halves agree about where the
+    // daemon's files are, which is the whole point.
+    #[cfg(windows)]
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    #[cfg(not(windows))]
     let home = std::env::var("HOME").unwrap_or_default();
+
     PathBuf::from(home).join(".keld")
 }
 
@@ -509,5 +529,34 @@ mod tests {
         assert_eq!(urlencode("a b"), "a%20b");
         assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
         assert_eq!(urlencode("+/"), "%2B%2F");
+    }
+
+    /// ⚠️ ON WINDOWS THE HOME DIRECTORY COMES FROM USERPROFILE, NOT HOME.
+    ///
+    /// Reading only `HOME` — which Windows does not set — collapsed this to the
+    /// RELATIVE path `.keld`, so `agent.json` was never found and the app showed
+    /// its "daemon not running" frame on a machine whose daemon was running
+    /// fine. It survived because the shell had only ever shipped on macOS, where
+    /// `HOME` is always set; the first Windows build hit it immediately.
+    ///
+    /// The assertion is that the result is ABSOLUTE and inside the user's
+    /// profile — not an exact string, which would only restate the code.
+    #[test]
+    fn keld_home_is_absolute_without_a_unix_home_var() {
+        // SAFETY: this test owns these vars for its duration and no other test
+        // in this binary reads them concurrently (see the KELD_HOME note above).
+        unsafe {
+            std::env::remove_var("KELD_HOME");
+        }
+        let got = keld_home();
+        assert!(
+            got.is_absolute(),
+            "keld_home() returned a relative path ({got:?}); on Windows that is the \
+             $HOME-only bug, and agent.json is never found"
+        );
+        assert!(
+            got.ends_with(".keld"),
+            "keld_home() should end in .keld, got {got:?}"
+        );
     }
 }
