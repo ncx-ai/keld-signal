@@ -48,7 +48,7 @@ test.describe("Web sign-in", () => {
     expect(url.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43,}$/);
 
     const tab = await finishInBrowser(page);
-    await expect(tab.getByText(/signed in/i).first()).toBeVisible();
+    await expect(tab.getByText("Signed in. Close this tab.")).toBeVisible();
 
     // AC-5: within 5 s of the callback, with no reload.
     await expect(page.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
@@ -117,7 +117,8 @@ test.describe("Web sign-in", () => {
     expect(html).not.toContain("bogus");
     expect(html).not.toContain("<script>alert(1)");
     expect(html).not.toContain("FORGED-CODE");
-    await expect(forged.getByText(/signed in\. close this tab/i)).toHaveCount(0);
+    await expect(forged.getByText("This sign-in was not started here", { exact: false })).toBeVisible();
+    await expect(forged.getByText("Signed in. Close this tab.")).toHaveCount(0);
 
     expect(harness.exists("hook.json"), "no hook.json after a refused return").toBe(false);
     expect(harness.exists("auth.json"), "no auth.json after a refused return").toBe(false);

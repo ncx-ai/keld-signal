@@ -2946,6 +2946,12 @@ if (typeof document !== "undefined") {
       }
       state.settings = { ...state.settings, send_to_atlas: true };
       restartAfter = !!(put.body && put.body.restart_required);
+      // A restart bar already up (from choosing local only, say) holds a patch
+      // that says send_to_atlas:false; pressing it now would turn Atlas off
+      // again. It carries the value just written instead.
+      if (state.restart.status !== RESTART_IDLE && "send_to_atlas" in state.restart.patch) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+      }
     }
     const res = await sendJSON("/v1/auth/start", "POST", {});
     if (!res.ok || !res.body) {
