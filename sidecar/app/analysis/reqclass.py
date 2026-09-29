@@ -302,6 +302,23 @@ def classify_bash(raw):
     # ⚠️ NO FALLBACK. See the note on `unclassified` below.
     return "unclassified"
 
+# ⚠️ THE PUBLISHED VOCABULARY, DECLARED IN ONE PLACE. Until a consumer asked for the closed
+# set, this existed only as string literals scattered across `route_class` and `classify_bash`,
+# which is exactly the shape that let `DynamicStatuses` and `DevBlockReasons` drift from their
+# Python originals -- the difference being that those at least had a list to drift FROM.
+#
+# A consumer (Atlas) now stores these as columns and displays nothing for a value it does not
+# know, so a tenth class added as a bare `return "..."` would publish rows that silently render
+# as nothing at all. `test_the_published_vocabulary_is_declared_in_one_place` reads this
+# module's own source and fails if any literal either function can return is missing here.
+#
+# ⚠️ `unclassified` IS a member and is an honest abstention, not a failure bucket: measured
+# residual 1.7% / 1.6% across two people's corpora. A consumer that drops it is reporting a
+# distribution that does not sum to the work.
+CLASSES = ("retrieve", "operate", "verify", "author_code", "author_prose",
+           "synthesize", "delegate", "acknowledge", "unclassified")
+
+
 def route_class(r):
     names=[(n.split("__")[-1], i) for n,i in r["tools"]]
     if not names:

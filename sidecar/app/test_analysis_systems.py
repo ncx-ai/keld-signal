@@ -217,6 +217,45 @@ def test_the_pair_resolves_for_every_lane():
     assert system_vendor(category_for_program("git"), vendor_for_program("git")) is None
 
 
+def test_the_published_vocabulary_is_declared_in_one_place():
+    """⚠️ A closed set a consumer RENDERS must have exactly one definition in the producer.
+
+    Atlas stores these as columns and displays nothing for a value it does not know, so a tenth
+    class added as a bare `return "..."` inside classify_bash would publish rows that render as
+    nothing, on every screen, in silence. This reads reqclass's own SOURCE -- the same technique
+    `DynamicStatuses` uses against dynamics.py -- so the declaration cannot fall behind the code
+    that produces the values."""
+    import inspect, re
+    from app.analysis import reqclass
+    src = inspect.getsource(reqclass)
+    # Every string literal either classifier can hand back, including the ternary arms.
+    returned = set(re.findall(r'return "([a-z_]+)"', src))
+    returned |= set(re.findall(r'else "([a-z_]+)"', src))
+    returned -= {"", "n"}
+    missing = returned - set(reqclass.CLASSES)
+    assert not missing, (
+        f"reqclass can return {sorted(missing)}, absent from CLASSES. A consumer renders this "
+        f"as a closed set and shows nothing for a value it does not know.")
+    assert len(reqclass.CLASSES) == 9, reqclass.CLASSES
+
+
+def test_unrecognized_pairs_with_an_ACTION_but_never_with_a_VENDOR():
+    """⚠️ THE ASYMMETRY IS DELIBERATE AND LOOKS LIKE AN OVERSIGHT, so it is pinned here.
+
+    `system_vendor("unrecognized", ...)` is None because there is no vendor to name -- the pair
+    would carry nothing the bare category does not already say. `system_action` DOES pair, because
+    there IS something to say: `unrecognized:update` reports that something was WRITTEN in a
+    system we cannot name, which is a materially different fact from `unrecognized:read` and is
+    not recoverable from `system_categories`.
+
+    A consumer may hide both; the producer must not conflate "nothing to report" with "the
+    reader chose not to look"."""
+    assert system_vendor("unrecognized", "whatever") is None
+    from app.analysis.systems import system_action
+    assert system_action("unrecognized", "acme-update-thing") == "unrecognized:update"
+    assert system_action("unrecognized", "acme-fetch-thing") == "unrecognized:read"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
