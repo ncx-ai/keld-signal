@@ -306,8 +306,15 @@ Filename: "{app}\keld-agent.exe"; Parameters: "uninstall"; \
 ; teardown), and not a keld-agent someone launched by hand. taskkill exits non-zero
 ; when nothing matches, which Inno ignores for this section, so "already gone" is a
 ; normal outcome rather than an error.
+;
+; ⚠️ "Keld Signal.exe" IS HERE FOR THE SAME REASON IT IS IN PrepareToInstall:
+; Windows will not delete a running exe, and the app outlives its own window
+; (closing it hides it behind a tray icon), so an uninstall started from a
+; machine where anyone ever opened it would fail to remove the app. `/F` rather
+; than a graceful close for the same reason too — the app's CloseRequested
+; handler calls prevent_close, so WM_CLOSE hides it and changes nothing.
 Filename: "{sys}\taskkill.exe"; \
-  Parameters: "/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe"; \
+  Parameters: "/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe /IM ""Keld Signal.exe"""; \
   Flags: runhidden; RunOnceId: "killstragglers"
 
 [Code]
@@ -1225,10 +1232,27 @@ begin
   Trace('PrepareToInstall: stopping the agent');
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN KeldAgent',
        '', SW_HIDE, ewWaitUntilTerminated, RC);
-  // /T so the sidecar's own children go with it; naming both images in one call
+  // /T so the sidecar's own children go with it; naming every image in one call
   // matches the idiom already in [UninstallRun].
+  //
+  // ⚠️ "Keld Signal.exe" IS IN THIS LIST BECAUSE THE INSTALLER NOW LAUNCHES IT,
+  // AND WITHOUT IT THE *NEXT* INSTALL FAILS. Windows refuses to delete a running
+  // exe, so the copy step stops on a modal: "An error occurred while trying to
+  // replace the existing file: DeleteFile failed; code 5. Access is denied."
+  // Measured on a real machine, first install after the postinstall launch entry
+  // was added. Nothing else here covers it — `CloseApplications=no` is set
+  // deliberately (the Restart Manager modal it renders reads as an error and
+  // failed to stop the agent anyway), so Inno will not offer to close it.
+  //
+  // ⚠️ AND `/F` IS LOAD-BEARING FOR THIS IMAGE SPECIFICALLY. A polite taskkill
+  // posts WM_CLOSE, which the app INTERCEPTS: its CloseRequested handler calls
+  // prevent_close and hides the window (see app/src-tauri/src/main.rs — closing
+  // the window is not quitting, so re-showing it is instant). So a graceful kill
+  // is a no-op that leaves the process alive and the file locked, and it is the
+  // same design that makes this necessary at all: a person who "closed" the app
+  // still has it running behind a tray icon with no idea it is there.
   Exec(ExpandConstant('{sys}\taskkill.exe'),
-       '/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe',
+       '/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe /IM "Keld Signal.exe"',
        '', SW_HIDE, ewWaitUntilTerminated, RC);
   // A moment for the OS to release the file handles the copy is about to take.
   Sleep(600);

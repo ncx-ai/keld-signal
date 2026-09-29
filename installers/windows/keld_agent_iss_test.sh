@@ -413,6 +413,43 @@ printf '%s\n' "$open_line" | grep -q 'skipifdoesntexist' || \
 printf '%s\n' "$open_line" | grep -q 'skipifsilent' || \
   fail "the app launch is not skipifsilent - an MDM push would throw a window at whoever is at the console"
 
+# 10e. ⚠️ LAUNCHING THE APP AT THE END OF AN INSTALL BREAKS THE *NEXT* ONE UNLESS
+#      SOMETHING STOPS IT FIRST. Windows will not delete a running exe, so the
+#      copy step stops on a modal — "DeleteFile failed; code 5. Access is
+#      denied." — measured on the first install after 10d's entry was added.
+#      Nothing else covers it: `CloseApplications=no` is set deliberately (guard
+#      9a), so Inno never offers to close anything.
+#
+#      Same on the way out: the app outlives its own window (closing hides it
+#      behind a tray icon), so an uninstall on a machine where anyone ever
+#      opened it could not remove the app's own exe.
+#
+#      ⚠️ AND IT MUST BE `/F`. The app's CloseRequested handler calls
+#      prevent_close, so the WM_CLOSE a graceful taskkill posts HIDES the window
+#      and leaves the process alive holding the file — the guard would pass and
+#      the install would still fail.
+prep="$(sed -n '/^function PrepareToInstall/,/^end;/p' "$iss" || true)"
+[ -n "$prep" ] || fail "cannot find PrepareToInstall - this guard would pass vacuously"
+# ⚠️ STRIP THE // COMMENTS BEFORE MATCHING, OR THIS GUARD READS ITS OWN PROSE.
+#    The comment above the Exec explains why `/F` is load-bearing, so it contains
+#    both "taskkill" and "/F" — and an unfiltered `grep taskkill` returns it
+#    alongside the code. Verified: with the comment left in, deleting `/F` from
+#    the actual Exec still passed. That is four times this suite has matched a
+#    comment restating the code instead of the code.
+prep_kill="$(printf '%s\n' "$prep" | grep -v '^[[:space:]]*//' \
+  | sed -e ':a' -e '/,$/{N;s/\n[[:space:]]*//;ba}' | grep 'taskkill' || true)"
+[ -n "$prep_kill" ] || fail "PrepareToInstall does not run taskkill - a running agent locks its own files"
+printf '%s\n' "$prep_kill" | grep -qF 'Keld Signal.exe' || \
+  fail "PrepareToInstall does not stop the desktop app - the install it launches would block the next install's file copy"
+printf '%s\n' "$prep_kill" | grep -q '/F' || \
+  fail "PrepareToInstall's taskkill is not /F - the app intercepts WM_CLOSE and would stay alive holding its exe"
+unkill="$(printf '%s\n' "$unfolded" | grep -F 'RunOnceId: "killstragglers"' || true)"
+[ -n "$unkill" ] || fail "the uninstall straggler kill is gone - a live process would block file removal"
+printf '%s\n' "$unkill" | grep -qF 'Keld Signal.exe' || \
+  fail "uninstall does not stop the desktop app - it could not delete the app's own exe"
+printf '%s\n' "$unkill" | grep -q '/F' || \
+  fail "the uninstall taskkill is not /F - the app intercepts WM_CLOSE and would stay alive holding its exe"
+
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
 #     LOADS, so an installer signed over an unsigned payload installs fine and
