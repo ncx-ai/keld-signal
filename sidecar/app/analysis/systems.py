@@ -76,20 +76,20 @@ _TABLE = {
     "knowledge_base": """notion confluence coda guru slab almanac nuclino tettra
         bookstack outline mediawiki sharepoint""",
     "communication": """slack teams discord zoom webex gmail outlook mailgun twilio
-        sendbird intercom-messenger chime""",
+        sendbird chime""",
     "crm_sales": """salesforce hubspot pipedrive gong outreach salesloft apollo clari
         zoominfo close copper insightly freshsales attio""",
     "support": """zendesk intercom freshdesk helpscout front kustomer gladly gorgias
-        servicenow jirasm""",
+        servicenow""",
     "design": """figma sketch canva miro framer invision zeplin abstract penpot excalidraw""",
     "hr_people": """workday bamboohr gusto rippling justworks greenhouse lever ashby
-        deel remote namely paylocity paycom adp trinet lattice culdeamp""",
+        deel remote namely paylocity paycom adp trinet lattice cultureamp""",
     "finance_billing": """netsuite quickbooks xero stripe bill ramp brex expensify coupa
         chargebee recurly avalara sage freshbooks mercury plaid""",
     "analytics_bi": """looker tableau powerbi amplitude mixpanel metabase hex sigma
         heap pendo posthog redash superset quicksight fullstory""",
     "marketing": """marketo mailchimp braze klaviyo iterable customerio hootsuite
-        sprout buffer contentful sanity webflow wordpress hubspotcms optimizely""",
+        sprout buffer contentful sanity webflow wordpress optimizely""",
     "code_hosting": """github gitlab bitbucket gerrit sourcehut codeberg gitea
         githubusercontent""",
     "ci_cd": """circleci jenkins buildkite travis appveyor teamcity bamboo argo
@@ -114,18 +114,39 @@ _TABLE = {
     # common internal hostname). `hashicorp` covers the vendor where it is actually named.
     "security_iam": """okta auth0 onepassword snyk crowdstrike vanta drata hashicorp
         sumologic duo jumpcloud cyberark lastpass bitwarden dependabot""",
-    "legal_contracts": """docusign ironclad pandadoc adobesign hellosign clm
+    "legal_contracts": """docusign ironclad pandadoc adobesign hellosign 
         contractbook juro""",
     "scheduling": """calendly cal doodle savvycal calendar chilipiper""",
     "storage_files": """drive dropbox box onedrive s3 gcs backblaze egnyte""",
     "ecommerce": """shopify woocommerce bigcommerce magento squarespace etsy
-        amazonseller faire""",
+        faire""",
     "ai_ml": """openai anthropic claude huggingface replicate openrouter together cohere
-        mistral perplexity langsmith weightsandbiases wandb modal runpod""",
+        mistral perplexity langsmith wandb modal runpod""",
 }
 
 # brand token -> category, built once.
 BRAND = {b: cat for cat, blob in _TABLE.items() for b in blob.split()}
+
+# ⚠️ SOME VENDOR NAMES ARE ORDINARY ENGLISH WORDS, AND THE TWO LANES DO NOT DESERVE EQUAL TRUST.
+#
+# A HOST is strong evidence: `monday.com` is Monday.com and nothing else, because the
+# registrable label had to match exactly and somebody had to register it. An MCP TOOL TOKEN is
+# weak: `mcp_provider` takes the first `-`/`_`-delimited word of a tool name, so
+# `monday-standup-notes` yields `monday`, `actions-list-runs` yields `actions` and
+# `heap-dump` yields `heap`. Each would publish a confident, wrong category.
+#
+# That is the failure this module already calls the worse one -- "a lookup that over-fires is
+# worse than one that misses, because unlike a miss it is invisible to the reader". So these
+# resolve BY HOST ONLY. The vendor is not dropped; `monday.com` still reports issue_tracking.
+# What is refused is inferring the vendor from a bare word somebody used as a verb.
+#
+# `_VERB_HEADS` already covers the subset that are also API verbs (`close`, `send`, `update`).
+# This is the complement: nouns and adjectives, which no verb list would catch.
+AMBIGUOUS = frozenset("""
+    abstract actions apollo argo bamboo bill box buffer cal calendar chime drive drone duo
+    faire front guru harness heap height hex lattice lever mercury modal monday namely outline
+    remote sage sigma sketch sprout teams together
+""".split())
 
 # ⚠️ HOSTS DO NOT EQUAL BRANDS and the difference is where this would silently under-report.
 # `app.notion.com` ends in the brand; `company.atlassian.net` does NOT contain `jira`, and
@@ -163,6 +184,19 @@ _HOST_SUFFIX = {
     "docusign.com": ("docusign", "legal_contracts"),
     "hubspot.com": ("hubspot", "crm_sales"), "pipedrive.com": ("pipedrive", "crm_sales"),
     "myshopify.com": ("shopify", "ecommerce"),
+    # ⚠️ THE CONGLOMERATES, BY PRODUCT HOST. `google`, `microsoft` and `adobe` are deliberately
+    # absent from the brand table because the company name says nothing about the work -- but
+    # their PRODUCT hosts say plenty, and without these every Google Docs or Drive reference
+    # resolved to `unrecognized` through `_strip_tld` finding only `google`.
+    "drive.google.com": ("drive", "storage_files"),
+    "docs.google.com": ("googledocs", "knowledge_base"),
+    "sheets.google.com": ("googlesheets", "analytics_bi"),
+    "calendar.google.com": ("googlecalendar", "scheduling"),
+    "mail.google.com": ("gmail", "communication"),
+    "meet.google.com": ("googlemeet", "communication"),
+    "teams.microsoft.com": ("teams", "communication"),
+    "outlook.office.com": ("outlook", "communication"),
+    "onedrive.live.com": ("onedrive", "storage_files"),
 }
 
 # ⚠️ A CLI PROGRAM IS A CLIENT FOR A SYSTEM, and the program name is usually NOT the brand.
@@ -261,6 +295,10 @@ def category_for_brand(token):
     t = (token or "").strip().lower()
     if not t:
         return None
+    if t in AMBIGUOUS:
+        # A real vendor, but this lane cannot establish it -- see AMBIGUOUS. `unrecognized`
+        # rather than None: a connector WAS used, we simply cannot name what kind it is.
+        return "unrecognized"
     return BRAND.get(t, "unrecognized")
 
 
@@ -285,9 +323,10 @@ def vendor_for_host(host):
 
 
 def vendor_for_brand(token):
-    """The vendor an MCP brand token names, or None when the table does not know it."""
+    """The vendor an MCP brand token names, or None when the table does not know it or the
+    token is one of the ordinary English words that only a HOST can establish."""
     t = (token or "").strip().lower()
-    return t if t in BRAND else None
+    return t if (t in BRAND and t not in AMBIGUOUS) else None
 
 
 def vendor_for_program(prog):

@@ -256,6 +256,65 @@ def test_unrecognized_pairs_with_an_ACTION_but_never_with_a_VENDOR():
     assert system_action("unrecognized", "acme-fetch-thing") == "unrecognized:read"
 
 
+def test_an_ordinary_english_word_resolves_from_a_HOST_but_not_from_a_TOOL_TOKEN():
+    """⚠️ THE TWO LANES DO NOT DESERVE EQUAL TRUST, and treating them alike publishes confident
+    wrong categories that no reader can detect.
+
+    A host is strong evidence: `monday.com` is Monday.com, because the registrable label had to
+    match exactly and somebody had to register it. A tool token is weak: `mcp_provider` takes
+    the first word of a tool NAME, so `monday-standup-notes` yields `monday`,
+    `actions-list-runs` yields `actions`, `heap-dump` yields `heap`. Each would have published
+    a category about a system nobody used.
+
+    This is the failure this module calls the worse one -- over-firing is invisible to the
+    reader in a way a miss is not. The vendor is NOT dropped; only the weak lane is refused."""
+    from app.analysis.systems import AMBIGUOUS
+    for word, host, cat in (("monday", "monday.com", "issue_tracking"),
+                            ("bill", "bill.com", "finance_billing"),
+                            ("front", "front.com", "support"),
+                            ("heap", "heap.io", "analytics_bi"),
+                            ("together", "together.ai", "ai_ml")):
+        assert word in AMBIGUOUS, word
+        # weak lane: refused, and refused as `unrecognized` -- a connector WAS used.
+        assert category_for_brand(word) == "unrecognized", word
+        assert vendor_for_brand(word) is None, word
+        # strong lane: still fully resolved.
+        assert category_for_host(host) == cat, host
+        assert vendor_for_host(host) == word, host
+
+
+def test_an_unambiguous_vendor_is_untouched_by_the_ambiguity_rule():
+    """The refusal must cost nothing for names that are not ordinary words."""
+    for tok, cat in (("jira", "issue_tracking"), ("notion", "knowledge_base"),
+                     ("salesforce", "crm_sales"), ("workday", "hr_people"),
+                     ("cultureamp", "hr_people")):
+        assert category_for_brand(tok) == cat, tok
+        assert vendor_for_brand(tok) == tok, tok
+
+
+def test_every_table_token_is_reachable():
+    """⚠️ A TOKEN NOTHING CAN EMIT IS A DEAD ENTRY THAT READS AS COVERAGE. `intercom-messenger`
+    was one: `mcp_provider` splits on `-`, so no lane could ever produce it, yet it sat in the
+    table looking like Intercom was handled. A hyphen or underscore makes a token unreachable
+    by construction, and that is checkable."""
+    for tok in BRAND:
+        assert "-" not in tok and "_" not in tok, (
+            f"{tok!r} can never be produced: both lanes split on - and _")
+    for vendor, _cat in _host_vendors():
+        assert vendor and "-" not in vendor, vendor
+
+
+def test_a_conglomerate_product_host_resolves_even_though_the_company_does_not():
+    """`google` is absent from the brand table on purpose -- the company name says nothing
+    about the work. Its PRODUCT hosts say plenty, and without these every Drive or Docs
+    reference fell through `_strip_tld` to `google` and answered `unrecognized`."""
+    assert category_for_host("drive.google.com") == "storage_files"
+    assert category_for_host("docs.google.com") == "knowledge_base"
+    assert category_for_host("mail.google.com") == "communication"
+    assert category_for_host("teams.microsoft.com") == "communication"
+    assert "google" not in BRAND and "microsoft" not in BRAND
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
