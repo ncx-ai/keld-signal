@@ -46,6 +46,48 @@ jobs:
       - name: daemon page unit tests
         run: node --test internal/agent/ui/test/*.test.js
 
+  # Web sign-in, end to end (AC-9, Signal half; layer 2 of the discovery's test
+  # plan): Playwright drives a REAL daemon built from this checkout, the
+  # conformance mock Atlas and a real Chromium through the whole round trip —
+  # Sign in, follow the authorize link, the mock redirects to the daemon's
+  # /auth/callback, the page says signed in — plus a forged-state return that
+  # must be refused, and the first-open choice across a restart.
+  #
+  # ⚠️ ONLY signin.config.ts, NOT THE WHOLE ui/e2e SUITE. The rest of it needs
+  # the ~5 GB sidecar venv and a generated corpus and has no CI job (§8 #4 of
+  # the discovery defers that); this config needs just the two Go binaries its
+  # global setup builds, so it runs on a stock runner. The mock stands in for
+  # Atlas here; the real Atlas round trip is keld-atlas's own job and the canary.
+  ui-e2e-signin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ui/e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install Playwright
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: sign-in + first-open journeys (builds keld-agent + keld-conform)
+        run: npx playwright test --config=signin.config.ts --project=chromium
+      - name: upload report and daemon logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-e2e-signin
+          path: |
+            ui/e2e/playwright-report-signin
+            ui/e2e/test-results
+          if-no-files-found: ignore
+
   shell-tests:
     runs-on: ubuntu-latest
     steps:
