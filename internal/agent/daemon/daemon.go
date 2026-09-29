@@ -1026,6 +1026,10 @@ func Run(ctx context.Context) error {
 		// already does exactly this.
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
+		// Mounted here too: a paired machine can sign in again (to another org),
+		// and a sign-in started before the handler swap finishes after it — the
+		// pending store is shared across both handlers.
+		ingress.SignInRoute(),
 		// The hook is built here because only Run holds the three things it
 		// needs: the ledger the page reads, the sidecar's ingest signal, and the
 		// facts resolver that gives the transcript its repository identity.

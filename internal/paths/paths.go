@@ -137,6 +137,16 @@ func TelemetrySpoolDir() string { return filepath.Join(SpoolDir(), "telemetry") 
 // client event's tens of bytes.
 func FeaturesSpoolDir() string { return filepath.Join(SpoolDir(), "features") }
 
+// AtlasWebBase is where Atlas's web pages live — the browser sign-in's
+// authorize page. KELD_ATLAS_WEB_URL, else APIBase(): one host serves both in
+// dev and prod, and only a local Atlas splits them (:3000 web, :8000 API).
+func AtlasWebBase() string {
+	if v := os.Getenv("KELD_ATLAS_WEB_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return APIBase()
+}
+
 func APIBase() string {
 	if apiOverrideSet {
 		return apiOverride
