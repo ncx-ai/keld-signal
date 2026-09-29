@@ -1245,6 +1245,29 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   **unknown errors are permanent by design** (never hammer). The HF model download
   (`sidecar/hf.go`) uses it; settings-poll / publish / api adopt it when next
   touched — don't hand-roll new backoff loops.
+- **Claims about this codebase are ANCHORED, not asserted — for new work, from
+  2026-09-17.** `claimlock` (`.claimlock.toml`, `claims/`) pins a stated
+  behaviour to the content that enforces it, so an edit that invalidates the
+  claim reports itself instead of leaving the sentence true-looking and wrong.
+  This file is full of claims that predate it ("measured 92% on 61 blocks",
+  "`MIN_EVIDENCE` 5 is derived") and **none of them were imported** — importing
+  would launder a review nobody recorded the content of into a fresh pin. So the
+  store starts empty **on purpose**: a claim is written when the work that earns
+  it lands, and `claimlock verify` is run only against something re-checked in
+  that session. While editing, `claimlock affected <paths>`; at the end of a
+  phase, `claimlock check --changed main`. Not in a pre-commit hook — measured
+  elsewhere at 27.6x re-reporting.
+  ⚠️ **LOCAL ONLY, decided 2026-09-17 — there is no CI gate and that is a
+  choice, not an omission.** claimlock installs from the private
+  `ncx-ai/claimlock` plugin repo, so a runner would need either a credential or
+  a vendored copy; neither was judged worth it while the store is small and one
+  person runs the gate. The honest consequence: **nothing automatic stops a
+  stale claim reaching `main`** — the same shape as the verifier freeze-check
+  under *Gotchas*, and named here rather than discovered later. Revisit when the
+  store outgrows one person's habit or a second contributor writes claims; the
+  cheapest fix is vendoring `bin/` + `lib/` (Python stdlib only, no install
+  step), not a credential.
+
 - **Never cut text mid-sentence.** Any text read as language — a prompt, a
   generated report, a conversation window handed to a model, a span shown to a
   person — is bounded at a **logical delimiter**: a sentence end, a line break, a

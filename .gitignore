@@ -54,3 +54,4 @@ installers/windows/keld-wizard-host.exe
 installers/windows/keld-agent-sidecar/
 installers/windows/Output/
 installers/windows/keld-agent-wizardtest.iss
+.claimlock/
