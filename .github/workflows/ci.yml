@@ -168,9 +168,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: macOS onboarding contract
+      - name: No onboarding script ships (onboard.command / onboard.cmd gone)
         run: bash installers/macos/onboard_command_test.sh
-      - name: macOS wizard pane contract
+      - name: macOS pkg has no Keld installer screen
         run: bash installers/macos/plugin_test.sh
       - name: macOS postinstall contract
         run: bash installers/macos/postinstall_test.sh

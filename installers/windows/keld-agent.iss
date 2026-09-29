@@ -1,7 +1,9 @@
 ﻿; Inno Setup script — build in CI: iscc installers\windows\keld-agent.iss
 ; Per-user install (no admin). Files staged next to this script by CI:
 ;   keld.exe, keld-agent.exe, keld-wizard-host.exe, keld-agent-sidecar\  (frozen one-dir)
-; onboard.cmd is committed beside this script, not staged by CI.
+; This installer only installs: it asks nothing about Keld (no sign-in, no setup
+; code, no tool picker) and opens Signal at the end of an interactive install.
+; See docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html, AC-10.
 ; KELD_VERSION is set in the environment by CI.
 #define MyVersion GetEnv("KELD_VERSION")
 
@@ -98,22 +100,6 @@ Source: "keld.exe";             DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-agent.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-wizard-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-agent-sidecar\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "onboard.cmd";          DestDir: "{app}"; Flags: ignoreversion
-
-; ⚠️ THE SAME TWO BINARIES AGAIN, `dontcopy`, AND BOTH ARE LOAD-BEARING.
-; The "Set up Keld" page runs BEFORE the payload is installed, so {app}\keld.exe
-; does not exist while the page needs it. `dontcopy` files are never installed;
-; they are stored in the setup and extracted to {tmp} on demand by
-; ExtractTemporaryFile. This is the Windows equivalent of the macOS wizard plugin
-; carrying its own copy of `keld` in the bundle's Resources, and for exactly the
-; same reason.
-;
-; ⚠️ The consequence is what makes `--bin-path` mandatory in CurStepChanged
-; below: the page drives {tmp}\keld.exe, and pinning THAT path into a tool's
-; hook command breaks every hook the moment the wizard closes — silently, since
-; the config looks perfectly correct.
-Source: "keld.exe";             Flags: dontcopy
-Source: "keld-wizard-host.exe"; Flags: dontcopy
 
 [Registry]
 ; PATH IS ADDED UNCONDITIONALLY — there is deliberately no [Tasks] checkbox for it.
@@ -134,95 +120,38 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   ValueData: "{olddata};{app}"; Check: NeedsAddPath('{app}')
 
 [Run]
-; TWO ENTRIES, AND BOTH ARE LOAD-BEARING. The first ALWAYS runs; the second is now
-; a FALLBACK that should normally not run at all.
+; ONE ENTRY: open Signal when an interactive install finishes.
 ;
-; 1. REGISTER THE AGENT UNCONDITIONALLY. Told explicitly that no human is
-;    reachable (--headless, see below), keld-agent install writes the v2
-;    agent-config.json, registers the logon task, starts the daemon, and prompts
-;    for nothing. The daemon then IDLES on awaitConfig until someone completes
-;    setup, which is a documented, supported state — not a crash.
+; ⚠️ REGISTERING THE AGENT DOES NOT LIVE HERE AND MUST NOT COME BACK. It runs in
+;    CurStepChanged(ssPostInstall), through RunQuiet, unconditionally — see there.
+;    `Flags: runhidden` hides keld-agent's WINDOW without stopping Windows
+;    allocating a console, and on a real install that console appeared ("it pops
+;    a terminal window open twice"). A [Run] entry cannot pass CREATE_NO_WINDOW;
+;    keld-wizard-host --run can. Re-adding it here would also register twice.
 ;
-;    ⚠️ This entry exists because putting registration behind the postinstall
-;    checkbox was a REGRESSION. `postinstall` renders a tickbox the user can
-;    untick, and `skipifsilent` skips it entirely — so an MDM /SILENT push
-;    installed the files and registered NOTHING, where even the previous broken
-;    hidden step at least created the logon task. A silent-install fleet would
-;    have gone dark with no error anywhere.
+; ⚠️ THIS REPLACED onboard.cmd (2026-09-29, web sign-in spec AC-10 / D10). That
+;    console asked for a setup code; no installer asks anything about Keld now.
+;    Signal asks the one real question on first open — sign in with Atlas, or use
+;    locally only — and the daemon's auto-setup configures the AI tools it finds.
 ;
-;    ⚠️ IT RUNS AFTER CurStepChanged(ssPostInstall), AND THAT ORDER IS THE POINT.
-;    Inno runs [Run] once ssPostInstall has returned, so `keld signal setup` has
-;    already written hook.json by the time the agent registers and starts — the
-;    daemon comes up with a configuration to read instead of idling on
-;    awaitConfig waiting for one.
+; `postinstall`: a checkbox on the Finished page, TICKED by default — opening
+;    Signal is how an interactive install ends, not a surprise.
+; `skipifsilent`: an MDM /SILENT or /VERYSILENT push opens nothing on a screen
+;    nobody is at. Such a machine is paired with `keld-agent install --code
+;    <CODE>` from the management tool, exactly as before.
+; `shellexec`, `nowait`: the installer must not wait on a browser.
 ;
-;    ⚠️ `--headless` IS LOAD-BEARING AND MUST NOT BE DROPPED. This entry used to
-;    read `Parameters: "install"` and rely on keld-agent detecting the absence of
-;    a terminal by itself. IT CANNOT, HERE: `runhidden` hides the WINDOW, it does
-;    not take the console away, so the child still owns a real console, stdout is
-;    still a console handle, and term.IsTerminal answers TRUE. install therefore
-;    took its INTERACTIVE branch inside an invisible window — it ran `keld login`
-;    where nobody could see it, then `keld signal setup`, which blocked forever on
-;    a [Y/n] prompt reading a stdin no human could type into.
+; ⚠️ DO NOT ADD runhidden. onboard.cmd once ran as `runhidden nowait` — an
+;    interactive login in a window nobody could see — and every Windows machine
+;    registered its task and then idled forever, collecting nothing and saying
+;    nothing. `keld signal open` prompts for nothing, but the flag on this line
+;    is how that defect arrived; keep it off.
 ;
-;    Measured on a real machine: the installer sat at "Registering the Keld
-;    agent..." indefinitely, with `keld.exe signal setup` alive as a child of
-;    keld-agent.exe; killing that process by hand was the only way to advance the
-;    install, and onboarding then asked for a login a SECOND time, because the
-;    first had already been consumed by the hidden console.
-;
-;    So the intent is stated rather than inferred: --headless writes the config,
-;    registers the task, starts the daemon, and prompts for NOTHING. macOS and
-;    Linux are unaffected — they never pass it, and their launchers really do
-;    detach stdio.
-; ⚠️ **THIS ENTRY MOVED INTO [Code] (CurStepChanged/ssPostInstall) AND MUST NOT
-;    COME BACK HERE.** `Flags: runhidden` hides keld-agent's WINDOW; it does not
-;    stop Windows allocating a console for it, and on a real install that console
-;    appeared — "after it finishes the progress bar for installing, it pops a
-;    terminal window open twice". Pascal Script cannot pass CREATE_NO_WINDOW and
-;    neither can a [Run] entry, so the call now goes through
-;    keld-wizard-host --run, which can (see RunQuiet).
-;
-;    The ordering [Run] used to provide is preserved explicitly: ssPostInstall
-;    runs `signal setup` first, then registers the agent, so the daemon still
-;    comes up with a hook.json to read rather than idling on awaitConfig.
-;
-;    Re-adding it here would ALSO register the agent twice.
-
-; 2. THE CONSOLE FALLBACK, which a normal install no longer reaches.
-;
-;    Onboarding now happens in the "Set up Keld" wizard page (see [Code]), so this
-;    entry is gated on `Check: NeedsConsoleOnboarding` — true only when the page
-;    did not complete a pairing. That is a narrow set: a /SILENT push (where the
-;    page never runs, and `skipifsilent` already covers it), or a [Code] failure.
-;
-;    ⚠️ DO NOT DELETE THIS ENTRY just because the page normally handles setup.
-;    The page is the thing that can fail; this is what a machine falls back to
-;    when it does, and deleting it is how a fleet goes dark silently.
-;
-;    ⚠️ DO NOT ADD runhidden TO THIS LINE. It used to be `keld-agent.exe install`
-;    with `runhidden nowait`, which meant the interactive login ran where nobody
-;    could see or complete it, on a step Inno neither waited for nor could report.
-;    Every Windows machine registered its task and then idled forever, collecting
-;    nothing and saying nothing.
-;
-;    skipifsilent is correct HERE and only here: a /SILENT push must not block on a
-;    console waiting for a human. Such a machine is registered by entry 1 and
-;    finished with `keld-agent install --code <CODE>` from the management tool.
-; ⚠️ `unchecked` IS LOAD-BEARING: THIS MUST NEVER OPEN A CONSOLE BY ITSELF.
-;    It is a postinstall checkbox, which Inno TICKS BY DEFAULT — so on any
-;    install where the wizard page did not end paired, closing the installer
-;    launched this and left a blank console sitting on the desktop waiting for
-;    input. Measured on a real install and reported as "when the installer
-;    itself closed, another terminal opened, blank, and just sat there", on a
-;    product whose entire Windows story is that no terminal ever appears.
-;
-;    Unchecked keeps the fallback REACHABLE (see the note above about not
-;    deleting it — it is what a machine falls back to when the page fails) while
-;    making it a deliberate choice rather than a surprise. A person who needs it
-;    ticks it; nobody else ever sees a console.
-Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
-  Check: NeedsConsoleOnboarding; Flags: postinstall shellexec skipifsilent unchecked
+; `keld signal open` needs the NEW daemon's agent.json (port + per-start
+; secret), which is why ssPostInstall waits for it (WaitForAgent) before the
+; Finished page appears.
+Filename: "{app}\keld.exe"; Parameters: "signal open"; Description: "Open Keld Signal"; \
+  Flags: postinstall shellexec skipifsilent nowait
 
 [UninstallRun]
 ; UNINSTALL USED TO REMOVE THE FILES AND NOTHING ELSE, which left three things
@@ -266,150 +195,30 @@ Filename: "{sys}\taskkill.exe"; \
   Flags: runhidden; RunOnceId: "killstragglers"
 
 [Code]
-// ── Onboarding lives HERE, not in a console ──────────────────────────────────
+// ── This installer asks nothing about Keld ───────────────────────────────────
 //
-// The "Set up Keld" page redeems a setup code (or runs the browser device flow
-// with Atlas's approval page embedded in the wizard), then collects which AI
-// tools to configure. CurStepChanged(ssPostInstall) does every destructive step
-// afterwards.
+// There used to be a "Set up Keld" page here: it redeemed a setup code or ran
+// the browser device flow with Atlas's approval page embedded (keld-wizard-host
+// --panel), then asked which AI tools to configure. It was removed on 2026-09-29
+// (docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html, AC-10):
+// installers only install. Signal asks on first open, and the daemon's own
+// auto-setup (internal/agent/integrations) configures detected tools. What is
+// left is install plumbing — stop the agent, register it without a console,
+// wait for it to come up, and the uninstall cleanup.
 //
-// ⚠️ **THIS PAGE RENDERS; IT DECIDES NOTHING.** Every step runs `keld` and draws
-// the NDJSON it emits (internal/cli's --json seam). Auth, tool detection and path
-// resolution stay in Go, where they are tested. A Pascal reimplementation of any
-// of them is the defect this design exists to avoid — and this file has a history
-// of describing onboarding UI that was never built, so: if you are reading this
-// and there is no page on screen, the code below is what is wrong, not the doc.
-//
-// ⚠️ **EVERYTHING INTERACTIVE HAPPENS BEFORE THE INSTALL, and Inno's structure
-// forces it**: a CreateCustomPage page can only be placed ahead of wpReady, so a
-// person can still cancel while it is on screen. It therefore does only what is
-// safe to abandon — redeem a code (auth.json) and read which tools exist
-// (--dry-run writes nothing). Rewriting a tool's settings.json and registering
-// the logon task happen after the commit point.
-//
-// ⚠️ **NOTHING HERE BLOCKS, AND THAT IS NOT A STYLE CHOICE.** Pascal Script has
-// no message-pump call — there is no AppProcessMessages — so a loop waiting on a
-// device flow would freeze the wizard for minutes and Windows would mark it Not
-// Responding. Every step is therefore started and left running, and a WinAPI
-// SetTimer callback (the idiom Inno's own CodeDll.iss example uses) collects the
-// results on the wizard's existing message loop.
-//
-// ⚠️ **THERE IS NO HANDOFF FILE, and that is not an oversight.** macOS needs one
-// because its wizard pane and its postinstall script are different processes.
-// Inno's [Code] is ONE process for the life of the wizard, so the variables this
-// page sets are still here in CurStepChanged. Adding a handoff file would import
-// the whole stale-file failure surface — a cancelled install leaving one behind,
-// a version guard to detect that — for no benefit at all.
-
-const
-  RunNone     = 0;
-  RunIdentity = 1;
-  RunSignIn   = 2;
-  RunTools    = 3;
-
-  TickMs = 200;
-  // Bound the work one tick may do: a burst of events must not turn a timer
-  // callback into a visible stall.
-  MaxEventsPerTick = 25;
-
-function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
-  external 'SetTimer@user32.dll stdcall';
-function KillTimer(hWnd, nIDEvent: Longword): BOOL;
-  external 'KillTimer@user32.dll stdcall';
-
-// The wizard's own pid, handed to every helper so a killed wizard — which writes
-// no cancel sentinel — still reaps its children.
-function GetCurrentProcessId: DWORD;
-  external 'GetCurrentProcessId@kernel32.dll stdcall';
+// installers/windows/keld_agent_iss_test.sh fails if a custom page, a sign-in
+// run or a tool step comes back.
 
 var
-  SetupPage: TWizardPage;
-  AccountHdr, StatusLbl, ToolsHdr, RestartLbl: TNewStaticText;
-  RetryBtn: TNewButton;
-  WebPanel: TPanel;
-  LoadingBar: TNewProgressBar;
-  ToolChecks: array of TNewCheckBox;
-  ToolNames: array of String;
-
-  Paired: Boolean;
-  PairedAPIURL: String;
-  IdentityChecked: Boolean;
-  SignInStarted: Boolean;
-  ApprovalShown: Boolean;
-  PanelRunning: Boolean;
-
-  TmpKeld, TmpHost, CancelFile, PanelStopFile, TraceFile: String;
-  TimerID: Longword;
-  RunCounter: Integer;
-
-  // The one run in flight, if any.
-  Mode: Integer;
-  RunDir: String;
-  RunSeqNo: Integer;
-
-  PanelDir: String;
-  PanelSeqNo: Integer;
-
-  // Filled by the event handler, read when the run finishes.
-  EvIdentityStatus, EvPrincipal, EvOrg, EvAPIURL, EvError: String;
-  EvUserCode, EvApprovalURL: String;
-  PendingNames, PendingDisplays, PendingActions: TArrayOfString;
-
-procedure StartTools; forward;
-procedure BrowserSignIn; forward;
-procedure CheckIdentity; forward;
-procedure OnRunFinished(FinishedMode: Integer); forward;
-
-// ── Small helpers ────────────────────────────────────────────────────────────
-
-// JsonStr pulls one string field out of a flat event object.
-//
-// ⚠️ Deliberately NOT a JSON parser. The events are flat objects written by Go,
-// one per file, and every field this page reads is a string. Escaped quotes are
-// skipped so a message containing one cannot truncate the value; \\ and \" are
-// unescaped on the way out, which is every escape Go's encoder emits for these
-// fields.
-function JsonStr(const S, Key: String): String;
-var
-  Pat, Val: String;
-  P, Q: Integer;
-begin
-  Result := '';
-  Pat := '"' + Key + '":"';
-  P := Pos(Pat, S);
-  if P = 0 then
-    exit;
-  P := P + Length(Pat);
-  Q := P;
-  while Q <= Length(S) do
-  begin
-    if S[Q] = '\' then
-      Q := Q + 2
-    else if S[Q] = '"' then
-      break
-    else
-      Q := Q + 1;
-  end;
-  Val := Copy(S, P, Q - P);
-  StringChangeEx(Val, '\"', '"', True);
-  StringChangeEx(Val, '\\', '\', True);
-  Result := Val;
-end;
-
-function Pad4(N: Integer): String;
-begin
-  Result := IntToStr(N);
-  while Length(Result) < 4 do
-    Result := '0' + Result;
-end;
+  TraceFile: String;
 
 // Trace appends one line to a fixed path, so a run that goes wrong leaves
 // evidence rather than a description.
 //
 // ⚠️ It writes OUTSIDE {tmp} on purpose: Inno deletes {tmp} when the wizard
 // closes, taking the helper's event files with it, so a log kept there is gone
-// exactly when it is wanted. The page state is ids and statuses — no code, no
-// token, no URL query.
+// exactly when it is wanted. It records steps and exit codes only — no token,
+// no secret, no URL query.
 procedure Trace(const S: String);
 var
   Existing: AnsiString;
@@ -421,601 +230,7 @@ begin
   SaveStringToFile(TraceFile, Existing + S + #13#10, False);
 end;
 
-procedure SetStatus(const S: String);
-begin
-  StatusLbl.Caption := S;
-  Trace('status: ' + S);
-end;
-
-function NewRunDir: String;
-begin
-  RunCounter := RunCounter + 1;
-  Result := ExpandConstant('{tmp}\keldrun') + IntToStr(RunCounter);
-  CreateDir(Result);
-end;
-
-// ── Driving keld ─────────────────────────────────────────────────────────────
-
-// StartRun launches one `keld` invocation and RETURNS IMMEDIATELY. The timer
-// below collects its events.
-function StartRun(NewMode: Integer; const Args: String): Boolean;
-var
-  Params: String;
-  RC: Integer;
-begin
-  RunDir := NewRunDir;
-  RunSeqNo := 1;
-  EvError := '';
-  Params := '--run "' + TmpKeld + '" --events-dir "' + RunDir + '"' +
-            ' --sentinel "' + CancelFile + '"' +
-            ' --parent-pid ' + IntToStr(GetCurrentProcessId) +
-            ' -- ' + Args;
-  Trace('run start mode=' + IntToStr(NewMode) + ' args=' + Args);
-  Result := Exec(TmpHost, Params, '', SW_HIDE, ewNoWait, RC);
-  if not Result then
-    Trace('run start FAILED to exec ' + TmpHost);
-  if Result then
-    Mode := NewMode
-  else
-    Mode := RunNone;
-end;
-
-procedure HandleEvent(const Line: String);
-var
-  Ev: String;
-  N: Integer;
-begin
-  Ev := JsonStr(Line, 'event');
-
-  if Ev = 'error' then
-  begin
-    EvError := JsonStr(Line, 'message');
-    exit;
-  end;
-
-  case Mode of
-    RunIdentity:
-      if Ev = 'identity' then
-      begin
-        EvIdentityStatus := JsonStr(Line, 'status');
-        EvPrincipal := JsonStr(Line, 'principal');
-        EvOrg := JsonStr(Line, 'org');
-        EvAPIURL := JsonStr(Line, 'api_url');
-      end;
-
-    RunSignIn:
-      begin
-        if Ev = 'device_code' then
-        begin
-          EvUserCode := JsonStr(Line, 'user_code');
-          // ⚠️ Prefer Atlas's compact route. `verification_url` is the page built
-          // for a real browser window and does not fit a wizard panel;
-          // `installer_url` is the same approval sized for an embedded view. It
-          // is ABSENT on an Atlas that predates it, and that case must still
-          // work — hence the fallback rather than a requirement.
-          EvApprovalURL := JsonStr(Line, 'installer_url');
-          if EvApprovalURL = '' then
-            EvApprovalURL := JsonStr(Line, 'verification_url');
-        end
-        else if Ev = 'authorized' then
-        begin
-          Paired := True;
-          EvPrincipal := JsonStr(Line, 'principal');
-          EvOrg := JsonStr(Line, 'org');
-          PairedAPIURL := JsonStr(Line, 'api_url');
-        end;
-      end;
-
-    RunTools:
-      if Ev = 'tool' then
-      begin
-        N := GetArrayLength(PendingNames);
-        SetArrayLength(PendingNames, N + 1);
-        SetArrayLength(PendingDisplays, N + 1);
-        SetArrayLength(PendingActions, N + 1);
-        PendingNames[N] := JsonStr(Line, 'name');
-        PendingDisplays[N] := JsonStr(Line, 'display');
-        PendingActions[N] := JsonStr(Line, 'action');
-      end;
-  end;
-end;
-
-// ── The embedded approval panel ──────────────────────────────────────────────
-
-// ⚠️ THE FIELDS ARE ATLAS'S, NOT OURS, AND THAT IS THE ENTIRE POINT. A native
-// email/password form here would work, and would make this installer an auth
-// client handling somebody's org password, dead-end the day Atlas gains SSO,
-// break password-manager autofill, and teach people that typing credentials into
-// an installer is normal — anyone can build a lookalike installer; only a real
-// page can prove its own origin. Rendering Atlas's page costs none of that, and
-// the wizard still never sends anyone to another app.
-procedure StartPanel(const URL: String);
-var
-  Params: String;
-  RC: Integer;
-begin
-  DeleteFile(PanelStopFile);
-  PanelDir := NewRunDir;
-  PanelSeqNo := 1;
-  Params := '--panel ' + IntToStr(WebPanel.Handle) +
-            ' --url "' + URL + '"' +
-            ' --inset 1' +
-            ' --events-dir "' + PanelDir + '"' +
-            ' --sentinel "' + PanelStopFile + '"' +
-            ' --parent-pid ' + IntToStr(GetCurrentProcessId);
-  if Exec(TmpHost, Params, '', SW_HIDE, ewNoWait, RC) then
-    PanelRunning := True;
-end;
-
-procedure ShowToolSection(Visible: Boolean);
-var
-  I: Integer;
-begin
-  ToolsHdr.Visible := Visible;
-  for I := 0 to GetArrayLength(ToolChecks) - 1 do
-    ToolChecks[I].Visible := Visible;
-end;
-
-// An Inno wizard page has a FIXED height, so the approval panel borrows the
-// space of the sections below it rather than pushing them off the bottom.
-// ⚠️ THE PANEL STAYS HIDDEN UNTIL THE PAGE HAS LOADED. Embedding succeeds the
-// instant the control exists — before a byte of Atlas has arrived — so revealing
-// it here shows an empty rectangle for however long the network takes, which
-// reads as a broken installer rather than a loading one. A marquee bar holds the
-// space until the helper reports `loaded` (see DrainPanel).
-procedure ShowApproval(const URL: String);
-begin
-  ApprovalShown := True;
-  ShowToolSection(False);
-  RestartLbl.Visible := False;
-  RetryBtn.Visible := False;
-  // ⚠️ **THE PANEL MUST BE VISIBLE BEFORE StartPanel, AND HIDING IT HERE IS WHAT
-  // MADE THE SIGN-IN PAGE RENDER NOTHING.** StartPanel hands WebPanel.Handle to
-  // the helper, which creates the WebView2 controller as a child of it. A
-  // controller created under a HIDDEN parent never starts rendering, and making
-  // the parent visible afterwards does not notify it — so the page loaded, its
-  // JavaScript ran (proved by atlas.keld.co bytes in the WebView2 code cache),
-  // and nothing was ever painted.
-  //
-  // This line and the height-fitting ratchet both arrived in 31cafa0 ("fit
-  // height only, and show a real loading state"), which is exactly when the page
-  // stopped rendering — reported as "this used to work", and it did.
-  //
-  // The loading state survives: the status line says what is happening and the
-  // marquee rides ON TOP of the panel. WebPanel is created after LoadingBar so
-  // it wins z-order by default; BringToFront is what keeps the bar visible.
-  WebPanel.Visible := True;
-  SetStatus('Loading the Keld sign-in page…');
-  LoadingBar.Visible := True;
-  LoadingBar.BringToFront;
-  StartPanel(URL);
-end;
-
-procedure HideApproval;
-begin
-  if PanelRunning then
-  begin
-    SaveStringToFile(PanelStopFile, 'stop', False);
-    PanelRunning := False;
-  end;
-  ApprovalShown := False;
-  WebPanel.Visible := False;
-  LoadingBar.Visible := False;
-end;
-
-// DrainPanel notices the one thing the page must react to: a machine with no
-// WebView2 runtime, where the panel can never appear and the person would
-// otherwise be left staring at an empty rectangle.
-procedure DrainPanel;
-var
-  F, Status: String;
-  Lines: TArrayOfString;
-  RC: Integer;
-begin
-  F := AddBackslash(PanelDir) + Pad4(PanelSeqNo) + '.json';
-  if not FileExists(F) then
-    exit;
-  PanelSeqNo := PanelSeqNo + 1;
-  if not (LoadStringsFromFile(F, Lines) and (GetArrayLength(Lines) > 0)) then
-    exit;
-  if JsonStr(Lines[0], 'event') <> 'panel' then
-    exit;
-  Status := JsonStr(Lines[0], 'status');
-  Trace('panel status=' + Status);
-
-  // `embedded` only means the control exists — keep the loading bar up.
-  if Status = 'embedded' then
-    exit;
-
-  // `loaded` is the page having actually rendered: swap the bar for the panel.
-  if Status = 'loaded' then
-  begin
-    LoadingBar.Visible := False;
-    WebPanel.Visible := True;
-    SetStatus('Sign in to approve this device.');
-    exit;
-  end;
-
-  // ⚠️ **ONLY A KNOWN FAILURE FALLS BACK. ANYTHING ELSE IS IGNORED.** This used
-  // to be an unconditional else, so ANY status the wizard did not recognise
-  // tore down the panel and launched a browser. Adding one diagnostic event to
-  // the helper (`metrics`, reporting the window size against the page's
-  // viewport) was therefore enough to eject a WORKING embed: the form rendered
-  // on `loaded`, the next event arrived, and the panel was replaced by a
-  // browser window a second later.
-  //
-  // An unrecognised status means a helper newer than this script, which is
-  // normal — the two ship in one installer but are edited separately — and it
-  // is never evidence that the embed failed. Falling back on it is a confident
-  // negative from a check nobody performed, which is the failure mode this
-  // codebase refuses everywhere else.
-  //
-  // The browser is a LAST RESORT, not a default. Keep this list closed.
-  if (Status <> 'no_runtime') and (Status <> 'failed') then
-    exit;
-
-  // Degraded, stated, and still no console: the approval opens in the default
-  // browser and the device-flow poll carries on unchanged.
-  //
-  // ⚠️ DO NOT "FIX" THIS BY BUNDLING THE WEBVIEW2 EVERGREEN BOOTSTRAPPER. It is a
-  // ~150 MB install-time download, for a case this fallback already covers, and
-  // it needs admin rights this installer deliberately never asks for
-  // (PrivilegesRequired=lowest).
-  Trace('panel FELL BACK to browser on status=' + Status);
-  WebPanel.Visible := False;
-  LoadingBar.Visible := False;
-  PanelRunning := False;
-  SetStatus('Approve this device in the browser window that just opened.');
-  if EvApprovalURL <> '' then
-    ShellExec('open', EvApprovalURL, '', '', SW_SHOW, ewNoWait, RC);
-end;
-
-// DrainRun reads the in-flight run's event files in order.
-//
-// ⚠️ **A PUBLISHED FILE IS COMPLETE.** The helper writes <n>.tmp and renames it,
-// so a file that exists can be read whole. That is why this reads numbered files
-// rather than tailing one stream: a half-written line is a truncated JSON object
-// this page would silently drop, and for `authorized` — the LAST event a login
-// writes — dropping it means a paired machine the wizard believes is unpaired.
-procedure DrainRun;
-var
-  F: String;
-  Lines: TArrayOfString;
-  Handled, FinishedMode: Integer;
-begin
-  Handled := 0;
-  while Handled < MaxEventsPerTick do
-  begin
-    F := AddBackslash(RunDir) + Pad4(RunSeqNo) + '.json';
-    if not FileExists(F) then
-      exit;
-    RunSeqNo := RunSeqNo + 1;
-    Handled := Handled + 1;
-    if LoadStringsFromFile(F, Lines) and (GetArrayLength(Lines) > 0) then
-    begin
-      if JsonStr(Lines[0], 'event') = '__exit' then
-      begin
-        Trace('run finished mode=' + IntToStr(Mode) + ' msg=' + JsonStr(Lines[0], 'message'));
-        // ⚠️ A RUN THAT NEVER STARTED IS NOT A RUN THAT ANSWERED NO. The helper
-        // reports the reason on __exit; without capturing it here the page said
-        // "Sign-in didn't finish" when Windows had refused to launch keld.exe at
-        // all — a confident negative from a check nobody performed, which is the
-        // one thing this codebase refuses to publish anywhere else either.
-        if (EvError = '') and (JsonStr(Lines[0], 'message') <> '') then
-          EvError := JsonStr(Lines[0], 'message');
-        FinishedMode := Mode;
-        Mode := RunNone;
-        OnRunFinished(FinishedMode);
-        exit;
-      end;
-      Trace('  event=' + JsonStr(Lines[0], 'event'));
-      HandleEvent(Lines[0]);
-      // A device_code arrives MID-RUN and the panel must go up now, not when the
-      // run finishes — the run does not finish until the person has approved.
-      //
-      // ⚠️ **SCOPED TO THE SIGN-IN RUN, AND WITHOUT THAT IT RESURRECTS THE PANEL
-      // OVER THE NEXT STEP.** This condition is evaluated for EVERY event of
-      // EVERY run. `EvApprovalURL` is only cleared when a sign-in STARTS, and
-      // HideApproval sets `ApprovalShown` back to False — so once sign-in
-      // succeeded, both halves were true again and the first `tool` event of the
-      // NEXT run re-launched the whole approval panel: a second WebView2,
-      // re-navigating to the sign-in page, behind the tool checkboxes.
-      //
-      // Reported as the checklist "on top of the old sign in page as if the
-      // video memory wasn't cleared" — which is exactly what it looks like, and
-      // is not a repaint bug at all: the page underneath was live. It also ate
-      // the 5-10 seconds before Next came back, because the panel was starting
-      // a browser while the tools run was still going.
-      if (Mode = RunSignIn) and (EvApprovalURL <> '') and not ApprovalShown then
-      begin
-        SetStatus('Sign in to approve this device.');
-        ShowApproval(EvApprovalURL);
-      end;
-    end;
-  end;
-end;
-
-// The wizard's own message loop dispatches this, so the window keeps painting
-// and responding while a device flow runs for as long as it takes.
-procedure TimerProc(H, Msg, Ev, Time: Longword);
-begin
-  if Mode <> RunNone then
-    DrainRun;
-  if PanelRunning then
-    DrainPanel;
-end;
-
-// ── Steps ────────────────────────────────────────────────────────────────────
-
-procedure RenderTools;
-var
-  I, N, Y: Integer;
-  Title: String;
-begin
-  N := GetArrayLength(PendingNames);
-  SetArrayLength(ToolChecks, N);
-  SetArrayLength(ToolNames, N);
-  Y := ScaleY(118);
-  for I := 0 to N - 1 do
-  begin
-    ToolNames[I] := PendingNames[I];
-    Title := PendingDisplays[I];
-    if Title = '' then
-      Title := PendingNames[I];
-    // `action` is one of configured | already_configured | skipped_conflict |
-    // will_configure. Everything except skipped_conflict is tickable and ticked
-    // by default.
-    if PendingActions[I] = 'skipped_conflict' then
-      Title := Title + ' — has its own telemetry settings; leave it alone';
-    ToolChecks[I] := TNewCheckBox.Create(SetupPage);
-    ToolChecks[I].Parent := SetupPage.Surface;
-    ToolChecks[I].SetBounds(0, Y, SetupPage.SurfaceWidth, ScaleY(17));
-    ToolChecks[I].Caption := Title;
-    ToolChecks[I].Checked := PendingActions[I] <> 'skipped_conflict';
-    Y := Y + ScaleY(20);
-  end;
-
-  RestartLbl.Top := Y + ScaleY(4);
-  if N = 0 then
-    RestartLbl.Caption := 'No supported AI tools found on this device.'
-  else
-    // ⚠️ SAY THIS OUT LOUD. A tool reads its telemetry configuration ONCE, at
-    // startup, so one already running keeps posting wherever it was pointed when
-    // it launched — and nothing on the machine can detect or fix that from the
-    // outside. Measured: a session started before setup ran emitted 0 telemetry
-    // events over 11 hours while its blocks published normally.
-    RestartLbl.Caption := 'Restart these apps after setup — they read their settings once, at startup.';
-  RestartLbl.Visible := True;
-  ToolsHdr.Visible := True;
-end;
-
-procedure StartTools;
-begin
-  SetArrayLength(PendingNames, 0);
-  SetArrayLength(PendingDisplays, 0);
-  SetArrayLength(PendingActions, 0);
-  // ⚠️ Next is disabled until this finishes. A person who clicked through while
-  // the list was still loading would reach ssPostInstall with no ticked tools,
-  // and the empty-selection rule there would correctly configure nothing — for a
-  // choice they never made.
-  WizardForm.NextButton.Enabled := False;
-  // ⚠️ AND SAY SO. MarkConnected has just printed "Connected — …" and enabled
-  // Next; this disables it again to enumerate tools, which takes long enough to
-  // notice. Without a word of explanation that reads as the installer having
-  // frozen at the exact moment the person expects to continue — reported as
-  // "the Next button remained disabled… it was not clear that anything was
-  // happening". The marquee says only "still working", which is all anything
-  // here knows.
-  SetStatus('Checking which AI tools are installed…');
-  LoadingBar.Visible := True;
-  LoadingBar.BringToFront;
-  // --dry-run writes NOTHING: it enumerates what is installed and returns before
-  // any write, which is what makes it safe to run before the commit point.
-  if not StartRun(RunTools, 'signal setup --dry-run --json') then
-  begin
-    LoadingBar.Visible := False;
-    SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
-    WizardForm.NextButton.Enabled := True;
-  end;
-end;
-
-procedure MarkConnected;
-begin
-  Paired := True;
-  RetryBtn.Visible := False;
-  SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
-  WizardForm.NextButton.Enabled := True;
-end;
-
-// BrowserSignIn runs the OAuth device-authorization flow with Atlas's approval
-// page embedded in the panel.
-//
-// ⚠️ `--no-browser` is LOAD-BEARING: without it the CLI opens the verification
-// URL itself, putting the same approval in two places at once — one of them the
-// browser this page exists to avoid sending anyone to.
-//
-// ⚠️ **THE USER CODE IS DELIBERATELY NOT SHOWN, AND THIS COMMENT USED TO ARGUE
-// THE OPPOSITE.** The rule it invoked is real — device flow's protection against
-// being phished into approving someone else's sign-in is that the code on screen
-// matches the code on the page being approved — but it does not reach this flow.
-// Atlas's embedded route reads the code from its own URL and posts it
-// (services/web/app/cli/installer/page.tsx); it never renders it. So there was
-// nothing on screen to compare against, and displaying a code beside a page that
-// does not show one asks the person to verify a match they cannot perform. A
-// check nobody can carry out is worse than no check: it looks like one.
-//
-// The protection that DOES apply here is that the code never left this process —
-// the page fetched it and put it in the URL itself, with no human in the loop to
-// mistype or be redirected.
-procedure BrowserSignIn;
-begin
-  if SignInStarted then
-    exit;
-  SignInStarted := True;
-  SetStatus('Signing in to Keld…');
-  // ⚠️ THE CODE FIELD GOES NOW, NOT WHEN THE PANEL APPEARS. It used to survive
-  // until `device_code` arrived — a network round trip — so the page sat there
-  // offering "paste a setup code / Connect" underneath the words "Signing in to
-  // Keld…", inviting a second, conflicting action while the first was in flight.
-  RetryBtn.Visible := False;
-  LoadingBar.Visible := True;
-  EvUserCode := '';
-  EvApprovalURL := '';
-  if not StartRun(RunSignIn, 'login --json --no-browser') then
-  begin
-    SignInStarted := False;
-    SetStatus('Could not start sign-in. Try again, or paste a setup code.');
-    RetryBtn.Visible := True;
-  end;
-end;
-
-// CheckIdentity asks whether this machine is ALREADY connected, and asks ATLAS
-// rather than looking for auth.json.
-//
-// ⚠️ `keld whoami` on its own never contacts Atlas — it prints what a local file
-// says — so a revoked token and a live one are indistinguishable to it. Enabling
-// Next on that basis would let someone install with a dead credential and
-// collect nothing, which is the confused state this page exists to prevent.
-// `--verify` performs the same Onboarding() call ssPostInstall will make minutes
-// later, so a verified answer predicts that step rather than merely correlating
-// with it.
-procedure CheckIdentity;
-begin
-  // ⚠️ EXTRACT BEFORE FIRST USE. A `dontcopy` file is stored INSIDE setup.exe and
-  // is not on disk until ExtractTemporaryFile puts it there; without this the
-  // page would drive two paths that do not exist and every run would fail to
-  // start. Both are needed: the CLI, and the helper that runs it.
-  if TmpKeld = '' then
-  begin
-    ExtractTemporaryFile('keld.exe');
-    ExtractTemporaryFile('keld-wizard-host.exe');
-    TmpKeld := ExpandConstant('{tmp}\keld.exe');
-    TmpHost := ExpandConstant('{tmp}\keld-wizard-host.exe');
-  end;
-
-  SetStatus('Checking this PC…');
-  RetryBtn.Visible := False;
-  EvIdentityStatus := '';
-  if not StartRun(RunIdentity, 'whoami --verify --json') then
-  begin
-    SetStatus('Could not check this PC. Try again.');
-    RetryBtn.Visible := True;
-  end;
-end;
-
-procedure RetryClick(Sender: TObject);
-begin
-  if Mode <> RunNone then
-    exit;
-  SignInStarted := False;
-  CheckIdentity;
-end;
-
-procedure AfterIdentity;
-begin
-  Trace('AfterIdentity status=' + EvIdentityStatus);
-
-  // ⚠️ NO STATUS AT ALL MEANS THE CHECK NEVER RAN. `whoami --verify --json`
-  // always emits an `identity` event, so an empty status is not a fourth kind of
-  // answer — it is the absence of one, and the only case seen in the wild is
-  // Windows refusing to launch keld.exe (Smart App Control blocks unsigned
-  // binaries, and the page drives a copy extracted to {tmp}). Reporting it as an
-  // ordinary sign-in failure sent people to retry something that cannot succeed.
-  if EvIdentityStatus = '' then
-  begin
-    if EvError <> '' then
-      SetStatus('Keld could not run a required component: ' + EvError)
-    else
-      SetStatus('Keld could not check this PC. Try again.');
-    RetryBtn.Visible := True;
-    WizardForm.NextButton.Enabled := False;
-    exit;
-  end;
-  if EvIdentityStatus = 'verified' then
-  begin
-    PairedAPIURL := EvAPIURL;
-    MarkConnected;
-    StartTools;
-    exit;
-  end;
-
-  if EvIdentityStatus = 'unreachable' then
-  begin
-    // ⚠️ THE THREE FAILURE STATES ARE NOT INTERCHANGEABLE. This one means we
-    // learned NOTHING about the credential, so the install must not proceed —
-    // there is deliberately no button that continues unverified.
-    SetStatus('Can''t reach Atlas — Keld can''t be set up right now.');
-    RetryBtn.Visible := True;
-    WizardForm.NextButton.Enabled := False;
-    exit;
-  end;
-
-  // `none` or `unauthorized`: this machine needs connecting, and there is exactly
-  // one way to do it — Atlas's own sign-in page, in the panel below.
-  //
-  // ⚠️ **THERE IS NO SETUP-CODE FIELD, AND ITS REMOVAL IS THE POINT.** The page
-  // began as a port of the macOS pane, which offers one because the pkg's flow
-  // starts from a code on the download page. This flow does not: the page fetches
-  // the code itself, puts it in the URL, and Atlas's route redeems it — nothing
-  // is ever shown to the person to copy, type or check. Keeping the field meant
-  // offering a second, conflicting way in that nobody needs and that this flow
-  // cannot even produce a code for. The clipboard read went with it, for the same
-  // reason: there is nothing for a pasted code to do here.
-  BrowserSignIn;
-end;
-
-procedure AfterLogin;
-begin
-  Trace('AfterLogin paired=' + IntToStr(Integer(Paired)) + ' err=' + EvError);
-  HideApproval;
-
-  if Paired then
-  begin
-    // ⚠️ RETIRE THE APPROVAL URL ONCE IT HAS BEEN USED. The Mode guard in
-    // DrainRun is the structural fix for the panel coming back; this is the
-    // other half, and it matters on its own: a spent device code is no longer
-    // approvable, so anything that later reached for this URL — the no-WebView2
-    // browser fallback, a retry — would send someone to a page that cannot work.
-    EvApprovalURL := '';
-    EvUserCode := '';
-    MarkConnected;
-    StartTools;
-    exit;
-  end;
-
-  // All-or-nothing: Next stays disabled and the only way on is to try again.
-  SignInStarted := False;
-  if EvError <> '' then
-    SetStatus('Sign-in didn''t finish (' + EvError + '). Try again.')
-  else
-    SetStatus('Sign-in didn''t finish. Try again.');
-  RetryBtn.Visible := True;
-end;
-
-procedure OnRunFinished(FinishedMode: Integer);
-begin
-  case FinishedMode of
-    RunIdentity:
-      AfterIdentity;
-    RunSignIn:
-      AfterLogin;
-    RunTools:
-      begin
-        LoadingBar.Visible := False;
-        RenderTools;
-        // Back to the fact that matters once the list is on screen.
-        if Paired then
-          SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
-        WizardForm.NextButton.Enabled := Paired;
-      end;
-  end;
-end;
-
-// ── Wizard plumbing ──────────────────────────────────────────────────────────
-
 procedure InitializeWizard();
-var
-  W: Integer;
 begin
   // HIDE THE PER-FILE LABEL ON THE INSTALLING PAGE.
   //
@@ -1031,97 +246,6 @@ begin
 
   TraceFile := ExpandConstant('{%TEMP}\keld-wizard-trace.log');
   DeleteFile(TraceFile);
-  CancelFile := ExpandConstant('{tmp}\keld-wizard-cancel');
-  PanelStopFile := ExpandConstant('{tmp}\keld-wizard-panel-stop');
-
-  SetupPage := CreateCustomPage(wpInfoBefore, 'Set up Keld',
-    'Sign this device in to your Keld account.');
-  W := SetupPage.SurfaceWidth;
-
-  AccountHdr := TNewStaticText.Create(SetupPage);
-  AccountHdr.Parent := SetupPage.Surface;
-  AccountHdr.SetBounds(0, 0, W, ScaleY(15));
-  AccountHdr.Font.Style := [fsBold];
-  AccountHdr.Caption := 'Your Keld account';
-
-  StatusLbl := TNewStaticText.Create(SetupPage);
-  StatusLbl.Parent := SetupPage.Surface;
-  StatusLbl.SetBounds(0, ScaleY(50), W, ScaleY(32));
-  StatusLbl.WordWrap := True;
-  StatusLbl.Caption := 'Checking this PC…';
-
-  RetryBtn := TNewButton.Create(SetupPage);
-  RetryBtn.Parent := SetupPage.Surface;
-  RetryBtn.SetBounds(0, ScaleY(84), ScaleX(90), ScaleY(23));
-  RetryBtn.Caption := 'Try again';
-  RetryBtn.OnClick := @RetryClick;
-  RetryBtn.Visible := False;
-
-  // Marquee, not a percentage: nothing here knows how far along a page load or a
-  // device-flow round trip is, and a progress bar that invents a number is worse
-  // than one that only says "still working".
-  LoadingBar := TNewProgressBar.Create(SetupPage);
-  LoadingBar.Parent := SetupPage.Surface;
-  LoadingBar.SetBounds(0, ScaleY(72), W, ScaleY(12));
-  LoadingBar.Style := npbstMarquee;
-  LoadingBar.Visible := False;
-
-  WebPanel := TPanel.Create(SetupPage);
-  WebPanel.Parent := SetupPage.Surface;
-  WebPanel.SetBounds(0, ScaleY(70), W, SetupPage.SurfaceHeight - ScaleY(74));
-  WebPanel.BevelOuter := bvNone;
-  WebPanel.Caption := '';
-  // A dark-gray hairline around the embedded page. It IS the panel showing
-  // through: the helper cannot paint on a window this process owns, so it insets
-  // its webview by one pixel (--inset, below) and this colour fills the ring.
-  // A panel colour that fails to apply costs the border and nothing else.
-  WebPanel.Color := $00595959;
-  WebPanel.Visible := False;
-
-  ToolsHdr := TNewStaticText.Create(SetupPage);
-  ToolsHdr.Parent := SetupPage.Surface;
-  ToolsHdr.SetBounds(0, ScaleY(98), W, ScaleY(15));
-  ToolsHdr.Font.Style := [fsBold];
-  ToolsHdr.Caption := 'Your AI tools';
-  ToolsHdr.Visible := False;
-
-  RestartLbl := TNewStaticText.Create(SetupPage);
-  RestartLbl.Parent := SetupPage.Surface;
-  RestartLbl.SetBounds(0, ScaleY(200), W, ScaleY(30));
-  RestartLbl.WordWrap := True;
-  RestartLbl.Visible := False;
-
-  TimerID := SetTimer(0, 0, TickMs, CreateCallback(@TimerProc));
-end;
-
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID <> SetupPage.ID then
-    exit;
-
-  // ⚠️ RE-ASSERT THE GATE ON EVERY ENTRY. Inno resets NextButton.Enabled when it
-  // changes page, so a gate set once leaks open the moment someone goes Back and
-  // forward again — and this page's whole job is that a machine cannot finish the
-  // install unconnected.
-  WizardForm.NextButton.Enabled := Paired and (Mode = RunNone);
-
-  if not IdentityChecked then
-  begin
-    IdentityChecked := True;
-    CheckIdentity;
-  end;
-end;
-
-// The console fallback runs only when this page did not complete a pairing.
-//
-// ⚠️ NARROWER THAN macOS'S CONDITION, AND DELIBERATELY SO. The pkg gates on BOTH
-// "no handoff file" AND "no hook.json", because its wizard pane can fail to load
-// with no diagnostic at all and because "Set up later" is a reachable choice
-// there. Neither applies here: there is no separate process to fail to load, and
-// there is no "Set up later". So the question is simply whether this page paired.
-function NeedsConsoleOnboarding: Boolean;
-begin
-  Result := not Paired;
 end;
 
 // PrepareToInstall stops the running agent BEFORE any file is replaced.
@@ -1248,60 +372,69 @@ begin
   Trace('RunQuiet ' + Exe + ' rc=' + IntToStr(Result));
 end;
 
+// KeldHome is where the daemon reads and writes. KELD_HOME is honoured, because
+// assuming %USERPROFILE%\.keld would watch (or offer to delete) a directory that
+// is not the one in use.
+function KeldHome: String;
+begin
+  Result := GetEnv('KELD_HOME');
+  if Result = '' then
+    Result := ExpandConstant('{%USERPROFILE}\.keld');
+end;
+
+// WaitForAgent waits, bounded, for the daemon just started to write agent.json.
+//
+// ⚠️ `keld signal open` — the Finished page's "Open Keld Signal" — reads that
+// file for the page's port and its per-start secret. On a FIRST install it does
+// not exist until the daemon writes it, so opening too early prints "not
+// running" into a console that closes at once: the person sees nothing open. On
+// an UPGRADE it holds the PREVIOUS daemon's port and secret (PrepareToInstall
+// killed that daemon), so opening too early lands on a dead port. Either way the
+// one thing an interactive install now ends with does not happen. So wait for
+// the content to CHANGE from what it was before registration, not merely exist.
+//
+// Bounded because Pascal Script cannot pump messages while it sleeps: a daemon
+// that never starts must not wedge the wizard. Normally this returns in well
+// under a second. Past the bound, the Finished page still offers the step, and
+// the app/page recovers on its own once the daemon is up.
+procedure WaitForAgent(const Before: AnsiString);
+var
+  Path: String;
+  Cur: AnsiString;
+  I: Integer;
+begin
+  Path := AddBackslash(KeldHome) + 'agent.json';
+  for I := 1 to 40 do
+  begin
+    if LoadStringFromFile(Path, Cur) and (Cur <> '') and (Cur <> Before) then
+    begin
+      Trace('agent.json written after ' + IntToStr(I * 250) + ' ms');
+      exit;
+    end;
+    Sleep(250);
+  end;
+  Trace('agent.json not rewritten within 10 s; Signal may open before the agent is up');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Args: String;
-  I, RC: Integer;
-  AnyTicked: Boolean;
+  RC: Integer;
+  AgentBefore: AnsiString;
 begin
   if CurStep <> ssPostInstall then
     exit;
 
-  // ⚠️ **EVERYTHING BELOW IS GATED ON `Paired` EXCEPT THE REGISTRATION, AND
-  // THAT ASYMMETRY IS LOAD-BEARING.** This procedure used to `exit` here when
-  // unpaired, which was correct while registering the agent lived in [Run] and
-  // happened unconditionally. Moving it in here made that early return skip it
-  // — so an MDM /SILENT push, where the wizard page never runs and Paired is
-  // always false, would have installed the files and registered NOTHING,
-  // silently. That is the exact failure `keld_agent_iss_test.sh` guard #1 was
-  // written for, and it is what caught this.
-  if Paired then
-  begin
+  // ⚠️ NOTHING HERE DEPENDS ON ANYTHING A PERSON DID. There used to be a tool
+  // step gated on the removed wizard page's pairing, and while registration sat
+  // behind the same gate an MDM /SILENT push (page never runs) installed the
+  // files and registered NOTHING, silently. Now registration is all there is,
+  // and keld_agent_iss_test.sh fails if a pairing state returns here.
+  if not LoadStringFromFile(AddBackslash(KeldHome) + 'agent.json', AgentBefore) then
+    AgentBefore := '';
 
-  // ⚠️ AN EMPTY SELECTION MUST CONFIGURE NOTHING, NOT EVERYTHING.
-  // `tools.Select(nil)` reads "no --tool flags at all" as "configure every
-  // detected adapter". That is right when the page never ran, and wrong when the
-  // page DID run and every checkbox was unticked — that person made a choice.
-  AnyTicked := False;
-  for I := 0 to GetArrayLength(ToolChecks) - 1 do
-    if ToolChecks[I].Checked then
-      AnyTicked := True;
-  // ⚠️ AN EMPTY SELECTION SKIPS TOOL CONFIGURATION, NOT THE WHOLE STEP. This
-  // used to `exit` here, which also skipped registering the agent below — so a
-  // person who unticked every tool got no daemon at all. Configuring nothing is
-  // their choice; not installing the product is not.
-  if AnyTicked then
-  begin
-    // ⚠️ --bin-path PINS THE INSTALLED BINARY. The page drove {tmp}\keld.exe, a
-    // path that stops existing when the wizard closes; without this flag every
-    // hook written here points at it and silently never runs.
-    Args := 'signal setup --yes --bin-path "' + ExpandConstant('{app}\keld.exe') + '"';
-    if PairedAPIURL <> '' then
-      Args := Args + ' --api-url "' + PairedAPIURL + '"';
-    for I := 0 to GetArrayLength(ToolChecks) - 1 do
-      if ToolChecks[I].Checked then
-        Args := Args + ' --tool ' + ToolNames[I];
-
-    WizardForm.StatusLabel.Caption := 'Configuring your AI tools...';
-    RC := RunQuiet(ExpandConstant('{app}\keld.exe'), Args,
-                   ExpandConstant('{tmp}\post-setup'));
-    end;
-  end;
-
-  // ⚠️ REGISTERING THE AGENT MOVED HERE FROM [Run], AND THE ORDER IS THE POINT.
-  // It has to happen AFTER `signal setup` has written hook.json, so the daemon
-  // comes up with a configuration to read instead of idling on awaitConfig —
-  // which is exactly what the [Run] entry's position used to guarantee.
+  // Registering starts the daemon UNPAIRED: it collects, holds what it would
+  // send, and serves the page, where Signal asks whether to sign in. An MDM
+  // machine is paired afterwards with `keld-agent install --code <CODE>`.
   //
   // ⚠️ `--headless` IS LOAD-BEARING AND MUST NOT BE DROPPED. Without it,
   // keld-agent detects a console (it HAS one — hiding a window does not take the
@@ -1316,7 +449,11 @@ begin
   RC := RunQuiet(ExpandConstant('{app}\keld-agent.exe'), 'install --headless',
                  ExpandConstant('{tmp}\post-agent'));
   if RC <> 0 then
-    Trace('agent install rc=' + IntToStr(RC));
+    Trace('agent install rc=' + IntToStr(RC))
+  else if not WizardSilent then
+    // Only an interactive install opens Signal ([Run] is skipifsilent), so
+    // only an interactive install waits for it.
+    WaitForAgent(AgentBefore);
 
   // ⚠️ CONFIRM THE UNINSTALLER EXISTS, because PrepareToInstall DELETED the old
   // one and the assumption that Inno rewrites it in the same slot is exactly
@@ -1330,24 +467,6 @@ begin
   else
     Trace('uninstaller: MISSING at ' + ExpandConstant('{uninstallexe}') +
           ' - re-run the installer to restore it');
-end;
-
-// Cancel and teardown both write the sentinel, so a helper — and the `keld`
-// child inside its job object — cannot outlive the wizard. A device-flow login
-// polls Atlas until the code expires, so without this a cancelled install leaves
-// a process polling in the background with nothing to report to.
-procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
-begin
-  SaveStringToFile(CancelFile, 'cancel', False);
-  SaveStringToFile(PanelStopFile, 'stop', False);
-end;
-
-procedure DeinitializeSetup();
-begin
-  if TimerID <> 0 then
-    KillTimer(0, TimerID);
-  SaveStringToFile(CancelFile, 'cancel', False);
-  SaveStringToFile(PanelStopFile, 'stop', False);
 end;
 
 function NeedsAddPath(P: string): Boolean;
@@ -1400,9 +519,7 @@ begin
   if CurUninstallStep <> usPostUninstall then
     exit;
   RemoveFromPath(ExpandConstant('{app}'));
-  Home := GetEnv('KELD_HOME');
-  if Home = '' then
-    Home := ExpandConstant('{%USERPROFILE}\.keld');
+  Home := KeldHome;
   if not DirExists(Home) then
     exit;
   if MsgBox('Also remove your Keld settings and credentials?' #13#10#13#10

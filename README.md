@@ -286,9 +286,10 @@ install scripts wire up.
 
 ⚠️ **The pkg ships *without* the sidecar.** Apple's notary service scans every
 file in a submission, and the frozen sidecar is ~15k files / ~190 MB of torch —
-which put a real submission **4+ hours** into an unbounded queue. A Terminal
-script (`onboard.command`) opens after install, fetches the sidecar tarball into
-`~/.local/bin`, and walks you through sign-in and tool setup.
+which put a real submission **4+ hours** into an unbounded queue. The agent
+fetches it into `~/.local/bin` on its own. The installer asks nothing: when it
+finishes, **Keld Signal opens** and asks whether to sign in with Atlas or use it
+locally only, and it sets up the AI tools it finds by itself.
 
 **Apple Silicon only — there is no Intel macOS build.** PyTorch dropped
 Intel-mac wheels after torch 2.2.2, and macOS 27 is Apple-Silicon-only, so a
@@ -301,10 +302,11 @@ torch-based sidecar cannot meaningfully target Intel.
 ### Windows — `keld-setup.exe`
 
 Per-user (no admin): installs to `%LOCALAPPDATA%\Programs\keld`, adds Keld to
-your `PATH`, and registers the agent as a logon task. A console window
-(`onboard.cmd`) opens afterwards to take a setup code or run a browser login.
+your `PATH`, and registers the agent as a logon task. The installer asks
+nothing; its Finished page opens Keld Signal, which asks whether to sign in with
+Atlas or use it locally only.
 
-An MDM `/SILENT` push skips that console; finish such a machine with
+An MDM `/SILENT` push opens nothing; pair such a machine with
 `keld-agent install --code <CODE>` from the management tool.
 
 > **SmartScreen:** unsigned builds trigger a warning — click **More info → Run

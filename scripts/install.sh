@@ -206,7 +206,7 @@ echo "  ✓ $(printf '%-26s' 'keld + keld-agent') → ${DEST}"
 # The abort below is therefore MORE justified than when it was written for ML, not
 # less: without this binary a Keld install collects credential detection and nothing
 # else. The macOS .pkg does not bundle it either (Apple notarization scans all ~15k
-# of its files) — onboard.command fetches it exactly as this does. Published
+# of its files) — the daemon and the pkg's postinstall fetch it exactly as this does. Published
 # per-OS/arch as keld-agent-sidecar_<os>_<arch>.tar.gz (macOS: darwin/arm64, Apple
 # Silicon only).
 if { [ "$os" = "linux" ] || [ "$os" = "darwin" ]; } && [ -f "${DEST}/keld-agent" ]; then
@@ -273,6 +273,14 @@ agent_install() {
   fi
 }
 
+# The daemon rewrites ~/.keld/agent.json (its port and a fresh per-start secret)
+# every time it starts, and `keld signal open` reads it. Snapshot it BEFORE the
+# install restarts the daemon, so the end of this script can tell the new
+# daemon's file from the previous one's (see wait_for_agent below).
+keld_home="${KELD_HOME:-${HOME}/.keld}"
+agent_before=""
+[ -f "${keld_home}/agent.json" ] && agent_before=$(cat "${keld_home}/agent.json" 2>/dev/null || true)
+
 if [ -f "${DEST}/keld-agent" ]; then
   # keld-agent install owns login → signal setup → service (agent last), and the
   # TTY/headless decision. With a setup code it onboards non-interactively.
@@ -327,6 +335,35 @@ if [ "$os" = "darwin" ]; then
   echo "  To allow the binary: System Settings > Privacy & Security > Allow."
 fi
 
+# can_open_signal: is there a person at a screen to open Signal for? A terminal,
+# not CI, not an SSH session (a browser would open on the far machine, or not at
+# all), and on Linux a graphical session. Anything else prints the command.
+can_open_signal() {
+  [ "$has_tty" = 1 ] || return 1
+  [ -z "${CI:-}" ] || return 1
+  [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 1
+  case "$os" in
+    darwin) return 0 ;;
+    *) [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] ;;
+  esac
+}
+
+# wait_for_agent waits, bounded, for the daemon just (re)started to write its own
+# agent.json. Opening earlier reads the PREVIOUS daemon's port and secret on an
+# upgrade, or finds no daemon at all on a first install — either way the one
+# thing this script ends with does not happen. Normally well under a second.
+wait_for_agent() {
+  i=0
+  while [ "$i" -lt 20 ]; do
+    now=""
+    [ -f "${keld_home}/agent.json" ] && now=$(cat "${keld_home}/agent.json" 2>/dev/null || true)
+    if [ -n "$now" ] && [ "$now" != "$agent_before" ]; then return 0; fi
+    sleep 0.5 2>/dev/null || sleep 1
+    i=$((i + 1))
+  done
+  return 0
+}
+
 # ── Summary: report what actually happened, never what was hoped for ──────────
 # `keld-agent install` exits 0 after merely REGISTERING the service when it has
 # no terminal and no setup code (the normal headless path — a GUI installer, CI,
@@ -335,7 +372,6 @@ fi
 # onboarding had never run. So the summary is decided by observed state: setup
 # is done when it has written an ingest token to hook.json — exactly the file
 # the daemon itself requires (internal/hook.LoadConfig).
-keld_home="${KELD_HOME:-${HOME}/.keld}"
 onboarded=0
 if [ -f "${keld_home}/hook.json" ] \
   && grep -q '"ingest_token"[[:space:]]*:[[:space:]]*"[^"]' "${keld_home}/hook.json" 2>/dev/null; then
@@ -359,12 +395,25 @@ elif [ -n "$CODE" ]; then
   echo "  Re-run with a fresh code:  keld-agent install --code <CODE>" >&2
   exit 1
 else
-  # No terminal and no code: the service is registered but Keld is NOT set up.
-  # This is an expected, recoverable state — not a failure — so exit 0, but say
-  # so plainly. The daemon idles and picks the config up on its own (it polls for
-  # hook.json), so no restart is needed after finishing setup.
-  echo "Installed — but Keld is NOT set up yet (nothing is being collected)."
-  echo "Finish setup in a terminal:"
-  echo "  keld login && keld signal setup"
-  echo "The agent is already running and will start collecting the moment you do."
+  # No code: the service is registered and running, and it is not signed in.
+  # That is the normal end of an interactive install now, not a failure (exit 0).
+  #
+  # ⚠️ THIS INSTALLER ASKS NOTHING ABOUT KELD (2026-09-29, web sign-in spec
+  # AC-10). Signal asks the one real question the first time it opens — sign in
+  # with Atlas, or use it locally only — and the daemon's auto-setup configures
+  # the AI tools it detects. So this ends by OPENING Signal where someone can see
+  # it, and otherwise says in one line how to. `--code` (above) is unchanged.
+  echo "Keld is installed and running, but not set up with Atlas yet. Signal asks"
+  echo "  whether to sign in with Atlas or use it locally only."
+  if can_open_signal; then
+    wait_for_agent
+    if "${DEST}/keld" signal open >/dev/null 2>&1; then
+      echo "  Opened Keld Signal."
+    else
+      echo "Open Signal: keld signal open"
+    fi
+  else
+    echo "Open Signal: keld signal open"
+  fi
+  echo "  (Or from a terminal: keld login && keld signal setup)"
 fi

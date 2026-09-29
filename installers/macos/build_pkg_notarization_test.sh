@@ -19,8 +19,7 @@ test -f "$pkg" || { echo "missing build-pkg.sh"; exit 1; }
 test -f "$wf" || { echo "missing installers.yml"; exit 1; }
 fails=0
 
-# Comments are stripped before grepping (matching onboard_command_test.sh's
-# practice): a grep for prose is satisfied by a comment describing the thing
+# Comments are stripped before grepping: a grep for prose is satisfied by a comment describing the thing
 # just as easily as by the thing itself, so a check phrased that way can keep
 # passing after the real line it names has gone.
 pkg_code="$(sed 's/#.*//' "$pkg")"
@@ -66,32 +65,30 @@ else
   echo "PASS: workflow does not hardcode the relaxation"
 fi
 
-# ── The wizard plugin ────────────────────────────────────────────────────────
-# The pane is what removes the Terminal; these pin that it is actually built,
-# actually signed, and actually handed to productbuild.
+# ── No wizard plugin (inverted 2026-09-29) ───────────────────────────────────
+# These three pinned that the Keld pane was built, signed and handed to
+# productbuild. Installers only install now (web sign-in spec, AC-10), so they
+# pin the opposite: a plugin put back into the pkg is a Keld screen put back
+# into the installer. installers/macos/plugin_test.sh asserts the same from the
+# tree's side.
 #
 # ⚠️ THESE MUST FEED THE SAME `fails` COUNTER AS THE CHECKS ABOVE, and the
-# summary line must print AFTER every check has run, not between the two
-# groups. Printing "all checks passed" before this section (as this file used
-# to) means a failure HERE still prints that line first and only THEN fails —
-# a false-positive banner every reader would trust. $pkg and $b are the same
-# file, so this reuses $pkg_code rather than re-reading it.
-if printf '%s' "$pkg_code" | grep -qF 'plugin/build-plugin.sh'; then
-  echo "PASS: build-pkg.sh builds the wizard plugin"
+# summary line must print AFTER every check has run — a banner printed before a
+# failing group is a false positive every reader would trust.
+if printf '%s' "$pkg_code" | grep -qF 'build-plugin'; then
+  echo "FAIL: build-pkg.sh builds a wizard plugin again"; fails=$((fails+1))
 else
-  echo "FAIL: build-pkg.sh does not build the wizard plugin"; fails=$((fails+1))
+  echo "PASS: build-pkg.sh builds no wizard plugin"
 fi
 if printf '%s' "$pkg_code" | grep -qF -- '--plugins'; then
-  echo "PASS: build-pkg.sh passes --plugins to productbuild"
+  echo "FAIL: build-pkg.sh passes --plugins to productbuild again"; fails=$((fails+1))
 else
-  echo "FAIL: build-pkg.sh does not pass --plugins to productbuild"; fails=$((fails+1))
+  echo "PASS: build-pkg.sh passes no --plugins to productbuild"
 fi
-# ⚠️ The plugin lives OUTSIDE $STAGE, so sign-macho.sh's sweep does not see it.
-# An unsigned Mach-O anywhere in a submission fails notarization for the whole pkg.
-if printf '%s' "$pkg_code" | grep -qF 'codesign --verify --strict --verbose=2 "$PLUGIN_DIR/KeldSetup.bundle"'; then
-  echo "PASS: build-pkg.sh verifies the plugin's signature"
+if printf '%s' "$pkg_code" | grep -qF 'onboard.command'; then
+  echo "FAIL: build-pkg.sh stages onboard.command again"; fails=$((fails+1))
 else
-  echo "FAIL: build-pkg.sh does not verify the plugin's signature"; fails=$((fails+1))
+  echo "PASS: build-pkg.sh stages no onboarding script"
 fi
 
 [ "$fails" -eq 0 ] || { echo; echo "$fails check(s) failed"; exit 1; }
