@@ -405,3 +405,22 @@ func removeDBFiles(t *testing.T) {
 		}
 	}
 }
+
+// One file, one Store, one connection pool per process: a second independent
+// connection to a WAL database is what unlinked the live -wal on a real
+// machine when the first one closed (see New).
+func TestNewSharesOneStorePerFile(t *testing.T) {
+	setHome(t)
+	a, b := New(), New()
+	if a != b {
+		t.Fatal("two Stores for one ledger file in one process")
+	}
+	a.Cut(BlockKey{Session: "s1", Start: 60}, 660, "idle", "budget", "claude_code", time.Now())
+	if _, err := os.Stat(dbPath() + "-wal"); err != nil {
+		t.Fatalf("no WAL after a write: %v", err)
+	}
+	setHome(t)
+	if New() == a {
+		t.Fatal("a different ledger path got the same Store")
+	}
+}

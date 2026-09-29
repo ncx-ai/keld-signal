@@ -318,9 +318,35 @@ type Store struct {
 // via internal/paths so tests can isolate it). It never opens the file
 // eagerly and never fails: the first write (or Read) opens/creates it on
 // demand, and a failure there is logged once and swallowed.
+//
+// ⚠️ **ONE STORE PER FILE PER PROCESS, and New enforces it.** It returns the
+// same Store for the same path every time. Two independent connections to one
+// WAL database inside one process lost data on a real machine (2026-09-29):
+// the daemon builds its v3 wiring twice — once for the onboarding handler, once
+// for Run — and each opened its own Store. When the discarded one's connection
+// closed, SQLite took it for the last connection, checkpointed and UNLINKED the
+// -wal and -shm files while the live Store still held them open. Every write
+// after that went into an unlinked file, reached ledger.db only when a
+// checkpoint happened to run, and was lost at the next restart — observed as a
+// backfill marker written at 14:28 and gone by 14:33, and a WAL that vanished 13
+// seconds after every start. Sharing the Store makes the second connection
+// impossible rather than merely avoided.
 func New() *Store {
-	return &Store{path: dbPath()}
+	path := dbPath()
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	if s, ok := stores[path]; ok {
+		return s
+	}
+	s := &Store{path: path}
+	stores[path] = s
+	return s
 }
+
+var (
+	storesMu sync.Mutex
+	stores   = map[string]*Store{}
+)
 
 var (
 	_ Recorder = (*Store)(nil)
