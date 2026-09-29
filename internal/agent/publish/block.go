@@ -169,6 +169,18 @@ type BlockEnrichment struct {
 	// delegated task; a run spans several blocks whenever it outlives the cutter's
 	// 20-minute budget, measured at 20% of runs on one corpus.
 	SubagentID string `json:"subagent_id,omitempty"`
+	// ParentSessionID is the session that LAUNCHED this run, recovered from the
+	// transcript's path. Empty and omitted on a main-line block, and also on a
+	// delegated run whose layout does not name a parent — never guessed.
+	//
+	// ⚠️ WITHOUT IT A SUBAGENT BLOCK NAMES NOBODY. Its own session_id is
+	// `agent-<hash>`, which no tool_event carries and no other row shares, so a
+	// consumer can see that delegated work happened and cannot say whose. That
+	// makes the only honest total of a session that delegated uncomputable: a
+	// parent block's mix EXCLUDES its subagents' calls while its cost INCLUDES
+	// them, so neither side alone is the whole, and the composite is the parent's
+	// blocks plus the blocks of the runs it launched.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
@@ -224,17 +236,75 @@ type ProjectMatch struct {
 // record in it carries isSidechain, and ZERO sidechain records appear in a
 // session transcript (measured across 405 files). So the filename is the whole
 // test -- there is no need to read the file, and no other source knows this.
-func SubagentRunOf(transcriptPath string) (bool, string) {
+func SubagentRunOf(transcriptPath string) (isRun bool, runID, parentSession string) {
 	base := filepath.Base(transcriptPath)
 	const pre, ext = "agent-", ".jsonl"
 	if !strings.HasPrefix(base, pre) || !strings.HasSuffix(base, ext) {
-		return false, ""
+		return false, "", ""
 	}
 	id := base[len(pre) : len(base)-len(ext)]
 	if id == "" {
-		return false, ""
+		return false, "", ""
 	}
-	return true, id
+	return true, id, parentSessionOf(transcriptPath)
+}
+
+// parentSessionOf recovers the session that LAUNCHED a delegated run, from the
+// path alone, or "" when the layout does not say.
+//
+// ⚠️ THIS EXISTS BECAUSE A SUBAGENT BLOCK NAMED NOBODY. Its `session_id` is
+// `agent-<hash>` (blocks.sessionIDFor is the basename), a value no tool_event
+// can carry and no other row shares, so a consumer could see that delegated work
+// happened and could not say whose it was. That silently broke the one honest
+// composite available: a session's own blocks plus its subagents' blocks cover
+// the work exactly once, which is the only correct way to total a session that
+// delegated — a parent block's mix excludes its subagents while its cost
+// includes them (see internal/agent/blocks/emitter.go).
+//
+// Claude Code writes a delegated run to
+// `<projects>/<parent-session-uuid>/subagents/agent-<hash>.jsonl`, so the parent
+// is the grandparent directory. Measured on the frozen corpus: 445 of 445
+// subagent transcripts have that shape with a UUID-shaped parent, and on all 444
+// readable ones it equals the `sessionId` INSIDE the file — zero mismatches. So
+// this is read from the path rather than by opening the transcript, which keeps
+// the emitter's "path, cursor and clock, no text" contract intact.
+//
+// ⚠️ IT IS CHECKED, NOT ASSUMED. An unexpected layout returns "" and the field is
+// omitted, because a wrong parent silently reassigns one person's work to another
+// session. The two facts stay independent: a run whose parent cannot be named is
+// still a run, and `is_subagent_run` remains true.
+func parentSessionOf(transcriptPath string) string {
+	dir := filepath.Dir(transcriptPath)
+	if filepath.Base(dir) != "subagents" {
+		return ""
+	}
+	parent := filepath.Base(filepath.Dir(dir))
+	if !isSessionUUID(parent) {
+		return ""
+	}
+	return parent
+}
+
+// isSessionUUID reports whether s has the 8-4-4-4-12 lowercase-hex shape Claude
+// Code gives a session. Shape only — this never has to prove the session exists,
+// only refuse a directory that plainly is not one.
+func isSessionUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') && !(r >= 'A' && r <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // BuildBlock builds the wire row.
@@ -246,7 +316,7 @@ func SubagentRunOf(transcriptPath string) (bool, string) {
 // the marker off a row that had carried it, which is invisible on both sides. A
 // required parameter makes a future third call site a compile error instead.
 func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time, transcriptPath string) BlockEnrichment {
-	isRun, runID := SubagentRunOf(transcriptPath)
+	isRun, runID, parentSession := SubagentRunOf(transcriptPath)
 	return BlockEnrichment{
 		Source: Source{ID: b.Source},
 		Correlation: Correlation{
@@ -258,6 +328,7 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time, tra
 		SessionID:         b.SessionID,
 		IsSubagentRun:     isRun,
 		SubagentID:        runID,
+		ParentSessionID:   parentSession,
 		Window:            b.Ref,
 		StartReason:       b.Ref.StartReason,
 		EndReason:         b.Ref.EndReason,
