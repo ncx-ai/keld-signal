@@ -1410,6 +1410,11 @@ func Run(ctx context.Context) error {
 			// so without this a session that lived entirely between two polls
 			// read `broken · watcher` while capturing perfectly.
 			WithPromptObserver(watchPrompt())
+		// The one-time backfill of transcripts already on disk, into the
+		// requests table only. Started after watch.New on purpose: the watcher
+		// replays every line written after its start, the backfill reads every
+		// file whole, and together they leave no gap (see usage.Backfill).
+		go newUsageBackfill(sig.ledger, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
 		// Third use of the same detection: the watcher already knows when a
 		// transcript grew, so it tells the sidecar, which brings its
 		// reference-series store up to date from its own byte offset. That is

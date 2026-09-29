@@ -13,6 +13,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/usage"
+	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 )
 
 func countingAtlas(t *testing.T) (*httptest.Server, *atomic.Int64) {
@@ -121,5 +122,37 @@ func TestMirroredToolIsSentAndCounted(t *testing.T) {
 	}
 	if got := len(requestRows(t, store)); got != 4 {
 		t.Fatalf("counted %d, want 4", got)
+	}
+}
+
+// A2: the backfill reads history into the table and sends none of it — even
+// on a machine where every tool is mirrored and a token exists.
+func TestBackfillSendsNothingToAtlas(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv, posts := countingAtlas(t)
+	all := map[string]bool{"claude_code": true, "cowork": true, "codex": true, "gemini_cli": true, "gemini": true}
+	tel := promptlog.New(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", func() string { return "tok" }, all)
+	store := ledger.New()
+	_, _ = transcriptObservers(tel, usage.New(store, priceStored)) // the live wiring exists beside it
+
+	dir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join("..", "promptlog", "testdata", "codex_rollout.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rollout-a.jsonl"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bf := newUsageBackfill(store, func() []watch.Root { return []watch.Root{{SourceID: "codex", Dir: dir}} })
+	for !bf.Step() {
+	}
+	if n := posts.Load(); n != 0 {
+		t.Fatalf("backfill reached Atlas with %d bodies, want 0", n)
+	}
+	if got := len(requestRows(t, store)); got != 4 {
+		t.Fatalf("backfill wrote %d requests, want 4", got)
 	}
 }
