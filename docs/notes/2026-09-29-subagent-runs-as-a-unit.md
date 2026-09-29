@@ -151,3 +151,61 @@ decision covers a median of 13 (A) / 29 (B) inference requests.
 **Still open:** E1 (characterise a run's *kind* from its brief, now that "dominant class" is
 known to be the wrong target), E3 (sessions), E4 (is the run a better published unit than the
 block), and a third corpus for all of it.
+
+---
+
+# E3 + E4, run 2026-09-29: which unit is coherent enough to characterise?
+
+A unit is worth characterising only if its contents are consistent. If it is a grab-bag, any
+single label for it is a lie and the honest output is a distribution.
+
+## ⚠️ The naive table was confounded and I nearly reported it
+
+Coherence (share of a unit's requests in its own largest class) is **inversely related to
+size**: a one-request unit is coherent 1.0 by arithmetic. Corpus B's sessions scored 0.92 —
+on a **median of 4 requests**. The control is a **size-matched shuffle**: reassign every
+request to a random unit while preserving each unit's size, then recompute. A real unit must
+beat its own shuffled twin.
+
+| unit | CORPUS A gain over shuffle | CORPUS B gain over shuffle |
+|---|---|---|
+| session | **+0.24** | **+0.41** |
+| subagent run | +0.10 | +0.04 |
+| **block (20 min)** | **+0.06** | **−0.10** |
+
+## And the gain does not survive size — on any unit
+
+| unit | 1–5 req | 6–20 req | **21+ req** |
+|---|---|---|---|
+| session (A / B) | +0.08 / +0.29 | **+0.25 / +0.42** | **+0.07 / −0.21** |
+| subagent run (A / B) | +0.10 / −0.17 | **+0.20 / +0.20** | **+0.05 / +0.00** |
+| block (A / B) | +0.17 / −0.10 | +0.05 / −0.17 | +0.01 / −0.10 |
+
+## Three findings
+
+**1. Above ~20 requests, NO unit is coherent.** Session, block and run all collapse to
++0.07 / +0.05 / +0.01 on corpus A and −0.21 / +0.00 / −0.10 on corpus B. **Any single
+activity label for a large unit is a false statement**, whatever the unit is called. This is
+independent evidence for the product decision already taken: publish a DISTRIBUTION, never a
+label. It was argued from the taxonomy before; it is now measured.
+
+**2. The 20-minute block is the WORST unit at every size, on both corpora** — +0.06 and
+−0.10 overall, and never above +0.17 in any band. It is an arbitrary time cut and the data
+says so plainly. It remains fine as a *reporting window*; it is not a thing with a kind.
+
+**3. ⚠️ CORRECTION TO THIS FILE'S OWN EARLIER SECTION.** I argued above that a subagent run is
+"a semantically delimited unit and a block is not", on the strength of its having a stated
+goal. Its goal is stated; its **execution is barely more coherent than a block** — +0.10 / +0.04
+overall, +0.05 / +0.00 in the 21+ band. A run knows what it was ASKED to do and still does a
+mixture of reading, writing and verifying to get there. E2's positive result stands on its own
+terms (the brief predicts whether code gets written, +0.245 across people) and does **not**
+license the stronger claim that a run is a homogeneous thing.
+
+## Where a single label WOULD be honest
+
+The 6–20 request band is the only place coherence is real and consistent across both corpora:
+sessions **+0.25 / +0.42** and runs **+0.20 / +0.20**. That suggests a size-gated treatment —
+label a small unit, distribute a large one — rather than one rule for all.
+
+⚠️ Untested: that band was found by looking, not predicted in advance. Treat it as a
+hypothesis for a pre-registered check, not a threshold to ship.
