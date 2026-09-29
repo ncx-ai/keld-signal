@@ -1,0 +1,1142 @@
+<!-- Discovery document. Shell shared with the explainer-page skill. Do not repaint. -->
+
+<title>Signal Web Sign-in</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1; --panel:#FFFFFF;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:46px 0 8px;text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3 .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+p{max-width:66ch;margin:0 0 12px}
+ul,ol{max-width:68ch;margin:0 0 12px;padding-left:20px}
+li{margin:0 0 4px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+.meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:14px 0 0;
+  font-size:13px;color:var(--muted)}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.06em;text-transform:uppercase}
+.chip-draft{background:var(--enc-soft);color:var(--enc);border:1px solid var(--enc)}
+.chip-signed{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+.chip-reviewed{background:var(--daemon-soft);color:var(--daemon);border:1px solid var(--daemon)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:18px 0 0;max-width:720px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+
+.wrap{overflow-x:auto;margin:0 0 4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase;white-space:nowrap}
+td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.ac td:first-child,table.tests td:first-child{width:52px;color:var(--muted);white-space:nowrap}
+table.ac td:nth-child(2){width:42%}
+table.tests td:nth-child(2){width:38%}
+tr:target td{background:var(--daemon-soft)}
+
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.04em;white-space:nowrap}
+.p-met{background:var(--good-soft);color:var(--good)}
+.p-partial{background:var(--enc-soft);color:var(--enc)}
+.p-missed{background:var(--bad-soft);color:var(--bad)}
+.p-unver{background:var(--rule);color:var(--muted)}
+.p-reuse{background:var(--good-soft);color:var(--good)}
+.p-extend{background:var(--daemon-soft);color:var(--daemon)}
+.p-new{background:var(--enc-soft);color:var(--enc)}
+.p-pattern{background:var(--bad-soft);color:var(--bad)}
+.p-h{background:var(--bad-soft);color:var(--bad)}
+.p-m{background:var(--enc-soft);color:var(--enc)}
+.p-l{background:var(--good-soft);color:var(--good)}
+
+pre.gherkin{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--daemon);
+  border-radius:4px;padding:14px 16px;margin:0 0 12px;overflow-x:auto;
+  font:13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+pre.gherkin .kw{color:var(--daemon);font-weight:500}
+pre.gherkin .cov{color:var(--muted)}
+pre.cmd{background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:12px 14px;
+  margin:0 0 12px;overflow-x:auto;font:12.5px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+
+.note{border-left:3px solid var(--enc);background:var(--enc-soft);padding:10px 14px;
+  margin:0 0 14px;max-width:68ch;font-size:14px}
+.note strong{color:var(--enc)}
+
+figure{margin:18px 0 0;padding:0}
+figure .wrap{overflow-x:auto}
+figure svg{display:block;width:100%;min-width:640px;height:auto;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.lane{stroke:var(--rule);stroke-width:1}
+.life{stroke:var(--rule);stroke-width:1.2;stroke-dasharray:4 4}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.bold{fill:var(--ink);font-weight:600}
+.small{fill:var(--muted);font-size:11px}
+.monot{fill:var(--muted);font:11px "IBM Plex Mono",monospace}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-panel{fill:var(--panel);stroke:var(--rule);stroke-width:1.2}
+.b-new{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4;stroke-dasharray:5 3}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.arr-daemon{stroke:var(--daemon);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.t-ink{fill:var(--ink)}
+
+.qa{border-top:1px solid var(--rule);margin-top:48px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+a{color:var(--daemon)}
+a:focus-visible{outline:2px solid var(--daemon);outline-offset:2px}
+@media (max-width:520px){ main{padding:28px 16px 56px} .kv{grid-template-columns:1fr} .kv dt{margin-top:6px} }
+</style>
+
+<main>
+
+<h1>Signal Web Sign-in — Discovery</h1>
+<p class="lede">How a person signs in to Signal through the Atlas website, the way Notion's
+desktop app does it. Sign-in leaves the installers and happens when Signal first opens, with a
+choice to skip and use Signal locally. This page settles the flow, the security controls and the
+tests. If it is wrong, we ship a login that leaks a credential or breaks without anyone noticing.</p>
+
+<div class="meta">
+  <span class="chip chip-signed">Signed off — 2026-09-29</span>
+  <span>Opus 5.5 — thinking: high</span>
+  <span class="mono">2026-09-29</span>
+  <span>Tickets <a href="https://app.notion.com/p/3e90f0c5fd60814689c7e8b9d33fd1c7">#447</a> + <a href="https://app.notion.com/p/3e40f0c5fd60804d80ebc88da38f093c">#431</a> (now in scope)</span>
+</div>
+
+<dl class="kv">
+  <dt>Repos</dt><dd class="mono">keld-signal · keld-atlas · keld-atlas-canary</dd>
+  <dt>Spec source</dt><dd class="mono">keld-signal/docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html</dd>
+  <dt>One-time code today</dt><dd class="mono">8 chars from 32 symbols ≈ 40 bits · measured: cli_devices.py:6,17-21</dd>
+  <dt>Code lifetime today</dt><dd class="mono">600 s · cli_device_ttl_s, config.py:72</dd>
+  <dt>Browser-code lifetime</dt><dd class="mono">120 s · a choice, not measured · enough to finish one redirect</dd>
+  <dt>Signal page port</dt><dd class="mono">random on every start · bindAddr() 127.0.0.1:0, daemon.go:338-343</dd>
+  <dt>Pending sign-ins held</dt><dd class="mono">≤ 4 at once, 10 min each, memory only · a choice</dd>
+  <dt>Installers that sign in today</dt><dd class="mono">3 of 3 · macOS pane + Terminal fallback, Windows console, Linux prints commands · read from installers/ and install.sh</dd>
+  <dt>Canary cadence</dt><dd class="mono">cron says 10 min; GitHub ran heartbeat 4–6 h apart · observed in gh run list</dd>
+</dl>
+
+<!-- ============================================================ 1 -->
+<h2 id="s1">1 · Hypothesis &amp; scope</h2>
+
+<h3>The why</h3>
+<ul>
+  <li><strong>Problem:</strong> the installer demands a sign-in with no context, and signing in means copying a code between two windows.</li>
+  <li><strong>Who feels it:</strong> every new user, in the installer, before Signal has even opened. #431: "I couldn't proceed without signing in."</li>
+  <li><strong>Business value:</strong> install is just install. The first open offers a one-click web sign-in, or local-only use. Fewer installs stall unpaired.</li>
+  <li><strong>Hypothesis:</strong> if Signal hands sign-in to the browser and takes the result back itself, a new user pairs without copying anything. The canary proves it daily in dev and prod.</li>
+</ul>
+
+<h3>Goals</h3>
+<ul>
+  <li><strong>G1</strong> — A person goes from "Log in" to "signed in" without typing or pasting.</li>
+  <li><strong>G2</strong> — No step in the flow lets a credential reach anyone but that person's own Signal.</li>
+  <li><strong>G3</strong> — Every layer is tested automatically: on each pull request, after each deploy, and on a schedule in prod.</li>
+  <li><strong>G4</strong> — The whole flow runs on a laptop against a local Atlas before anything is pushed.</li>
+  <li><strong>G5</strong> — Installers only install. Signal asks on first open, and "use locally only" is a first-class answer.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<p>Binary, observable at a seam, each naming its own verification. The reviewer grades these IDs.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="ac-1"><td class="mono">AC-1</td><td>Clicking Log in asks the Signal service to start a sign-in. It returns an Atlas URL carrying a return address on its own port, a 32-byte random <span class="mono">state</span> and an S256 <span class="mono">code_challenge</span>. The service tries to open the system browser; the page always shows the link too.</td><td class="mono">POST /v1/auth/start (secret-gated)</td><td class="mono">go test ./internal/agent/ingress -run TestSignInStart</td></tr>
+  <tr id="ac-2"><td class="mono">AC-2</td><td>Atlas redirects only to <span class="mono">http://127.0.0.1:&lt;1024–65535&gt;/auth/callback</span>, with no user info, query or fragment. Every other return address gets an error page and no code is minted.</td><td class="mono">POST /api/cli/authorize</td><td class="mono">pytest services/api/tests/test_cli_authorize.py (≥ 14-row reject table)</td></tr>
+  <tr id="ac-3"><td class="mono">AC-3</td><td>A signed-in user sees their email, their org and one Continue button. Nothing is minted until they click it. A signed-out user goes through login and returns to the same authorize URL, including a brand-new Google or GitHub signup.</td><td class="mono">/cli/signal/authorize page</td><td class="mono">vitest test/cli-signal-authorize.test.tsx · pytest test_oauth_callback.py</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td>A browser code is single-use, lives 120 s and is bound to the challenge. <span class="mono">/v1/cli/enroll</span> with a wrong or missing <span class="mono">code_verifier</span> answers 410 and burns the code. Setup codes without a challenge behave exactly as today.</td><td class="mono">POST /v1/cli/enroll</td><td class="mono">pytest test_cli_enroll.py -k verifier</td></tr>
+  <tr id="ac-5"><td class="mono">AC-5</td><td>A valid return writes <span class="mono">auth.json</span> and <span class="mono">hook.json</span> through the same function <span class="mono">POST /v1/config</span> uses. The browser shows a fixed "Signed in, close this tab" page. The Signal page shows signed in within 5 s, without a reload.</td><td class="mono">GET /auth/callback · ~/.keld files · page</td><td class="mono">go test -run TestSignInCallback · ui/e2e/signin.spec.ts</td></tr>
+  <tr id="ac-6"><td class="mono">AC-6</td><td>The return is refused with no file written and no call to Atlas when the state is unknown, expired or already used, when the code names a different Atlas than the one the sign-in started with, or when Send to Atlas is off. Nothing from the URL is echoed into the page.</td><td class="mono">GET /auth/callback</td><td class="mono">go test -run TestSignInCallbackRefuses (table)</td></tr>
+  <tr id="ac-7"><td class="mono">AC-7</td><td>All three <span class="mono">next</span> checks reject backslash, encoded-slash and control-character bypasses such as <span class="mono">/\evil.com</span>. One case file drives both the Python and the TypeScript tests.</td><td class="mono">_safe_next · login page · OAuth buttons</td><td class="mono">pytest -k safe_next · vitest safe-next.test.ts</td></tr>
+  <tr id="ac-8"><td class="mono">AC-8</td><td>Setup codes, <span class="mono">keld-agent install --code</span> and <span class="mono">keld login</span> work unchanged. Their existing tests and the conformance chain pass with no test edited.</td><td class="mono">existing suites</td><td class="mono">go test ./... · conformance.yml · git diff --stat on *_test.go</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td>Both repos test the round trip on every pull request, as required checks. Signal: Playwright drives a real daemon, the mock Atlas and a real browser, happy path plus a bad-state path. Atlas: pytest logs in, authorizes, redeems with the verifier and gets an ingest token, on real Postgres and Redis.</td><td class="mono">keld-signal ci.yml · keld-atlas ci.yml</td><td class="mono">job ui-e2e-signin · pytest test_cli_authorize.py::test_round_trip</td></tr>
+  <tr id="ac-10"><td class="mono">AC-10</td><td>No installer asks anyone anything about Keld. The macOS pkg has no Keld screen at all: no sign-in, no tool picker. After a non-silent install, macOS, Windows and Linux open Signal instead of a code prompt. Signal's own auto-setup configures detected tools. <span class="mono">--code</span> still pairs a silent install on all three.</td><td class="mono">installers/ · scripts/install.sh</td><td class="mono">pkg build test: no KeldSetup.bundle · postinstall_test.sh · keld_agent_iss_test.sh · one manual pkg + exe run</td></tr>
+  <tr id="ac-11"><td class="mono">AC-11</td><td>The canary runs <span class="mono">signal-signin.spec.ts</span> against dev and prod, on schedule and on demand, including one hostile-return-address case. It pushes <span class="mono">canary_check_success{check="signal_signin"}</span>. After the Signal release, its Linux install job also signs in the <em>shipped</em> binary. The spec runs locally with <span class="mono">BASE_URL=http://localhost:3000</span>.</td><td class="mono">keld-atlas-canary · Pushgateway</td><td class="mono">gh run list -w signal-signin.yml · step signin-real-binary · one local run</td></tr>
+  <tr id="ac-12"><td class="mono">AC-12</td><td>The first time Signal opens unpaired, with no choice made, it offers two buttons: Sign in and Use locally only. Local only sets <span class="mono">send_to_atlas: false</span>, collection keeps running on the machine, and the screen never returns. Log in stays one click away in Settings. A paired machine never sees the screen.</td><td class="mono">Signal page · agent-config.json</td><td class="mono">ui/e2e/firstrun.spec.ts · go test -run TestFirstRunChoice</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Explicit exclusions</h3>
+<ul>
+  <li>IT-driven rollout with an org enrollment key. That is its own ticket (<a href="https://app.notion.com/p/3ea0f0c5fd60810082fad6eccf68e010">org enrollment key</a>).</li>
+  <li>Changing tool auto-setup or the page's Integrations view. Tool choice already lives there.</li>
+  <li>Changing what the silent/MDM path does. <span class="mono">--code</span> pairs exactly as today.</li>
+  <li>A custom <span class="mono">keld://</span> link type, SSO/SAML, and a server-side logout. See section 3 and section 8.</li>
+  <li>Opening links from inside the desktop app in general. The service opens the browser, so the app needs no change.</li>
+  <li>Per-IP rate limiting on existing setup codes. It is a real gap, logged in section 8, with its own fix.</li>
+</ul>
+
+<!-- ============================================================ 2 -->
+<h2 id="s2">2 · Proposed solution</h2>
+
+<h3>How it works, in one picture</h3>
+<ul>
+  <li>Signal makes two random secrets and keeps them in memory: a <strong>state</strong> and a <strong>verifier</strong>.</li>
+  <li>The browser carries the state there and back. It never carries the verifier.</li>
+  <li>Atlas returns a short-lived code. The code is worthless without the verifier Signal kept.</li>
+</ul>
+
+<figure><div class="wrap">
+<svg viewBox="0 0 880 650" role="img" aria-label="Sequence of the sign-in round trip across four participants: the Signal page, the Signal service on the person's machine, the system browser, and Atlas. Step 1: the page asks the service to start a sign-in. Step 2: the service creates a random state and a secret verifier and keeps both in memory. Step 3: the service opens the browser on the Atlas authorize address, passing its own return address, the state and a challenge derived from the verifier. Step 4: the browser loads the Atlas authorize page. Step 5: Atlas asks the person to sign in if needed, then shows Continue as their email. Step 6: the person clicks Continue. Step 7: Atlas checks the return address and redirects the browser to 127.0.0.1 with a short-lived code and the state. Step 8: the browser lands on the Signal service, which checks the state and uses it once. Step 9: the service redeems the code together with the verifier and receives the Signal login token. Step 10: the service fetches the org ingest token. Step 11: the browser shows signed in, close this tab, and the Signal page updates to signed in.">
+  <defs>
+    <marker id="s-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+    <marker id="s-ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+  </defs>
+  <rect x="25" y="14" width="150" height="42" rx="4" class="b-daemon"/><text x="100" y="40" text-anchor="middle" class="bold">Signal page</text>
+  <rect x="225" y="14" width="150" height="42" rx="4" class="b-daemon"/><text x="300" y="40" text-anchor="middle" class="bold">Signal service</text>
+  <rect x="465" y="14" width="150" height="42" rx="4" class="b-plain"/><text x="540" y="40" text-anchor="middle" class="bold">Browser</text>
+  <rect x="705" y="14" width="150" height="42" rx="4" class="b-enc"/><text x="780" y="40" text-anchor="middle" class="bold">Atlas</text>
+  <line x1="100" y1="56" x2="100" y2="636" class="life"/>
+  <line x1="300" y1="56" x2="300" y2="636" class="life"/>
+  <line x1="540" y1="56" x2="540" y2="636" class="life"/>
+  <line x1="780" y1="56" x2="780" y2="636" class="life"/>
+
+  <text x="200" y="80" text-anchor="middle" class="txt">1 · Log in</text>
+  <text x="200" y="93" text-anchor="middle" class="monot">POST /v1/auth/start</text>
+  <path d="M100 102H296" class="arr" marker-end="url(#s-ah)"/>
+
+  <rect x="312" y="116" width="170" height="42" rx="4" class="b-new"/>
+  <text x="397" y="134" text-anchor="middle" class="txt">2 · make state + verifier</text>
+  <text x="397" y="149" text-anchor="middle" class="small">kept in memory only</text>
+
+  <text x="420" y="178" text-anchor="middle" class="txt">3 · open the browser</text>
+  <text x="420" y="191" text-anchor="middle" class="monot">return address · state · challenge</text>
+  <path d="M300 200H536" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="660" y="226" text-anchor="middle" class="txt">4 · load authorize page</text>
+  <text x="660" y="239" text-anchor="middle" class="monot">/cli/signal/authorize</text>
+  <path d="M540 248H776" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="660" y="274" text-anchor="middle" class="txt">5 · sign in if needed, then</text>
+  <text x="660" y="287" text-anchor="middle" class="small">"Continue as ana@acme.com"</text>
+  <path d="M780 296H544" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="660" y="322" text-anchor="middle" class="txt">6 · click Continue</text>
+  <text x="660" y="335" text-anchor="middle" class="monot">POST /api/cli/authorize</text>
+  <path d="M540 344H776" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="660" y="370" text-anchor="middle" class="txt">7 · check address, redirect</text>
+  <text x="660" y="383" text-anchor="middle" class="monot">127.0.0.1:port/auth/callback</text>
+  <path d="M780 392H544" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="420" y="418" text-anchor="middle" class="txt">8 · land back on Signal</text>
+  <text x="420" y="431" text-anchor="middle" class="small">state checked, then thrown away</text>
+  <path d="M540 440H304" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="540" y="466" text-anchor="middle" class="txt">9 · redeem code + verifier → Signal login token</text>
+  <text x="540" y="479" text-anchor="middle" class="monot">POST /v1/cli/enroll</text>
+  <path d="M300 488H776" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="540" y="514" text-anchor="middle" class="txt">10 · fetch the org ingest token</text>
+  <text x="540" y="527" text-anchor="middle" class="monot">GET /v1/cli/onboarding</text>
+  <path d="M300 536H776" class="arr" marker-end="url(#s-ah)"/>
+
+  <text x="420" y="562" text-anchor="middle" class="txt">11 · "Signed in. Close this tab."</text>
+  <path d="M300 572H536" class="arr-good" marker-end="url(#s-ahg)"/>
+  <text x="200" y="600" text-anchor="middle" class="txt">page shows signed in</text>
+  <path d="M300 612H104" class="arr-good" marker-end="url(#s-ahg)"/>
+</svg></div>
+<figcaption>Only one thing crosses the browser that Atlas can redeem: a two-minute code. Redeeming it
+also needs the verifier, which never leaves the Signal service. Steps 9 and 10 already exist today
+for setup codes.</figcaption>
+</figure>
+
+<h3>Where sign-in happens, before and after</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 350" role="img" aria-label="Where sign-in happens today and after this change, per platform. Today on macOS the installer pane demands a setup code or a browser sign-in before install can continue, and a Terminal window asks for a code if the pane never ran. Today on Windows, a console window asks for the code after install. Today on Linux install.sh ends by printing keld login and keld signal setup. After this change, the macOS installer has no Keld screen at all and opens the Signal app, and Signal sets up detected tools itself; Windows opens the Signal page in the browser after install; Linux install.sh ends by opening Signal, or prints keld signal open when there is no display. On all three, the first open offers Sign in or Use locally only. Silent and MDM installs are unchanged: --code pairs with no window.">
+  <defs>
+    <marker id="w-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+  </defs>
+  <text x="20" y="20" class="lanelbl">TODAY</text>
+  <text x="470" y="20" class="lanelbl">AFTER THIS CHANGE</text>
+
+  <rect x="20" y="34" width="400" height="76" rx="4" class="b-bad"/>
+  <text x="34" y="56" class="bold">macOS · installer pane</text>
+  <text x="34" y="75" class="txt">Paste a setup code or sign in to continue</text>
+  <text x="34" y="94" class="small">Terminal asks for a code if the pane never ran</text>
+  <path d="M420 72H466" class="arr" marker-end="url(#w-ah)"/>
+  <rect x="470" y="34" width="390" height="76" rx="4" class="b-new"/>
+  <text x="484" y="56" class="bold">macOS · no Keld screen, then the app opens</text>
+  <text x="484" y="75" class="txt">First open: Sign in · Use locally only</text>
+  <text x="484" y="94" class="small">tools: Signal sets them up itself (auto-setup)</text>
+
+  <rect x="20" y="124" width="400" height="76" rx="4" class="b-bad"/>
+  <text x="34" y="146" class="bold">Windows · after install</text>
+  <text x="34" y="165" class="txt">A console window asks for the setup code</text>
+  <text x="34" y="184" class="monot">onboard.cmd · keld-agent.iss:99</text>
+  <path d="M420 162H466" class="arr" marker-end="url(#w-ah)"/>
+  <rect x="470" y="124" width="390" height="76" rx="4" class="b-new"/>
+  <text x="484" y="146" class="bold">Windows · the Signal page opens</text>
+  <text x="484" y="165" class="txt">Same first-open choice, in the browser</text>
+  <text x="484" y="184" class="small">skipped on /SILENT, as today</text>
+
+  <rect x="20" y="214" width="400" height="76" rx="4" class="b-bad"/>
+  <text x="34" y="236" class="bold">Linux · install.sh without --code</text>
+  <text x="34" y="255" class="txt">Ends: "Run: keld login &amp;&amp; keld signal setup"</text>
+  <text x="34" y="274" class="monot">scripts/install.sh:297,347</text>
+  <path d="M420 252H466" class="arr" marker-end="url(#w-ah)"/>
+  <rect x="470" y="214" width="390" height="76" rx="4" class="b-new"/>
+  <text x="484" y="236" class="bold">Linux · ends by opening Signal</text>
+  <text x="484" y="255" class="txt">Same first-open choice, in the browser</text>
+  <text x="484" y="274" class="small">no display: prints "keld signal open"</text>
+
+  <rect x="20" y="304" width="840" height="36" rx="4" class="b-good"/>
+  <text x="440" y="327" text-anchor="middle" class="txt">Silent and MDM installs: unchanged on all three. --code pairs with no window at all.</text>
+</svg></div>
+<figcaption>Every installer stops asking. The one real question moves to the first time Signal
+opens, and it gets a real "not now" answer. Which tools to connect was never a question worth
+asking: Signal already detects and sets them up.</figcaption>
+</figure>
+
+<h3>What the first open looks like</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 300" role="img" aria-label="Wireframe of the first-open screen on the Signal page. Title: Welcome to Signal. Body: Signal is already collecting on this computer. Sign in to send it to your company's Atlas, or keep everything here. Two buttons: Sign in with Atlas, the primary one, and Use locally only. A footnote says you can sign in later from Settings, and that local only means nothing leaves this computer. On the right, notes explain that Sign in starts the browser round trip, and Use locally only writes send_to_atlas false so the screen never returns.">
+  <rect x="20" y="16" width="520" height="268" rx="10" class="b-panel"/>
+  <text x="50" y="58" class="bold" style="font-size:18px">Welcome to Signal</text>
+  <text x="50" y="92" class="txt">Signal is already collecting on this computer.</text>
+  <text x="50" y="112" class="txt">Sign in to send it to your company's Atlas,</text>
+  <text x="50" y="132" class="txt">or keep everything here.</text>
+  <rect x="50" y="160" width="190" height="42" rx="6" class="b-daemon"/>
+  <text x="145" y="186" text-anchor="middle" class="bold">Sign in with Atlas</text>
+  <rect x="256" y="160" width="190" height="42" rx="6" class="b-plain"/>
+  <text x="351" y="186" text-anchor="middle" class="txt">Use locally only</text>
+  <text x="50" y="236" class="small">You can sign in later from Settings.</text>
+  <text x="50" y="254" class="small">Local only: nothing leaves this computer.</text>
+  <path d="M240 181C300 110 520 80 590 80" class="arr-daemon"/>
+  <rect x="590" y="56" width="270" height="56" rx="4" class="b-new"/>
+  <text x="604" y="78" class="txt">Starts the browser round trip</text>
+  <text x="604" y="96" class="monot">POST /v1/auth/start · AC-1</text>
+  <path d="M446 190C520 210 560 200 590 200" class="arr"/>
+  <rect x="590" y="172" width="270" height="56" rx="4" class="b-enc"/>
+  <text x="604" y="194" class="txt">Writes send_to_atlas: false</text>
+  <text x="604" y="212" class="monot">existing setting · AC-12</text>
+</svg></div>
+<figcaption>Local only is not a dead end. It is the existing Send to Atlas switch, turned off, with
+zero outbound connections. The screen shows only while that switch has never been set.</figcaption>
+</figure>
+
+<h3>Prior art — what this builds on</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Existing thing</th><th>Path</th><th>Role here</th></tr></thead>
+<tbody>
+  <tr><td>Setup code minted already-approved for the signed-in user</td><td class="mono">keld-atlas services/api/app/routers/cli.py:134-153</td><td><span class="pill p-extend">extend</span> gains a challenge</td></tr>
+  <tr><td>Single-use redeem, atomic <span class="mono">GETDEL</span> claim</td><td class="mono">routers/cli.py:90-112 · cli_devices.py:51-62</td><td><span class="pill p-extend">extend</span> checks the verifier</td></tr>
+  <tr><td>Onboarding returns the ingest token</td><td class="mono">routers/cli.py:115-121</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>Login gate keeps the full path in <span class="mono">?next=</span></td><td class="mono">services/web/proxy.ts:27-48</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>Device-approve page pattern (auth check, then act)</td><td class="mono">services/web/app/cli/signal/page.tsx:12-43</td><td><span class="pill p-reuse">reuse</span> as the model</td></tr>
+  <tr><td><span class="mono">next</span> checks with a backslash gap</td><td class="mono">oauth.py:25-26 · login/page.tsx:34-35 · oauth-buttons.tsx:51-53</td><td><span class="pill p-extend">fix</span></td></tr>
+  <tr><td>Loopback-host set</td><td class="mono">services/api/app/telemetry_hook.py:92</td><td><span class="pill p-reuse">reuse</span> as reference only</td></tr>
+  <tr><td>Pairing: parse code, enroll, onboarding, write files</td><td class="mono">keld-signal internal/agent/ingress/config.go:34-87</td><td><span class="pill p-extend">generalize</span> into one <span class="mono">pair()</span></td></tr>
+  <tr><td>Secret gate for page routes</td><td class="mono">internal/agent/ingress/route.go:24-40</td><td><span class="pill p-reuse">reuse</span> on <span class="mono">/v1/auth/start</span></td></tr>
+  <tr><td>Browser opener (open / rundll32 / xdg-open)</td><td class="mono">internal/auth/device.go:178-191</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>One listener, handler swapped in place</td><td class="mono">internal/agent/daemon/onboarding.go:64-177</td><td><span class="pill p-reuse">reuse</span> mounts both routes</td></tr>
+  <tr><td>Mock Atlas for enroll and onboarding</td><td class="mono">internal/conform/mockatlas/server.go:86-98,241-253</td><td><span class="pill p-extend">extend</span> fake authorize</td></tr>
+  <tr><td>Playwright suite against a real daemon</td><td class="mono">internal/agent/ui/e2e/ (README)</td><td><span class="pill p-extend">extend</span> + first CI job</td></tr>
+  <tr><td><span class="mono">send_to_atlas</span>: absent means on, <span class="mono">false</span> means zero outbound connections</td><td class="mono">internal/agent/settings/settings.go:102-110</td><td><span class="pill p-reuse">reuse</span> as the local-only answer</td></tr>
+  <tr><td>Local-only wording already on the page</td><td class="mono">internal/agent/ui/app.js:382 (localOnlyConfirmationText)</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>macOS installer pane: code field, browser device sign-in, tool picker</td><td class="mono">installers/macos/plugin/ · InstallerSections.plist:34 · build-pkg.sh:153-165</td><td><span class="pill p-extend">remove</span> entirely</td></tr>
+  <tr><td>postinstall reads the pane's handoff and runs tool setup</td><td class="mono">installers/macos/scripts/postinstall:48-75,175-197</td><td><span class="pill p-extend">remove</span></td></tr>
+  <tr><td>Daemon configures detected tools itself; on by default</td><td class="mono">internal/agent/integrations/detector.go:36-40 · settings.go:163-179,345</td><td><span class="pill p-reuse">reuse</span> replaces the picker</td></tr>
+  <tr><td>Integrations view on the page, to change tools later</td><td class="mono">internal/agent/daemon/v3.go:151-185 (/v1/integrations*)</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>macOS postinstall Terminal fallback</td><td class="mono">installers/macos/scripts/postinstall:217-219</td><td><span class="pill p-extend">change</span> open Signal instead</td></tr>
+  <tr><td>Windows post-install console</td><td class="mono">installers/windows/keld-agent.iss:99-100</td><td><span class="pill p-extend">change</span> open the page</td></tr>
+  <tr><td>Linux end-of-install messages</td><td class="mono">scripts/install.sh:297,347</td><td><span class="pill p-extend">change</span></td></tr>
+  <tr><td>Canary password login helper</td><td class="mono">keld-atlas-canary tests/heartbeat.spec.ts:9-16</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>Canary Cloudflare Access headers, metric push</td><td class="mono">src/browser/cf-access.ts:8-23 · scripts/push-canary-metric.sh:45-52</td><td><span class="pill p-reuse">reuse</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reuse ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">mint_approved_grant(challenge=None)</span>, lifted out of <span class="mono">enroll_code</span></td><td><span class="pill p-extend">generalize</span></td><td>Setup code and browser code must mint the same way. One helper, two callers.</td></tr>
+  <tr><td><span class="mono">POST /api/cli/authorize</span></td><td><span class="pill p-new">new route</span></td><td>Validation must run server-side, before minting. Overloading <span class="mono">enroll-code</span> with a return address would blur two contracts.</td></tr>
+  <tr><td><span class="mono">valid_loopback_redirect()</span> in <span class="mono">cli_redirect.py</span></td><td><span class="pill p-new">new module</span></td><td>No return-address validator exists. <span class="mono">_safe_next</span> only handles relative paths.</td></tr>
+  <tr><td><span class="mono">/v1/cli/enroll</span> accepts <span class="mono">code_verifier</span></td><td><span class="pill p-extend">extend</span></td><td>Optional field. Required only when the grant carries a challenge.</td></tr>
+  <tr><td>Authorize page <span class="mono">app/cli/signal/authorize/page.tsx</span></td><td><span class="pill p-new">new page</span></td><td>Same shape as <span class="mono">/cli/signal</span>. Different action and a different "done" state.</td></tr>
+  <tr><td><span class="mono">safeNext()</span> + fixed <span class="mono">_safe_next</span> + shared case file</td><td><span class="pill p-extend">generalize</span></td><td>Three copies drifted to the same bug. The web two become one TS helper.</td></tr>
+  <tr><td><span class="mono">ingress.pair()</span> shared by <span class="mono">/v1/config</span> and the callback</td><td><span class="pill p-extend">generalize</span></td><td>Two ways to write <span class="mono">hook.json</span> would be a parallel system.</td></tr>
+  <tr><td><span class="mono">/v1/auth/start</span> + <span class="mono">/auth/callback</span> in <span class="mono">ingress/signin.go</span></td><td><span class="pill p-new">new module</span></td><td>New behaviour. It follows the existing route-file pattern.</td></tr>
+  <tr><td>First-open screen on the page</td><td><span class="pill p-extend">extend</span></td><td>A new page state, keyed on the existing <span class="mono">send_to_atlas</span> being unset. No new setting, no new file.</td></tr>
+  <tr><td>Installers stop signing in</td><td><span class="pill p-extend">remove + change</span></td><td>Deletes the macOS pane and its handoff; three installers open Signal instead of prompting. Tool setup is already the daemon's job. <span class="mono">--code</span> untouched.</td></tr>
+  <tr><td><span class="mono">paths.AtlasWebBase()</span> (<span class="mono">KELD_ATLAS_WEB_URL</span>)</td><td><span class="pill p-extend">extend</span></td><td>Defaults to <span class="mono">APIBase()</span>, which is right in dev and prod. Only local Atlas splits :3000 and :8000.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>New patterns introduced:</strong> one. A GET route on the Signal service that changes state and needs no page secret. The single-use state is its credential, because the return arrives in the system browser, which has no page cookie (<span class="mono">ui/embed.go:61-77</span>). Needs sign-off.</li>
+  <li><strong>Shared-decision helpers:</strong> <span class="mono">valid_loopback_redirect</span> (Atlas, one copy). <span class="mono">pair()</span> (Signal, one copy). <span class="mono">next</span> validation is one helper per language, pinned by one case file.</li>
+</ul>
+
+<h3>Technical design</h3>
+<ul>
+  <li><strong>Data:</strong> no migration. The Redis grant JSON gains an optional <span class="mono">challenge</span>. Old grants without it read as "no challenge".</li>
+  <li><strong>Atlas API:</strong> <span class="mono">POST /api/cli/authorize {redirect_uri, state, code_challenge, code_challenge_method:"S256"}</span> → <span class="mono">{redirect_to}</span>. Session-gated, org of the session user. <span class="mono">EnrollRequest</span> gains <span class="mono">code_verifier?</span>.</li>
+  <li><strong>Atlas web:</strong> the authorize page stays behind the login gate, so a signed-out visit keeps its query in <span class="mono">next</span>. Continue calls the API and navigates only to the returned <span class="mono">redirect_to</span>.</li>
+  <li><strong>Signal:</strong> <span class="mono">/v1/auth/start</span> stores <span class="mono">{state → verifier, api base, expiry}</span> in memory. <span class="mono">/auth/callback</span> deletes the entry on first sight, then calls <span class="mono">pair()</span>.</li>
+  <li><strong>First open:</strong> the page shows the choice while unpaired and <span class="mono">send_to_atlas</span> is absent. Sign in starts the round trip. Local only writes <span class="mono">false</span> through the existing settings route.</li>
+  <li><strong>Installers:</strong> macOS drops the pane and its handoff file, and postinstall opens the Signal app. Tools are configured by the daemon's auto-setup, as on every silent install today. Windows swaps <span class="mono">onboard.cmd</span> for opening the page, still <span class="mono">skipifsilent</span>. <span class="mono">install.sh</span> ends with <span class="mono">keld signal open</span>. Every <span class="mono">--code</span> path is unchanged.</li>
+  <li><strong>Return page:</strong> fixed HTML with no values from the URL. The Signal page learns the result from its existing status polling.</li>
+  <li><strong>Invariants respected:</strong> the org comes from the Atlas session, never from the request. Send to Atlas off refuses, as <span class="mono">/v1/config</span> does (<span class="mono">config.go:34-87</span>). Setup codes, <span class="mono">--code</span> and <span class="mono">keld login</span> stay (AC-12 of the integrations spec).</li>
+</ul>
+
+<h3>System diagram</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 500" role="img" aria-label="Components touched, in four lanes. Device lane: the Signal page gains a Log in button, which calls the new start route on the Signal service; the new callback route hands the code to pair, a function now shared with the existing config route, which writes auth.json and hook.json. Browser lane: the unchanged system browser, which the start route opens and which later returns to the callback route. Atlas web lane: the new authorize page with the Continue screen, the login page whose next check is fixed, and the OAuth signup which now keeps next. Atlas API lane: the new authorize route, which uses the new loopback return-address check and the changed grant-minting helper that records a challenge; the changed enroll route checks the verifier; the onboarding route is unchanged. Pair calls enroll and onboarding.">
+  <defs>
+    <marker id="c-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+  </defs>
+  <line x1="20" y1="150" x2="860" y2="150" class="lane"/>
+  <line x1="20" y1="232" x2="860" y2="232" class="lane"/>
+  <line x1="20" y1="334" x2="860" y2="334" class="lane"/>
+  <text x="20" y="18" class="lanelbl">DEVICE · SIGNAL</text>
+  <text x="20" y="168" class="lanelbl">BROWSER</text>
+  <text x="20" y="250" class="lanelbl">ATLAS WEB</text>
+  <text x="20" y="352" class="lanelbl">ATLAS API</text>
+
+  <rect x="20" y="32" width="180" height="52" rx="4" class="b-enc"/>
+  <text x="110" y="54" text-anchor="middle" class="txt">Signal page</text>
+  <text x="110" y="71" text-anchor="middle" class="small">+ first-open choice, Log in</text>
+  <path d="M200 58H236" class="arr" marker-end="url(#c-ah)"/>
+  <rect x="236" y="32" width="190" height="52" rx="4" class="b-new"/>
+  <text x="331" y="54" text-anchor="middle" class="txt">start route</text>
+  <text x="331" y="71" text-anchor="middle" class="monot">POST /v1/auth/start</text>
+  <rect x="456" y="32" width="190" height="52" rx="4" class="b-new"/>
+  <text x="551" y="54" text-anchor="middle" class="txt">callback route</text>
+  <text x="551" y="71" text-anchor="middle" class="monot">GET /auth/callback</text>
+  <path d="M646 58H676" class="arr" marker-end="url(#c-ah)"/>
+  <rect x="676" y="32" width="184" height="52" rx="4" class="b-enc"/>
+  <text x="768" y="54" text-anchor="middle" class="txt">pair()</text>
+  <text x="768" y="71" text-anchor="middle" class="small">shared with /v1/config</text>
+  <rect x="676" y="98" width="184" height="36" rx="4" class="b-plain"/>
+  <text x="768" y="121" text-anchor="middle" class="monot">auth.json · hook.json</text>
+  <path d="M768 84V96" class="arr" marker-end="url(#c-ah)"/>
+
+  <rect x="236" y="176" width="410" height="42" rx="4" class="b-plain"/>
+  <text x="441" y="202" text-anchor="middle" class="txt">system browser (unchanged)</text>
+  <path d="M331 84V174" class="arr" marker-end="url(#c-ah)"/>
+  <text x="338" y="130" class="small">opens</text>
+  <path d="M551 176V86" class="arr" marker-end="url(#c-ah)"/>
+  <text x="558" y="130" class="small">redirect back</text>
+
+  <rect x="236" y="258" width="220" height="56" rx="4" class="b-new"/>
+  <text x="346" y="281" text-anchor="middle" class="txt">authorize page</text>
+  <text x="346" y="298" text-anchor="middle" class="small">Continue as … · /cli/signal/authorize</text>
+  <rect x="476" y="258" width="180" height="56" rx="4" class="b-enc"/>
+  <text x="566" y="281" text-anchor="middle" class="txt">login page</text>
+  <text x="566" y="298" text-anchor="middle" class="small">next check fixed</text>
+  <rect x="676" y="258" width="184" height="56" rx="4" class="b-enc"/>
+  <text x="768" y="281" text-anchor="middle" class="txt">OAuth signup</text>
+  <text x="768" y="298" text-anchor="middle" class="small">keeps next</text>
+  <path d="M346 218V256" class="arr" marker-end="url(#c-ah)"/>
+
+  <rect x="236" y="362" width="220" height="52" rx="4" class="b-new"/>
+  <text x="346" y="384" text-anchor="middle" class="txt">authorize route</text>
+  <text x="346" y="401" text-anchor="middle" class="monot">POST /api/cli/authorize</text>
+  <path d="M346 314V360" class="arr" marker-end="url(#c-ah)"/>
+  <text x="353" y="342" class="small">Continue</text>
+  <rect x="236" y="430" width="220" height="42" rx="4" class="b-new"/>
+  <text x="346" y="456" text-anchor="middle" class="monot">valid_loopback_redirect()</text>
+  <path d="M346 414V428" class="arr" marker-end="url(#c-ah)"/>
+  <path d="M456 388H474" class="arr" marker-end="url(#c-ah)"/>
+  <rect x="476" y="362" width="180" height="52" rx="4" class="b-enc"/>
+  <text x="566" y="384" text-anchor="middle" class="txt">mint_approved_grant</text>
+  <text x="566" y="401" text-anchor="middle" class="small">+ challenge, 120 s</text>
+  <rect x="676" y="362" width="184" height="52" rx="4" class="b-enc"/>
+  <text x="768" y="384" text-anchor="middle" class="txt">enroll</text>
+  <text x="768" y="401" text-anchor="middle" class="small">checks code_verifier</text>
+  <rect x="676" y="430" width="184" height="42" rx="4" class="b-plain"/>
+  <text x="768" y="456" text-anchor="middle" class="monot">/v1/cli/onboarding</text>
+  <path d="M860 58C875 58 875 200 870 330" class="arr" />
+  <path d="M870 330L862 360" class="arr" marker-end="url(#c-ah)"/>
+  <text x="848" y="210" text-anchor="end" class="small">redeem</text>
+
+  <rect x="20" y="480" width="14" height="10" class="b-new"/><text x="40" y="489" class="small">new</text>
+  <rect x="80" y="480" width="14" height="10" class="b-enc"/><text x="100" y="489" class="small">changed</text>
+  <rect x="160" y="480" width="14" height="10" class="b-plain"/><text x="180" y="489" class="small">unchanged</text>
+</svg></div>
+<figcaption>Every new box sits beside an existing one it copies. The riskiest new piece is the
+small dashed validator on the bottom row, because it is the only thing between a signed-in person
+and a return address someone else chose.</figcaption>
+</figure>
+
+<!-- ============================================================ 3 -->
+<h2 id="s3">3 · Alternatives considered</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>Reuse the device flow (<span class="mono">keld login</span>): open the approve page, poll until approved.</td><td>A code approved anywhere is delivered to whoever started it. That is the device-code phishing attack: an attacker far away sends the link, the victim approves, the attacker's machine gets the token. A loopback return can only land on the victim's own machine.</td></tr>
+  <tr><td class="mono">B</td><td>Custom link type <span class="mono">keld://callback</span>.</td><td>Needs per-OS registration: an app bundle on macOS, a registry entry on Windows, a <span class="mono">.desktop</span> file on Linux. On Windows and Linux Signal is a background service with no app to register. Any app can also claim the same link type.</td></tr>
+  <tr><td class="mono">C</td><td>Put the Signal login token straight in the redirect URL.</td><td>A long-lived, revoke-only token would sit in browser history and in any proxy log.</td></tr>
+  <tr><td class="mono">D</td><td>No challenge/verifier; rely on single use and 120 s.</td><td>The code rides a URL. A leaked code redeemed first wins the account. The verifier costs one field on each side.</td></tr>
+  <tr><td class="mono">E</td><td>Redirect automatically, with no Continue click.</td><td>Then any link opened in a signed-in browser mints a code for whatever listens on 127.0.0.1. On a shared machine that can be another user.</td></tr>
+  <tr><td class="mono">F</td><td>Do nothing.</td><td>First sign-in stays "copy a code between two windows". #431 already records that as confusing.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Closest call:</strong> option A. It is pure reuse and gives almost the same click path.
+One fact decided it: <strong>a device code works from anywhere, a loopback return works only on the
+machine that asked</strong>.</p>
+
+<!-- ============================================================ 4 -->
+<h2 id="s4">4 · Behaviour &amp; test specification</h2>
+
+<h3>User flow</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 812" role="img" aria-label="Decision chain from the first time Signal opens to signed in. Signal opens unpaired with no choice made and asks: sign in, or use locally. Use locally writes send_to_atlas false, keeps collecting on the machine and does not ask again. Choosing sign in continues. If the browser does not open, the page shows the link to open by hand and the flow continues. If the person is not signed in to Atlas, they sign in or create an account and come back to the same page. If they do not click Continue, nothing is minted and Signal still says not signed in. If the return address is not 127.0.0.1 on the callback path, Atlas shows an error page and makes no code. If the state is unknown, expired or used, Signal shows an error page and writes nothing. If Atlas refuses the code and verifier, Signal says the code expired and offers try again. Otherwise auth.json and hook.json are written and the page shows signed in.">
+  <defs>
+    <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+    <marker id="f-ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+    <marker id="f-ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+    <marker id="f-ahe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-enc"/></marker>
+  </defs>
+  <rect x="190" y="16" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="37" text-anchor="middle" class="txt">Signal opens for the first time</text>
+  <text x="320" y="53" text-anchor="middle" class="small">not paired · send_to_atlas never set</text>
+  <path d="M320 62V92" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="190" y="92" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="120" text-anchor="middle" class="txt">Sign in, or use locally?</text>
+  <path d="M450 115H600" class="arr-bad" marker-end="url(#f-ahe)"/><text x="525" y="108" text-anchor="middle" class="small">locally</text>
+  <rect x="600" y="92" width="260" height="46" rx="4" class="b-enc"/>
+  <text x="730" y="113" text-anchor="middle" class="txt">send_to_atlas: false</text>
+  <text x="730" y="129" text-anchor="middle" class="small">keeps collecting here · not asked again</text>
+  <path d="M320 138V168" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="157" class="small">sign in</text>
+  <rect x="190" y="168" width="260" height="46" rx="4" class="b-daemon"/>
+  <text x="320" y="196" text-anchor="middle" class="txt">Clicks Sign in with Atlas</text>
+  <path d="M320 214V244" class="arr" marker-end="url(#f-ah)"/>
+
+  <rect x="190" y="244" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="272" text-anchor="middle" class="txt">Browser opened?</text>
+  <path d="M450 267H600" class="arr-bad" marker-end="url(#f-ahe)"/><text x="525" y="260" text-anchor="middle" class="small">no</text>
+  <rect x="600" y="244" width="260" height="46" rx="4" class="b-enc"/>
+  <text x="730" y="265" text-anchor="middle" class="txt">Page shows the link</text>
+  <text x="730" y="281" text-anchor="middle" class="small">person opens it; flow continues</text>
+  <path d="M320 290V320" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="309" class="small">yes</text>
+
+  <rect x="190" y="320" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="348" text-anchor="middle" class="txt">Signed in to Atlas?</text>
+  <path d="M450 343H600" class="arr-bad" marker-end="url(#f-ahe)"/><text x="525" y="336" text-anchor="middle" class="small">no</text>
+  <rect x="600" y="320" width="260" height="46" rx="4" class="b-enc"/>
+  <text x="730" y="341" text-anchor="middle" class="txt">Sign in or create an account</text>
+  <text x="730" y="357" text-anchor="middle" class="small">returns to the same authorize URL</text>
+  <path d="M320 366V396" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="385" class="small">yes</text>
+
+  <rect x="190" y="396" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="424" text-anchor="middle" class="txt">Clicks Continue?</text>
+  <path d="M450 419H600" class="arr-bad" marker-end="url(#f-ahb)"/><text x="525" y="412" text-anchor="middle" class="small">closes tab</text>
+  <rect x="600" y="396" width="260" height="46" rx="4" class="b-bad"/>
+  <text x="730" y="417" text-anchor="middle" class="txt">Nothing minted</text>
+  <text x="730" y="433" text-anchor="middle" class="small">Signal still says not signed in · Try again</text>
+  <path d="M320 442V472" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="461" class="small">yes</text>
+
+  <rect x="190" y="472" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="493" text-anchor="middle" class="txt">Return address valid?</text>
+  <text x="320" y="509" text-anchor="middle" class="monot">http://127.0.0.1:port/auth/callback</text>
+  <path d="M450 495H600" class="arr-bad" marker-end="url(#f-ahb)"/><text x="525" y="488" text-anchor="middle" class="small">no</text>
+  <rect x="600" y="472" width="260" height="46" rx="4" class="b-bad"/>
+  <text x="730" y="493" text-anchor="middle" class="txt">Atlas error page</text>
+  <text x="730" y="509" text-anchor="middle" class="small">no redirect, no code minted</text>
+  <path d="M320 518V548" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="537" class="small">yes</text>
+
+  <rect x="190" y="548" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="569" text-anchor="middle" class="txt">State known, fresh, unused,</text>
+  <text x="320" y="585" text-anchor="middle" class="txt">same Atlas, sending on?</text>
+  <path d="M450 571H600" class="arr-bad" marker-end="url(#f-ahb)"/><text x="525" y="564" text-anchor="middle" class="small">no</text>
+  <rect x="600" y="548" width="260" height="46" rx="4" class="b-bad"/>
+  <text x="730" y="569" text-anchor="middle" class="txt">Signal error page</text>
+  <text x="730" y="585" text-anchor="middle" class="small">nothing written, no call to Atlas</text>
+  <path d="M320 594V624" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="613" class="small">yes</text>
+
+  <rect x="190" y="624" width="260" height="46" rx="4" class="b-plain"/>
+  <text x="320" y="652" text-anchor="middle" class="txt">Atlas accepts code + verifier?</text>
+  <path d="M450 647H600" class="arr-bad" marker-end="url(#f-ahb)"/><text x="525" y="640" text-anchor="middle" class="small">410</text>
+  <rect x="600" y="624" width="260" height="46" rx="4" class="b-bad"/>
+  <text x="730" y="645" text-anchor="middle" class="txt">"That code expired."</text>
+  <text x="730" y="661" text-anchor="middle" class="small">Try again from the Signal page</text>
+  <path d="M320 670V700" class="arr-good" marker-end="url(#f-ahg)"/><text x="330" y="689" class="small">yes</text>
+
+  <rect x="150" y="700" width="340" height="60" rx="4" class="b-good"/>
+  <text x="320" y="724" text-anchor="middle" class="txt">Signed in</text>
+  <text x="320" y="742" text-anchor="middle" class="small">auth.json + hook.json written · page updates within 5 s</text>
+  <text x="20" y="792" class="small">Service restarted mid-flow? Its port changed, so step 8 fails to connect. The page offers Try again.</text>
+</svg></div>
+<figcaption>Every refusal ends in a stated message and a Try again, never a silent half-state. The
+two red checks in the middle are the security controls; each has its own test table below.</figcaption>
+</figure>
+
+<h3>Behavioural specs</h3>
+<pre class="gherkin"><span class="kw">Feature:</span> Signal web sign-in
+
+  <span class="cov"># Covers: AC-1, AC-3, AC-5</span>
+  <span class="kw">Scenario:</span> A signed-in Atlas user signs in to an unpaired Signal
+    <span class="kw">Given</span> Signal is installed and not paired, and Send to Atlas is on
+    <span class="kw">And</span>   ana@acme.test is signed in to Atlas as a member of Acme
+    <span class="kw">When</span>  she clicks Log in on the Signal page
+    <span class="kw">And</span>   she clicks "Continue as ana@acme.test" in the browser
+    <span class="kw">Then</span>  the browser shows "Signed in. Close this tab."
+    <span class="kw">And</span>   ~/.keld/hook.json holds an ingest token for Acme
+    <span class="kw">And</span>   the Signal page shows her as signed in within 5 seconds
+
+  <span class="cov"># Covers: AC-3</span>
+  <span class="kw">Scenario:</span> A brand-new user signs up with Google on the way
+    <span class="kw">Given</span> no Atlas account exists for new@acme.test
+    <span class="kw">When</span>  she opens the authorize link, signs up with Google and finishes signup
+    <span class="kw">Then</span>  she lands on the same authorize URL with the same state
+
+  <span class="cov"># Covers: AC-2</span>
+  <span class="kw">Scenario:</span> A crafted link names someone else's server
+    <span class="kw">Given</span> ana is signed in to Atlas
+    <span class="kw">When</span>  she opens /cli/signal/authorize?redirect_uri=https://evil.example/cb
+    <span class="kw">Then</span>  Atlas shows "This sign-in link is not valid"
+    <span class="kw">And</span>   no grant exists in Redis for her
+
+  <span class="cov"># Covers: AC-4</span>
+  <span class="kw">Scenario:</span> A code copied from browser history is replayed
+    <span class="kw">Given</span> a browser code was issued with a challenge
+    <span class="kw">When</span>  someone posts it to /v1/cli/enroll without the verifier
+    <span class="kw">Then</span>  Atlas answers 410 and the code no longer works for anyone
+
+  <span class="cov"># Covers: AC-6</span>
+  <span class="kw">Scenario:</span> A forged return tries to pair Signal to another org
+    <span class="kw">Given</span> Signal has no pending sign-in with state S
+    <span class="kw">When</span>  the browser opens 127.0.0.1:&lt;port&gt;/auth/callback?pairing_code=X&amp;state=S
+    <span class="kw">Then</span>  Signal shows "This sign-in was not started here"
+    <span class="kw">And</span>   auth.json and hook.json are unchanged and Atlas received no call
+
+  <span class="cov"># Covers: AC-7</span>
+  <span class="kw">Scenario:</span> A login link tries to bounce off Atlas
+    <span class="kw">When</span>  someone opens /login?next=/\evil.com and signs in
+    <span class="kw">Then</span>  the browser goes to / on Atlas
+
+  <span class="cov"># Covers: AC-12</span>
+  <span class="kw">Scenario:</span> Someone chooses to use Signal locally only
+    <span class="kw">Given</span> Signal has just been installed and never paired
+    <span class="kw">When</span>  she opens Signal and clicks "Use locally only"
+    <span class="kw">Then</span>  agent-config.json holds send_to_atlas: false
+    <span class="kw">And</span>   Signal makes no outbound connection to Atlas
+    <span class="kw">And</span>   reopening Signal shows the normal page, not the choice
+    <span class="kw">And</span>   Settings still offers "Sign in with Atlas"
+
+  <span class="cov"># Covers: AC-10</span>
+  <span class="kw">Scenario:</span> A person installs Signal on a Mac by double-clicking the pkg
+    <span class="kw">When</span>  they click through the installer
+    <span class="kw">Then</span>  no Keld screen appears in the installer
+    <span class="kw">And</span>   the Signal app opens when the install finishes
+    <span class="kw">And</span>   Signal sets up the AI tools it detects within a minute
+
+  <span class="cov"># Covers: AC-8, AC-10</span>
+  <span class="kw">Scenario:</span> IT installs Signal silently with a setup code
+    <span class="kw">When</span>  the MDM runs the silent install, then keld-agent install --code X
+    <span class="kw">Then</span>  the machine is paired and no window opened
+    <span class="kw">And</span>   the first-open choice never appears on that machine
+
+  <span class="cov"># Covers: AC-8</span>
+  <span class="kw">Scenario:</span> Existing pairing paths are untouched
+    <span class="kw">When</span>  a setup code is pasted, or keld-agent install --code runs
+    <span class="kw">Then</span>  pairing succeeds exactly as before and no existing test changed</pre>
+
+<h3>Decision table — Atlas return-address check</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>redirect_uri</th><th>Why it is interesting</th><th>Expected</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td class="mono">http://127.0.0.1:53211/auth/callback</td><td>the real shape</td><td>accept</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">2</td><td class="mono">http://127.0.0.1:1024/auth/callback · :65535</td><td>port bounds</td><td>accept</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">3</td><td class="mono">http://127.0.0.1:80/auth/callback · :0 · :70000 · no port</td><td>outside range or missing</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">4</td><td class="mono">https://evil.example/auth/callback</td><td>foreign host</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">5</td><td class="mono">http://localhost:5000/… · http://[::1]:5000/…</td><td>names that can resolve elsewhere; Signal binds 127.0.0.1 only</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">6</td><td class="mono">http://127.0.0.1.evil.example:5000/…</td><td>prefix trick</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">7</td><td class="mono">http://127.0.0.1@evil.example:5000/…</td><td>user-info trick</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">8</td><td class="mono">http://2130706433:5000/… · http://0x7f.1:5000/…</td><td>numeric forms of 127.0.0.1</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">9</td><td class="mono">https://127.0.0.1:5000/auth/callback</td><td>Signal serves plain http</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">10</td><td class="mono">…/auth/callback/../v1/config · /Auth/Callback · /auth/callback/</td><td>path games</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">11</td><td class="mono">…/auth/callback?x=1 · …#frag</td><td>smuggled params</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">12</td><td class="mono">" http://127.0.0.1:5000/auth/callback" · tab or newline inside</td><td>whitespace and control characters</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">13</td><td>state missing, over 128 chars, or not base64url</td><td>garbage state</td><td>reject</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">14</td><td>challenge missing, or method not S256</td><td>unbound code</td><td>reject</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Decision table — Signal return route</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>State</th><th>Code's Atlas</th><th>Send to Atlas</th><th>Expected</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>pending, fresh</td><td>same as start</td><td>on</td><td>pair, files written, success page</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">2</td><td>unknown</td><td>any</td><td>on</td><td>refuse, nothing written, no Atlas call</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">3</td><td>used once already</td><td>same</td><td>on</td><td>refuse (replay)</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">4</td><td>older than 10 min</td><td>same</td><td>on</td><td>refuse (expired)</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">5</td><td>pending, fresh</td><td>different host</td><td>on</td><td>refuse, state burned</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">6</td><td>pending, fresh</td><td>same</td><td>off</td><td>refuse like /v1/config's 409</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">7</td><td>pending, fresh</td><td>same, Atlas answers 410</td><td>on</td><td>"That code expired", nothing written</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">8</td><td><span class="mono">&lt;script&gt;</span> in any param</td><td>—</td><td>—</td><td>fixed page; the value never appears in the HTML</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Decision table — does the first-open choice show?</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Paired (hook.json)</th><th>send_to_atlas</th><th>Expected</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>no</td><td>absent</td><td>show the choice</td><td class="mono"><a href="#ac-12">AC-12</a></td></tr>
+  <tr><td class="mono">2</td><td>no</td><td>false</td><td>normal page; Settings offers Sign in</td><td class="mono"><a href="#ac-12">AC-12</a></td></tr>
+  <tr><td class="mono">3</td><td>no</td><td>true (set by hand)</td><td>normal page with the not-signed-in bar</td><td class="mono"><a href="#ac-12">AC-12</a></td></tr>
+  <tr><td class="mono">4</td><td>yes (UI, <span class="mono">--code</span> or MDM)</td><td>any</td><td>never shown</td><td class="mono"><a href="#ac-12">AC-12</a></td></tr>
+  <tr><td class="mono">5</td><td>no, <span class="mono">KELD_ATLAS=0</span> set</td><td>absent</td><td>never shown; the env var already chose local</td><td class="mono"><a href="#ac-12">AC-12</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Test layers — what runs where</h3>
+<ul>
+  <li><strong>Layer 1, unit (every PR):</strong> the two tables above, the verifier rules, the <span class="mono">next</span> case file, the authorize page states.</li>
+  <li><strong>Layer 2, Signal against a fake Atlas (every Signal PR):</strong> Playwright drives the real daemon and the mock Atlas. It catches Signal regressions without needing Atlas up.</li>
+  <li><strong>Layer 3, Atlas round trip (every Atlas PR):</strong> real Postgres and Redis, no browser. It proves the contract the fake in layer 2 imitates.</li>
+  <li><strong>Layer 4, canary (dev and prod):</strong> a real browser and real Atlas, with a small script playing Signal. It runs on a schedule, on demand, and after each dev deploy.</li>
+  <li><strong>Layer 5, shipped binary (after each Signal release):</strong> the canary installs the released Signal and signs it in against dev.</li>
+</ul>
+
+<figure><div class="wrap">
+<svg viewBox="0 0 880 360" role="img" aria-label="Test layers across the delivery pipeline. Columns are stages: pull request, merge and deploy to dev, dev canary, and prod. The Signal repo row runs Go tests for the start and callback routes and a Playwright sign-in test against the mock Atlas on each pull request, then releases installers on merge. The Atlas repo row runs pytest for the return-address check, the verifier and the full round trip, plus vitest for the authorize page and next cases on each pull request, then builds images and deploys to dev through ArgoCD. The canary row runs the sign-in spec against atlas-dev every six hours and after each dev deploy, and the same spec against atlas.keld.co in prod, plus the shipped-binary check after a Signal release. A dashed arrow from the dev canary to prod promotion marks a proposed gate that is an open decision.">
+  <defs>
+    <marker id="p-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+    <marker id="p-ahe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-enc"/></marker>
+  </defs>
+  <text x="150" y="18" class="lanelbl">PULL REQUEST</text>
+  <text x="360" y="18" class="lanelbl">MERGE → DEV</text>
+  <text x="560" y="18" class="lanelbl">DEV CANARY</text>
+  <text x="760" y="18" class="lanelbl">PROD</text>
+  <text x="20" y="72" class="lanelbl">SIGNAL</text>
+  <text x="20" y="172" class="lanelbl">ATLAS</text>
+  <text x="20" y="272" class="lanelbl">CANARY</text>
+  <line x1="20" y1="122" x2="860" y2="122" class="lane"/>
+  <line x1="20" y1="222" x2="860" y2="222" class="lane"/>
+
+  <rect x="120" y="34" width="210" height="76" rx="4" class="b-new"/>
+  <text x="225" y="56" text-anchor="middle" class="txt">go test: start + callback</text>
+  <text x="225" y="74" text-anchor="middle" class="txt">Playwright vs mock Atlas</text>
+  <text x="225" y="94" text-anchor="middle" class="small">L1 + L2 · required</text>
+  <path d="M330 72H354" class="arr" marker-end="url(#p-ah)"/>
+  <rect x="354" y="44" width="170" height="56" rx="4" class="b-plain"/>
+  <text x="439" y="68" text-anchor="middle" class="txt">release → installers</text>
+  <text x="439" y="86" text-anchor="middle" class="small">tag vX, unchanged</text>
+
+  <rect x="120" y="134" width="210" height="76" rx="4" class="b-new"/>
+  <text x="225" y="156" text-anchor="middle" class="txt">pytest: check, verifier,</text>
+  <text x="225" y="173" text-anchor="middle" class="txt">round trip · vitest: page</text>
+  <text x="225" y="194" text-anchor="middle" class="small">L1 + L3 · required</text>
+  <path d="M330 172H354" class="arr" marker-end="url(#p-ah)"/>
+  <rect x="354" y="144" width="170" height="56" rx="4" class="b-plain"/>
+  <text x="439" y="168" text-anchor="middle" class="txt">images → ArgoCD dev</text>
+  <text x="439" y="186" text-anchor="middle" class="small">atlas-dev.keld.co</text>
+
+  <rect x="544" y="234" width="150" height="76" rx="4" class="b-new"/>
+  <text x="619" y="256" text-anchor="middle" class="txt">signal-signin.spec</text>
+  <text x="619" y="274" text-anchor="middle" class="txt">vs atlas-dev</text>
+  <text x="619" y="294" text-anchor="middle" class="small">L4 · 6 h + after deploy</text>
+  <path d="M439 200C439 250 500 272 542 272" class="arr" marker-end="url(#p-ah)"/>
+  <text x="470" y="258" class="small">dispatch</text>
+
+  <rect x="714" y="134" width="146" height="76" rx="4" class="b-plain"/>
+  <text x="787" y="162" text-anchor="middle" class="txt">promote-prod</text>
+  <text x="787" y="180" text-anchor="middle" class="small">copies dev tags</text>
+  <path d="M694 250C730 240 760 230 780 212" class="arr-bad" marker-end="url(#p-ahe)"/>
+  <text x="700" y="216" text-anchor="end" class="small t-enc">gate? §8 #3</text>
+
+  <rect x="714" y="234" width="146" height="76" rx="4" class="b-new"/>
+  <text x="787" y="256" text-anchor="middle" class="txt">same spec vs prod</text>
+  <text x="787" y="274" text-anchor="middle" class="txt">+ shipped binary</text>
+  <text x="787" y="294" text-anchor="middle" class="small">L4 + L5</text>
+  <path d="M787 210V232" class="arr" marker-end="url(#p-ah)"/>
+
+  <path d="M524 72C600 72 640 150 640 232" class="arr-daemon" marker-end="url(#p-ah)"/>
+  <text x="600" y="100" class="small">Signal release → L5</text>
+  <text x="440" y="344" text-anchor="middle" class="small">L5 runs the shipped binary on dev first, then prod, after each Signal release.</text>
+</svg></div>
+<figcaption>Each layer catches what the one before it cannot. The mock Atlas in layer 2 can drift
+from the real one; layers 3 and 4 exist to catch exactly that drift. Nothing reaches prod users
+untested by a real browser.</figcaption>
+</figure>
+
+<h3>What each CI piece looks like</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Repo</th><th>Where</th><th>What it runs</th><th>Trigger</th></tr></thead>
+<tbody>
+  <tr><td>keld-signal</td><td class="mono">ci.yml · job ui-e2e-signin</td><td>Build daemon + mock Atlas, Playwright <span class="mono">ui/e2e/signin.spec.ts</span> and <span class="mono">firstrun.spec.ts</span>. The mock gains <span class="mono">/cli/signal/authorize</span> that redirects straight back, and checks the verifier on enroll.</td><td>every push and PR · required</td></tr>
+  <tr><td>keld-signal</td><td class="mono">ci.yml · installer-guards (existing)</td><td><span class="mono">plugin_test.sh</span> asserts the pane has no code field or sign-in call. <span class="mono">postinstall_test.sh</span> and <span class="mono">keld_agent_iss_test.sh</span> assert Signal opens and no code prompt runs, and that <span class="mono">--code</span> still pairs.</td><td>every push and PR · already required</td></tr>
+  <tr><td>keld-atlas</td><td class="mono">ci.yml · api-tests (existing job)</td><td><span class="mono">test_cli_authorize.py</span>: both tables, round trip with a real session, Redis and Postgres (<span class="mono">tests/conftest.py:387-401</span>).</td><td>every PR · already required</td></tr>
+  <tr><td>keld-atlas</td><td class="mono">ci.yml · web-tests (existing job)</td><td>vitest for the authorize page and <span class="mono">safe-next</span>, fed by the shared case file.</td><td>every PR · already required</td></tr>
+  <tr><td>keld-atlas-canary</td><td class="mono">.github/workflows/signal-signin.yml</td><td>Matrix dev/prod. <span class="mono">loginViaBrowser</span>, a Node listener on <span class="mono">127.0.0.1:0</span>, Continue, redeem with Cloudflare headers, onboarding, one hostile case.</td><td>cron every 6 h · dispatch · <span class="mono">repository_dispatch</span> after dev deploy</td></tr>
+  <tr><td>keld-atlas-canary</td><td class="mono">install.yml · step signin-real-binary</td><td>After install on ubuntu: run the daemon with a temp <span class="mono">KELD_HOME</span>, POST start with the secret from <span class="mono">agent.json</span>, drive the URL with Playwright, assert <span class="mono">hook.json</span>.</td><td>existing schedule · enabled once Signal ships</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Test it on a laptop first</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 320" role="img" aria-label="Local test setup on one Mac. Atlas runs through make dev with the web app on port 3000, the API on port 8000, Postgres and Redis. A throwaway Signal service runs in the foreground with its own temporary KELD_HOME and its own telemetry port, and a random page port. The person's real Signal keeps running untouched. The throwaway Signal opens the browser on the local Atlas authorize page; the person signs in as a seeded user; the browser returns to the throwaway Signal, which redeems the code against the local Atlas API.">
+  <defs>
+    <marker id="l-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+  </defs>
+  <rect x="10" y="10" width="860" height="300" rx="10" class="b-panel"/>
+  <text x="28" y="34" class="lanelbl">YOUR MAC</text>
+  <rect x="30" y="52" width="290" height="126" rx="4" class="b-enc"/>
+  <text x="175" y="76" text-anchor="middle" class="bold">Atlas · make dev</text>
+  <text x="175" y="100" text-anchor="middle" class="monot">web  localhost:3000</text>
+  <text x="175" y="118" text-anchor="middle" class="monot">api  localhost:8000</text>
+  <text x="175" y="136" text-anchor="middle" class="monot">postgres · redis</text>
+  <text x="175" y="160" text-anchor="middle" class="small">make dev-seed → admin@acme.test</text>
+  <rect x="540" y="52" width="310" height="106" rx="4" class="b-new"/>
+  <text x="695" y="76" text-anchor="middle" class="bold">Throwaway Signal (foreground)</text>
+  <text x="695" y="98" text-anchor="middle" class="monot">KELD_HOME=$(mktemp -d)</text>
+  <text x="695" y="116" text-anchor="middle" class="monot">KELD_TELEMETRY_PORT=14418</text>
+  <text x="695" y="134" text-anchor="middle" class="monot">page port: random</text>
+  <rect x="540" y="226" width="310" height="60" rx="4" class="b-plain"/>
+  <text x="695" y="252" text-anchor="middle" class="txt">Your real Signal</text>
+  <text x="695" y="270" text-anchor="middle" class="small">untouched: own home, own ports</text>
+  <rect x="210" y="226" width="220" height="60" rx="4" class="b-plain"/>
+  <text x="320" y="252" text-anchor="middle" class="txt">Browser</text>
+  <text x="320" y="270" text-anchor="middle" class="small">Chrome, Safari, Firefox</text>
+  <path d="M540 150C470 170 420 200 400 224" class="arr" marker-end="url(#l-ah)"/>
+  <text x="488" y="182" class="small">1 opens</text>
+  <path d="M260 226V180" class="arr" marker-end="url(#l-ah)"/>
+  <text x="200" y="206" class="small">2 sign in</text>
+  <path d="M430 246C480 246 520 200 560 160" class="arr" marker-end="url(#l-ah)"/>
+  <text x="470" y="222" class="small">3 back</text>
+  <path d="M540 90H322" class="arr" marker-end="url(#l-ah)"/>
+  <text x="430" y="84" text-anchor="middle" class="small">4 redeem :8000</text>
+</svg></div>
+<figcaption>The throwaway Signal has its own home folder and ports, so the Signal you use every
+day is never touched. Never test this with <span class="mono">keld-agent install</span>: it rewrites
+your real service.</figcaption>
+</figure>
+<pre class="cmd"># Terminal 1 — Atlas (keld-atlas)
+make dev &amp;&amp; make dev-seed
+
+# Terminal 2 — throwaway Signal (keld-signal)
+export KELD_HOME=$(mktemp -d) KELD_TELEMETRY_PORT=14418
+export KELD_API_URL=http://localhost:8000 KELD_ATLAS_WEB_URL=http://localhost:3000
+go run ./cmd/keld-agent run
+
+# Terminal 3 — open its page, click Log in, sign in as admin@acme.test / acme2026
+KELD_HOME=$KELD_HOME go run ./cmd/keld signal open
+cat $KELD_HOME/hook.json     # expect an ingest_token
+
+# Same flow, automated, from keld-atlas-canary
+BASE_URL=http://localhost:3000 CANARY_EMAIL=admin@acme.test CANARY_PASSWORD=acme2026 \
+  npx playwright test --project=dev tests/signal-signin.spec.ts</pre>
+<p>Then point the throwaway Signal at <span class="mono">https://atlas-dev.keld.co</span> and repeat.
+Prod follows only after the dev canary is green.</p>
+
+<!-- ============================================================ 5 -->
+<h2 id="s5">5 · Integration, dependencies &amp; security surface</h2>
+
+<h3>Threats and the control that stops each</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 480" role="img" aria-label="Seven threats matched to controls. One: a website links a signed-in person to the authorize page with its own return address; stopped by the return-address check, which accepts only 127.0.0.1 on the callback path. Two: a phishing link sent from far away; stopped because the code can only land on the person's own machine, unlike the device flow. Three: the code leaks from browser history or logs; stopped by the verifier held in Signal's memory. Four: a forged return tries to pair the person's Signal to an attacker's org; stopped by the single-use state. Five: another user on a shared machine listens on a port and sends a link; mitigated by the Continue screen, residual risk accepted. Six: an attacker guesses codes; browser codes need the verifier too, and a per-IP limit for setup codes is logged as debt. Seven: a login link bounces through Atlas to another site; stopped by the fixed next check.">
+  <defs>
+    <marker id="t-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+  </defs>
+  <text x="20" y="16" class="lanelbl">THREAT</text>
+  <text x="500" y="16" class="lanelbl">CONTROL</text>
+
+  <rect x="20" y="26" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="48" class="txt">A website links you to authorize with its own address</text>
+  <text x="34" y="66" class="small">redirect_uri=https://evil.example/cb</text>
+  <path d="M420 52H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="26" width="360" height="52" rx="4" class="b-good"/>
+  <text x="514" y="48" class="txt">Return-address check</text>
+  <text x="514" y="66" class="small">only http://127.0.0.1:port/auth/callback · AC-2</text>
+
+  <rect x="20" y="90" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="112" class="txt">Phishing link sent from far away</text>
+  <text x="34" y="130" class="small">"click to approve your Signal"</text>
+  <path d="M420 116H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="90" width="360" height="52" rx="4" class="b-good"/>
+  <text x="514" y="112" class="txt">Loopback return</text>
+  <text x="514" y="130" class="small">the code lands on the clicker's machine, nobody else's</text>
+
+  <rect x="20" y="154" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="176" class="txt">The code leaks from history, a log or a screenshot</text>
+  <text x="34" y="194" class="small">it rides a URL, briefly</text>
+  <path d="M420 180H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="154" width="360" height="52" rx="4" class="b-good"/>
+  <text x="514" y="176" class="txt">Verifier + single use + 120 s</text>
+  <text x="514" y="194" class="small">code alone is refused, then burned · AC-4</text>
+
+  <rect x="20" y="218" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="240" class="txt">Forged return pairs your Signal to their org</text>
+  <text x="34" y="258" class="small">their code, your 127.0.0.1</text>
+  <path d="M420 244H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="218" width="360" height="52" rx="4" class="b-good"/>
+  <text x="514" y="240" class="txt">State: 32 random bytes, single use</text>
+  <text x="514" y="258" class="small">no match, nothing written · AC-6</text>
+
+  <rect x="20" y="282" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="304" class="txt">Another user on a shared machine listens on a port</text>
+  <text x="34" y="322" class="small">then sends you a link with their own challenge</text>
+  <path d="M420 308H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="282" width="360" height="52" rx="4" class="b-enc"/>
+  <text x="514" y="304" class="txt">Continue screen · residual, accepted</text>
+  <text x="514" y="322" class="small">nothing mints without your click · AC-3</text>
+
+  <rect x="20" y="346" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="368" class="txt">Guessing codes against /v1/cli/enroll</text>
+  <text x="34" y="386" class="small">limit is per code today, not per caller</text>
+  <path d="M420 372H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="346" width="360" height="52" rx="4" class="b-enc"/>
+  <text x="514" y="368" class="txt">Browser codes need the verifier</text>
+  <text x="514" y="386" class="small">setup codes: per-IP limit is debt, §8 #1</text>
+
+  <rect x="20" y="410" width="400" height="52" rx="4" class="b-bad"/>
+  <text x="34" y="432" class="txt">Login link bounces through Atlas to another site</text>
+  <text x="34" y="450" class="small">/login?next=/\evil.com passes all three checks today</text>
+  <path d="M420 436H496" class="arr" marker-end="url(#t-ah)"/>
+  <rect x="500" y="410" width="360" height="52" rx="4" class="b-good"/>
+  <text x="514" y="432" class="txt">Fixed next check, one case file</text>
+  <text x="514" y="450" class="small">Python and TypeScript agree · AC-7</text>
+</svg></div>
+<figcaption>Five threats are fully stopped by a tested control. Two are only reduced (orange). The
+shared-machine case needs someone already logged in to the same computer, and it is accepted.</figcaption>
+</figure>
+
+<h3>What the device ends up holding</h3>
+<figure><div class="wrap">
+<svg viewBox="0 0 880 200" role="img" aria-label="Three files in the Signal home folder after sign-in. agent.json holds the page port and page secret, changes on every restart, and never leaves the machine. auth.json holds the person's Signal login token, starting keldcli_, stored with owner-only permissions, with no expiry and revoke-only. hook.json holds the Atlas address and the org ingest token that Signal sends data with. A bar underneath says neither token ever appears in a URL; the URL carries only a two-minute code that is useless without the verifier in Signal's memory.">
+  <rect x="20" y="16" width="270" height="110" rx="4" class="b-daemon"/>
+  <text x="155" y="42" text-anchor="middle" class="bold">agent.json</text>
+  <text x="155" y="66" text-anchor="middle" class="txt">page port + page secret</text>
+  <text x="155" y="86" text-anchor="middle" class="small">changes on every restart</text>
+  <text x="155" y="104" text-anchor="middle" class="small">never leaves the machine</text>
+  <rect x="305" y="16" width="270" height="110" rx="4" class="b-good"/>
+  <text x="440" y="42" text-anchor="middle" class="bold">auth.json · 0600</text>
+  <text x="440" y="66" text-anchor="middle" class="txt">your Signal login token</text>
+  <text x="440" y="86" text-anchor="middle" class="monot">keldcli_… (64 hex)</text>
+  <text x="440" y="104" text-anchor="middle" class="small">no expiry · revoke-only · hashed in Atlas</text>
+  <rect x="590" y="16" width="270" height="110" rx="4" class="b-good"/>
+  <text x="725" y="42" text-anchor="middle" class="bold">hook.json</text>
+  <text x="725" y="66" text-anchor="middle" class="txt">Atlas address + ingest token</text>
+  <text x="725" y="86" text-anchor="middle" class="small">what Signal sends data with</text>
+  <text x="725" y="104" text-anchor="middle" class="small">one per user, per org</text>
+  <rect x="20" y="142" width="840" height="42" rx="4" class="b-enc"/>
+  <text x="440" y="168" text-anchor="middle" class="txt">Neither token is ever in a URL. The URL carries a 2-minute code, useless without the verifier.</text>
+</svg></div>
+<figcaption>The device gets exactly what a setup code gives it today. Only the way it arrives
+changes, so nothing downstream of pairing is affected.</figcaption>
+</figure>
+
+<h3>System contacts</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>System</th><th>Direction</th><th>Change</th></tr></thead>
+<tbody>
+  <tr><td class="mono">Redis cli:device:* / cli:usercode:*</td><td>write + read</td><td>Grant JSON gains optional <span class="mono">challenge</span>; browser grants live 120 s.</td></tr>
+  <tr><td class="mono">cli_tokens table</td><td>write</td><td>Same rows as a setup-code pairing. No schema change.</td></tr>
+  <tr><td class="mono">ingest tokens</td><td>read / create</td><td>Unchanged: <span class="mono">ensure_ingest_token</span>.</td></tr>
+  <tr><td class="mono">OAuth session (keld_oauth)</td><td>write</td><td><span class="mono">next</span> now survives <span class="mono">/signup/finish</span> (oauth.py:130).</td></tr>
+  <tr><td class="mono">~/.keld/auth.json, hook.json</td><td>write</td><td>Through <span class="mono">pair()</span> only. Same content as today.</td></tr>
+  <tr><td class="mono">Signal service memory</td><td>write</td><td>Up to 4 pending sign-ins: state, verifier, Atlas base, expiry. Never on disk.</td></tr>
+  <tr><td class="mono">canary Pushgateway</td><td>write</td><td>New <span class="mono">check="signal_signin"</span> series.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Data privacy</h3>
+<ul>
+  <li><strong>New PII:</strong> none. The Continue screen shows the signed-in user's own email and org.</li>
+  <li><strong>Cross-boundary data:</strong> none new. The same two tokens a setup code yields cross the same routes. No prompt text is involved anywhere.</li>
+  <li><strong>Auth surface:</strong> <span class="mono">/api/cli/authorize</span> is session-gated. <span class="mono">/v1/auth/start</span> needs the page secret. <span class="mono">/auth/callback</span> needs a live state instead of the secret, which is the one new pattern (section 2).</li>
+  <li><strong>Browser caveat, unverified:</strong> Chrome's local-network rules are believed to target sub-requests, not top-level redirects. The canary's Chromium run and one manual Safari and Firefox pass settle it (section 8 #6).</li>
+</ul>
+
+<!-- ============================================================ 6 -->
+<h2 id="s6">6 · Success metrics</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline today</th><th>Target</th><th>Where read</th></tr></thead>
+<tbody>
+  <tr><td>Canary sign-in success, dev and prod</td><td class="mono">no check exists</td><td class="mono">≥ 99% of runs per week</td><td>Pushgateway <span class="mono">canary_check_success{check="signal_signin"}</span></td></tr>
+  <tr><td>Browser sign-ins vs setup-code pairings</td><td class="mono">unknown · not logged</td><td class="mono">browser &gt; 50% of new pairings, 30 days after release</td><td>new <span class="mono">cli.grant_minted kind=browser|setup_code</span> log line</td></tr>
+  <tr><td>Machines installed but never paired</td><td class="mono">unknown</td><td class="mono">falls after release</td><td>Deploy Signal fleet view (<span class="mono">routers/signal.py:58-67</span>)</td></tr>
+  <tr><td>Redeem refusals (410 on enroll)</td><td class="mono">unknown</td><td class="mono">watched, no target</td><td>same log line with <span class="mono">outcome</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ 7 -->
+<h2 id="s7">7 · Risks, observability &amp; rollback</h2>
+
+<h3>Risk evaluation</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Class</th><th>Mitigation</th></tr></thead>
+<tbody>
+  <tr><td>Return-address check has a hole, so a token reaches an attacker</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-h">High</span></td><td>Exact-match parse, one helper, the 14-row table, canary hostile case.</td></tr>
+  <tr><td>Mock Atlas drifts from real Atlas, so Signal CI stays green over a break</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Layers 3 to 5 run against real Atlas.</td></tr>
+  <tr><td>Linux service has no display, so the browser never opens</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>The page always shows the link. Spike on Ubuntu desktop (§8 #5).</td></tr>
+  <tr><td>A browser blocks the https→http://127.0.0.1 redirect</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">Med</span></td><td>Chromium canary daily; one manual Safari and Firefox pass before release.</td></tr>
+  <tr><td>Service restarts mid-flow and the return hits a dead port</td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Browser shows a connection error; the page offers Try again.</td></tr>
+  <tr><td>Canary mints a live token every run and none are revoked</td><td><span class="pill p-h">H</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-m">Med</span></td><td>Canary-only accounts, hashed at rest, 6 h cadence. Revoke route is §8 #2.</td></tr>
+  <tr><td>Removing installer sign-in breaks silent/MDM pairing</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">Med</span></td><td><span class="mono">--code</span> paths untouched; AC-8 bars test edits; the scenario above runs in installer-guards.</td></tr>
+  <tr><td>People pick local only and never sign in</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>That is a legitimate choice. Settings keeps Sign in one click away; admins see unpaired machines in the fleet view.</td></tr>
+  <tr><td>Auto-setup connects a tool the person would have unticked</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Same as every silent install today. The Integrations view turns it off; setup keeps a backup of each config.</td></tr>
+  <tr><td>Signal doesn't open after a GUI install, so nobody sees the choice</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Each installer opens Signal explicitly; manual pkg + exe run in AC-10.</td></tr>
+  <tr><td>Stricter <span class="mono">next</span> rejects a real deep link</td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Falls back to <span class="mono">/</span>; case file includes today's real links.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Stricter <span class="mono">next</span> validation in three places</td><td>yes, revert</td><td>links with odd paths land on <span class="mono">/</span></td><td>shared case file · AC-7</td></tr>
+  <tr><td>Wire: <span class="mono">EnrollRequest.code_verifier</span> added</td><td>yes</td><td>additive, optional; old clients unaffected</td><td>AC-8 unchanged tests</td></tr>
+  <tr><td>Redis grant JSON gains <span class="mono">challenge</span></td><td>yes</td><td>old grants read as no challenge; 10 min TTL clears them</td><td>AC-4</td></tr>
+  <tr><td><strong>Deleted code:</strong> the whole macOS installer plugin (<span class="mono">installers/macos/plugin/</span>), its section entry, its build step, and postinstall's handoff and tool-setup steps</td><td>yes, revert the release</td><td>every GUI pkg install</td><td>a pkg build test asserts no Keld section; postinstall_test.sh</td></tr>
+  <tr><td><strong>Changed default:</strong> postinstall opens Signal instead of <span class="mono">onboard.command</span> in Terminal</td><td>yes</td><td>pkg installs where the pane never ran</td><td>postinstall_test.sh</td></tr>
+  <tr><td><strong>Changed default:</strong> Windows opens the page instead of <span class="mono">onboard.cmd</span></td><td>yes</td><td>every interactive Windows install</td><td>keld_agent_iss_test.sh · still skipifsilent</td></tr>
+  <tr><td><span class="mono">install.sh</span> end-of-install text and action</td><td>yes</td><td>interactive Linux installs without <span class="mono">--code</span></td><td>review</td></tr>
+  <tr><td>Canary README scope rule reworded</td><td>yes</td><td>docs only</td><td>review</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Observability</h3>
+<ul>
+  <li><strong>Reused signals:</strong> the canary's three Pushgateway metrics, labelled with the new check. The fleet view for unpaired machines.</li>
+  <li><strong>New signals:</strong> one structured log line per grant mint and per redeem in Atlas: <span class="mono">user_id, org_id, kind, outcome</span>. Today nothing logs a mint (<span class="mono">cli.py</span>, <span class="mono">cli_tokens.py</span>). Signal logs one line per refused return, with the reason and no values.</li>
+</ul>
+
+<h3>Rollback plan</h3>
+<ul>
+  <li><strong>Flag:</strong> none. The authorize page is unreachable until a Signal release links to it. Atlas ships first and sits inert.</li>
+  <li><strong>Order:</strong> Atlas first, then one Signal release carrying the button, the first-open screen and the installer changes together. Installers must not stop asking before Signal can ask instead.</li>
+  <li><strong>Steps:</strong> hide the Log in button in a Signal patch release, and restore the installer prompts from the previous release. Setup codes keep working. Tokens already minted stay valid, exactly like setup-code tokens. Revert the Atlas route last, only if it is itself the problem.</li>
+</ul>
+
+<!-- ============================================================ 8 -->
+<h2 id="s8">8 · Open gaps &amp; technical debt</h2>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Unknown or debt</th><th>Blocks?</th><th>Needs</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Setup codes can be guessed across codes: the limit is keyed on the code itself (<span class="mono">cli.py:21-30,95</span>). ≈ 40 bits, no per-caller limit.</td><td>no</td><td>A per-IP limit via <span class="mono">services/rate_limit.py:13</span>. Separate ticket.</td></tr>
+  <tr><td class="mono">2</td><td>No server-side revoke. Nothing sets <span class="mono">CliToken.revoked</span>; <span class="mono">keld logout</span> cannot invalidate a token.</td><td>no</td><td>A small <span class="mono">DELETE /v1/cli/token</span>. Also cleans up canary tokens.</td></tr>
+  <tr><td class="mono">3</td><td>Should prod promotion wait for a green dev sign-in canary?</td><td>no</td><td>Approved 2026-09-29 (D4): a check in <span class="mono">promote-prod.yml</span>. In scope.</td></tr>
+  <tr><td class="mono">4</td><td>The rest of <span class="mono">ui/e2e</span> has no CI job at all.</td><td>no</td><td>Deferred. This page wires only the sign-in spec.</td></tr>
+  <tr><td class="mono">5</td><td>Does <span class="mono">xdg-open</span> work from a <span class="mono">systemd --user</span> service on common desktops?</td><td>no</td><td>A 30-minute spike on Ubuntu and Fedora. The link fallback covers it meanwhile.</td></tr>
+  <tr><td class="mono">6</td><td>Safari and Firefox behaviour on the https→127.0.0.1 redirect is unverified.</td><td>no</td><td>One manual pass before the Signal release.</td></tr>
+  <tr><td class="mono">7</td><td>Links inside the desktop app (<span class="mono">target=_blank</span>) probably do nothing: no opener plugin (<span class="mono">app/src-tauri/Cargo.toml:30-40</span>).</td><td>no</td><td>Separate fix. This design sidesteps it by opening the browser from the service.</td></tr>
+  <tr><td class="mono">8</td><td><strong>Decided 2026-09-29 (Gabriel):</strong> no installer pane at all. Auto-setup configures tools; the Integrations view changes them.</td><td>no</td><td>Nothing. Recorded for traceability.</td></tr>
+  <tr><td class="mono">9</td><td><span class="mono">onboard.command</span> and <span class="mono">onboard.cmd</span> become unused by the GUI installers.</td><td>no</td><td>Delete them in this change, unless an MDM runbook calls them by name. Check docs/install.md first.</td></tr>
+  <tr><td class="mono">10</td><td><span class="mono">/v1/config</span> answers <span class="mono">restart_required: true</span>, though <span class="mono">awaitConfig</span> picks up the file without one.</td><td>no</td><td>Nothing now. A restart would change the port mid-flow, so the callback does not ask for one.</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ 9 -->
+<h2 id="s9">9 · Review log</h2>
+<p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match
+the code. A wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
+<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+
+<section class="qa">
+<h2 id="objections">Objections</h2>
+<dl>
+  <dt>Why not just auto-open the device flow we already have?</dt>
+  <dd>It is closer to reuse, and the clicks are nearly the same. But a device code approved anywhere
+  goes to whoever started it, which is how device-code phishing works. A loopback return only reaches
+  the machine that asked.</dd>
+  <dt>Notion doesn't make me click Continue. Why do we?</dt>
+  <dd>It is one extra click, true. Without it, any link opened in a signed-in browser would mint a
+  credential for whatever is listening on this computer. The click is what makes "nothing happens
+  unless you meant it" true.</dd>
+  <dt>Isn't a verifier overkill for a two-minute, single-use code?</dt>
+  <dd>Single use helps, but the first redeemer still wins. The code travels in a URL, and URLs end up
+  in history and logs. The verifier costs one field on each side and makes a leaked code worthless.</dd>
+  <dt>Why fix the <span class="mono">next</span> bug in this piece of work?</dt>
+  <dd>It predates this work. But every new Signal user will now pass through <span class="mono">/login?next=</span>
+  from a link. Shipping a new front door through a known bypass would be careless.</dd>
+  <dt>The canary mints a live token every six hours. Isn't that a mess?</dt>
+  <dd>Yes, the rows pile up, and Atlas has no revoke today. They belong to a canary-only account and are
+  stored hashed. The revoke route in section 8 #2 cleans this up and also fixes logout.</dd>
+  <dt>If the installer stops asking, won't fewer people sign in?</dt>
+  <dd>Some will choose local only, and that is a real answer, not a failure. Today's forced prompt did
+  not make people sign in; it stopped some of them installing. Sign in stays one click away in Settings,
+  and admins see unpaired machines in the fleet view.</dd>
+  <dt>Five test layers sounds heavy. Which one could we drop?</dt>
+  <dd>Layers 1 and 3 mostly extend jobs that already run. Layer 2 is the only new Signal CI job. Layer 5
+  is the only test of the binary people actually install, so it is the last one to cut.</dd>
+</dl>
+</section>
+
+<h2 id="decisions">Needs your decision</h2>
+<p class="lede">Ten items, most important first. <strong>All ten approved by Gabriel on 2026-09-29, as recommended.</strong> The discovery is signed off on the same date.</p>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Question</th><th>Approved answer</th><th>Why it matters</th><th>See</th></tr></thead>
+<tbody>
+  <tr id="d-1"><td class="mono">D1</td><td>Do we add a "Continue as you@…" click in the browser, where Notion returns automatically?</td><td><strong>Yes.</strong> One extra click.</td><td>Without it, any link opened in a signed-in browser mints a credential for whatever listens on that computer.</td><td class="mono"><a href="#ac-3">AC-3</a> · §3 E</td></tr>
+  <tr id="d-2"><td class="mono">D2</td><td>Sign off the one new pattern: a Signal route that accepts the browser's return with no page secret, protected only by the single-use state.</td><td><strong>Approve.</strong></td><td>The system browser has no page cookie, so there is no other way back in. The skill requires your sign-off for any new pattern.</td><td class="mono">§2 reuse ledger · <a href="#ac-6">AC-6</a></td></tr>
+  <tr id="d-3"><td class="mono">D3</td><td>Fix two existing Atlas bugs inside this work: the <span class="mono">/\evil.com</span> open redirect, and new Google/GitHub signups losing their place.</td><td><strong>Yes, in scope.</strong></td><td>Every new Signal user will pass through both. Shipping a new front door over a known bypass is careless.</td><td class="mono"><a href="#ac-7">AC-7</a> · <a href="#ac-3">AC-3</a></td></tr>
+  <tr id="d-4"><td class="mono">D4</td><td>Should promoting Atlas to prod wait for a green dev sign-in canary?</td><td><strong>Yes</strong>, as a check in <span class="mono">promote-prod.yml</span>.</td><td>It is the "tested on dev before prod" guarantee you asked for, enforced rather than remembered.</td><td class="mono">§8 #3</td></tr>
+  <tr id="d-5"><td class="mono">D5</td><td>Setup codes can be guessed without limit today (≈ 40 bits, limit is per code). Fix now, or a separate ticket?</td><td><strong>Separate ticket, P1.</strong> Not blocking this work.</td><td>It is a live gap in the existing setup-code path, independent of web sign-in.</td><td class="mono">§8 #1</td></tr>
+  <tr id="d-6"><td class="mono">D6</td><td>Add a server-side "revoke this token" route in this work?</td><td><strong>Separate small ticket.</strong></td><td>Logout cannot invalidate a token today, and the canary will leave a live token behind every run.</td><td class="mono">§8 #2 · §7 risks</td></tr>
+  <tr id="d-7"><td class="mono">D7</td><td>Ship order: Atlas first, then ONE Signal release with the button, the first-open screen and the installer changes together.</td><td><strong>Agree.</strong></td><td>If installers stop asking before Signal can ask, new machines end up unpaired with no way to sign in.</td><td class="mono">§7 rollback</td></tr>
+  <tr id="d-8"><td class="mono">D8</td><td>Button wording for skipping sign-in: "Use locally only" or "Skip for now"?</td><td><strong>"Use locally only".</strong></td><td>It says what happens: nothing leaves the computer. "Skip" sounds like a step you will be nagged about.</td><td class="mono"><a href="#ac-12">AC-12</a> · §2 wireframe</td></tr>
+  <tr id="d-9"><td class="mono">D9</td><td>Let the canary sign in against prod every 6 hours, which means rewording its "never touches the Signal client" rule?</td><td><strong>Yes.</strong></td><td>It is the only check that proves prod sign-in still works. It uses the canary-only account.</td><td class="mono"><a href="#ac-11">AC-11</a></td></tr>
+  <tr id="d-10"><td class="mono">D10</td><td>Delete <span class="mono">onboard.command</span> and <span class="mono">onboard.cmd</span>, now that no installer opens them?</td><td><strong>Delete</strong>, after checking no MDM runbook names them.</td><td>Unused scripts that prompt for codes will confuse the next person who finds them.</td><td class="mono">§8 #9</td></tr>
+</tbody>
+</table>
+</div>
+<p class="small" style="color:var(--muted);font-size:13px">Numbers I chose rather than measured, open to change: browser codes live 120 s, Signal holds at most 4 pending sign-ins for 10 min, the canary runs every 6 h.</p>
+
+</main>
