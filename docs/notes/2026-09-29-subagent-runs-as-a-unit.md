@@ -81,3 +81,73 @@ evidence either way.
 - **8 of corpus B's 290 runs do not start with a `user` record.** Small, but it means "the
   first record is the brief" is a strong regularity, not an invariant, and code must not
   assume it.
+
+---
+
+# E2, run 2026-09-29: the brief predicts whether a run will write code
+
+## ⚠️ First, the obvious target was DEAD
+
+"Predict the run's dominant activity from its brief" has a majority constant of **86% (corpus
+A) / 89% (corpus B)** — almost every delegated run is retrieval-dominant. There is essentially
+nothing to beat, so that question was abandoned before any arm ran.
+
+| dominant class per run | CORPUS A | CORPUS B |
+|---|---|---|
+| retrieve | 161/187 (86%) | 258/290 (89%) |
+| author_code | 18 | 11 |
+| operate / verify / author_prose | 8 | 21 |
+
+**That is itself a finding:** delegated work is overwhelmingly reading. Runs still differ —
+median distance from the pooled mix is 0.30–0.36 — but not in their argmax.
+
+## The target that is both balanced and routing-actionable
+
+**"Will this run write any code?"** — constant **54% (A) / 60% (B)**, and it decides the one
+thing a router needs: whether the run requires a code-capable model.
+
+## Design: fit on corpus A, test on corpus B
+
+Cross-person by construction, so there is no holdout to contaminate and no way to tune on the
+test set. **The gold needs no labelling** — it is the deterministic per-request classifier's
+own output for that run.
+
+## Result
+
+| arm | corpus | accuracy | constant | **lift** | P | R |
+|---|---|---|---|---|---|---|
+| lexical rule (in-sample) | A | 0.888 | 0.540 | +0.348 | 0.93 | 0.85 |
+| **lexical rule (out-of-sample)** | **B** | **0.845** | **0.600** | **+0.245** | **0.97** | **0.76** |
+| one word: `implement` | B | 0.579 | 0.600 | −0.021 | 0.98 | 0.30 |
+| **shuffled-label control** | B | **0.276** | 0.600 | **−0.324** | 0.30 | 0.15 |
+
+**The signal transfers across people** (+0.245 on a corpus never seen), **is not a trivial
+keyword** (the single strongest word scores below the constant), and **is real rather than
+register** (the shuffled control collapses to 0.276, far below chance).
+
+Generalisation gap 0.348 → 0.245, which is real and reported.
+
+⚠️ **The fitted terms looked like a trap and mostly were not.** The strongest negatives on
+corpus A are `re-reviewing`, `verdicts`, `out-of-scope`, `critical/important` — the vocabulary
+of ONE subagent-driven-development skill. If the rule were learning that skill's phrasing it
+would have collapsed on corpus B. It lost 0.10 of lift and kept the rest, so most of the
+signal is about the work. Some of it is not, and a third corpus is still owed.
+
+## ⚠️ For routing, the operating point is WRONG as tuned
+
+Precision 0.97 / recall 0.76 means: when it says "this will write code" it is almost always
+right, but it **misses a quarter of code-writing runs**. That is the expensive error — a
+missed code run routed to a cheap model costs a failed run, while a false positive costs only
+over-provisioning on one. The threshold was chosen to maximise accuracy on corpus A; for
+routing it must be **re-tuned for recall**, and that is a deliberate choice, not a default.
+
+## What this establishes
+
+Delegated work can be characterised **at dispatch time, before it runs** — from text that is
+already written, with no model, at +0.245 over the constant across people. That is a
+capability that did not exist, and it is a far cheaper place to route than per request: one
+decision covers a median of 13 (A) / 29 (B) inference requests.
+
+**Still open:** E1 (characterise a run's *kind* from its brief, now that "dominant class" is
+known to be the wrong target), E3 (sessions), E4 (is the run a better published unit than the
+block), and a third corpus for all of it.
