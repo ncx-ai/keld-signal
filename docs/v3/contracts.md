@@ -138,6 +138,34 @@ dimension values. Spec: `docs/superpowers/specs/2026-09-28-signal-2c-overview-di
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).
 
+## `requests` (`~/.keld/state/ledger.db`) — one row per model request, added 2026-09-29
+
+The Overview counts tokens and spend **per request**, not per block. Each row is one
+model request read off a transcript by `promptlog.Parser` — the same parse the Atlas
+mirror uses, with bookkeeping of its own.
+
+| Column | Meaning |
+|---|---|
+| `source` | `claude_code`, `cowork`, `codex` or `gemini_cli` (closed set) |
+| `session` | the tool's session id |
+| `request_key` | the tool's own id for the request: Claude Code's `requestId`; Codex `session@timestamp#ordinal`; Gemini's message id |
+| `ts` | the request's own instant, unix milliseconds (indexed) |
+| `model` | as the transcript names it; `''` when it names none, and the row is still counted |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` | Atlas's normalisation: input is fresh input, disjoint from the cache classes; output includes reasoning |
+| `estimate_usd` | priced at write with `pricing.Estimate`; `0` for a model the table does not know, re-priced when it learns one |
+
+Rules:
+
+- **Primary key `(source, session, request_key)`, insert-or-ignore.** A key is read off
+  the transcript, never a counter, so re-reading a transcript adds nothing.
+- **Rows are kept for good.** No rollup, no pruning. A deleted transcript keeps its rows.
+- **Only what the table holds is shown.** Days before a source's first row show no usage.
+- A `ledger_meta` row, `requests_backfill_done`, records that the one-time backfill of
+  transcripts on disk finished. It lives in this file, so deleting `ledger.db` refills it.
+- Local only. Nothing in this table is sent to Atlas; the mirror sends its own records.
+
+Spec: `docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html`.
+
 ## The page's own conventions — settled 2026-09-05, after lane D asked
 
 Four things the page needs that the routes above do not specify. Each is answered here so a

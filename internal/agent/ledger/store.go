@@ -422,6 +422,12 @@ func (s *Store) open() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// The per-request table (requests.go) is ensured here rather than per call
+	// so a ledger recreated after deletion gets it back on the same reopen.
+	if _, err := db.Exec(requestsSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// ⚠️ **`CREATE TABLE IF NOT EXISTS` DOES NOTHING TO A TABLE THAT ALREADY
 	// EXISTS**, so a column added to the schema above reaches new databases
 	// only. There is no version counter in this store, so the migration is the
