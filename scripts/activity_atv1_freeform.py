@@ -2,7 +2,7 @@
 """FREE-FORM route: don't tell GLiNER2 what to choose from.
 
 Motivation, measured: label WORDING is worth 0.378 on `code.*` and the whole difference between
-0/7 and 3/7 on John's set. A closed label set makes the answer a function of our prose. This
+0/7 and 3/7 on corpus A's set. A closed label set makes the answer a function of our prose. This
 asks GLiNER2 to EXTRACT what the work is, in the text's own words, then maps that into the atv1
 space by embedding — so our wording stops being the bottleneck.
 
@@ -48,7 +48,7 @@ if sys.argv[1:2]==["extract"]:
     ex=GLiNER2.from_pretrained("fastino/gliner2-large-v1")
     out={}
 
-    P="/home/dg/Downloads/transcripts-john/session-export-1787252995037/transcript.jsonl"
+    P=os.environ.get("KELD_CORPUS_A_SESSION", "")  # set to the corpus-A session export
     allraw,_=load(P)
     t0=dt.datetime.fromisoformat(allraw[0]["timestamp"].replace("Z","+00:00"))
     tN=dt.datetime.fromisoformat(allraw[-1]["timestamp"].replace("Z","+00:00"))
@@ -89,7 +89,7 @@ idv, nullv = vecs[:-1], vecs[-1]
 
 spans_by_win=json.load(open(STAGE1))
 gold={}
-for line in open(os.path.join(HERE,"activity-atv1-john-labels.txt")):
+for line in open(os.path.join(HERE,"activity-atv1-corpusA-labels.txt")):
     m=re.match(r"^(J\d\d)\s+(.+)$", line.strip())
     if m: gold[m.group(1)]=[x.strip() for x in m.group(2).split(">")]
 

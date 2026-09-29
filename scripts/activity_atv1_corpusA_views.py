@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Blind views for John's product/marketing session, on the SAME 60/50 grid as the
+"""Blind views for corpus A's product/marketing session, on the SAME 60/50 grid as the
 engineering frame so the two gold sets pool.
 
 Blind by the same rules attempt four used: user prompts + assistant prose only, fenced code
@@ -9,7 +9,7 @@ action, no count reaches the labeller.
 import json, os, re, sys, datetime as dt
 
 SPAN, STRIDE = 60, 50
-P = "/home/dg/Downloads/transcripts-john/session-export-1787252995037/transcript.jsonl"
+P = os.environ.get("KELD_CORPUS_A_SESSION", "")  # set to the corpus-A session export
 FENCE = re.compile(r"```.*?```", re.S)
 
 def text_of(content):
@@ -57,7 +57,7 @@ while start < tN:
             p = bound(FENCE.sub(" ", t), 400)
             if p: prose.append(p)
     print("="*100)
-    print(f"[J{idx:02d}] john#{here:%Y%m%dT%H%M}   prompts={len(prompts)} assistant_turns={len(prose)}")
+    print(f"[J{idx:02d}] corpusA#{here:%Y%m%dT%H%M}   prompts={len(prompts)} assistant_turns={len(prose)}")
     print("="*100)
     print()
     for p in prompts: print(f"USER: {p}\n")

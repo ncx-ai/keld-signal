@@ -99,8 +99,8 @@ def run(name, windows, expect):
     print("  by SUB-WINDOW:", ", ".join(f"{d} {c/ns:.0%}" for d,c in per_sub.most_common(4)))
     return per_window
 
-# John
-P="/home/dg/Downloads/transcripts-john/session-export-1787252995037/transcript.jsonl"
+# corpus A
+P=os.environ.get("KELD_CORPUS_A_SESSION", "")  # set to the corpus-A session export
 allt=load(P)
 raw=[o for o in open(P, errors="ignore")]
 jw=[]
@@ -127,4 +127,4 @@ for line in open(S):
     if t: ew.append(t)
 
 run("ENGINEERING (your transcripts)", ew, "engineering / product")
-run("JOHN (customer deck session)",   jw, "sales / marketing / product")
+run("CORPUS A (customer deck session)",   jw, "sales / marketing / product")

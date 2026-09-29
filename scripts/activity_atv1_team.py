@@ -7,7 +7,7 @@ Two mechanisms, deliberately distinguished:
   T2  BRANCH — actually restrict the offered label set by team (what was asked for)
 
 Measured WITHIN each corpus against its own `docs`-wording baseline. The two corpora use
-different pipelines (the engineering frame is single-call on a 2000-char cap; John's is
+different pipelines (the engineering frame is single-call on a 2000-char cap; corpus A's is
 turn-packed sub-window voting), so cross-corpus numbers are NOT comparable — only the delta
 from team information is.
 """
@@ -38,10 +38,10 @@ def eng_corpus():
     recs=[json.loads(l) for l in open(S)][:len(gold)]
     return {i:[window_text(r)] for i,r in enumerate(recs,1)}, gold
 
-def john_corpus():
+def corpusA_corpus():
     import importlib.util
-    spec=importlib.util.spec_from_file_location("jc", os.path.join(HERE,"activity_atv1_john_clean.py"))
-    src=open(os.path.join(HERE,"activity_atv1_john_clean.py")).read()
+    spec=importlib.util.spec_from_file_location("jc", os.path.join(HERE,"activity_atv1_corpusA_clean.py"))
+    src=open(os.path.join(HERE,"activity_atv1_corpusA_clean.py")).read()
     src=src.split("from gliner2 import GLiNER2")[0]          # reuse the packing, not the scoring
     ns={"__name__":"jc"}; exec(compile(src,"jc","exec"), ns)
     return ns["wins"], ns["gold"]
@@ -68,7 +68,7 @@ from gliner2 import GLiNER2
 ex=GLiNER2.from_pretrained("fastino/gliner2-large-v1")
 
 for name, loader, team in (("ENGINEERING 100 (team=eng)", eng_corpus, "eng"),
-                           ("JOHN 7 (team=other)",        john_corpus, "other")):
+                           ("CORPUS A 7 (team=other)",        corpusA_corpus, "other")):
     texts, gold = loader()
     print(f"\n=== {name}")
     score(ex, texts, gold, team, False, "baseline (docs, no team info)")

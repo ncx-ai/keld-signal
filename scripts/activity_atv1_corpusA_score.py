@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score GLiNER2 against John's multi-label gold — the only non-engineering ground truth.
+"""Score GLiNER2 against corpus A's multi-label gold — the only non-engineering ground truth.
 
 Reports BOTH framings so the difference is visible:
   top1 == primary   the mutually-exclusive score the engineering frame used
@@ -9,8 +9,8 @@ Also runs the CONTEXT pass, which the engineering corpus could not test at all.
 import json, re, os, sys, subprocess, collections
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VIEWS = "/tmp/claude-1000/john-views.txt"
-LABELS = os.path.join(HERE, "activity-atv1-john-labels.txt")
+VIEWS = "/tmp/claude-1000/corpusA-views.txt"
+LABELS = os.path.join(HERE, "activity-atv1-corpusA-labels.txt")
 sys.path.insert(0, HERE)
 from activity_atv1 import RICH, window_text, SENT  # reuse the measured description set
 

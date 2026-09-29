@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""John's session, sub-windows cut at LOGICAL boundaries — turn first, sentence only if a turn
+"""corpus A's session, sub-windows cut at LOGICAL boundaries — turn first, sentence only if a turn
 overflows, never mid-clause and never a truncation marker.
 
 The prior run violated AGENTS.md's "never cut text mid-sentence" convention three ways:
@@ -14,8 +14,8 @@ import json, re, os, sys, collections, datetime as dt
 HERE=os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0,HERE)
 from activity_atv1 import RICH, DOCS
 
-P="/home/dg/Downloads/transcripts-john/session-export-1787252995037/transcript.jsonl"
-LABELS=os.path.join(HERE,"activity-atv1-john-labels.txt")
+P=os.environ.get("KELD_CORPUS_A_SESSION", "")  # set to the corpus-A session export
+LABELS=os.path.join(HERE,"activity-atv1-corpusA-labels.txt")
 SPAN,STRIDE=60,50
 BUDGET=1400                     # chars; well inside 512 deberta positions
 FENCE=re.compile(r"```.*?```", re.S)

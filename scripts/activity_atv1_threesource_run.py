@@ -91,10 +91,10 @@ def run(units, gold, team, tag):
     n=len(gold)
     print(f"  {tag:30s} primary {prim}/{n}={prim/n:.3f}  in-set {inset/n:.3f}  recall {sum(recs)/max(len(recs),1):.3f}  (modality added {mod_added} candidates)")
 
-# JOHN
-P="/home/dg/Downloads/transcripts-john/session-export-1787252995037/transcript.jsonl"
+# CORPUS A
+P=os.environ.get("KELD_CORPUS_A_SESSION", "")  # set to the corpus-A session export
 gold={}
-for line in open(os.path.join(HERE,"activity-atv1-john-labels.txt")):
+for line in open(os.path.join(HERE,"activity-atv1-corpusA-labels.txt")):
     m=re.match(r"^(J\d\d)\s+(.+)$",line.strip())
     if m: gold[m.group(1)]=[x.strip() for x in m.group(2).split(">")]
 allraw,_=load(P)
@@ -106,7 +106,7 @@ while start<tN:
     r,t=load(P,start,end); here,start=start,start+dt.timedelta(minutes=STRIDE)
     if not t: continue
     idx+=1; units[f"J{idx:02d}"]=(r,t)
-print("\n=== JOHN 7 (team=other) — three-source")
+print("\n=== CORPUS A 7 (team=other) — three-source")
 run(units,gold,"other","three-source")
 
 # ENGINEERING 100 — same three-source pipeline, from the frame's own transcripts

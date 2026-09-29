@@ -1,7 +1,7 @@
 # Hand labels — `atv1`, MULTI-LABEL, prominence-ordered. corpus A's product/marketing session.
 #
 # THIS HEADER IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN. Source views:
-# `scripts/activity_atv1_john_views.py` — user prompts + assistant prose ONLY, fenced code
+# `scripts/activity_atv1_corpusA_views.py` — user prompts + assistant prose ONLY, fenced code
 # elided, every tool_use / tool_result / thinking block dropped. No tool name, file path,
 # action or count reached the labeller.
 #

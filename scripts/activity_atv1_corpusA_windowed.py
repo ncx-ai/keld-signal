@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""John's session, WINDOWED: cut each 60-min window into 400-char sub-windows, classify each,
+"""corpus A's session, WINDOWED: cut each 60-min window into 400-char sub-windows, classify each,
 rank verbs by share. This is the design the single-call arm structurally cannot express, because
 a 60-min window does not fit GLiNER2's 512 positions.
 
@@ -10,8 +10,8 @@ import re, sys, os, collections, json
 HERE=os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0,HERE)
 from activity_atv1 import RICH
 
-VIEWS="/tmp/claude-1000/john-views.txt"
-LABELS=os.path.join(HERE,"activity-atv1-john-labels.txt")
+VIEWS="/tmp/claude-1000/corpusA-views.txt"
+LABELS=os.path.join(HERE,"activity-atv1-corpusA-labels.txt")
 SENT=re.compile(r"(?<=[.!?])\s+")
 
 gold={}

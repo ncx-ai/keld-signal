@@ -61,7 +61,7 @@ def snap(verb, context):
 
 def file_evidence(turns):
     """WRITE-side modality: what was PRODUCED, not what was read. Includes SendUserFile.files,
-    which paths.PATH_INPUTS does not cover -- the gap that made John's .pptx invisible."""
+    which paths.PATH_INPUTS does not cover -- the gap that made corpus A's .pptx invisible."""
     props = collections.Counter()
     for o in turns:
         c = (o.get("message") or {}).get("content")
