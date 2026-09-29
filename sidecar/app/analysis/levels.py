@@ -351,6 +351,30 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 "think": o.think_chars or 0,
                 "out":   int((o.usage or {}).get("output_tokens") or 0),
             }), 1)
+            # ⚠️ THE SAME CLASS, WEIGHTED BY OUTPUT TOKENS RATHER THAN COUNTED.
+            #
+            # Two denominators are needed because they DISAGREE, and not slightly: on one
+            # real block `author_prose` is 9.4% of calls and 25.8% of output tokens, while
+            # `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer with only the call
+            # count would report that block as dominated by retrieval when prose authoring
+            # consumed the output. Neither denominator is wrong; publishing one is.
+            #
+            # It rides the ordinary `n` field because `window.rollup` SUMS n per (level, ref),
+            # so a token weight needs no new shape and no new machinery -- the level's name is
+            # what says which denominator it carries.
+            #
+            # ⚠️ NOT A COST FIGURE, and must not be rendered as one. Output is only 10-14% of
+            # modelled cost; 97-98.6% of input is cache reads at roughly a tenth the price. A
+            # true per-class cost needs per-class INPUT too, which is not measured here and was
+            # not judged worth it. This says where the OUTPUT went, nothing more.
+            _out = int((o.usage or {}).get("output_tokens") or 0)
+            if _out:
+                add("ref", "activity_class_tokens", reqclass.route_class({
+                    "tools": [(c.name, c.input) for c in o.tool_calls],
+                    "text":  o.text or "",
+                    "think": o.think_chars or 0,
+                    "out":   _out,
+                }), _out)
 
         paths = []
         for call in o.tool_calls:

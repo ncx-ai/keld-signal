@@ -128,8 +128,19 @@ type WindowAnalysis struct {
 	// nothing Atlas-side pins it, and anyone adding extra="forbid" to
 	// `EnrichmentIn` would turn this additive field into a 422 on live traffic.
 	ActivityClasses []NameCount
-	Dimensions      map[string]Labeled
-	Dynamics        map[string]Dynamic
+	// ActivityClassTokens is the same nine values weighted by OUTPUT TOKENS rather
+	// than counted. Both denominators are published because they DISAGREE: on one
+	// real block `author_prose` is 9.4% of calls and 25.8% of output tokens, and
+	// `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer with only the
+	// call count reports that block as retrieval-dominated when prose authoring
+	// consumed the output.
+	//
+	// ⚠️ NOT A COST FIGURE. Output is 10-14% of modelled cost; 97-98.6% of input
+	// is cache reads at roughly a tenth the price. A true per-class cost needs
+	// per-class INPUT, which is not measured. This says where the OUTPUT went.
+	ActivityClassTokens []NameCount
+	Dimensions          map[string]Labeled
+	Dynamics            map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

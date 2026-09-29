@@ -225,7 +225,12 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # Cap 9 is the WHOLE closed vocabulary, so this level can never be truncated and
              # `inventory_omitted` can never name it -- a cut distribution is a wrong one, not
              # a shorter one. `unclassified` is a real value and publishes as itself.
-             ("activity_classes", "activity_class", 9)]
+             ("activity_classes", "activity_class", 9),
+             # The same nine values weighted by OUTPUT TOKENS instead of counted. Two
+             # denominators because they disagree by up to 3x on the same block; see the
+             # comment at the emission site in levels.py. ⚠️ Not a cost figure -- output is
+             # 10-14% of modelled cost, the rest being cache reads.
+             ("activity_class_tokens", "activity_class_tokens", 9)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".

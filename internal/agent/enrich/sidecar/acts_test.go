@@ -176,14 +176,32 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		// ⚠️ Its cap is the WHOLE vocabulary (9), so unlike every other inventory it can
 		// never be truncated -- a cut distribution is a wrong one, not a shorter one.
 		"activity_classes": false,
+		// THE FIFTEENTH, AND ITS ARGUMENT.
+		//
+		// `activity_class_tokens` is the SAME nine values as the key above, weighted by
+		// output tokens instead of counted. It is a separate key rather than a richer
+		// item shape because `window.rollup` sums a level's `n`, so a second level costs
+		// no new machinery and no change to `NameCount` -- and because every other
+		// inventory on this wire is {name, n}, so widening that struct for one dimension
+		// would make fourteen consumers handle a field only one of them populates.
+		//
+		// It earns a key because the two denominators DISAGREE, and not slightly: on one
+		// real block `author_prose` is 9.4% of calls and 25.8% of output tokens, while
+		// `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer given only counts
+		// reports that block as retrieval-dominated when prose authoring consumed the
+		// output. Publishing one denominator is choosing which of those a reader sees.
+		//
+		// ⚠️ It is NOT a cost figure and must not be rendered as one: output is 10-14% of
+		// modelled cost, the rest being cache reads at roughly a tenth the price.
+		"activity_class_tokens": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all fourteen inventory keys and no others should be "+
-			"decodable — a fifteenth needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all fifteen inventory keys and no others should be "+
+			"decodable — a sixteenth needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
