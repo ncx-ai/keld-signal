@@ -619,7 +619,7 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		chunk := blocks[start:end]
 		rows := make([]publish.BlockEnrichment, 0, len(chunk))
 		for _, b := range chunk {
-			row := publish.BuildBlock(b, e.actor, now)
+			row := publish.BuildBlock(b, e.actor, now, tgt.Path)
 			// ⚠️ STAMPED HERE, NOT IN publish.BuildBlock, because deciding which
 			// projects a block enters is the decision layer's job and this
 			// package must not import it. Nil on a daemon that wires no hook

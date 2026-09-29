@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -136,6 +137,38 @@ type BlockEnrichment struct {
 	// attribution runs carries no concepts and is byte-identical to the payload
 	// before this field existed, exactly as Projects is.
 	Concepts []enrich.Concept `json:"concepts,omitempty"`
+	// IsSubagentRun says this block's transcript IS a subagent's own conversation,
+	// not the main one a person was driving.
+	//
+	// ⚠️ IT IS NOT THE `subagents` INVENTORY, AND THE TWO ARE OPPOSITE DIRECTIONS.
+	// `subagents` (an AnalysisFacets inventory level) names the subagents a block
+	// LAUNCHED. This says the block IS one. A row can carry both: a delegated run
+	// that itself delegates further.
+	//
+	// Why it is needed: Signal already publishes blocks cut from subagent
+	// transcripts -- measured on one real machine, 294 of 355 block cursors are
+	// `agent-*.jsonl` -- and until now nothing on the wire distinguished them. On
+	// two real corpora that is 41.5% and 70.6% of all inference requests silently
+	// blended into the same block counts, with no way for a reader to separate
+	// work a person did from work a person delegated. `labels.go` already names
+	// the gap from the other side: "`subagents` is the ONLY dimension that says
+	// work was DELEGATED, invisible in every other level because a subagent's own
+	// turns are a different transcript."
+	//
+	// ⚠️ NOT `delegated`: Atlas already uses `delegates` for a collector
+	// credential that asserts no identity of its own, so `delegated: true` on a
+	// block reads there as a claim about identity, which is a different axis
+	// entirely. Named after a check against the Atlas ingest path rather than
+	// after this side's own vocabulary.
+	//
+	// omitempty, so a main-line block is byte-identical to the payload before
+	// this field existed -- the same contract `projects` and `concepts` keep.
+	IsSubagentRun bool `json:"is_subagent_run,omitempty"`
+	// SubagentID is the run's identity, taken from the transcript filename
+	// (`agent-<id>.jsonl`). It is what makes a run's blocks groupable into one
+	// delegated task; a run spans several blocks whenever it outlives the cutter's
+	// 20-minute budget, measured at 20% of runs on one corpus.
+	SubagentID string `json:"subagent_id,omitempty"`
 	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
@@ -184,7 +217,36 @@ type ProjectMatch struct {
 // what the cursor's `>=` comparison is made against; blocks within a session
 // are disjoint and chronological, so a start is unique per session by
 // construction.
-func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) BlockEnrichment {
+// SubagentRunOf reports whether transcriptPath is a subagent's own conversation
+// and, if so, that run's id.
+//
+// Claude Code writes each delegated task to its own `agent-<id>.jsonl`; every
+// record in it carries isSidechain, and ZERO sidechain records appear in a
+// session transcript (measured across 405 files). So the filename is the whole
+// test -- there is no need to read the file, and no other source knows this.
+func SubagentRunOf(transcriptPath string) (bool, string) {
+	base := filepath.Base(transcriptPath)
+	const pre, ext = "agent-", ".jsonl"
+	if !strings.HasPrefix(base, pre) || !strings.HasSuffix(base, ext) {
+		return false, ""
+	}
+	id := base[len(pre) : len(base)-len(ext)]
+	if id == "" {
+		return false, ""
+	}
+	return true, id
+}
+
+// BuildBlock builds the wire row.
+//
+// ⚠️ transcriptPath is REQUIRED rather than optional on purpose. It is the only
+// input that says whether this block is a subagent's work, and there are two
+// call sites -- the emitter and the attribution REPUBLISH. A republish rebuilds
+// the row from scratch, so an optional path would let attribution silently strip
+// the marker off a row that had carried it, which is invisible on both sides. A
+// required parameter makes a future third call site a compile error instead.
+func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time, transcriptPath string) BlockEnrichment {
+	isRun, runID := SubagentRunOf(transcriptPath)
 	return BlockEnrichment{
 		Source: Source{ID: b.Source},
 		Correlation: Correlation{
@@ -194,6 +256,8 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 		},
 		Actor:             actor,
 		SessionID:         b.SessionID,
+		IsSubagentRun:     isRun,
+		SubagentID:        runID,
 		Window:            b.Ref,
 		StartReason:       b.Ref.StartReason,
 		EndReason:         b.Ref.EndReason,
