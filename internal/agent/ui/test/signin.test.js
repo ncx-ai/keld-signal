@@ -61,8 +61,9 @@ test("unpaired and local only -> no bar: that was a choice, Settings keeps Sign 
   assert.equal(signinBarMode(auth(), atlasOff, idle, 0), null);
 });
 
-test("while the first-open choice is on screen the bar stays out of its way", () => {
+test("while the first-open choice is on screen the bar stays out of its way, even mid-sign-in (the screen shows it)", () => {
   assert.equal(signinBarMode(auth({ first_run: true }), atlasOn, idle, 0), null);
+  assert.equal(signinBarMode(auth({ first_run: true }), atlasOn, { status: "waiting" }, 0), null);
 });
 
 test("paired -> no bar", () => {

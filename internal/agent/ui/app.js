@@ -585,10 +585,13 @@ export function showFirstRun(auth) {
  *  "prompt" (not signed in while Send to Atlas is on) or null. Local only is a
  *  choice, not a fault, so it gets no bar; Settings keeps Sign in. */
 export function signinBarMode(auth, settings, flow, now) {
+  // The first-open screen carries its own sign-in progress; a second copy of
+  // it in a bar above would be the same sentence twice.
+  if (showFirstRun(auth)) return null;
   const status = (flow && flow.status) || "idle";
   if (status === "starting" || status === "waiting" || status === "failed") return "flow";
   if (status === "done" && now - (flow.doneAt || 0) < SIGNIN_DONE_LINGER_MS) return "done";
-  if (!auth || auth.paired || showFirstRun(auth)) return null;
+  if (!auth || auth.paired) return null;
   return atlasEnabled(settings) ? "prompt" : null;
 }
 
@@ -1700,6 +1703,16 @@ if (typeof document !== "undefined") {
     // whole pane on every 10s poll, and a confirmation that vanished on the
     // next tick would be unreadable.
     integrationResults: new Map(),
+    // auth: the last GET /v1/auth/state body (contract C5). Null until it has
+    // answered once, and null for good on a daemon without the route — which
+    // renders as no first-open screen and no sign-in bar, never as "not
+    // signed in": the page does not know that, so it does not say it.
+    auth: null,
+    // signin: the web sign-in in progress, from whichever entry point started
+    // it. {status: idle|starting|waiting|failed|done, url, opened, startedAt,
+    // failures, message, doneAt, restartAfter, enableAtlas}. See
+    // signinPollStep for when "waiting" ends.
+    signin: { status: "idle" },
   };
 
   async function fetchJSON(path, opts) {
@@ -1763,7 +1776,19 @@ if (typeof document !== "undefined") {
     // older build, or any harness serving the page without it) would have
     // declared the whole machine down over a missing progress bar. Caught by
     // the mock-shell specs, which is exactly the shape an older daemon has.
-    await loadEngine();
+    await Promise.all([loadEngine(), loadAuth()]);
+  }
+
+  // Outside loadAll's Promise.all for the engine's reason: a daemon without
+  // /v1/auth/state is an older build, not a machine that is down. Keeps the
+  // last known answer on a failed read, so one missed request cannot flash
+  // the first-open screen at somebody who already chose.
+  async function loadAuth() {
+    try {
+      state.auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // unchanged
+    }
   }
 
   function paneFromHash() {
@@ -2566,6 +2591,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "tiles", style: "grid-template-columns:1fr 1fr" },
+        renderAccountTile(atlasOn, readonly),
         el(
           "div",
           { class: "tile" },
@@ -2884,6 +2910,223 @@ if (typeof document !== "undefined") {
     }
     await loadAll();
     route();
+  }
+
+  // ---- Web sign-in ----
+
+  let signinTimer = null;
+
+  function signinBusy() {
+    return state.signin.status === "starting" || state.signin.status === "waiting";
+  }
+
+  /** Start a web sign-in: POST /v1/auth/start, then poll /v1/auth/state.
+   *
+   *  `enableAtlas` is Settings' path from local-only mode: the start route
+   *  refuses while Send to Atlas is off (409, as /v1/config does), so the
+   *  switch is turned on first through the same PUT the switch itself uses.
+   *
+   *  ⚠️ The restart that PUT asks for is DEFERRED until the sign-in finishes.
+   *  The daemon's page port is random on every start and the pending sign-in
+   *  lives in its memory, so a restart mid-flow sends the browser's return to
+   *  a dead port and throws the attempt away — offering Restart then would be
+   *  offering to break the thing in progress. */
+  async function startSignin({ enableAtlas = false } = {}) {
+    if (signinBusy()) return;
+    clearTimeout(signinTimer);
+    state.signin = { status: "starting", enableAtlas };
+    route();
+    let restartAfter = false;
+    if (enableAtlas && !atlasEnabled(state.settings)) {
+      const put = await sendJSON("/v1/settings", "PUT", { send_to_atlas: true });
+      if (!put.ok) {
+        state.signin = { status: "failed", enableAtlas, message: settingsErrorText(put.status, put.body) };
+        route();
+        return;
+      }
+      state.settings = { ...state.settings, send_to_atlas: true };
+      restartAfter = !!(put.body && put.body.restart_required);
+    }
+    const res = await sendJSON("/v1/auth/start", "POST", {});
+    if (!res.ok || !res.body) {
+      state.signin = { status: "failed", enableAtlas, restartAfter, message: signinStartErrorText(res.status, res.body) };
+      route();
+      return;
+    }
+    state.signin = {
+      status: "waiting",
+      enableAtlas,
+      restartAfter,
+      url: safeAuthorizeURL(res.body.authorize_url),
+      opened: res.body.opened === true,
+      startedAt: Date.now(),
+      failures: 0,
+    };
+    route();
+    signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+  }
+
+  // One poll. Re-renders only when the verdict changes: route() rebuilds the
+  // whole pane, and doing that every second would wipe whatever a person is
+  // typing into the setup-code box meanwhile.
+  async function pollSignin() {
+    const flow = state.signin;
+    if (flow.status !== "waiting") return;
+    let auth = null;
+    try {
+      auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // counted below
+    }
+    if (state.signin !== flow) return; // superseded by a newer attempt or a choice
+    const failures = auth ? 0 : (flow.failures || 0) + 1;
+    const step = signinPollStep(auth, { startedAt: flow.startedAt, now: Date.now(), failures });
+    if (auth) state.auth = auth;
+    if (!step.stop) {
+      flow.failures = failures;
+      signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+      return;
+    }
+    if (step.status === "done") {
+      state.signin = { status: "done", doneAt: Date.now() };
+      if (flow.restartAfter) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+        state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
+      }
+      route();
+      // The rest of the page (the health strip's Atlas row, the env pill)
+      // reads the ledger and settings, not auth state — refresh them now
+      // rather than on the next 30 s tick.
+      await loadAll();
+      route();
+      setTimeout(route, SIGNIN_DONE_LINGER_MS + 50);
+      return;
+    }
+    state.signin = { status: "failed", enableAtlas: flow.enableAtlas, restartAfter: flow.restartAfter, message: signinErrorText(step.error) };
+    route();
+  }
+
+  /** "Use locally only": the existing Send to Atlas switch, turned off,
+   *  through the page's one settings call. The daemon then answers
+   *  first_run:false (send_to_atlas is no longer absent), which is what keeps
+   *  the screen from ever coming back — the flag set here only saves the
+   *  flash before the next read. */
+  async function chooseLocalOnly() {
+    clearTimeout(signinTimer);
+    state.signin = { status: "idle" };
+    await updateSettings({ send_to_atlas: false });
+    if (settingsErrorFor("send_to_atlas")) return; // updateSettings already routed it
+    if (state.auth) state.auth = { ...state.auth, first_run: false };
+    route();
+    await loadAuth();
+    route();
+  }
+
+  /** The progress of a sign-in, wherever it is drawn (the bar, the
+   *  first-open screen). Null while idle. */
+  function signinFlowNode() {
+    const flow = state.signin;
+    if (flow.status === "starting") return el("div", { class: "signin-flow" }, el("span", {}, SIGNIN_TEXT.starting));
+    if (flow.status === "waiting") {
+      return el(
+        "div",
+        { class: "signin-flow" },
+        el("strong", {}, SIGNIN_TEXT.waiting),
+        flow.url
+          ? el(
+              "span",
+              { class: "signin-link" },
+              `${flow.opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened} `,
+              el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel)
+            )
+          : null
+      );
+    }
+    if (flow.status === "failed") {
+      return el(
+        "div",
+        { class: "signin-flow failed" },
+        el("span", {}, flow.message || signinErrorText(null)),
+        el("button", { class: "btn", type: "button", onclick: () => startSignin({ enableAtlas: !!flow.enableAtlas }) }, SIGNIN_TEXT.tryAgain)
+      );
+    }
+    if (flow.status === "done") return el("div", { class: "signin-flow done" }, el("strong", {}, signedInText(state.auth)));
+    return null;
+  }
+
+  function renderSigninBanner() {
+    const node = document.getElementById("signinBanner");
+    if (!node) return;
+    const mode = state.offline ? null : signinBarMode(state.auth, state.settings, state.signin, Date.now());
+    node.innerHTML = "";
+    node.hidden = !mode;
+    node.className = "signin-banner" + (mode ? ` ${mode}` : "");
+    if (!mode) return;
+    if (mode === "prompt") {
+      node.appendChild(
+        el("div", { class: "signin-copy" }, el("strong", {}, SIGNIN_TEXT.notSignedIn), el("span", {}, SIGNIN_TEXT.notSignedInBody))
+      );
+      node.appendChild(el("button", { class: "btn", type: "button", onclick: () => startSignin() }, SIGNIN_TEXT.signIn));
+      return;
+    }
+    const flow = signinFlowNode();
+    if (flow) node.appendChild(flow);
+  }
+
+  /** The first-open choice (AC-12), in place of whichever pane was asked for.
+   *  It shows only while the daemon says first_run — see showFirstRun. */
+  function renderFirstRun(root) {
+    root.innerHTML = "";
+    const err = settingsErrorFor("send_to_atlas");
+    root.appendChild(
+      el(
+        "section",
+        { class: "firstrun", "aria-labelledby": "firstrunTitle" },
+        el("h1", { id: "firstrunTitle" }, SIGNIN_TEXT.firstRunTitle),
+        el("p", { class: "firstrun-lead" }, SIGNIN_TEXT.firstRunLead),
+        el("p", {}, SIGNIN_TEXT.firstRunBody),
+        el(
+          "div",
+          { class: "firstrun-actions" },
+          el("button", { class: "btn", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
+          el("button", { class: "btn secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
+        ),
+        signinFlowNode(),
+        err ? el("div", { class: "settings-note error-note" }, err) : null,
+        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.later),
+        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.localNote)
+      )
+    );
+  }
+
+  /** Settings' account tile: who this machine is signed in as, or a way to
+   *  sign in. Beside the setup-code box, which stays (AC-8). Nothing at all
+   *  on a daemon without /v1/auth/state. */
+  function renderAccountTile(atlasOn, readonly) {
+    const auth = state.auth;
+    if (!auth) return null;
+    if (auth.paired) {
+      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "signin-who" }, signedInText(auth)));
+    }
+    // Signing in from local-only mode turns Send to Atlas on — impossible
+    // while KELD_ATLAS pins it off, so the button says why instead.
+    const pinnedOff = !atlasOn && readonly.has("send_to_atlas");
+    return el(
+      "div",
+      { class: "tile" },
+      el("div", { class: "l" }, SIGNIN_TEXT.account),
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, SIGNIN_TEXT.notSignedInSettings, atlasOn ? null : el("div", { class: "desc" }, SIGNIN_TEXT.turnsAtlasOn)),
+        el(
+          "button",
+          { class: "btn", type: "button", disabled: pinnedOff || signinBusy(), onclick: () => startSignin({ enableAtlas: !atlasOn }) },
+          SIGNIN_TEXT.signIn
+        )
+      ),
+      pinnedOff ? el("div", { class: "settings-note readonly-note" }, readonlyNote("send_to_atlas")) : null
+    );
   }
 
   // ---- Router / boot ----
@@ -3380,6 +3623,7 @@ if (typeof document !== "undefined") {
     renderNavVersion();
     syncNavVisibility();
     document.getElementById("offlineBanner").hidden = !state.offline;
+    renderSigninBanner();
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the
     // middle. Projects and Settings are ordinary documents that should scroll
@@ -3388,6 +3632,14 @@ if (typeof document !== "undefined") {
     // careful.
     document.body.classList.toggle("pane-today", pane === "today");
     const root = document.getElementById("paneRoot");
+    // The first-open choice stands in for every pane until it is answered.
+    // Not while offline: the cached page is showing what it last knew, and
+    // neither button could do anything.
+    if (showFirstRun(state.auth) && !state.offline) {
+      document.body.classList.remove("pane-today");
+      renderFirstRun(root);
+      return;
+    }
     if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
     else if (pane === "integrations") {
