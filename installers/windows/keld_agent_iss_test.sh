@@ -358,6 +358,29 @@ fi
 printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := False' && \
   fail "ShowApproval still hides WebPanel; that is the line that made the sign-in page render nothing"
 
+# 10c. ⚠️ THE DESKTOP APP SHIPS BESIDE keld.exe, AND ITS ABSENCE MUST NOT BREAK
+#      THE BUILD. `keld signal open` prefers the app over a browser tab and finds
+#      it by looking next to the running keld.exe — so it installs into {app}
+#      rather than its own directory, giving one install dir and nothing to keep
+#      in step. But it is a CONVENIENCE: without it `signal open` opens a
+#      browser, which is what every release before this did. A Rust build failing
+#      on the runner must not take the whole Windows installer down, and a
+#      missing `Source:` is otherwise a compile error.
+app_line="$(printf '%s\n' "$unfolded" | grep -F 'Source: "Keld Signal.exe"' || true)"
+[ -n "$app_line" ] || \
+  fail "the desktop app is not shipped; keld signal open would always fall back to a browser"
+printf '%s\n' "$app_line" | grep -q 'DestDir: "{app}"' || \
+  fail "the desktop app is not installed beside keld.exe - signal open looks there first and would not find it"
+printf '%s\n' "$app_line" | grep -q 'skipifsourcedoesntexist' || \
+  fail "the desktop app is a required Source - a failed Rust build would fail the whole installer compile"
+grep -q 'name: Build the desktop app (Windows)' "$wf" || \
+  fail "nothing builds the desktop app on the Windows leg; the Source above would never exist"
+# ⚠️ --bundles app is a macOS FORMAT; on Windows it would emit nsis/msi, i.e. a
+#    second installer beside keld-setup.exe. We want the bare executable.
+app_step="$(sed -n '/name: Build the desktop app (Windows)/,/name: Restore HuggingFace/p' "$wf")"
+printf '%s\n' "$app_step" | grep -q -- '--no-bundle' || \
+  fail "the Windows app build does not use --no-bundle - it would produce a second installer"
+
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
 #     LOADS, so an installer signed over an unsigned payload installs fine and

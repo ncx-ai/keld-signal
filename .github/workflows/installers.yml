@@ -304,6 +304,37 @@ jobs:
           echo "KELD_APP_BUNDLE=$PWD/$BUNDLE" >> "$GITHUB_ENV"
           echo "built $(du -sh "$BUNDLE" | cut -f1) app bundle for $TARGET"
 
+      # ⚠️ `--no-bundle`, NOT `--bundles app`. `app` is a macOS bundle FORMAT; on
+      # Windows the equivalent bundlers are nsis/msi, which would produce a
+      # SECOND installer beside keld-setup.exe — exactly what we do not want.
+      # What we want is the bare executable, which Tauri writes to
+      # target/release/ regardless of bundling.
+      #
+      # ⚠️ NO WEBVIEW2 REDISTRIBUTABLE IS SHIPPED WITH IT. Tauri renders through
+      # the system WebView2, which the wizard already requires and which is
+      # present on every supported Windows 11 machine — and the wizard's own
+      # `no_runtime` path is what covers a machine that somehow lacks it. Adding
+      # the ~150 MB evergreen bootstrapper here would double the installer to fix
+      # a case that already has an answer.
+      #
+      # The binary is copied into the payload staging dir like every other one,
+      # so `sign-payload.ps1` catalogs and signs it with no signing change at all.
+      - name: Build the desktop app (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd app
+          npx --yes @tauri-apps/cli@latest build --no-bundle
+          EXE="src-tauri/target/release/Keld Signal.exe"
+          if [ ! -f "$EXE" ]; then
+            echo "no app executable at $EXE"
+            ls -R src-tauri/target/release 2>/dev/null | head -40
+            exit 1
+          fi
+          cp "$EXE" "../stage/Keld Signal.exe"
+          echo "built $(du -h "$EXE" | cut -f1) desktop app"
+
       # Import the Developer ID identities into a throwaway keychain. Without this the
       # APPLE_DEVELOPER_ID_* names resolve against nothing: they are only identity
       # NAMES, looked up in the runner's keychain search list, and a fresh runner has
@@ -496,6 +527,16 @@ jobs:
           # which reads every workflow shell-agnostically — so a comment after
           # it fails that guard. Copy-Item resolves a directory either way.
           Copy-Item stage\keld.exe, stage\keld-agent.exe, stage\keld-wizard-host.exe installers\windows
+          # ⚠️ OPTIONAL, AND DELIBERATELY SO. The desktop app is a convenience —
+          # `keld signal open` falls back to the browser without it, which is the
+          # behaviour every release before this one had. A Rust build failing must
+          # not take the installer down with it, so the .iss marks this file
+          # `skipifsourcedoesntexist` and this copy tolerates its absence.
+          if (Test-Path "stage\Keld Signal.exe") {
+            Copy-Item "stage\Keld Signal.exe" installers\windows
+          } else {
+            Write-Warning "no desktop app staged - keld signal open will use the browser"
+          }
 
       # ⚠️ ENUMERATION STAYS IN THE SCRIPT, NOT IN THE ACTION, BECAUSE THE
       # ALREADY-SIGNED RULE LIVES THERE. The action can sweep a folder itself

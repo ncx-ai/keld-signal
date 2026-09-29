@@ -136,14 +136,52 @@ func TestWindowsAppCandidatesUsesLocalAppDataAndProgramFiles(t *testing.T) {
 		"LOCALAPPDATA": `C:\Users\dev\AppData\Local`,
 		"ProgramFiles": `C:\Program Files`,
 	}
-	got := windowsAppCandidates(func(k string) string { return env[k] })
+	got := windowsAppCandidates(func(k string) string { return env[k] }, "")
 	if len(got) != 2 {
 		t.Fatalf("want 2 candidates, got %v", got)
 	}
 	// Absent env vars must not produce empty-rooted paths.
-	got = windowsAppCandidates(func(string) string { return "" })
+	got = windowsAppCandidates(func(string) string { return "" }, "")
 	if len(got) != 0 {
 		t.Fatalf("want no candidates with no env set, got %v", got)
+	}
+}
+
+// ⚠️ THE INSTALL DIRECTORY IS THE ONLY CANDIDATE THAT MATCHES HOW WE ACTUALLY
+// SHIP, AND IT MUST BE TRIED FIRST.
+//
+// keld-setup.exe puts everything in ONE directory (`%LOCALAPPDATA%\Programs\
+// keld\`), which is neither of the two fixed `…\Keld Signal\` paths — so before
+// this, `signal open` on a machine installed by our own installer could never
+// find the app and always fell through to the browser, however well the app was
+// shipped. Looking beside the running keld.exe finds it wherever the installer
+// put it.
+func TestWindowsAppCandidatesLooksBesideTheRunningBinaryFirst(t *testing.T) {
+	env := map[string]string{
+		"LOCALAPPDATA": `C:\Users\dev\AppData\Local`,
+		"ProgramFiles": `C:\Program Files`,
+	}
+	exeDir := `C:\Users\dev\AppData\Local\Programs\keld`
+	got := windowsAppCandidates(func(k string) string { return env[k] }, exeDir)
+	if len(got) != 3 {
+		t.Fatalf("want 3 candidates, got %v", got)
+	}
+	want := filepath.Join(exeDir, "Keld Signal.exe")
+	if got[0] != want {
+		t.Errorf("install directory must be tried FIRST\n got %q\nwant %q", got[0], want)
+	}
+	// The fixed locations stay: a winget package or a hand-unpacked app lands
+	// there, and dropping them would silently break a layout we do not control.
+	for _, fixed := range []string{"Keld Signal"} {
+		found := false
+		for _, c := range got[1:] {
+			if strings.Contains(c, fixed) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the fixed %q candidates were dropped", fixed)
+		}
 	}
 }
 

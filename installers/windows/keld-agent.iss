@@ -97,6 +97,15 @@ InfoBeforeFile=..\resources\SECURITY-OVERVIEW.txt
 Source: "keld.exe";             DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-agent.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-wizard-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The Keld Signal desktop app. `keld signal open` prefers it over a browser tab
+; and finds it by looking BESIDE keld.exe — which is why it installs here rather
+; than into its own directory: one install dir, and nothing to keep in step.
+;
+; ⚠️ `skipifsourcedoesntexist` IS LOAD-BEARING. The app is a convenience: without
+; it `signal open` opens a browser, which is what every release before this did.
+; A Rust build that fails on the runner must not take the whole Windows installer
+; down with it, and a missing `Source:` is otherwise a COMPILE ERROR.
+Source: "Keld Signal.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "keld-agent-sidecar\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "onboard.cmd";          DestDir: "{app}"; Flags: ignoreversion
 
