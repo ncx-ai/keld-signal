@@ -330,7 +330,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           A window that answers with a key it did not answer with before is this number's
 #           trigger, exactly as at 13 -> 14, 14 -> 15 and 15 -> 16 -- except this one is scoped to
 #           the `/blocks` wire shape alone; `/analyze`'s payload is byte-unchanged.
-SCHEMA = 18
+SCHEMA = 19
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

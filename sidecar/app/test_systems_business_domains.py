@@ -1,0 +1,223 @@
+"""SYNTHETIC BUSINESS-DOMAIN SESSIONS, run through the REAL ingest -> analyze path.
+
+⚠️ WHY SYNTHESIS IS LEGITIMATE HERE WHEN IT WAS REFUTED ELSEWHERE IN THIS REPO. Two earlier
+attempts to synthesize evaluation data failed and are on the record: the `domain`/context work
+could not be validated because two generators disagreed on 2 of 3 sessions, and the attribution
+notes say the way forward is labeled real blocks, "not another synthetic sweep". Both were
+manufacturing GROUND TRUTH FOR AN INFERENCE -- asking a generator to decide what the right
+answer was, which is exactly the thing under test.
+
+This is the opposite shape. `systems.py` is a DECLARATIVE table: that Workday is an HR system
+is true by construction, not something a generator gets to vote on. What is genuinely uncertain
+is whether a realistic tool call from a sales or finance workflow REACHES that table at all --
+whether the MCP name shape, the host shape and the CLI shape survive `levels.py`, the store and
+the window rollup. That is plumbing, and synthesis tests plumbing honestly.
+
+⚠️ SO READ THE RESULT NARROWLY. A passing run says: a session that works this way produces
+these categories end to end. It does NOT say how often such sessions occur, how a real sales
+engineer phrases things, or that the table is complete. Neither corpus available to this repo
+contains Jira, Salesforce, Workday or NetSuite at all -- both are engineering work, and one
+holds zero MCP calls in 499 sessions -- which is precisely why this file exists and precisely
+why it cannot stand in for a real corpus from such an org.
+"""
+import json, os, sys, tempfile
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.analysis.analyze import analyze_window
+from app.analysis.ingest import ingest_file
+from app.analysis.store import open_store
+
+BASE = datetime(2026, 9, 29, 9, 0, 0, tzinfo=timezone.utc)
+CWD = "/home/dev/work"
+PROJDIR = CWD.replace("/", "-")
+# A real Claude connector presents as a uuid, not a readable name -- the brand is only in the
+# tool. Using a uuid here keeps the fixture honest about that.
+SRV = "c78d9895-d0ef-43c2-b7c3-db6cfc34856e"
+
+
+def _ts(off):
+    return (BASE + timedelta(seconds=off)).isoformat().replace("+00:00", "Z")
+
+
+def _user(off, i, text):
+    return {"type": "user", "uuid": f"u{i}", "promptId": f"p{i}", "timestamp": _ts(off),
+            "cwd": CWD, "gitBranch": "main",
+            "message": {"role": "user", "content": text}}
+
+
+def _calls(off, i, tools):
+    """One assistant turn issuing `tools` -- a list of (name, input) in the real block shape."""
+    return {"type": "assistant", "uuid": f"a{i}", "timestamp": _ts(off), "cwd": CWD,
+            "gitBranch": "main", "requestId": f"r{i}",
+            "message": {"role": "assistant", "model": "claude-opus-5",
+                        "content": [{"type": "tool_use", "id": f"t{i}_{j}",
+                                     "name": n, "input": inp}
+                                    for j, (n, inp) in enumerate(tools)],
+                        "usage": {"input_tokens": 100, "output_tokens": 40,
+                                  "cache_creation_input_tokens": 0,
+                                  "cache_read_input_tokens": 0}}}
+
+
+def mcp(tool, **inp):
+    return (f"mcp__{SRV}__{tool}", inp)
+
+
+def bash(cmd):
+    return ("Bash", {"command": cmd})
+
+
+def fetch(url):
+    return ("WebFetch", {"url": url})
+
+
+# Each domain: the tool calls a realistic session in that function would issue, and the
+# categories that MUST appear. Written as the work, not as the answer -- the expectation is
+# derived from the table, and a table edit that breaks one of these fails here.
+DOMAINS = {
+    "sales": ([mcp("salesforce-query-records", soql="SELECT Id FROM Opportunity"),
+               mcp("salesforce-update-record", id="006xx"),
+               mcp("gong-list-calls", account="Acme"),
+               fetch("https://acme.my.salesforce.com/lightning/o/Opportunity/list")],
+              {"crm_sales"}),
+    "people_ops": ([mcp("workday-get-worker", worker_id="W-1"),
+                    mcp("greenhouse-list-candidates", job="Backend Engineer"),
+                    fetch("https://acme.myworkday.com/acme/d/task/1")],
+                   {"hr_people"}),
+    "finance": ([mcp("netsuite-query-transactions", period="2026-09"),
+                 mcp("quickbooks-create-invoice", customer="Acme"),
+                 bash("stripe invoices list --limit 20")],
+                {"finance_billing"}),
+    "support": ([mcp("zendesk-list-tickets", view="urgent"),
+                 mcp("intercom-reply-conversation", id="c-9"),
+                 fetch("https://acme.zendesk.com/agent/tickets/4821")],
+                {"support"}),
+    "product_mgmt": ([mcp("jira-create-issue", project="PLAT", summary="Rate limit 429s"),
+                      mcp("jira-transition-issue", key="PLAT-77"),
+                      fetch("https://acme.atlassian.net/browse/PLAT-77")],
+                     {"issue_tracking"}),
+    "knowledge": ([mcp("notion-fetch", page="Runbook"),
+                   mcp("notion-update-page", page="Runbook"),
+                   mcp("confluence-get-page", id="55")],
+                  {"knowledge_base"}),
+    "comms": ([mcp("slack-post-message", channel="#incidents"),
+               mcp("slack-list-channels")],
+              {"communication"}),
+    "design": ([mcp("figma-get-file", key="abc"),
+                fetch("https://www.figma.com/file/abc/Checkout")],
+               {"design"}),
+    "data_analytics": ([mcp("snowflake-run-query", sql="select 1"),
+                        mcp("looker-run-look", look_id="42"),
+                        bash("snowsql -q 'select count(*) from orders'")],
+                       {"data_platform", "analytics_bi"}),
+    "legal": ([mcp("docusign-send-envelope", template="MSA"),
+               fetch("https://demo.docusign.net/Signing/1")],
+              {"legal_contracts"}),
+    "marketing": ([mcp("marketo-get-campaign", id="7"),
+                   mcp("mailchimp-create-campaign", list_id="l1")],
+                  {"marketing"}),
+    "it_security": ([mcp("okta-list-users", filter="active"),
+                     bash("snyk test --all-projects")],
+                    {"security_iam"}),
+}
+
+
+def _write(tmp, name, tools):
+    d = os.path.join(tmp, "projects", PROJDIR)
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, f"sess-{name}.jsonl")
+    lines = [_user(0, 0, f"do the {name} task"), _calls(10, 0, tools),
+             _user(20, 1, "thanks"), _calls(30, 1, [("Read", {"file_path": "/x/notes.md"})]),
+             _user(40, 2, "target")]
+    with open(p, "w") as fh:
+        for o in lines:
+            fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+    return p
+
+
+def _inventory(tmp, name, tools, key):
+    p = _write(tmp, name, tools)
+    st = open_store(os.path.join(tmp, "state", "refseries.db"))
+    ingest_file(st, p)
+    out = analyze_window(p, "p2", span_minutes=60, store=st, nlp=None)
+    inv = (out.get("inventory") or {}).get(key) or []
+    return {row["value"] if isinstance(row, dict) else row[0] for row in inv}
+
+
+def _categories(tmp, name, tools):
+    return _inventory(tmp, name, tools, "system_categories")
+
+
+def test_each_business_domain_reaches_its_category_end_to_end():
+    """The plumbing claim, one domain at a time: a realistic session in that function produces
+    its category through ingest, the store and the window rollup -- not through a direct call
+    to the lookup."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, (tools, want) in DOMAINS.items():
+            got = _categories(os.path.join(tmp, name), name, tools)
+            missing = want - set(got)
+            assert not missing, f"{name}: expected {sorted(want)}, published {sorted(got)}"
+
+
+def test_no_domain_publishes_a_category_from_another_domain():
+    """⚠️ A LOOKUP THAT OVER-FIRES IS WORSE THAN ONE THAT MISSES. A sales session that also
+    reports `hr_people` would put a category on a block nobody worked in, and unlike a miss it
+    is invisible to whoever reads it. `unrecognized` is exempt: it is the honest bucket."""
+    others = set()
+    for _, want in DOMAINS.values():
+        others |= want
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, (tools, want) in DOMAINS.items():
+            got = set(_categories(os.path.join(tmp, name), name, tools)) - {"unrecognized"}
+            stray = got - want
+            assert not stray, f"{name}: also published {sorted(stray)}, expected only {sorted(want)}"
+
+
+# What each domain's session should say was DONE, not merely which system was touched.
+# Derived from the tool names above; a table or normaliser edit that breaks one fails here.
+ACTIONS_WANTED = {
+    "sales": {"crm_sales:search", "crm_sales:update", "crm_sales:read"},
+    "people_ops": {"hr_people:read"},
+    "finance": {"finance_billing:search", "finance_billing:create"},
+    "support": {"support:read", "support:send"},
+    "product_mgmt": {"issue_tracking:create", "issue_tracking:update"},
+    "knowledge": {"knowledge_base:read", "knowledge_base:update"},
+    "comms": {"communication:send", "communication:read"},
+    "design": {"design:read"},
+    "data_analytics": {"data_platform:run", "analytics_bi:run"},
+    "legal": {"legal_contracts:send"},
+    "marketing": {"marketing:read", "marketing:create"},
+    "it_security": {"security_iam:read"},
+}
+
+
+def test_the_action_taken_inside_the_system_publishes_too():
+    """⚠️ THE DISTINCTION THIS EXISTS FOR: `crm_sales` says a CRM was touched, and a session
+    that only ever READ one is not doing the same work as a session that UPDATED records.
+    Asserted end to end, so a verb that stops surviving the store or the rollup fails here
+    rather than quietly reducing this dimension to its sibling."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, want in ACTIONS_WANTED.items():
+            tools = DOMAINS[name][0]
+            got = _inventory(os.path.join(tmp, name), name, tools, "system_actions")
+            missing = want - got
+            assert not missing, f"{name}: expected {sorted(want)}, published {sorted(got)}"
+
+
+def test_an_unknown_verb_publishes_the_category_and_no_action():
+    """A tool whose verb the normaliser does not know must still say WHICH system was used.
+    Dropping the whole reference would hide the system; guessing a verb would be a false
+    statement about what happened inside somebody's system of record."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = [mcp("notion-wibble", page="x")]
+        cats = _inventory(tmp, "odd", tools, "system_categories")
+        acts = _inventory(tmp, "odd", tools, "system_actions")
+        assert "knowledge_base" in cats, cats
+        assert not acts, f"guessed an action from an unknown verb: {acts}"
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for fn in fns:
+        fn(); print(f"PASS {fn.__name__}")
+    print(f"\n{len(fns)} passed")

@@ -13,6 +13,7 @@ from app.analysis import magnitude, terms
 from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
 from app.analysis.readers import coerce
 from app.analysis.shell import bash_refs
+from app.analysis import systems
 from app.analysis.text import is_command_echo
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
@@ -22,6 +23,20 @@ LEVELS = ["workspace", "workspace_evidence", "repo", "repo_from_text", "repo_men
           "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
           "mcp_tool", "term"]
+# ⚠️ `system_category`, `system_action`, `activity_class` and `activity_class_tokens` are
+# EMITTED but deliberately ABSENT from LEVELS, and the omission is load-bearing rather than an
+# oversight. LEVELS is not "every level"; it is the set that contributes SHAPE STATISTICS to the
+# feature vector, and `features.DIMS` is computed as len(LEVELS) * len(SHAPE_STATS) per shell.
+# Registering a level here therefore widens the frozen manifest -- adding these two moved
+# per-shell 288 -> 298 and DIMS off 1534 -- which makes every feature row collected under the
+# old width incomparable with every row after it. That incoherent-corpus failure is the exact
+# thing the frozen manifest exists to prevent.
+#
+# Nothing else depends on this list: `store.PRECOMPUTED_LEVELS` is derived from
+# `dimensions.ALLOCATION + INVENTORY`, so binning, the window rollup and publication all work
+# for a level that is not here. Adding these to the feature ladder is a legitimate future
+# change; it is a deliberate FEATURE_SPEC_VERSION bump, never a side effect of publishing a
+# new dimension.
 
 # What the work REACHES OUT TO. Evidence-based only: a host that actually appears in a tool input,
 # never a service inferred from a CLI's name. Ports are dropped because a test harness binds a
@@ -30,6 +45,28 @@ URL_HOST = re.compile(r"\bhttps?://(?:[^@/\s]*@)?([A-Za-z0-9._\-]+)", re.I)
 SSH_HOST = re.compile(r"\b(?:ssh|scp|rsync)\s+(?:-\S+\s+)*(?:[\w.\-]+@)?"
                       r"([A-Za-z0-9.\-]+\.[A-Za-z0-9.\-]+|localhost)\b", re.I)
 MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
+
+
+def _sys_cat(add, cat):
+    """Emit one `system_category` row, or nothing when the key named no external system.
+
+    A function rather than four inline `if cat:` guards because the None/`unrecognized`
+    distinction is the whole contract and it must be applied identically at every site:
+    None means THERE WAS NO SYSTEM HERE (loopback, a spec URL, `ls`), `unrecognized` means a
+    system was used and the table cannot name it. Four copies of that test is four chances to
+    write one of them as `if cat is not None` and quietly start publishing local commands."""
+    if cat:
+        add("ref", "system_category", cat, 1)
+
+
+def _sys_act(add, pair):
+    """Emit one `system_action` row, or nothing when the tool named no action we know.
+
+    Same shape and same reason as `_sys_cat`: None means the verb was not recognised, and a
+    reference publishes its CATEGORY alone rather than a guessed verb. A wrong verb here is a
+    false statement about what someone did in a system of record."""
+    if pair:
+        add("ref", "system_action", pair, 1)
 
 
 def services_in(text):
@@ -230,7 +267,11 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             for kind in artifacts_for(skill=o.skill):
                 add("ref", "artifact", kind, 1)
         if o.mcp_server:
-            add("ref", "mcp_server", mcp_provider(o.mcp_server, o.mcp_tool), 1)
+            provider = mcp_provider(o.mcp_server, o.mcp_tool)
+            add("ref", "mcp_server", provider, 1)
+            _cat = systems.category_for_brand(provider)
+            _sys_cat(add, _cat)
+            _sys_act(add, systems.system_action(_cat, o.mcp_tool, provider))
         if o.mcp_tool:
             add("ref", "mcp_tool", o.mcp_tool, 1)
 
@@ -398,8 +439,14 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 add("ref", "mcp_tool", m["tool"], 1)
                 # The server id is a uuid; the tool name carries the recognisable
                 # service ("notion-fetch" -> notion), which is what a reader needs.
-                add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
-                    1)
+                # ⚠️ Via mcp_provider, NOT a bare split: a verb-led tool name
+                # (`get_file_metadata`) has no brand in it and the split invented
+                # services called `mcp:get`. Same defect, same fix, one function.
+                provider = mcp_provider(m["server"], m["tool"])
+                add("ref", "service", "mcp:" + provider, 1)
+                _cat = systems.category_for_brand(provider)
+                _sys_cat(add, _cat)
+                _sys_act(add, systems.system_action(_cat, m["tool"], provider))
             else:
                 add("ref", "tool", name, 1)
             if name == "Agent" and inp.get("subagent_type"):
@@ -414,6 +461,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                                                      inp.get("query"))
                                          if isinstance(v, str)))):
                 add("ref", "service", host, 1)
+                _sys_cat(add, systems.category_for_host(host))
             for k in PATH_INPUTS:
                 if isinstance(inp.get(k), str):
                     paths.append((inp[k], True))     # a tool's file_path IS a file
@@ -423,6 +471,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "verb", v, 1)
                 for e in dict.fromkeys(exes):
                     add("ref", "exe", e, 1)
+                    _sys_cat(add, systems.category_for_program(e))
                     for kind in toolchain_for(e):
                         add("ref", "toolchain", kind, 1)
                 # The acts come from `bash_refs`, not from a second pass over `verbs`: a

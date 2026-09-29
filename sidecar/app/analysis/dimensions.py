@@ -230,7 +230,47 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # denominators because they disagree by up to 3x on the same block; see the
              # comment at the emission site in levels.py. ⚠️ Not a cost figure -- output is
              # 10-14% of modelled cost, the rest being cache reads.
-             ("activity_class_tokens", "activity_class_tokens", 9)]
+             ("activity_class_tokens", "activity_class_tokens", 9),
+             # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
+             # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
+             #
+             # ⚠️ IT SITS BESIDE `external_systems`, NOT INSTEAD OF IT, and is the coarser of
+             # the two on purpose. That level publishes RAW HOSTS and a real corpus put
+             # `api-gateway-dev.keld.co` on the wire; a category names no host, no environment
+             # and no org, so this is strictly less identifying than its neighbour. It is also
+             # the only readable form of that evidence at all: 88.5% of one corpus's host
+             # mentions are loopback, and the top distinct value in the other is the org's own
+             # domain.
+             #
+             # ⚠️ WHAT IS MEASURED HERE IS THE KEY EXTRACTION, NOT THE COVERAGE. Both corpora
+             # are engineering work -- one contains zero MCP calls in 499 sessions -- so an org
+             # running on Jira, Salesforce or Workday is exactly the population this level is
+             # for and exactly the one neither corpus can speak for. Its coverage there is
+             # asserted from the table. That is why `unrecognized` is a published VALUE and not
+             # a silent drop: a thin answer must be legible as unknown coverage rather than as
+             # an org that touches nothing.
+             #
+             # Cap 22 is the whole closed vocabulary, like activity_classes: a truncated
+             # distribution is a wrong one, not a shorter one.
+             ("system_categories", "system_category", 22),
+             # `system_actions` -- `<category>:<verb>`, WHAT WAS DONE inside the system rather
+             # than only which system it was. `crm_sales` says a CRM was touched;
+             # `crm_sales:update` says a record was CHANGED, which is pipeline work rather than
+             # a lookup. The verb is already in the MCP tool name, so this costs no new
+             # evidence and no second parse.
+             #
+             # ⚠️ NOT REPLACEABLE BY JOINING `system_categories` WITH `activity_class`. That
+             # class is ONE label per inference REQUEST, covering every tool the request issued,
+             # so a request that fetches a Notion page and then greps a file has one class and
+             # no way to say which tool the verb belonged to. Pairing at the reference keeps
+             # them attached; the coarse view is still right there in the sibling dimension.
+             #
+             # ⚠️ MCP-ONLY BY DESIGN, so this dimension is SPARSER than its sibling and that is
+             # not a defect. A URL host names a system and no action. A CLI could be parsed for
+             # a subcommand, but `shell.py` already derives verbs on its own terms and a second
+             # verb vocabulary over the same commands is how two levels begin disagreeing about
+             # one call. Cap 24, above the realistic per-window distinct count.
+             ("system_actions", "system_action", 24)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
