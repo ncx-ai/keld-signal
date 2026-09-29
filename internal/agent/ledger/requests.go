@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS requests (
   PRIMARY KEY (source, session, request_key)
 );
 CREATE INDEX IF NOT EXISTS ix_requests_ts ON requests(ts);
+CREATE INDEX IF NOT EXISTS ix_requests_source_ts ON requests(source, ts);
+CREATE INDEX IF NOT EXISTS ix_requests_unpriced ON requests(model) WHERE estimate_usd = 0 AND model != '';
 CREATE TABLE IF NOT EXISTS ledger_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -139,55 +141,79 @@ func (s *Store) UsageRows(since, until time.Time) ([]RequestRow, error) {
 }
 
 // FirstRequestAt is each source's earliest request: where its data starts.
+// One indexed MIN per source rather than a GROUP BY, which would scan the
+// whole table on every Overview load.
 func (s *Store) FirstRequestAt() (map[string]time.Time, error) {
 	db := s.handle()
 	if db == nil {
 		return nil, errUnavailable
 	}
-	rows, err := db.Query(`SELECT source, MIN(ts) FROM requests GROUP BY source`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	out := map[string]time.Time{}
-	for rows.Next() {
-		var src string
-		var ms int64
-		if err := rows.Scan(&src, &ms); err != nil {
+	for src := range requestSources {
+		var ms sql.NullInt64
+		if err := db.QueryRow(`SELECT MIN(ts) FROM requests WHERE source = ?`, src).Scan(&ms); err != nil {
 			return nil, err
 		}
-		out[src] = time.UnixMilli(ms)
+		if ms.Valid {
+			out[src] = time.UnixMilli(ms.Int64)
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // RepriceUnpricedRequests is RepriceUnpriced for the requests table: a request
 // is priced once, at write, so a model the price table learns later would stay
 // $0 forever without it. Only rows that name a model, carry $0, and whose model
 // `price` now knows are touched.
+//
+// ⚠️ **IT RUNS SYNCHRONOUSLY AT DAEMON START, SO IT MUST NOT SCAN THE TABLE.**
+// A full scan measured 8.2 s at three years of ten times this machine's rate
+// (9.25M rows, 2026-09-29). It asks the partial index ix_requests_unpriced
+// which models are unpriced, and reads rows only for a model `price` now
+// knows — so a start with nothing newly priced reads the index alone.
 func (s *Store) RepriceUnpricedRequests(price func(model string, input, output, cacheRead, cacheCreation int64) (float64, bool)) int {
 	db := s.handle()
 	if db == nil {
 		return 0
 	}
-	type row struct {
-		source, session, key, model string
-		in, out, cr, cc             int64
-	}
-	rows, err := db.Query(`SELECT source, session, request_key, model, input_tokens, output_tokens,
-		cache_read_tokens, cache_creation_tokens FROM requests WHERE model != '' AND estimate_usd = 0`)
+	models, err := db.Query(`SELECT DISTINCT model FROM requests INDEXED BY ix_requests_unpriced
+		WHERE estimate_usd = 0 AND model != ''`)
 	if err != nil {
 		s.logFailure("RepriceUnpricedRequests", err)
 		return 0
 	}
-	var todo []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.source, &r.session, &r.key, &r.model, &r.in, &r.out, &r.cr, &r.cc); err == nil {
-			todo = append(todo, r)
+	var known []string
+	for models.Next() {
+		var m string
+		if err := models.Scan(&m); err == nil {
+			if _, ok := price(m, 1, 1, 1, 1); ok {
+				known = append(known, m)
+			}
 		}
 	}
-	rows.Close()
+	models.Close()
+
+	type row struct {
+		source, session, key, model string
+		in, out, cr, cc             int64
+	}
+	var todo []row
+	for _, m := range known {
+		rows, err := db.Query(`SELECT source, session, request_key, input_tokens, output_tokens,
+			cache_read_tokens, cache_creation_tokens FROM requests INDEXED BY ix_requests_unpriced
+			WHERE model = ? AND estimate_usd = 0 AND model != ''`, m)
+		if err != nil {
+			s.logFailure("RepriceUnpricedRequests", err)
+			return 0
+		}
+		for rows.Next() {
+			r := row{model: m}
+			if err := rows.Scan(&r.source, &r.session, &r.key, &r.in, &r.out, &r.cr, &r.cc); err == nil {
+				todo = append(todo, r)
+			}
+		}
+		rows.Close()
+	}
 
 	n := 0
 	s.tx("RepriceUnpricedRequests", func(txn *sql.Tx) error {

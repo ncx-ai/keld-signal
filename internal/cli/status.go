@@ -152,6 +152,9 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
+			console.Print("Usage:")
+			console.Print(localagent.ReadUsage().Line())
+
 			// Auto-update, read from DISK like the model states above: a CLI
 			// that cannot reach the daemon does not thereby know an update
 			// failed, and this command never contacts a release host.
@@ -363,6 +366,10 @@ func newDoctorCmd() *cobra.Command {
 				console.Print("  · collecting, not paired — work is captured and held locally and " +
 					"nothing is published yet. Finish with `keld login` then `keld signal setup`.")
 			}
+
+			// Informational, never a finding: how much per-request usage this
+			// machine holds, read-only off ledger.db.
+			console.Print(localagent.ReadUsage().Line())
 
 			if len(problems) > 0 {
 				for _, p := range problems {

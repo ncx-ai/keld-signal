@@ -163,6 +163,13 @@ Rules:
 - A `ledger_meta` row, `requests_backfill_done`, records that the one-time backfill of
   transcripts on disk finished. It lives in this file, so deleting `ledger.db` refills it.
 - Local only. Nothing in this table is sent to Atlas; the mirror sends its own records.
+- **Size, measured 2026-09-29.** ~310 bytes a row with its indexes. This machine makes
+  ~1,200 requests a day (36,472 in the last 30 days), so three years is ~1.3M rows, ~400 MB.
+  At ten times that rate for three years (`requests_scale_test.go`, 9.25M rows, 2.7 GB): a
+  30-day `/v1/usage` read 731 ms, each source's first request 2 ms, the startup re-price
+  under 1 ms (partial index on unpriced rows), doctor's row count 3.6 s.
+- `keld signal status` and `doctor` print one line: rows, since when, and the ledger's
+  size in use, read-only off disk.
 - Fed by the transcript watcher (`internal/agent/usage`), whatever the pairing, Send to
   Atlas or `tool_otlp` say. It stops only where the watcher does: `ml_backend: "off"`
   or `KELD_WATCH=0`.
