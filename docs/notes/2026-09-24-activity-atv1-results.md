@@ -1516,3 +1516,76 @@ that were separated on purpose.
 Open, and now the only things open: a **third** person's corpus (corpus B's 1.6% is fitted
 to corpus B's residual as corpus A's 2.8% was to corpus A's), and the complexity dimension above,
 which is new work rather than a threat.
+
+---
+
+# 2026-09-29 — does the vocabulary hold OUTSIDE engineering work?
+
+The standing worry: the eight classes were derived from developer tool use
+(**81.7%** and **94.5%** of tool calls in the two corpora are
+`Bash`/`Read`/`Edit`/`Write`/`Grep`/`Glob`/`LS`), so they might be a coding-agent
+vocabulary wearing a general name.
+
+⚠️ **First, a reframe that narrows the question sharply.** Signal's watcher sources are
+`claude_code`, `codex`, `cowork`, `gemini` — all CLI or desktop agents. **There is no
+web-app capture path at all**, and Cowork is VM-backed with `watch.coworkHidden` existing
+precisely to detect that its transcripts are unreachable. So for a non-technical user this
+is a **capture** question before it is a vocabulary one, and the vocabulary question cannot
+be answered for them by any means available here.
+
+## What CAN be tested, and was: editorial work
+
+Corpus A already contains substantial non-code knowledge work — Notion publishing, doc
+restructuring, lint-and-republish. 202 sessions of ≥10 requests, split by whether a session
+touched more document files than code files:
+
+| class | **editorial (33 sessions, 4,798 req)** | engineering (59 sessions, 2,697 req) |
+|---|---|---|
+| retrieve | 28.4% | 37.3% |
+| **author_prose** | **15.6%** | 8.3% |
+| author_code | 15.4% | 22.8% |
+| operate | 15.0% | 13.2% |
+| **synthesize** | **13.0%** | 4.4% |
+| delegate | 6.2% | 0.2% |
+| **verify** | **3.3%** | **11.2%** |
+| acknowledge | 1.8% | 1.4% |
+| **unclassified** | **1.3%** | **1.1%** |
+
+**Two results.**
+
+**Coverage does not degrade.** The unclassified residual is **1.3% against 1.1%** — the
+vocabulary covers editorial work as well as it covers engineering work.
+
+**And it discriminates.** `author_prose` nearly doubles, `synthesize` triples, `verify`
+falls to a third. It separates the two kinds of work rather than flattening them, which is
+the entire reason to publish a distribution. `verify` does not die on editorial work either
+— doc pipelines still run linters and builds.
+
+⚠️ **So "validated on developer work only" was WRONG — too alarming for the evidence.** The
+honest statement is *validated on code AND editorial work through CLI agents*. The docstring
+and the Go field comment both said the alarming version and are corrected
+(`feat/activity-class-inventory`, `9589fd3d`).
+
+## What remains genuinely untested
+
+That editorial work is done **by an engineer, through a CLI, in a git repo**. A finance or
+legal user's day would carry different tools and may need a class this vocabulary lacks —
+`verify` means "ran the tests" and has no obvious referent there. Nothing measurable here
+settles that.
+
+⚠️ **And with NO tool calls the vocabulary reaches only two of its nine values**: 74.8%
+`acknowledge` / 25.2% `synthesize` across 11,575 tool-free chat turns. That is the shape of
+Claude through a web app, and for such a user the dimension would say almost nothing.
+
+## The cheapest validation route that exists — and it ships with the feature
+
+⚠️ **`unclassified` IS THE INSTRUMENT.** It publishes honestly per unit, so a population the
+vocabulary does not fit **announces itself**: a residual running at 30% instead of 1.3% is
+the finding, measured with **no labels, no transcripts and nobody's consent**. That is the
+only route that reaches populations nobody here can sample, and it is a third independent
+reason the residual must never be folded into a default class — after `atv1`'s `other` at
+38.8% and the `operate` fallthrough at 57.5%.
+
+The matching product rule: **gate on coverage.** Below some threshold, publish `absent` for
+the dimension rather than a distribution that is mostly `unclassified` — the same
+`thin`/`no_majority` discipline the rest of this codebase runs on.
