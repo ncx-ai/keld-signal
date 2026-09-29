@@ -381,6 +381,38 @@ app_step="$(sed -n '/name: Build the desktop app (Windows)/,/name: Restore Huggi
 printf '%s\n' "$app_step" | grep -q -- '--no-bundle' || \
   fail "the Windows app build does not use --no-bundle - it would produce a second installer"
 
+# 10d. ⚠️ THE APP MUST OPEN WHEN THE INSTALLER FINISHES, AND THAT ENTRY'S FLAGS
+#      PULL IN OPPOSITE DIRECTIONS FROM EVERY OTHER [Run] LINE IN THIS FILE.
+#      Guard 9b requires onboard.cmd to be `unchecked`, because a ticked
+#      postinstall entry opened a blank console. The same reasoning inverts here:
+#      this one opens the application window, which is the thing the person was
+#      waiting for. Reading 9b as a house style and copying `unchecked` across is
+#      the specific mistake this guard catches.
+open_line="$(printf '%s\n' "$unfolded" | grep -F 'Filename: "{app}\Keld Signal.exe"' || true)"
+[ -n "$open_line" ] || \
+  fail "nothing opens the desktop app when the installer finishes"
+printf '%s\n' "$open_line" | grep -q 'postinstall' || \
+  fail "the app launch is not a postinstall action - it would run mid-install instead of on the Finished page"
+# ⚠️ NEGATIVE ASSERTIONS GO IN AN `if`, NOT `grep -q X && fail`. Under the
+#    `set -e` at the top of this file, the `&&` form EXITS 1 WHEN THE GREP DOES
+#    NOT MATCH — i.e. the script dies silently on exactly the passing case, and
+#    every guard after it never runs.
+if printf '%s\n' "$open_line" | grep -q 'unchecked'; then
+  fail "the app launch is unchecked - it is meant to be ticked by default, unlike the console fallback in 9b"
+fi
+# ⚠️ runhidden would hide the window the entry exists to open. It is the reflex
+#    fix everywhere else in this file, because those children are
+#    CONSOLE-subsystem; this one is GUI-subsystem and gets no console at all.
+if printf '%s\n' "$open_line" | grep -q 'runhidden'; then
+  fail "the app launch says runhidden - it would hide the window it exists to open"
+fi
+# ⚠️ The app is optional (see 10c), and Inno reports a HARD ERROR when it cannot
+#    start a [Run] command. A build without the app must install cleanly.
+printf '%s\n' "$open_line" | grep -q 'skipifdoesntexist' || \
+  fail "the app launch would fail the install on a build where the Rust step did not produce the app"
+printf '%s\n' "$open_line" | grep -q 'skipifsilent' || \
+  fail "the app launch is not skipifsilent - an MDM push would throw a window at whoever is at the console"
+
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
 #     LOADS, so an installer signed over an unsigned payload installs fine and

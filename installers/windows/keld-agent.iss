@@ -233,6 +233,42 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
   Check: NeedsConsoleOnboarding; Flags: postinstall shellexec skipifsilent unchecked
 
+; 3. OPEN THE DESKTOP APP, TICKED BY DEFAULT.
+;
+;    ⚠️ IT IS TICKED WHERE ENTRY 2 IS DELIBERATELY `unchecked`, AND THE
+;    DIFFERENCE IS NOT AN OVERSIGHT. Entry 2 is unchecked because a ticked
+;    postinstall entry opened a BLANK CONSOLE on a product whose whole Windows
+;    story is that no terminal ever appears. This one opens the application
+;    window a person just installed, which is the thing they were waiting for.
+;    Don't "make them consistent" — the flag encodes what the entry does, not a
+;    house style.
+;
+;    ⚠️ NO `runhidden`, AND ADDING IT WOULD HIDE THE WINDOW THIS ENTRY EXISTS TO
+;    OPEN. Every other console defence in this file is about a CONSOLE-subsystem
+;    child getting a fresh visible console from a console-less parent. This is
+;    the one [Run] entry that needs none of it: `Keld Signal.exe` is a
+;    GUI-subsystem binary (verified: PE subsystem 2), so CreateProcess allocates
+;    it no console at all.
+;
+;    ⚠️ `skipifdoesntexist` IS LOAD-BEARING, for the same reason
+;    `skipifsourcedoesntexist` is in [Files]. The app is a convenience whose Rust
+;    build is `continue-on-error` on the runner, so a Windows installer can ship
+;    without it — and Inno reports a HARD ERROR when it cannot start a [Run]
+;    command. Missing app must be a no-op, never a failed install.
+;
+;    `skipifsilent`: an MDM /SILENT push must not throw a window onto whoever
+;    happens to be at the console.
+;
+;    The app may open before `keld-agent install` (in CurStepChanged) has written
+;    ~/.keld/agent.json, in which case it shows its not-running frame. That is
+;    transient and needs nothing here: `follow_agent` in app/src-tauri/src/main.rs
+;    polls every 2s and navigates as soon as the file appears, and it is started
+;    on the not-running path precisely for this case. ⚠️ It is also why that frame
+;    had to stop panicking before this entry could exist — until `webview-data-url`
+;    was enabled, a launch that lost this race killed the app silently.
+Filename: "{app}\Keld Signal.exe"; Description: "Open Keld Signal"; \
+  Flags: postinstall nowait skipifsilent skipifdoesntexist
+
 [UninstallRun]
 ; UNINSTALL USED TO REMOVE THE FILES AND NOTHING ELSE, which left three things
 ; behind on every machine — each of them silent, and the first two actively broken.
