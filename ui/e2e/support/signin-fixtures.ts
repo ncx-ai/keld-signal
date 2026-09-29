@@ -9,7 +9,7 @@ export { expect };
  * network. Loopback is the daemon and the mock Atlas; nothing else may load
  * (the page's one external request is Google Fonts).
  */
-async function sealContext(context: BrowserContext): Promise<void> {
+export async function sealContext(context: BrowserContext): Promise<void> {
   await context.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
 }
 

@@ -33,6 +33,12 @@ export const CONFORM_BIN = path.join(BIN_DIR, process.platform === "win32" ? "ke
 // restart waits for the previous process to exit before binding it again.
 const TELEMETRY_PORT = process.env.KELD_E2E_TELEMETRY_PORT || "14411";
 
+export type HarnessOptions = {
+  /** KELD_TELEMETRY_PORT for this harness's daemon (default 14411, or
+   *  KELD_E2E_TELEMETRY_PORT). The local-Atlas suite uses its own. */
+  telemetryPort?: string;
+};
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function waitForLine(child: ChildProcess, re: RegExp, timeoutMs: number, what: string): Promise<RegExpMatchArray> {
@@ -89,13 +95,20 @@ export class SigninHarness {
   readonly home: string;
   readonly atlasState: string;
   readonly logPath: string;
+  /** The mock Atlas's URL, when this harness started one (startAtlas). */
   atlasURL = "";
+  /** What the daemon is handed as KELD_API_URL and KELD_ATLAS_WEB_URL: the
+   *  mock for both, or a real Atlas's two halves via useAtlas(). */
+  apiURL = "";
+  webURL = "";
   daemon: Daemon | null = null;
+  private readonly telemetryPort: string;
   private atlas: ChildProcess | null = null;
   private agent: ChildProcess | null = null;
   private log: fs.WriteStream;
 
-  constructor(name: string) {
+  constructor(name: string, opts: HarnessOptions = {}) {
+    this.telemetryPort = opts.telemetryPort || TELEMETRY_PORT;
     for (const bin of [AGENT_BIN, CONFORM_BIN]) {
       if (!fs.existsSync(bin)) throw new Error(`${bin} is missing: signin-setup.ts did not build it, so nothing here can pass`);
     }
@@ -123,13 +136,22 @@ export class SigninHarness {
     this.atlas.stderr?.on("data", (d) => this.log.write(`[mockatlas] ${d}`));
     const m = await waitForLine(this.atlas, /mockatlas listening on (http:\/\/127\.0\.0\.1:\d+)/, 15_000, "mock Atlas");
     this.atlasURL = m[1];
+    this.apiURL = this.webURL = this.atlasURL;
+  }
+
+  /** Point the daemon at an Atlas this harness did NOT start — the real one
+   *  the local-Atlas suite signs in against. Takes effect on the next
+   *  startDaemon(). */
+  useAtlas(apiURL: string, webURL: string): void {
+    this.apiURL = apiURL;
+    this.webURL = webURL;
   }
 
   /** Start (or restart) the daemon on this harness's home. Resolves once the
    *  NEW daemon answers its page routes with its NEW secret — agent.json is
    *  rewritten with a fresh secret and a fresh random port on every start. */
   async startDaemon(): Promise<Daemon> {
-    if (!this.atlasURL) throw new Error("start the mock Atlas first");
+    if (!this.apiURL) throw new Error("start the mock Atlas (or useAtlas) first");
     const infoPath = path.join(this.home, "agent.json");
     const prevSecret = this.readAgentJSON()?.secret || "";
     const env: NodeJS.ProcessEnv = {
@@ -137,10 +159,10 @@ export class SigninHarness {
       HOME: this.home,
       USERPROFILE: this.home,
       KELD_HOME: this.home,
-      KELD_API_URL: this.atlasURL,
-      KELD_ATLAS_WEB_URL: this.atlasURL,
+      KELD_API_URL: this.apiURL,
+      KELD_ATLAS_WEB_URL: this.webURL,
       KELD_AUTH_NO_BROWSER: "1",
-      KELD_TELEMETRY_PORT: TELEMETRY_PORT,
+      KELD_TELEMETRY_PORT: this.telemetryPort,
       KELD_AUTOUPDATE: "0",
       KELD_WATCH_POLL: "2s",
     };
@@ -204,6 +226,7 @@ export class SigninHarness {
 
   /** How many requests the mock Atlas has seen per route. */
   async atlasCounts(): Promise<Record<string, number>> {
+    if (!this.atlasURL) throw new Error("atlasCounts() needs the mock Atlas; this harness did not start one");
     const res = await fetch(`${this.atlasURL}/_conform/counts`);
     if (!res.ok) return {};
     const body = (await res.json()) as { counts?: Record<string, number> };

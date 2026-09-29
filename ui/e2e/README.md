@@ -94,6 +94,42 @@ The browser context is sealed to loopback, the authorize tab included.
 `KELD_E2E_SIGNIN_NOBUILD=1` reuses the last build; `KELD_E2E_KEEP=1` keeps each
 test's temp home. Daemon logs land in `test-results/signin-logs/`.
 
+## The sign-in suite against a real local Atlas (opt-in)
+
+```bash
+cd ui/e2e && KELD_E2E_ATLAS_WEB=http://localhost:3000 \
+  npx playwright test --config=local-atlas/local-atlas.config.ts
+```
+
+About 45 seconds, Chromium only. It needs a running local Atlas (web on
+`:3000`, api on `:8000`) with the web sign-in merged and its seeded logins
+(`admin@acme.test` / `sarah@acme.test`, password `acme2026`). Without
+`KELD_E2E_ATLAS_WEB` it builds nothing and every test **skips** with a message,
+which is what keeps CI unaffected; the main config and `signin.config.ts` both
+ignore `local-atlas/`.
+
+Each test starts a throwaway `keld-agent run` through the same harness as the
+mock suite (`support/signin-harness.ts`, fresh `KELD_HOME`, telemetry port
+**14421**), pointed at the real Atlas: `KELD_ATLAS_WEB_URL=$KELD_E2E_ATLAS_WEB`
+and `KELD_API_URL=${KELD_E2E_ATLAS_API:-http://localhost:8000}`. ⚠️ The API URL
+must be spelled exactly as Atlas's `otlp_public_url` (`localhost`, not
+`127.0.0.1`): the daemon compares the host inside the pairing code against it
+exactly, and case 09 relies on that to prove a different spelling is refused.
+The browser is sealed to loopback. Signing in mints real grants and CLI tokens
+in that Atlas through its own routes; nothing else is written to it.
+
+`local-atlas/real-atlas.spec.ts` covers, each asserting `auth.json`/`hook.json`
+and the page: the happy path through Atlas's email login (and that the written
+ingest token is accepted by `GET /v1/enrichment-settings`); already signed in;
+signed out → `/login?next=` → the same authorize URL; Cancel; two hostile
+`redirect_uri`s; a forged return; a replayed return; a browser code redeemed
+without its verifier (410, burned, then "That code expired"); a different
+Atlas; Send to Atlas off (409 and a refused return); local only across a
+restart then Settings' Sign in; `/login?next=` backslash/encoded-slash
+bypasses; the setup-code box (AC-8); and a viewer account.
+`KELD_E2E_SIGNIN_NOBUILD=1` and `KELD_E2E_KEEP=1` work here too; the report is
+`playwright-report-local-atlas/`.
+
 ## Knobs
 
 | env | effect |
