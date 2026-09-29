@@ -207,6 +207,22 @@ ALLOCATION = [
 # levels enter `store.PRECOMPUTED_LEVELS` automatically, since that tuple is DERIVED from
 # ALLOCATION + INVENTORY rather than restated; an unbinned published level would under-count the
 # interior of every historical window.
+# ⚠️ ADDING AN ENTRY HERE HAS A CONSUMER-SIDE CONSEQUENCE THAT NOTHING IN THIS REPO ENFORCES.
+#
+# Keld Atlas reads these as workstream dimensions by default and EXCLUDES a named set of
+# measure-type levels (`activity_classes`, `activity_class_tokens`, `system_categories`,
+# `system_actions`, `system_vendors`, `system_category_tokens`, `system_vendor_tokens`) from
+# that reader, because a distribution over capabilities or vendors is not a workstream and
+# renders as nonsense beside project/branch/language.
+#
+# That exclusion list is HAND-MAINTAINED on the Atlas side and keyed on the names below, so a
+# NEW measure-type level added here is NOT auto-excluded -- it will appear in Atlas's workstream
+# readers until someone adds it there. Confirmed by the Atlas side 2026-09-29.
+#
+# So: a new level that DESCRIBES the work (a path, a tool, a term) needs nothing. A new level
+# that MEASURES something about it needs a message to the Atlas side in the same change. This
+# is written here rather than only in their repo for the reason the block emitter's note gives:
+# a constraint recorded only in the consumer is one this side breaks without noticing.
 INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
              ("named_terms", "term", 12), ("physical_acts", "action", None),
