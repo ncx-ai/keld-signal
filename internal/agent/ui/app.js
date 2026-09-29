@@ -508,6 +508,143 @@ export function configErrorText(status, body) {
   return "Couldn't reach Signal to set that — try again.";
 }
 
+// ---- Web sign-in (contract C6 of docs/superpowers/plans/2026-09-29-signal-web-signin-plan.md) ----
+//
+// The page asks the daemon to start a sign-in (POST /v1/auth/start), the
+// daemon opens the system browser at Atlas, and the browser comes back to the
+// daemon's own /auth/callback — never to this page, which has no way to be
+// told. So the page learns the outcome the only way it can: by polling
+// GET /v1/auth/state. Everything that decides what to show or when to stop
+// lives here, as pure functions, so the rules are tested rather than read out
+// of a click handler.
+
+/** Every sentence the sign-in UI shows, in one place. The first four are the
+ *  spec's wireframe ("What the first open looks like") verbatim. */
+export const SIGNIN_TEXT = {
+  signIn: "Sign in with Atlas",
+  localOnly: "Use locally only",
+  later: "You can sign in later from Settings.",
+  localNote: "Local only: nothing leaves this computer.",
+  firstRunTitle: "Welcome to Signal",
+  firstRunLead: "Signal is already collecting on this computer.",
+  firstRunBody: "Sign in to send it to your company's Atlas, or keep everything here.",
+  starting: "Starting sign-in…",
+  waiting: "Finish signing in in your browser",
+  // The link is ALWAYS shown (AC-1: "the page always shows the link too"); only
+  // the sentence in front of it changes with whether the daemon managed to
+  // open a browser. A Linux service with no display is the common `false`.
+  linkOpened: "Browser didn't open? Use this link:",
+  linkNotOpened: "Your browser didn't open. Open this link to finish:",
+  linkLabel: "Open the Atlas sign-in page",
+  tryAgain: "Try again",
+  notSignedIn: "Not signed in to Atlas.",
+  notSignedInBody: "Signal is collecting on this machine and sends it once you sign in.",
+  notSignedInSettings: "Not signed in.",
+  turnsAtlasOn: "Signing in turns Send to Atlas on.",
+  account: "Atlas account",
+};
+
+/** One plain sentence per reason a sign-in can end without pairing: the five
+ *  `last_error` codes contract C5 names, the start route's 409, and the two
+ *  the page itself concludes (the daemon stopped answering; the attempt
+ *  vanished with no reason). */
+export const SIGNIN_ERROR_TEXT = {
+  not_started_here: "Signal did not recognise that sign-in. Start it again from this page.",
+  expired: "That sign-in expired before it finished.",
+  atlas_mismatch: "The browser came back from a different Atlas than the one this sign-in started with.",
+  atlas_off: "Send to Atlas was turned off, so Signal refused the sign-in.",
+  atlas_error: "Atlas could not finish the sign-in.",
+  send_to_atlas_is_off: "Send to Atlas is off. Turn it on in Settings to sign in.",
+  unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
+  abandoned: "This sign-in is no longer waiting.",
+};
+
+/** How often the page asks /v1/auth/state while a sign-in is in flight. 1 s,
+ *  so the page shows "signed in" well inside AC-5's 5 seconds of the callback. */
+export const SIGNIN_POLL_MS = 1000;
+/** The daemon forgets a pending sign-in after 10 minutes (C5); past that the
+ *  browser's return cannot succeed, so the page stops waiting for it. */
+export const SIGNIN_GIVE_UP_MS = 10 * 60 * 1000;
+/** Consecutive failed polls before the page concludes the daemon is gone —
+ *  e.g. it restarted mid-flow onto a new port. One missed poll is noise. */
+export const SIGNIN_MAX_POLL_FAILURES = 5;
+/** How long the "Signed in as …" confirmation stays in the bar. */
+export const SIGNIN_DONE_LINGER_MS = 8000;
+
+/** Does the first-open choice show? True only when the daemon says so and the
+ *  machine is not paired — the spec's decision table, whose rows 2, 3 and 5
+ *  the daemon folds into `first_run` itself. No answer (an older daemon
+ *  without the route) is never a yes: a person who already chose must not be
+ *  asked again because a request failed. */
+export function showFirstRun(auth) {
+  return !!auth && auth.first_run === true && auth.paired !== true;
+}
+
+/** What the bar above every pane shows: "flow" (a sign-in in progress or just
+ *  failed, from wherever it was started), "done" (a confirmation that lingers),
+ *  "prompt" (not signed in while Send to Atlas is on) or null. Local only is a
+ *  choice, not a fault, so it gets no bar; Settings keeps Sign in. */
+export function signinBarMode(auth, settings, flow, now) {
+  // The first-open screen carries its own sign-in progress; a second copy of
+  // it in a bar above would be the same sentence twice.
+  if (showFirstRun(auth)) return null;
+  const status = (flow && flow.status) || "idle";
+  if (status === "starting" || status === "waiting" || status === "failed") return "flow";
+  if (status === "done" && now - (flow.doneAt || 0) < SIGNIN_DONE_LINGER_MS) return "done";
+  if (!auth || auth.paired) return null;
+  return atlasEnabled(settings) ? "prompt" : null;
+}
+
+/** One poll's verdict: keep polling, or stop as done/failed with a reason.
+ *  `auth` is null when the poll itself failed; `failures` counts consecutive
+ *  failed polls including this one.
+ *
+ *  ⚠️ A `last_error` ends the attempt only once the daemon no longer holds a
+ *  pending sign-in. While one is pending, an error belongs to some OTHER
+ *  return — a forged callback with a made-up state, or an older attempt — and
+ *  letting it cancel the real sign-in would hand anyone who can open a URL on
+ *  this machine a way to keep a person from ever signing in. */
+export function signinPollStep(auth, { startedAt, now, failures = 0 }) {
+  if (auth && auth.paired) return { stop: true, status: "done", error: null };
+  if (now - startedAt >= SIGNIN_GIVE_UP_MS) return { stop: true, status: "failed", error: "expired" };
+  if (!auth) {
+    if (failures >= SIGNIN_MAX_POLL_FAILURES) return { stop: true, status: "failed", error: "unreachable" };
+    return { stop: false, status: "waiting", error: null };
+  }
+  if (auth.pending) return { stop: false, status: "waiting", error: null };
+  return { stop: true, status: "failed", error: auth.last_error || "abandoned" };
+}
+
+export function signinErrorText(code) {
+  if (!code) return "Signing in did not finish.";
+  return SIGNIN_ERROR_TEXT[code] || code;
+}
+
+/** POST /v1/auth/start's refusals. 404 is a daemon older than the route. */
+export function signinStartErrorText(status, body) {
+  const code = body && body.error;
+  if (code) return signinErrorText(code);
+  if (!status) return "Couldn't reach Signal to start signing in — try again.";
+  if (status === 404) return "This version of Signal can't sign in from the page. Paste a setup code in Settings instead.";
+  return "Signal couldn't start signing in just now — try again.";
+}
+
+export function signedInText(auth) {
+  const who = auth && auth.principal;
+  const org = auth && auth.org;
+  if (who && org) return `Signed in as ${who} · ${org}`;
+  if (who) return `Signed in as ${who}`;
+  return "Signed in to Atlas";
+}
+
+/** The authorize URL as an href, or "" when it is not http(s). It comes from
+ *  this machine's own daemon, but an href is the one place a string becomes
+ *  executable (`javascript:`), so the page checks rather than trusts. */
+export function safeAuthorizeURL(u) {
+  const s = String(u || "");
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
 /** The restart-bar state machine. `PUT /v1/settings` answers
  *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
  *  answers it on every success (a new host always needs one). Either landing
@@ -1566,6 +1703,16 @@ if (typeof document !== "undefined") {
     // whole pane on every 10s poll, and a confirmation that vanished on the
     // next tick would be unreadable.
     integrationResults: new Map(),
+    // auth: the last GET /v1/auth/state body (contract C5). Null until it has
+    // answered once, and null for good on a daemon without the route — which
+    // renders as no first-open screen and no sign-in bar, never as "not
+    // signed in": the page does not know that, so it does not say it.
+    auth: null,
+    // signin: the web sign-in in progress, from whichever entry point started
+    // it. {status: idle|starting|waiting|failed|done, url, opened, startedAt,
+    // failures, message, doneAt, restartAfter, enableAtlas}. See
+    // signinPollStep for when "waiting" ends.
+    signin: { status: "idle" },
   };
 
   async function fetchJSON(path, opts) {
@@ -1629,7 +1776,19 @@ if (typeof document !== "undefined") {
     // older build, or any harness serving the page without it) would have
     // declared the whole machine down over a missing progress bar. Caught by
     // the mock-shell specs, which is exactly the shape an older daemon has.
-    await loadEngine();
+    await Promise.all([loadEngine(), loadAuth()]);
+  }
+
+  // Outside loadAll's Promise.all for the engine's reason: a daemon without
+  // /v1/auth/state is an older build, not a machine that is down. Keeps the
+  // last known answer on a failed read, so one missed request cannot flash
+  // the first-open screen at somebody who already chose.
+  async function loadAuth() {
+    try {
+      state.auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // unchanged
+    }
   }
 
   function paneFromHash() {
@@ -2432,6 +2591,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "tiles", style: "grid-template-columns:1fr 1fr" },
+        renderAccountTile(atlasOn, readonly),
         el(
           "div",
           { class: "tile" },
@@ -2750,6 +2910,229 @@ if (typeof document !== "undefined") {
     }
     await loadAll();
     route();
+  }
+
+  // ---- Web sign-in ----
+
+  let signinTimer = null;
+
+  function signinBusy() {
+    return state.signin.status === "starting" || state.signin.status === "waiting";
+  }
+
+  /** Start a web sign-in: POST /v1/auth/start, then poll /v1/auth/state.
+   *
+   *  `enableAtlas` is Settings' path from local-only mode: the start route
+   *  refuses while Send to Atlas is off (409, as /v1/config does), so the
+   *  switch is turned on first through the same PUT the switch itself uses.
+   *
+   *  ⚠️ The restart that PUT asks for is DEFERRED until the sign-in finishes.
+   *  The daemon's page port is random on every start and the pending sign-in
+   *  lives in its memory, so a restart mid-flow sends the browser's return to
+   *  a dead port and throws the attempt away — offering Restart then would be
+   *  offering to break the thing in progress. */
+  async function startSignin({ enableAtlas = false } = {}) {
+    if (signinBusy()) return;
+    clearTimeout(signinTimer);
+    state.signin = { status: "starting", enableAtlas };
+    route();
+    let restartAfter = false;
+    if (enableAtlas && !atlasEnabled(state.settings)) {
+      const put = await sendJSON("/v1/settings", "PUT", { send_to_atlas: true });
+      if (!put.ok) {
+        state.signin = { status: "failed", enableAtlas, message: settingsErrorText(put.status, put.body) };
+        route();
+        return;
+      }
+      state.settings = { ...state.settings, send_to_atlas: true };
+      restartAfter = !!(put.body && put.body.restart_required);
+      // A restart bar already up (from choosing local only, say) holds a patch
+      // that says send_to_atlas:false; pressing it now would turn Atlas off
+      // again. It carries the value just written instead.
+      if (state.restart.status !== RESTART_IDLE && "send_to_atlas" in state.restart.patch) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+      }
+    }
+    const res = await sendJSON("/v1/auth/start", "POST", {});
+    if (!res.ok || !res.body) {
+      state.signin = { status: "failed", enableAtlas, restartAfter, message: signinStartErrorText(res.status, res.body) };
+      route();
+      return;
+    }
+    state.signin = {
+      status: "waiting",
+      enableAtlas,
+      restartAfter,
+      url: safeAuthorizeURL(res.body.authorize_url),
+      opened: res.body.opened === true,
+      startedAt: Date.now(),
+      failures: 0,
+    };
+    route();
+    signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+  }
+
+  // One poll. Re-renders only when the verdict changes: route() rebuilds the
+  // whole pane, and doing that every second would wipe whatever a person is
+  // typing into the setup-code box meanwhile.
+  async function pollSignin() {
+    const flow = state.signin;
+    if (flow.status !== "waiting") return;
+    let auth = null;
+    try {
+      auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // counted below
+    }
+    if (state.signin !== flow) return; // superseded by a newer attempt or a choice
+    const failures = auth ? 0 : (flow.failures || 0) + 1;
+    const step = signinPollStep(auth, { startedAt: flow.startedAt, now: Date.now(), failures });
+    if (auth) state.auth = auth;
+    if (!step.stop) {
+      flow.failures = failures;
+      signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+      return;
+    }
+    if (step.status === "done") {
+      state.signin = { status: "done", doneAt: Date.now() };
+      if (flow.restartAfter) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+        state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
+      }
+      route();
+      // The rest of the page (the health strip's Atlas row, the env pill)
+      // reads the ledger and settings, not auth state — refresh them now
+      // rather than on the next 30 s tick.
+      await loadAll();
+      route();
+      setTimeout(route, SIGNIN_DONE_LINGER_MS + 50);
+      return;
+    }
+    state.signin = { status: "failed", enableAtlas: flow.enableAtlas, restartAfter: flow.restartAfter, message: signinErrorText(step.error) };
+    route();
+  }
+
+  /** "Use locally only": the existing Send to Atlas switch, turned off,
+   *  through the page's one settings call. The daemon then answers
+   *  first_run:false (send_to_atlas is no longer absent), which is what keeps
+   *  the screen from ever coming back — the flag set here only saves the
+   *  flash before the next read. */
+  async function chooseLocalOnly() {
+    clearTimeout(signinTimer);
+    state.signin = { status: "idle" };
+    await updateSettings({ send_to_atlas: false });
+    if (settingsErrorFor("send_to_atlas")) return; // updateSettings already routed it
+    if (state.auth) state.auth = { ...state.auth, first_run: false };
+    route();
+    await loadAuth();
+    route();
+  }
+
+  /** The progress of a sign-in, wherever it is drawn (the bar, the
+   *  first-open screen). Null while idle. */
+  function signinFlowNode() {
+    const flow = state.signin;
+    if (flow.status === "starting") return el("div", { class: "signin-flow" }, el("span", {}, SIGNIN_TEXT.starting));
+    if (flow.status === "waiting") {
+      return el(
+        "div",
+        { class: "signin-flow" },
+        el("strong", {}, SIGNIN_TEXT.waiting),
+        flow.url
+          ? el(
+              "span",
+              { class: "signin-link" },
+              `${flow.opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened} `,
+              el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel)
+            )
+          : null
+      );
+    }
+    if (flow.status === "failed") {
+      return el(
+        "div",
+        { class: "signin-flow failed" },
+        el("span", {}, flow.message || signinErrorText(null)),
+        el("button", { class: "btn", type: "button", onclick: () => startSignin({ enableAtlas: !!flow.enableAtlas }) }, SIGNIN_TEXT.tryAgain)
+      );
+    }
+    if (flow.status === "done") return el("div", { class: "signin-flow done" }, el("strong", {}, signedInText(state.auth)));
+    return null;
+  }
+
+  function renderSigninBanner() {
+    const node = document.getElementById("signinBanner");
+    if (!node) return;
+    const mode = state.offline ? null : signinBarMode(state.auth, state.settings, state.signin, Date.now());
+    node.innerHTML = "";
+    node.hidden = !mode;
+    node.className = "signin-banner" + (mode ? ` ${mode}` : "");
+    if (!mode) return;
+    if (mode === "prompt") {
+      node.appendChild(
+        el("div", { class: "signin-copy" }, el("strong", {}, SIGNIN_TEXT.notSignedIn), el("span", {}, SIGNIN_TEXT.notSignedInBody))
+      );
+      node.appendChild(el("button", { class: "btn", type: "button", onclick: () => startSignin() }, SIGNIN_TEXT.signIn));
+      return;
+    }
+    const flow = signinFlowNode();
+    if (flow) node.appendChild(flow);
+  }
+
+  /** The first-open choice (AC-12), in place of whichever pane was asked for.
+   *  It shows only while the daemon says first_run — see showFirstRun. */
+  function renderFirstRun(root) {
+    root.innerHTML = "";
+    const err = settingsErrorFor("send_to_atlas");
+    root.appendChild(
+      el(
+        "section",
+        { class: "firstrun", "aria-labelledby": "firstrunTitle" },
+        el("h1", { id: "firstrunTitle" }, SIGNIN_TEXT.firstRunTitle),
+        el("p", { class: "firstrun-lead" }, SIGNIN_TEXT.firstRunLead),
+        el("p", {}, SIGNIN_TEXT.firstRunBody),
+        el(
+          "div",
+          { class: "firstrun-actions" },
+          el("button", { class: "btn", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
+          el("button", { class: "btn secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
+        ),
+        signinFlowNode(),
+        err ? el("div", { class: "settings-note error-note" }, err) : null,
+        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.later),
+        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.localNote)
+      )
+    );
+  }
+
+  /** Settings' account tile: who this machine is signed in as, or a way to
+   *  sign in. Beside the setup-code box, which stays (AC-8). Nothing at all
+   *  on a daemon without /v1/auth/state. */
+  function renderAccountTile(atlasOn, readonly) {
+    const auth = state.auth;
+    if (!auth) return null;
+    if (auth.paired) {
+      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "signin-who" }, signedInText(auth)));
+    }
+    // Signing in from local-only mode turns Send to Atlas on — impossible
+    // while KELD_ATLAS pins it off, so the button says why instead.
+    const pinnedOff = !atlasOn && readonly.has("send_to_atlas");
+    return el(
+      "div",
+      { class: "tile" },
+      el("div", { class: "l" }, SIGNIN_TEXT.account),
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, SIGNIN_TEXT.notSignedInSettings, atlasOn ? null : el("div", { class: "desc" }, SIGNIN_TEXT.turnsAtlasOn)),
+        el(
+          "button",
+          { class: "btn", type: "button", disabled: pinnedOff || signinBusy(), onclick: () => startSignin({ enableAtlas: !atlasOn }) },
+          SIGNIN_TEXT.signIn
+        )
+      ),
+      pinnedOff ? el("div", { class: "settings-note readonly-note" }, readonlyNote("send_to_atlas")) : null
+    );
   }
 
   // ---- Router / boot ----
@@ -3246,6 +3629,7 @@ if (typeof document !== "undefined") {
     renderNavVersion();
     syncNavVisibility();
     document.getElementById("offlineBanner").hidden = !state.offline;
+    renderSigninBanner();
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the
     // middle. Projects and Settings are ordinary documents that should scroll
@@ -3254,6 +3638,14 @@ if (typeof document !== "undefined") {
     // careful.
     document.body.classList.toggle("pane-today", pane === "today");
     const root = document.getElementById("paneRoot");
+    // The first-open choice stands in for every pane until it is answered.
+    // Not while offline: the cached page is showing what it last knew, and
+    // neither button could do anything.
+    if (showFirstRun(state.auth) && !state.offline) {
+      document.body.classList.remove("pane-today");
+      renderFirstRun(root);
+      return;
+    }
     if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
     else if (pane === "integrations") {

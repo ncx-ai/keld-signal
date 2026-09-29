@@ -68,6 +68,32 @@ The suite **fails, rather than passes vacuously, when the daemon is not
 reachable**: `global-setup` throws if the bring-up fails, and every fixture throws
 if `state.json` is missing.
 
+## The sign-in suite (its own config)
+
+```bash
+cd ui/e2e && npm ci && npx playwright install chromium && npx playwright test --config=signin.config.ts --project=chromium
+```
+
+About 20 seconds. `signin.spec.ts` and `firstrun.spec.ts` need the OPPOSITE of the
+daemon above — unpaired, Send to Atlas never set, no `KELD_ATLAS` — plus an Atlas to
+sign in against, so they run under `signin.config.ts` and the main config ignores
+them. `signin-setup.ts` builds this checkout's `keld-agent` and `keld-conform`; every
+test then starts its own mock Atlas (`keld-conform mockatlas`, loopback) and its own
+daemon on a fresh temp home (`support/signin-harness.ts`) with `KELD_API_URL` /
+`KELD_ATLAS_WEB_URL` pointed at the mock, `KELD_AUTH_NO_BROWSER=1`,
+`ml_backend: "off"` (no sidecar, no engine download), telemetry port 14411
+(`KELD_E2E_TELEMETRY_PORT` to move it), and every inherited `KELD_*` dropped. No
+sidecar venv and no corpus, which is why CI can run it (`ci.yml` → `ui-e2e-signin`).
+The browser context is sealed to loopback, the authorize tab included.
+
+| spec | what a user sees |
+|---|---|
+| `firstrun.spec.ts` | a fresh machine shows **Welcome to Signal** with Sign in with Atlas / Use locally only on every pane; Use locally only writes `send_to_atlas: false` and the choice never returns across a reload and a daemon restart; Settings still offers Sign in |
+| `signin.spec.ts` | Sign in from the first-open screen, from local-only Settings (turns Send to Atlas back on) and from the not-signed-in bar: the page shows the authorize link, the tab lands on "Signed in. Close this tab.", the page says signed in within 5 s, `hook.json` + `auth.json` exist; a forged `/auth/callback?state=bogus` gets the fixed refusal page, writes nothing, calls no Atlas and echoes nothing; a forged return while a real sign-in waits does not cancel it |
+
+`KELD_E2E_SIGNIN_NOBUILD=1` reuses the last build; `KELD_E2E_KEEP=1` keeps each
+test's temp home. Daemon logs land in `test-results/signin-logs/`.
+
 ## Knobs
 
 | env | effect |

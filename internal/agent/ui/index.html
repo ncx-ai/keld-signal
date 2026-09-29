@@ -59,6 +59,10 @@
       <strong>Signal is not running on this machine.</strong>
       <span>Start it with <code>keld-agent run</code>, then reload this page.</span>
     </div>
+    <!-- Not signed in to Atlas, or a sign-in in progress. Filled by
+         renderSigninBanner (app.js); empty and hidden on a paired machine, on
+         one that chose local only, and while the first-open choice is up. -->
+    <div id="signinBanner" class="signin-banner" role="status" hidden></div>
     <div id="paneRoot" class="pane-root" aria-live="polite">
       <p class="loading">Loading…</p>
     </div>
