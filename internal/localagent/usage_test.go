@@ -49,4 +49,3 @@ func TestUsageLineOnALedgerWithoutTheTable(t *testing.T) {
 		t.Fatalf("state %+v", u)
 	}
 }
-

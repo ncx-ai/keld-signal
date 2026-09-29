@@ -84,7 +84,9 @@ func TestRequestsTableAtScale(t *testing.T) {
 	})
 	// Every row is priced, so this is the start with nothing newly priced — the
 	// one that happens on every daemon start.
-	reprice := timed(func() { s.RepriceUnpricedRequests(func(string, int64, int64, int64, int64) (float64, bool) { return 0, false }) })
+	reprice := timed(func() {
+		s.RepriceUnpricedRequests(func(string, int64, int64, int64, int64) (float64, bool) { return 0, false })
+	})
 	stats := timed(func() { _, _ = s.RequestStats() })
 
 	t.Logf("%d rows (%d/day × %d days) written in %s", st.Rows, perDay, days, wrote.Round(time.Second))
