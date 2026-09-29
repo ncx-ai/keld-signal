@@ -71,9 +71,8 @@ func hasEvent(events []string, needle string) bool {
 	return false
 }
 
-// ⚠️ Events must appear AS THEY ARRIVE. The page watches this directory to raise
-// the approval panel the moment `device_code` lands; a relay that published only
-// on exit would freeze the page for the whole of a device flow.
+// ⚠️ Events must appear AS THEY ARRIVE, not on exit: a caller watching this
+// directory must see progress while the child is still running.
 func TestRelayPublishesEventsIncrementally(t *testing.T) {
 	events := filepath.Join(t.TempDir(), "events")
 	exe, args := emit(`{"event":"device_code"}`, `{"event":"authorized"}`)
@@ -95,9 +94,8 @@ func TestRelayPublishesEventsIncrementally(t *testing.T) {
 	}
 }
 
-// ⚠️ Order is the page's only way to sequence: it reads 0001, 0002, … and a
-// device_code arriving after authorized would raise a panel over a finished
-// sign-in.
+// ⚠️ Order is the reader's only way to sequence: it reads 0001, 0002, … so a
+// later line must never land under an earlier number.
 func TestRelayPreservesOrder(t *testing.T) {
 	events := filepath.Join(t.TempDir(), "events")
 	exe, args := emit(`{"event":"one"}`, `{"event":"two"}`, `{"event":"three"}`)
@@ -260,24 +258,39 @@ func TestParseArgsDoesNotEatChildFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	if o.URL != "" || o.Sentinel != "" {
-		t.Fatalf("child flags leaked into our options: url=%q sentinel=%q", o.URL, o.Sentinel)
+	if o.Sentinel != "" || o.EventsDir != "evts" {
+		t.Fatalf("child flags leaked into our options: sentinel=%q events=%q", o.Sentinel, o.EventsDir)
 	}
 	if len(o.Args) != 5 {
 		t.Fatalf("child args = %v, want 5 of them", o.Args)
 	}
 }
 
-func TestParseArgsPanel(t *testing.T) {
-	o, err := parseArgs([]string{
-		"--panel", "123456",
-		"--url", "https://atlas.keld.co/cli/installer?code=X",
-	})
+func TestParseArgsSpawn(t *testing.T) {
+	o, err := parseArgs([]string{"--spawn", `C:\keld\keld-agent.exe`, "--", "run", "--hide-console"})
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	if o.Mode != "panel" || o.Panel != 123456 {
-		t.Fatalf("mode/panel = %q/%d", o.Mode, o.Panel)
+	if o.Mode != "spawn" || o.Exe != `C:\keld\keld-agent.exe` || strings.Join(o.Args, " ") != "run --hide-console" {
+		t.Fatalf("spawn parsed as mode=%q exe=%q args=%v", o.Mode, o.Exe, o.Args)
+	}
+	if err := validate(o); err != nil {
+		t.Fatalf("validate(spawn): %v", err)
+	}
+}
+
+// ⚠️ The installer's wizard page is gone (2026-09-29, web sign-in spec AC-10),
+// and with it the only callers of --panel (an embedded WebView2 sign-in) and
+// --clipboard (reading a pasted setup code). They are REFUSED now, not
+// silently accepted: a mode nobody should be calling must fail loudly.
+func TestRemovedWizardModesAreUnknown(t *testing.T) {
+	for _, argv := range [][]string{
+		{"--panel", "123456", "--url", "https://atlas.keld.co/cli/installer"},
+		{"--clipboard", "--events-dir", "evts"},
+	} {
+		if _, err := parseArgs(argv); err == nil {
+			t.Errorf("parseArgs(%v) accepted a removed wizard mode", argv)
+		}
 	}
 }
 
@@ -286,8 +299,7 @@ func TestValidateRejectsIncompleteInvocations(t *testing.T) {
 		"no mode":           {},
 		"run without exe":   {Mode: "run", EventsDir: "x"},
 		"run without dir":   {Mode: "run", Exe: "keld.exe"},
-		"panel without h":   {Mode: "panel", URL: "https://x"},
-		"panel without url": {Mode: "panel", Panel: 1},
+		"spawn without exe": {Mode: "spawn"},
 	} {
 		if err := validate(o); err == nil {
 			t.Errorf("%s: expected an error", name)
