@@ -13,7 +13,20 @@ value to publish.
 """
 import json, os, re, glob, collections, statistics as st
 
-ROOT=os.path.expanduser("~/keld/john-projects/projects")
+# ⚠️ CORPUS PATHS ARE ENVIRONMENT-CONFIGURED, NEVER HARDCODED. These studies read private
+# session transcripts belonging to real people; a hardcoded home directory both breaks on any
+# other machine and publishes whose transcripts they were. Set KELD_CORPUS_A / KELD_CORPUS_B
+# to the directories to read. The two corpora are referred to throughout as CORPUS A and
+# CORPUS B and are deliberately not named after their owners.
+def corpus(var, what):
+    import os, sys
+    p = os.environ.get(var, "").strip()
+    if not p:
+        sys.exit(f"set {var} to the {what} transcript directory (see the note above)")
+    return os.path.expanduser(p)
+
+
+ROOT=corpus("KELD_CORPUS_A", "corpus A")
 OBS=re.compile(r"\[MESSAGE FROM NON-USER SOURCE\]|<observed_from_primary_session>")
 CODE={".py",".go",".ts",".tsx",".js",".jsx",".rs",".java",".rb",".c",".h",".cpp",".sh",".zsh",
       ".sql",".css",".scss",".html",".vue",".swift",".kt",".php",".lua",".mjs",".cjs",".spec"}

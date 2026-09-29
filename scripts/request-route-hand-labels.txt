@@ -1,6 +1,6 @@
 # Hand labels — PER-REQUEST routing class. 120 inference requests, blind, stratified 15/class.
 #
-# Corpus: a colleague's real Claude Code transcripts (~/keld/john-projects), 298 files after
+# Corpus: a second engineer's real Claude Code transcripts (corpus A) ($KELD_CORPUS_A), 298 files after
 # observer-session exclusion, 8,193 requests. Sample drawn by scripts/request_gold_sample.py
 # (seed 11), committed at e1df5e6 BEFORE a single label was written. The blind file carries no
 # class, and the key was held back in a separate file. Both orderings are provable from git.

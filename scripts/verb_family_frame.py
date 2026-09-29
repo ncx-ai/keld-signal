@@ -16,7 +16,7 @@ recorded so the distribution is never read as the population's.
 """
 import json, os, re, glob, random, collections, datetime as dt
 
-D=os.path.expanduser("~/keld/john-projects/projects")
+D=corpus("KELD_CORPUS_A", "corpus A")
 OUT="/tmp/claude-1000/vf"
 # ⚠️ BLOCKS, not 60-minute windows. Signal cuts blocks at MAX_BLOCK_MINUTES=20 or IDLE_BINS=3
 # (15 min of silence) over 5-minute bins, and the facet being designed is BLOCK-scope. An
@@ -38,8 +38,10 @@ INJECT=re.compile(r"Another Claude session sent a message|\[Subagent hand-back\]
 SENT=re.compile(r"(?<![0-9A-Z])[.!?]+\s+(?=[A-Z\"'(\[])")
 
 # how many windows to draw from each project group
-QUOTA=[("-Users-johnluther-keld-keld-website", 20),   # language family lives here
-       ("-Users-johnluther-keld",              30),
+# Stratify on a project-directory SUFFIX, not the full path: the full path carries the
+# owner's home directory, which is both machine-specific and identifying.
+QUOTA=[("keld-website", 20),   # the language family lives in this project
+       ("keld",         30),
        ("*",                                   10)]
 
 def text_of(c):

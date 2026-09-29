@@ -1,5 +1,5 @@
 # Hand labels — VERB and FAMILY, multi-label, prominence-ordered.
-# Corpus: a colleague's REAL Claude Code transcripts (~/keld/john-projects), 60 windows.
+# Corpus: a colleague's REAL Claude Code transcripts ($KELD_CORPUS_A), 60 windows.
 #
 # THIS HEADER IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN, and the labels before any arm is
 # scored. Both orderings are provable from git, which is what makes the numbers falsifiable.

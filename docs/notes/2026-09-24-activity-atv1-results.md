@@ -393,8 +393,8 @@ full run.
 
 ## ⚠️ 2026-09-25 — the 0.660 DOES NOT TRANSFER off engineering work
 
-John's product/marketing session (7 windows, multi-label gold,
-`scripts/activity-atv1-john-labels.txt`) is the first non-engineering ground truth. The
+corpus A's product/marketing session (7 windows, multi-label gold,
+`scripts/activity-atv1-corpusA-labels.txt`) is the first non-engineering ground truth. The
 measured arm was re-run on it.
 
 | framing | result |
@@ -418,7 +418,7 @@ sub-windows and ranking by share — the design the single call structurally can
 produced the SAME 0/7. The truncation was a real confound and a red herring for this failure.
 
 **Prime suspect: wording, and it is testable.** The `rich` description for `text.transform`
-reads "rewriting, translating or reformatting PROSE that already exists". John's work is
+reads "rewriting, translating or reformatting PROSE that already exists". corpus A's work is
 editing a SLIDE DECK — reordering slides, fixing arrow labels, splicing slide XML. The wording
 study already measured a **0.378** swing on `code.*` from description changes alone, larger
 than any arm gap in this study, so "describe `text.*` in terms of documents, decks and pages
@@ -433,14 +433,14 @@ to implement until either the wording hypothesis is tested or the claim is narro
 
 **Vocabulary finding from the same labelling:** `text.create` has a `sales` context;
 `text.transform` does NOT (financial/general/legal/marketing/media/medical/scientific only).
-John's session creates a customer deck once and revises it five times, so identical work is
+corpus A's session creates a customer deck once and revises it five times, so identical work is
 labelable `sales` at creation and only `general` afterwards. That asymmetry is in `atv1`, not
 in the labelling.
 
 
 ## 2026-09-25 — RECOVERED: two fixes took the transfer failure to the best result measured
 
-The 0/7 on John's session was substantially SELF-INFLICTED. Two defects, both found by the
+The 0/7 on corpus A's session was substantially SELF-INFLICTED. Two defects, both found by the
 repo owner, and fixing them improved BOTH corpora.
 
 **Defect 1 — malformed sub-windows (violated this repo's own convention).** AGENTS.md:
@@ -459,14 +459,14 @@ real sentence ends (`(?<![0-9A-Z])[.!?]+\s+(?=[A-Z"'(\[])`, which ignores enumer
 initials), and never emitting a truncation marker. Result: 37 sub-windows, **0 markers**.
 
 **Defect 2 — the word "prose".** `rich` described `text.transform` as *"reformatting PROSE that
-already exists"*. John's work is editing a SLIDE DECK. Across 37 CLEAN calls the model proposed
+already exists"*. corpus A's work is editing a SLIDE DECK. Across 37 CLEAN calls the model proposed
 a `text.*` verb **zero times**, answering `extract` instead. The `docs` style widens text.* to
 "document, deck, page, report, spec" and narrows `extract` to "pulling structured fields into a
 list or table. NOT discussing or explaining what a document says".
 
 ### The numbers
 
-| arm | John's 7 (primary) | John's gold-set recall | Engineering 100 | `code.*` |
+| arm | corpus A's 7 (primary) | corpus A's gold-set recall | Engineering 100 | `code.*` |
 |---|---|---|---|---|
 | malformed + `rich` | 0/7 | 0.190 | 0.660 | 0.600 |
 | logical boundaries + `rich` | 0/7 | 0.310 | 0.660 | 0.600 |
@@ -475,7 +475,7 @@ list or table. NOT discussing or explaining what a document says".
 **`docs` is a strict improvement on BOTH corpora — it is not a trade.** 0.700 exceeds the
 shipped `activity_type` (0.670) and `domain` (0.683) facets. ⚠️ The change was made on
 PRINCIPLE (a deck, a page and a spec are text artifacts; "prose" wrongly excluded them) and
-then regression-checked on the engineering set, rather than tuned against John's 7 — which
+then regression-checked on the engineering set, rather than tuned against corpus A's 7 — which
 would have been fitting noise at n=7.
 
 ⚠️ **This does not retract the transfer warning, it relocates it.** A headline accuracy is
@@ -484,7 +484,7 @@ gap was a description defect rather than a model limit — and that was only fin
 second, differently-shaped corpus existed.
 
 **Live, untested (2026-09-25):** branch the label set on Atlas team membership
-(engineering vs other) — John's J06 predicted `code.edit` 50% on deck work and a team branch
+(engineering vs other) — corpus A's J06 predicted `code.edit` 50% on deck work and a team branch
 would suppress it; and open-ended extraction mapped into the atv1 space by embedding, which
 would remove the label-wording dependency this section is entirely about (measured worth:
 0.378 on `code.*`, and the difference between 0/7 and 3/7 here).
@@ -505,7 +505,7 @@ axis, because a verb names WHAT WAS PRODUCED and team names WHAT ENDS IT SERVED.
 **Confirmed.** Inert as a prior, harmful as a branch.
 
 ⚠️ **T2 is unsound in principle as well as in measurement, and this corpus proves it.** The
-non-engineering branch drops `code.write`/`code.edit` — but John, who is not an engineer,
+non-engineering branch drops `code.write`/`code.edit` — but corpus A, who is not an engineer,
 wrote **23 `.js` files and a `.py`** to generate his deck. A hard exclusion keyed on team makes
 the correct label UNREACHABLE. Do not implement a team branch on the verb axis.
 
@@ -529,13 +529,13 @@ different question. Team already worked where it belongs — on context.
 PROPOSES candidates at one sub-window's weight; prose votes the verb; team primes the context;
 everything snaps to a legal `atv1` id and ranks by share.
 
-**John's 7 (team=Product):** primary 3/7 = 0.429, in-set 0.429, **recall 0.476 -> 0.548**,
+**corpus A's 7 (team=Product):** primary 3/7 = 0.429, in-set 0.429, **recall 0.476 -> 0.548**,
 with **11 candidates added by modality**.
 
 **Deterministic proposals raise RECALL without displacing the top-1** — which is what
 "propose, never gate" is supposed to do, and it is the first measured support for the
 decomposition. `SendUserFile.files` is included, which `paths.PATH_INPUTS` does not cover; on
-John's session that is the only way the delivered `.pptx` is visible at all.
+corpus A's session that is the only way the delivered `.pptx` is visible at all.
 
 ⚠️ **A LEADING-PROMPT DEFECT was found and fixed mid-run.** The first team prior read "they
 work in product and **marketing**" — `marketing` is a taxonomy value, so the context pass
@@ -543,7 +543,7 @@ returned `marketing` almost everywhere. That is encoding the answer, not supplyi
 Restated as "someone on the **Product** team", contexts snapped back to `general` and matched
 gold on J01/J03/J04/J05. **State the team's NAME, never a context value.**
 
-⚠️ **Context scoring on John's set is UNRESOLVABLE and no context number should be quoted from
+⚠️ **Context scoring on corpus A's set is UNRESOLVABLE and no context number should be quoted from
 it.** Gold is `general` on the revision windows only because `text.transform` has no `sales`
 context. The work genuinely is customer-facing, so a `marketing` or `financial` prediction
 there is not cleanly wrong. The vocabulary gap, not the model, makes the comparison
@@ -551,13 +551,13 @@ meaningless.
 
 ## 2026-09-25 — free-form extraction + embedding into the atv1 space
 
-Motivation: label WORDING is worth 0.378 on `code.*` and the whole 0/7 -> 3/7 on John's set, so
+Motivation: label WORDING is worth 0.378 on `code.*` and the whole 0/7 -> 3/7 on corpus A's set, so
 a closed label set makes the answer a function of OUR prose. This asks GLiNER2 to extract what
 the work is in the TEXT'S own words (no atv1 vocabulary in the prompt), then maps the spans
 into the atv1 space with Qwen3-Embedding-0.6B against the 68 descriptions plus a NULL doc —
 `/attribute`'s measured discipline. `scripts/activity_atv1_freeform.py`.
 
-| John's 7 | closed labels (three-source) | free-form + embedding |
+| corpus A's 7 | closed labels (three-source) | free-form + embedding |
 |---|---|---|
 | primary | **0.429** | 0.000 |
 | in-set | **0.429** | 0.143 |
@@ -585,7 +585,7 @@ verb-phrase-only extraction is UNTESTED and is the obvious next variant.
 |---|---|---|
 | modality from file evidence | 0.476 -> 0.548 | none |
 | free-form + embedding | -> **0.714** | destroys it (0.000) |
-| closed-label prose pass | — | **the only thing that ranks** (0.429 John / 0.700 eng) |
+| closed-label prose pass | — | **the only thing that ranks** (0.429 corpus A / 0.700 eng) |
 
 So free-form belongs as a CANDIDATE GENERATOR feeding the closed-label ranker, not as a
 replacement for it — the same "propose, never gate" shape that made modality work. ⚠️ Untested
@@ -601,7 +601,7 @@ exist and the comparison between them is its own control: if both produce the sa
 distribution it does not work. `atv1`'s context list has no `engineering` value, so this uses a
 9-value business-function vocabulary matching the question as asked.
 
-| ENGINEERING — 40 windows | | JOHN — 7 windows | |
+| ENGINEERING — 40 windows | | CORPUS A — 7 windows | |
 |---|---|---|---|
 | engineering | **48%** | sales | **71%** |
 | product | **45%** | product | 14% |
@@ -610,7 +610,7 @@ distribution it does not work. `atv1`'s context list has no `engineering` value,
 | sales / marketing | **0%** | | |
 
 **The corpora separate COMPLETELY on the axis that matters.** The engineering corpus never
-produces `sales` or `marketing`; John's never produces `engineering`.
+produces `sales` or `marketing`; corpus A's never produces `engineering`.
 
 **This is a stronger signal than the fine-grained verb**, and the reason is structural: nine
 business functions barely overlap, where 17 verbs contain genuinely confusable pairs
@@ -622,21 +622,21 @@ Three readings worth keeping:
 - **The 48/45 engineering-vs-product split is probably not an error.** Many of those windows
   genuinely are product work — specs, plans, design decisions, reviews. ⚠️ Unprovable without
   per-window labels; stated as a reading, not a finding.
-- **`sales` 71% for John agrees with the one context label assigned by hand** (`text.create.sales`
+- **`sales` 71% for corpus A agrees with the one context label assigned by hand** (`text.create.sales`
   on the deck-creation window) — a small independent agreement.
-- **`finance` appears in both** (5% / 16% of sub-windows) and is defensible in both: John's deck
+- **`finance` appears in both** (5% / 16% of sub-windows) and is defensible in both: corpus A's deck
   is inference-spend economics, and the engineering corpus contains real seat-cost, billing and
   capex work.
 
 ⚠️ **What this does NOT establish.** `legal`, `medical`, `support` and `operations` appear in
 NEITHER corpus as ground truth, so this says only that the model does not hallucinate them
 here — never that it finds them when they are real. Ground truth is CORPUS-level and therefore
-coarse. John's side is 7 windows.
+coarse. corpus A's side is 7 windows.
 
 ## 2026-09-27 — SYNTHETIC transcripts cannot validate the domain classifier
 
 No real legal/medical/finance/support/operations transcript exists anywhere on this machine
-(`john-projects` in the frozen corpus is the SAME deck session already used). So six sessions
+(the corpus-A session in the frozen corpus is the SAME deck session already used). So six sessions
 per domain were written synthetically — **by TWO independent generators from ONE brief**,
 because the confound was stated in advance: if one model writes the data and another classifies
 it, the test may measure whether two models share a prior about what "legal work" sounds like.
@@ -679,7 +679,7 @@ result worth following up.
 ### What this does NOT overturn
 
 The real-corpus result stands on its own evidence: 40 engineering windows -> engineering+product
-93% with 0% sales/marketing; 7 John windows -> sales 71% with 0% engineering. That is REAL data
+93% with 0% sales/marketing; 7 corpus A windows -> sales 71% with 0% engineering. That is REAL data
 with REAL ground truth and two corpora that separate completely.
 
 ⚠️ **What is now blocked is EXTENDING it.** Legal, medical, support and operations cannot be
@@ -735,7 +735,7 @@ existed before.
 
 ### Consequence for the domain facet
 
-The real-corpus result stands (engineering 93% / John 71%, clean separation). **It cannot be
+The real-corpus result stands (engineering 93% / corpus A 71%, clean separation). **It cannot be
 extended to legal, medical, finance or support by ANY route currently available** — not
 synthesis (generators disagree 2/3 of the time), not public chat data (the work is not in it).
 Validating those domains requires transcripts from people doing that work, i.e. real Keld
@@ -762,7 +762,7 @@ hand**, so it is deferred rather than guessed at.
 
 ### The corpus, and why it is not the engineering one
 
-A colleague's real Claude Code transcripts (`~/keld/john-projects`). The engineering frame
+A second engineer's real Claude Code transcripts (**corpus A**) (`$KELD_CORPUS_A`). The engineering frame
 this doc has been scoring against has **zero `text.*` gold and support for 7 of 17 verbs**,
 so it structurally cannot measure the language or understanding families. This corpus
 carries real Notion document work, a publishing pipeline, and lint/review passes alongside
@@ -1291,9 +1291,9 @@ prior. Not on blocks, and not as the decider.
 
 ### 2026-09-28 — the residual, round two: a RESOLVER instead of a fifth pattern
 
-⚠️ **CORPUS: all of this is JOHN'S transcripts** (`~/keld/john-projects`), 298 files. The 60
+⚠️ **CORPUS: all of this is CORPUS A**, a second engineer's transcripts (`$KELD_CORPUS_A`), 298 files. The 60
 blocks, the 120 labels and the 80 holdout labels all come from there. The only frame measured
-on the repo owner's own transcripts is the engineering one (100 windows, 60-minute,
+on the repo corpus B's own transcripts is the engineering one (100 windows, 60-minute,
 single-label) — already recorded as not poolable with these. **None of these numbers has been
 checked against a second person's work**, and that is the open generalisation question.
 
@@ -1334,14 +1334,14 @@ class again and not a bucket.
 
 Every number to this point came from ONE person's transcripts. The residual is a coverage
 metric needing no labels, so the rules ran unchanged against a second corpus — the repo
-owner's `~/.claude/projects`, **568 transcripts / 40,677 requests**, five times John's, with
+corpus B's `~/.claude/projects`, **568 transcripts / 40,677 requests**, five times corpus A's, with
 the two sessions belonging to this investigation excluded (they are unrepresentatively
 Bash-and-Python-heavy and the rules were written inside them).
 
 **Result against the pre-registered bar: 7.1%** — the middle band, *person-shaped at the
 margins; one more resolver round*. That round closed it.
 
-| | JOHN | OWNER |
+| | CORPUS A | CORPUS B |
 |---|---|---|
 | residual, first run | 2.8% | **7.1%** |
 | residual, after one round | **1.7%** | **1.6%** |
@@ -1350,11 +1350,11 @@ margins; one more resolver round*. That round closed it.
 #### What the gap was made of
 
 Two thirds was the SAME shape a fifth time — a wrapper or prefix standing where the verb
-belongs — in forms John's corpus never contained: `timeout 900 cargo check`, `env X=1 cmd`,
+belongs — in forms corpus A's corpus never contained: `timeout 900 cargo check`, `env X=1 cmd`,
 `PYTHONPATH=. python x` (an assignment with **no separator**, which the existing assignment
 rule required), and bare `echo X` / `true` as an entire command rather than a prefix.
 
-The rest was **two toolchains John never used**: `cargo` (5.1%) and `go`. That is not a bug
+The rest was **two toolchains corpus A never used**: `cargo` (5.1%) and `go`. That is not a bug
 in the rules, it is coverage of a tool that was absent from the first corpus — and it is
 exactly the class of gap a single-corpus study cannot surface.
 
@@ -1365,7 +1365,7 @@ while a plain fetch stays `retrieve`.
 
 #### ⚠️ The class shares differ, and that is a finding rather than a failure
 
-| class | JOHN | OWNER |
+| class | CORPUS A | CORPUS B |
 |---|---|---|
 | retrieve | 39.2% | **47.6%** |
 | verify | 5.3% | **10.4%** |
@@ -1373,13 +1373,13 @@ while a plain fetch stays `retrieve`.
 | synthesize | **7.9%** | 3.8% |
 | subagent share | 41.5% | **70.6%** |
 
-The owner's work is test-and-inspect heavy and runs twice as much through subagents; John's
+The corpus B's work is test-and-inspect heavy and runs twice as much through subagents; corpus A's
 carries the document authoring and reporting. **No class collapsed on either corpus**, which
 is the evidence that matters: the eight-class vocabulary transferred even though one person's
 rules did not, and it is the vocabulary — not the regexes — that was the real claim.
 
 ⚠️ **AND THE ECONOMICS ARE WORSE ON THE SECOND CORPUS, NOT BETTER: in:out is 405:1**
-(median 200,434 in, 295 out) against John's 234:1. The case that routing by activity type
+(median 200,434 in, 295 out) against corpus A's 234:1. The case that routing by activity type
 optimises the wrong 0.4% of token flow is stronger here, not weaker.
 
 #### What this does and does not establish
@@ -1389,21 +1389,21 @@ cost nothing on the labelled set (fitted 0.945 and holdout 0.920 both unchanged,
 coverage rose on BOTH corpora — a fix that improved coverage without touching accuracy is the
 shape of a real fix rather than an overfit).
 
-**Does not:** the second round's fixes were derived from the owner's residual, so **1.6% on
-the owner's corpus is now fitted to it** exactly as 2.8% was to John's. A third person is the
-clean test. The evidence that this is not overfitting is that John's labelled holdout did not
-move while John's own residual also fell, 2.8% → 1.7%.
+**Does not:** the second round's fixes were derived from corpus B's residual, so **1.6% on
+corpus B's corpus is now fitted to it** exactly as 2.8% was to corpus A's. A third person is the
+clean test. The evidence that this is not overfitting is that corpus A's labelled holdout did not
+move while corpus A's own residual also fell, 2.8% → 1.7%.
 
 **Still owed, unchanged:** a second labeller. I wrote the classifier and both label sets.
 
 ### 2026-09-28 — ⚠️ CORRECTION: the "0.4% of token flow" claim was WRONG
 
 I stated repeatedly in this investigation that routing by activity type optimises "the 0.4% of
-token flow that is generation", from a raw in:out ratio of 234:1 (john) / 405:1 (owner).
+token flow that is generation", from a raw in:out ratio of 234:1 (corpus A) / 405:1 (corpus B).
 **That figure counted cache-read tokens at the same weight as fresh ones.** It does not
 survive the decomposition.
 
-| | JOHN | OWNER |
+| | CORPUS A | CORPUS B |
 |---|---|---|
 | fresh input | 50,183 (**0.00%**) | 194,260 (**0.00%**) |
 | cache WRITE | 47,611,220 (2.78%) | 168,676,664 (1.43%) |
@@ -1416,7 +1416,7 @@ survive the decomposition.
 is statistically zero. Under Claude-shaped ratios (read 0.1 / fresh 1.0 / write 1.25 /
 output 5.0):
 
-| | JOHN | OWNER |
+| | CORPUS A | CORPUS B |
 |---|---|---|
 | cache read | 63.4% | 76.6% |
 | cache write | 22.7% | 13.9% |
@@ -1430,7 +1430,7 @@ that makes this project *more* worthwhile, not less.
 output slice alone — it scales the WHOLE request, cache reads included. A `retrieve` sent to a
 model priced 5x lower is 5x cheaper on its cache reads too. Cost by class:
 
-| class | JOHN | OWNER |
+| class | CORPUS A | CORPUS B |
 |---|---|---|
 | **retrieve** | **32.4%** | **42.0%** |
 | author_code | 15.7% | 14.6% |
@@ -1508,11 +1508,11 @@ that were separated on purpose.
 |---|---|
 | holdout, independent sample | acc **0.925**, macro F1 **0.920** |
 | inter-labeller reliability | κ **0.885** (72/80 raw) |
-| cross-person residual | john **1.7%**, owner **1.6%**, same rules |
+| cross-person residual | A **1.7%**, B **1.6%**, same rules |
 | tool-free negative control | **passes** — zero tool-derived classes on 11,575 turns |
 | `operate` composition | 92% positive match, 1 request unaccounted |
 | cost concentration | `retrieve` **32–42%** of modelled cost, F1 0.92–1.00 |
 
-Open, and now the only things open: a **third** person's corpus (the owner's 1.6% is fitted
-to the owner's residual as john's 2.8% was to john's), and the complexity dimension above,
+Open, and now the only things open: a **third** person's corpus (corpus B's 1.6% is fitted
+to corpus B's residual as corpus A's 2.8% was to corpus A's), and the complexity dimension above,
 which is new work rather than a threat.

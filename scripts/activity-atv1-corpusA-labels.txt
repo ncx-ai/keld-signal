@@ -1,4 +1,4 @@
-# Hand labels — `atv1`, MULTI-LABEL, prominence-ordered. John's product/marketing session.
+# Hand labels — `atv1`, MULTI-LABEL, prominence-ordered. corpus A's product/marketing session.
 #
 # THIS HEADER IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN. Source views:
 # `scripts/activity_atv1_john_views.py` — user prompts + assistant prose ONLY, fenced code

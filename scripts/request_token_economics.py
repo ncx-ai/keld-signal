@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHERE THE TOKENS ACTUALLY GO. in:out is 234:1 (john) / 405:1 (owner), so a router that
+"""WHERE THE TOKENS ACTUALLY GO. in:out is 234:1 (corpus A) / 405:1 (corpus B), so a router that
 picks a model by activity class is optimising ~0.3% of the token flow. This asks what the
 other 99.7% IS, because that decides whether the class is the wrong lever or merely a
 partial one.
@@ -8,6 +8,19 @@ The split that matters is CACHE READ vs CACHE CREATION vs fresh input: a cache-r
 already cheap, so a raw in:out ratio overstates the prize. This separates them.
 """
 import json, os, re, glob, collections, statistics as st
+
+# ⚠️ CORPUS PATHS ARE ENVIRONMENT-CONFIGURED, NEVER HARDCODED. These studies read private
+# session transcripts belonging to real people; a hardcoded home directory both breaks on any
+# other machine and publishes whose transcripts they were. Set KELD_CORPUS_A / KELD_CORPUS_B
+# to the directories to read. The two corpora are referred to throughout as CORPUS A and
+# CORPUS B and are deliberately not named after their owners.
+def corpus(var, what):
+    import os, sys
+    p = os.environ.get(var, "").strip()
+    if not p:
+        sys.exit(f"set {var} to the {what} transcript directory (see the note above)")
+    return os.path.expanduser(p)
+
 
 OBS=re.compile(r"\[MESSAGE FROM NON-USER SOURCE\]|<observed_from_primary_session>")
 SELF={"13a58628-4f19-4ac9-9423-d669c717f259","d58162e2-bb14-40b5-afd9-2c55e403fe99"}
@@ -64,5 +77,5 @@ def scan(root, label):
     for c,v in cc.most_common(): print(f"      {c:14s} {v/tot:6.1%}")
     return reqs
 
-scan(os.path.expanduser("~/keld/john-projects/projects"), "JOHN")
-scan(os.path.expanduser("~/.claude/projects"),             "OWNER")
+scan(corpus("KELD_CORPUS_A", "corpus A"), "CORPUS A")
+scan(corpus("KELD_CORPUS_B", "corpus B"), "CORPUS B")
