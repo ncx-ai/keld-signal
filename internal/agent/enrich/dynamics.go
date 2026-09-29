@@ -162,8 +162,48 @@ type WindowAnalysis struct {
 	// that class is ONE label per inference request covering every tool the
 	// request issued, so which tool a verb belonged to is already gone.
 	SystemActions []NameCount
-	Dimensions    map[string]Labeled
-	Dynamics      map[string]Dynamic
+	// SystemVendors pairs the category with the NAMED PRODUCT —
+	// `issue_tracking:jira`. The category says a tracker was used; this says
+	// which one, which is what a reader recognises.
+	//
+	// ⚠️ It carries NO NEW INFORMATION, and that is the argument for it. The
+	// vendor already crosses: McpServers publishes the bare brand and
+	// ExternalSystems the raw host. What did not cross is the PAIRING, which
+	// lives only in the sidecar's table — so a consumer cannot join them without
+	// its own copy, and a second copy drifts in silence.
+	//
+	// ⚠️ A SUBDOMAIN NEVER CROSSES. Enterprise SaaS hosts each customer on its
+	// own subdomain (`acme.atlassian.net`), so the first label is frequently the
+	// CUSTOMER'S name. The vendor half is a token from the table, never a slice
+	// of the host string.
+	//
+	// ⚠️ An UNRECOGNISED system publishes nothing here, unlike the two fields
+	// above: this level means "we can name this", and that something could not
+	// be named is already carried by SystemCategories.
+	SystemVendors []NameCount
+	// SystemCategoryTokens and SystemVendorTokens are the two dimensions above
+	// weighted by OUTPUT TOKENS rather than counted — how much the model WROTE
+	// while working in that system.
+	//
+	// ⚠️ OUTPUT ONLY, and measured rather than conservative. Over 970
+	// system-touching requests across two corpora the median uncached input is
+	// 2 tokens against a median cache_read of 355,776 — input is ~100% the
+	// conversation prefix replayed on every call — and total input rises 9.0x
+	// between a session's first ten turns and turn 50+ for the same kinds of
+	// call. A total-token figure would say a late Jira call consumed nine times
+	// an early one for identical work: session depth wearing a vendor's name.
+	//
+	// ⚠️ NOT A COST FIGURE. Output is 0.4% of all tokens here.
+	//
+	// ⚠️ THESE DO NOT SUM TO THE BLOCK TOTAL. A call touching two systems counts
+	// fully toward both; splitting would invent a ratio with nothing behind it,
+	// and the over-count is bounded — 97.3% of system-touching requests touch
+	// exactly one system. Render as "tokens in calls that used this system",
+	// never as a share of a whole.
+	SystemCategoryTokens []NameCount
+	SystemVendorTokens   []NameCount
+	Dimensions           map[string]Labeled
+	Dynamics             map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

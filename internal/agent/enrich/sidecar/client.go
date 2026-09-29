@@ -487,15 +487,18 @@ type InventoryBlock struct {
 	// NamedTerms is the one inventory drawn from message TEXT rather than
 	// tool-call inputs — see the AnalyzeResult comment above for why that
 	// distinction survives even though the field now exists.
-	NamedTerms          []InventoryItem `json:"named_terms"`
-	FileTypes           []InventoryItem `json:"file_types"`
-	ShellVerbs          []InventoryItem `json:"shell_verbs"`
-	Subagents           []InventoryItem `json:"subagents"`
-	McpServers          []InventoryItem `json:"mcp_servers"`
-	ActivityClasses     []InventoryItem `json:"activity_classes"`
-	ActivityClassTokens []InventoryItem `json:"activity_class_tokens"`
-	SystemCategories    []InventoryItem `json:"system_categories"`
-	SystemActions       []InventoryItem `json:"system_actions"`
+	NamedTerms           []InventoryItem `json:"named_terms"`
+	FileTypes            []InventoryItem `json:"file_types"`
+	ShellVerbs           []InventoryItem `json:"shell_verbs"`
+	Subagents            []InventoryItem `json:"subagents"`
+	McpServers           []InventoryItem `json:"mcp_servers"`
+	ActivityClasses      []InventoryItem `json:"activity_classes"`
+	ActivityClassTokens  []InventoryItem `json:"activity_class_tokens"`
+	SystemCategories     []InventoryItem `json:"system_categories"`
+	SystemActions        []InventoryItem `json:"system_actions"`
+	SystemVendors        []InventoryItem `json:"system_vendors"`
+	SystemCategoryTokens []InventoryItem `json:"system_category_tokens"`
+	SystemVendorTokens   []InventoryItem `json:"system_vendor_tokens"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:

@@ -3,7 +3,9 @@ distinction the table would silently get wrong without it."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.systems import (CATEGORIES, BRAND, CLI_CLIENT, LOCAL_HOSTS, NOT_A_SYSTEM,
-                                  category_for_host, category_for_brand, category_for_program)
+                                  category_for_host, category_for_brand, category_for_program,
+                                  vendor_for_host, vendor_for_brand, vendor_for_program,
+                                  system_vendor)
 
 
 def test_the_published_vocabulary_is_closed_and_every_entry_maps_into_it():
@@ -11,8 +13,9 @@ def test_the_published_vocabulary_is_closed_and_every_entry_maps_into_it():
     consumer can render, and nothing else would notice."""
     for brand, cat in BRAND.items():
         assert cat in CATEGORIES, (brand, cat)
-    for prog, cat in CLI_CLIENT.items():
+    for prog, (vendor, cat) in CLI_CLIENT.items():
         assert cat in CATEGORIES, (prog, cat)
+        assert vendor, prog
 
 
 def test_a_vendor_spanning_two_categories_is_keyed_by_PRODUCT_not_by_company():
@@ -156,6 +159,62 @@ def test_an_empty_key_is_None_and_an_unknown_key_is_unrecognized():
     assert category_for_brand(None) is None
     assert category_for_brand("zzzz") == "unrecognized"
     assert category_for_host("") is None
+
+
+def test_a_subdomain_never_crosses_only_the_vendor_does():
+    """⚠️ THE ONE PRIVACY EDGE IN THIS DIMENSION. Enterprise SaaS hosts a customer on their own
+    subdomain -- `acme.atlassian.net`, `acme.myworkday.com`, `acme.my.salesforce.com` -- so the
+    first label is frequently the CUSTOMER'S OWN NAME. The vendor half must come from this
+    module's table, never from the host string, or this level would publish who an org's
+    customers are."""
+    for host, vendor in (("acme.atlassian.net", "atlassian"),
+                         ("bigco.myworkday.com", "workday"),
+                         ("contoso.my.salesforce.com", "salesforce"),
+                         ("acme.zendesk.com", "zendesk")):
+        got = vendor_for_host(host)
+        assert got == vendor, (host, got)
+        assert host.split(".")[0] not in (got or ""), (host, got)
+
+
+def test_an_unrecognized_system_publishes_no_vendor_pair():
+    """This dimension means "we can name this". A system we could not name is already reported
+    by `system_categories` as `unrecognized`; pairing it here with no vendor would be a second,
+    emptier way of saying the same thing -- and the rendering it supports shows only nameable
+    systems."""
+    assert category_for_host("keld.co") == "unrecognized"
+    assert vendor_for_host("keld.co") is None
+    assert system_vendor("unrecognized", "anything") is None
+    assert system_vendor(None, "jira") is None
+    assert system_vendor("issue_tracking", None) is None
+
+
+def test_the_vendor_vocabulary_is_closed_even_though_it_is_large():
+    """⚠️ NOT the open-vocabulary exposure `named_terms` is. A published vendor can only ever be
+    a token this module already holds, so the set of values that can ever cross is bounded by
+    the table and enumerable from it."""
+    known = set(BRAND) | {v for v, _ in _host_vendors()} | {v for v, _ in CLI_CLIENT.values()}
+    for host in ("app.notion.com", "acme.atlassian.net", "github.com", "totally-unknown.io"):
+        v = vendor_for_host(host)
+        assert v is None or v in known, (host, v)
+    for tok in ("jira", "notion", "zzzz", ""):
+        v = vendor_for_brand(tok)
+        assert v is None or v in known, (tok, v)
+
+
+def _host_vendors():
+    from app.analysis.systems import _HOST_SUFFIX
+    return list(_HOST_SUFFIX.values())
+
+
+def test_the_pair_resolves_for_every_lane():
+    """All three key lanes produce a pair, because a vendor seen only by URL is as real as one
+    seen through a connector."""
+    assert system_vendor(category_for_brand("jira"), vendor_for_brand("jira")) == "issue_tracking:jira"
+    assert system_vendor(category_for_host("app.notion.com"),
+                         vendor_for_host("app.notion.com")) == "knowledge_base:notion"
+    assert system_vendor(category_for_program("gh"),
+                         vendor_for_program("gh")) == "code_hosting:github"
+    assert system_vendor(category_for_program("git"), vendor_for_program("git")) is None
 
 
 if __name__ == "__main__":

@@ -135,6 +135,17 @@ def _write(tmp, name, tools):
     return p
 
 
+def _weighted(tmp, name, tools, key):
+    """Inventory rows as {value: n}, keeping the COUNT -- the token dimensions ride `n`."""
+    p = _write(tmp, name, tools)
+    st = open_store(os.path.join(tmp, "state", "refseries.db"))
+    ingest_file(st, p)
+    out = analyze_window(p, "p2", span_minutes=60, store=st, nlp=None)
+    inv = (out.get("inventory") or {}).get(key) or []
+    return {(r["value"] if isinstance(r, dict) else r[0]):
+            (r.get("n") if isinstance(r, dict) else r[1]) for r in inv}
+
+
 def _inventory(tmp, name, tools, key):
     p = _write(tmp, name, tools)
     st = open_store(os.path.join(tmp, "state", "refseries.db"))
@@ -214,6 +225,87 @@ def test_an_unknown_verb_publishes_the_category_and_no_action():
         acts = _inventory(tmp, "odd", tools, "system_actions")
         assert "knowledge_base" in cats, cats
         assert not acts, f"guessed an action from an unknown verb: {acts}"
+
+
+# The named product inside each category -- what a reader actually recognises.
+VENDORS_WANTED = {
+    "sales": {"crm_sales:salesforce", "crm_sales:gong"},
+    "people_ops": {"hr_people:workday", "hr_people:greenhouse"},
+    "finance": {"finance_billing:netsuite", "finance_billing:quickbooks",
+                "finance_billing:stripe"},
+    "support": {"support:zendesk", "support:intercom"},
+    "product_mgmt": {"issue_tracking:jira", "issue_tracking:atlassian"},
+    "knowledge": {"knowledge_base:notion", "knowledge_base:confluence"},
+    "comms": {"communication:slack"},
+    "design": {"design:figma"},
+    "data_analytics": {"data_platform:snowflake", "analytics_bi:looker"},
+    "legal": {"legal_contracts:docusign"},
+    "marketing": {"marketing:marketo", "marketing:mailchimp"},
+    "it_security": {"security_iam:okta", "security_iam:snyk"},
+}
+
+
+def test_the_named_vendor_inside_each_category_publishes_too():
+    """`issue_tracking` says a tracker was used; `issue_tracking:jira` says which one. Asserted
+    end to end so a vendor that stops surviving the store or the rollup fails here."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, want in VENDORS_WANTED.items():
+            tools = DOMAINS[name][0]
+            got = _inventory(os.path.join(tmp, name), name, tools, "system_vendors")
+            missing = want - got
+            assert not missing, f"{name}: expected {sorted(want)}, published {sorted(got)}"
+
+
+def test_a_customers_own_subdomain_never_reaches_the_wire():
+    """⚠️ THE PRIVACY CHECK, END TO END RATHER THAN AT THE LOOKUP. Enterprise SaaS puts the
+    CUSTOMER'S NAME in the first label -- `acme.atlassian.net`. Nothing published may contain
+    it: the vendor half comes from the table, never from the host string."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = [fetch("https://supersecretcustomer.atlassian.net/browse/X-1"),
+                 fetch("https://supersecretcustomer.myworkday.com/d/task/1")]
+        for key in ("system_vendors", "system_categories", "system_actions"):
+            for value in _inventory(tmp, "sub", tools, key):
+                assert "supersecretcustomer" not in value, (key, value)
+
+
+def test_tokens_are_charged_once_per_REQUEST_not_once_per_reference():
+    """⚠️ THE SUBTLE ONE. A category is emitted per tool REFERENCE, but output tokens belong
+    to the inference REQUEST -- one assistant turn has one output budget however many tools it
+    calls. A turn calling `notion-fetch` three times must charge its output ONCE.
+
+    Charged per reference, the figure would rank systems by how CHATTY their API is rather
+    than by how much work went through them -- and the sibling `system_categories` count
+    already reports call frequency, so the token dimension would be reporting it a second
+    time in a more confusing unit.
+
+    _calls() writes output_tokens=40 per turn, and only one of this session's two turns
+    touches a system."""
+    with tempfile.TemporaryDirectory() as tmp:
+        three = [mcp("notion-fetch", page="a"), mcp("notion-fetch", page="b"),
+                 mcp("notion-update-page", page="c")]
+        got = _weighted(tmp, "thrice", three, "system_category_tokens")
+        assert got.get("knowledge_base") == 40, (
+            f"expected the turn's 40 output tokens charged once, got {got}")
+
+
+def test_a_call_touching_two_systems_counts_fully_toward_both():
+    """Double-attribution, asserted rather than assumed. Splitting would invent a ratio with
+    nothing behind it; the over-count is bounded at the 2.7% of real requests that touch more
+    than one system. A consumer must never sum these rows, which is why both are equal to the
+    turn's whole output rather than to halves of it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        both = [mcp("jira-create-issue", p="X"), mcp("slack-post-message", ch="#x")]
+        got = _weighted(tmp, "two", both, "system_category_tokens")
+        assert got.get("issue_tracking") == 40, got
+        assert got.get("communication") == 40, got
+
+
+def test_an_unrecognized_system_contributes_no_token_row():
+    """Matching `system_vendors`: a system we cannot name says so once, in
+    `system_categories`, and does not reappear carrying a token weight."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = [fetch("https://some-unknown-vendor.example.net/x")]
+        assert not _weighted(tmp, "unk", tools, "system_category_tokens")
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ SSH_HOST = re.compile(r"\b(?:ssh|scp|rsync)\s+(?:-\S+\s+)*(?:[\w.\-]+@)?"
 MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
 
 
-def _sys_cat(add, cat):
+def _sys_cat(add, cat, seen=None):
     """Emit one `system_category` row, or nothing when the key named no external system.
 
     A function rather than four inline `if cat:` guards because the None/`unrecognized`
@@ -57,6 +57,22 @@ def _sys_cat(add, cat):
     write one of them as `if cat is not None` and quietly start publishing local commands."""
     if cat:
         add("ref", "system_category", cat, 1)
+        if seen is not None and cat != "unrecognized":
+            seen.add(cat)
+
+
+def _sys_ven(add, pair, seen=None):
+    """Emit one `system_vendors` row, or nothing when the vendor could not be named.
+
+    ⚠️ Unlike its two siblings this one is silent for an UNRECOGNISED system, and that is the
+    contract rather than an omission: the level's entire content is "we can name this". An
+    unnameable system is already reported by `system_category` as `unrecognized`, which is
+    where that fact belongs; repeating it here as a pair with no vendor would be a second,
+    emptier way of saying the same thing."""
+    if pair:
+        add("ref", "system_vendor", pair, 1)
+        if seen is not None:
+            seen.add(pair)
 
 
 def _sys_act(add, pair):
@@ -262,6 +278,12 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "repo_mentioned", rr, 1)
         if base[3]:
             add("ref", "branch", base[3], 1)
+        # ⚠️ DISTINCT SYSTEMS FOR THIS TURN, collected so the token weights below can be
+        # emitted ONCE PER SYSTEM rather than once per reference. A turn that calls
+        # `notion-fetch` three times is ONE inference request with one output budget;
+        # charging its tokens three times would make a chatty tool dominate the figure by
+        # how often it is called, which the sibling COUNT dimension already reports.
+        _seen_cats, _seen_vendors = set(), set()
         if o.skill:
             add("ref", "skill", o.skill, 1)
             for kind in artifacts_for(skill=o.skill):
@@ -270,8 +292,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             provider = mcp_provider(o.mcp_server, o.mcp_tool)
             add("ref", "mcp_server", provider, 1)
             _cat = systems.category_for_brand(provider)
-            _sys_cat(add, _cat)
+            _sys_cat(add, _cat, _seen_cats)
             _sys_act(add, systems.system_action(_cat, o.mcp_tool, provider))
+            _sys_ven(add, systems.system_vendor(_cat, systems.vendor_for_brand(provider)), _seen_vendors)
         if o.mcp_tool:
             add("ref", "mcp_tool", o.mcp_tool, 1)
 
@@ -445,8 +468,10 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 provider = mcp_provider(m["server"], m["tool"])
                 add("ref", "service", "mcp:" + provider, 1)
                 _cat = systems.category_for_brand(provider)
-                _sys_cat(add, _cat)
+                _sys_cat(add, _cat, _seen_cats)
                 _sys_act(add, systems.system_action(_cat, m["tool"], provider))
+                _sys_ven(add, systems.system_vendor(_cat,
+                                                    systems.vendor_for_brand(provider)), _seen_vendors)
             else:
                 add("ref", "tool", name, 1)
             if name == "Agent" and inp.get("subagent_type"):
@@ -461,7 +486,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                                                      inp.get("query"))
                                          if isinstance(v, str)))):
                 add("ref", "service", host, 1)
-                _sys_cat(add, systems.category_for_host(host))
+                _sys_cat(add, systems.category_for_host(host), _seen_cats)
+                _sys_ven(add, systems.system_vendor(systems.category_for_host(host),
+                                                    systems.vendor_for_host(host)), _seen_vendors)
             for k in PATH_INPUTS:
                 if isinstance(inp.get(k), str):
                     paths.append((inp[k], True))     # a tool's file_path IS a file
@@ -471,7 +498,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "verb", v, 1)
                 for e in dict.fromkeys(exes):
                     add("ref", "exe", e, 1)
-                    _sys_cat(add, systems.category_for_program(e))
+                    _sys_cat(add, systems.category_for_program(e), _seen_cats)
+                    _sys_ven(add, systems.system_vendor(systems.category_for_program(e),
+                                                        systems.vendor_for_program(e)), _seen_vendors)
                     for kind in toolchain_for(e):
                         add("ref", "toolchain", kind, 1)
                 # The acts come from `bash_refs`, not from a second pass over `verbs`: a
@@ -481,6 +510,34 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 for act in acts:
                     add("ref", "action", act, 1)
                 paths += [(q, False) for q in bp]
+        # ⚠️ OUTPUT TOKENS OF THE CALLS THAT TOUCHED EACH SYSTEM. Not a cost figure and not
+        # summable, and both caveats are measured rather than hedges.
+        #
+        # OUTPUT ONLY, because input is not a property of the call. Measured over 970
+        # system-touching requests in two corpora: median uncached input 2 tokens against a
+        # median cache_read of 355,776 -- input is ~100% the conversation prefix replayed --
+        # and total input rises 9.0x from a session's first ten turns (median 45,347) to turn
+        # 50+ (median 409,517) for the same kinds of call. A total-token figure would report
+        # that a Jira call late in a session consumed nine times one early in it, for
+        # identical work: that is session depth wearing a vendor's name. Output is only 0.4%
+        # of all tokens here, so this says HOW MUCH THE MODEL WROTE while working in that
+        # system -- never what the system cost.
+        #
+        # DOUBLE-ATTRIBUTED, never split: a call touching two systems counts fully toward
+        # both, so these rows do NOT sum to the block total. Splitting would invent a ratio
+        # (there is no basis for 50/50 -- the model did not spend half its output on each),
+        # and the error double-counting admits is bounded and small: measured, 97.3% of
+        # system-touching requests touch exactly one system and only 2.7% touch more.
+        #
+        # `unrecognized` is excluded by `_sys_cat`'s own filter, so an unnameable system
+        # contributes no token row -- matching `system_vendors`, which never pairs one.
+        _sys_out = int((o.usage or {}).get("output_tokens") or 0)
+        if _sys_out:
+            for _c in sorted(_seen_cats):
+                add("ref", "system_category_tokens", _c, _sys_out)
+            for _v in sorted(_seen_vendors):
+                add("ref", "system_vendor_tokens", _v, _sys_out)
+
         for p, from_input in paths:
             rel = rel_within(p, root_dir, o.cwd)
             if not rel or rel.startswith("."):

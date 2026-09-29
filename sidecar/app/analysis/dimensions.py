@@ -270,7 +270,50 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # a subcommand, but `shell.py` already derives verbs on its own terms and a second
              # verb vocabulary over the same commands is how two levels begin disagreeing about
              # one call. Cap 24, above the realistic per-window distinct count.
-             ("system_actions", "system_action", 24)]
+             ("system_actions", "system_action", 24),
+             # `system_vendors` -- `<category>:<vendor>`, WHICH NAMED PRODUCT inside the
+             # category. `issue_tracking` says a tracker was used; `issue_tracking:jira` says
+             # which one, which is what a reader recognises.
+             #
+             # ⚠️ IT PUBLISHES NO NEW INFORMATION AND THAT IS THE ARGUMENT FOR IT. The vendor
+             # ALREADY crosses -- `mcp_servers` publishes the bare brand, `external_systems`
+             # publishes the raw host it came from. What did not cross is the PAIRING, because
+             # vendor -> category lives only in `systems.py`, so a consumer cannot join the two
+             # without its own copy of that table. A copy is the thing to avoid: the table's
+             # whole operational value is that it grows client-side as connectors appear, and
+             # two copies drift silently.
+             #
+             # ⚠️ AN UNRECOGNISED SYSTEM PUBLISHES NOTHING HERE, unlike the two dimensions
+             # above. The level means "we can name this"; the fact that something could not be
+             # named is already carried by `system_categories` as `unrecognized`.
+             #
+             # ⚠️ The vendor half is an OPEN-LOOKING but CLOSED vocabulary: a value can only
+             # ever be a token from the table, never a raw host, so this is not the
+             # open-vocabulary exposure `named_terms` is. In particular a SUBDOMAIN never
+             # crosses -- `acme.atlassian.net` publishes `atlassian`, and `acme` is frequently
+             # the customer's own name.
+             ("system_vendors", "system_vendor", 24),
+             # The two dimensions above, weighted by OUTPUT TOKENS instead of counted --
+             # "how much did the model WRITE while working in this system".
+             #
+             # ⚠️ OUTPUT ONLY, and that is measured rather than conservative. Over 970
+             # system-touching requests in two corpora, median uncached input is 2 tokens
+             # against a median cache_read of 355,776 -- input is ~100% the conversation
+             # prefix replayed on every call -- and total input rises 9.0x between a
+             # session's first ten turns and turn 50+ for the same kinds of call. A
+             # total-token figure would report a late Jira call as consuming nine times an
+             # early one for identical work: session depth wearing a vendor's name.
+             #
+             # ⚠️ NOT A COST FIGURE. Output is 0.4% of all tokens here; the rest is cache
+             # reads at roughly a tenth the price.
+             #
+             # ⚠️ THESE ROWS DO NOT SUM TO THE BLOCK TOTAL, by design. A call touching two
+             # systems counts fully toward both. Splitting would invent a ratio with nothing
+             # behind it, and the over-count is bounded: 97.3% of system-touching requests
+             # touch exactly one system, 2.7% touch more. A consumer must render them as
+             # "tokens in calls that used this system" and never as shares of a whole.
+             ("system_category_tokens", "system_category_tokens", 22),
+             ("system_vendor_tokens", "system_vendor_tokens", 24)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".

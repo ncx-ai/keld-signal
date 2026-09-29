@@ -132,24 +132,37 @@ BRAND = {b: cat for cat, blob in _TABLE.items() for b in blob.split()}
 # `console.aws.amazon.com` does not contain `aws` as a registrable label. These are the hosts
 # whose brand cannot be read off the name, resolved by SUFFIX so a subdomain cannot evade them.
 _HOST_SUFFIX = {
-    "atlassian.net": "issue_tracking", "atlassian.com": "issue_tracking",
-    "amazonaws.com": "cloud_infra", "amazon.com": "cloud_infra",
-    "googleapis.com": "cloud_infra", "cloud.google.com": "cloud_infra",
-    "azure.com": "cloud_infra", "windows.net": "cloud_infra",
-    "force.com": "crm_sales", "my.salesforce.com": "crm_sales",
-    "slack.com": "communication", "office.com": "communication",
-    "sharepoint.com": "knowledge_base", "atlassian.io": "knowledge_base",
-    "myworkday.com": "hr_people", "successfactors.com": "hr_people",
-    "service-now.com": "support", "zendesk.com": "support",
-    "githubusercontent.com": "code_hosting", "github.io": "code_hosting",
-    "figma.com": "design", "miro.com": "design",
-    "snowflakecomputing.com": "data_platform", "databricks.com": "data_platform",
-    "datadoghq.com": "observability", "sentry.io": "observability",
-    "pagerduty.com": "observability", "grafana.net": "observability",
-    "okta.com": "security_iam", "auth0.com": "security_iam",
-    "docusign.net": "legal_contracts", "docusign.com": "legal_contracts",
-    "hubspot.com": "crm_sales", "pipedrive.com": "crm_sales",
-    "myshopify.com": "ecommerce",
+    # ⚠️ The VENDOR here is the company whose host this is, which is not always the product
+    # the category names. `atlassian.net` serves both Jira and Confluence and the URL path
+    # would be needed to tell them apart -- which this never sees -- so the vendor is
+    # `atlassian` and the category is the more common of the two. Naming the vendor `jira`
+    # would claim a precision the evidence does not have.
+    "atlassian.net": ("atlassian", "issue_tracking"),
+    "atlassian.com": ("atlassian", "issue_tracking"),
+    "amazonaws.com": ("aws", "cloud_infra"), "amazon.com": ("aws", "cloud_infra"),
+    "googleapis.com": ("gcp", "cloud_infra"), "cloud.google.com": ("gcp", "cloud_infra"),
+    "azure.com": ("azure", "cloud_infra"), "windows.net": ("azure", "cloud_infra"),
+    "force.com": ("salesforce", "crm_sales"),
+    "my.salesforce.com": ("salesforce", "crm_sales"),
+    "slack.com": ("slack", "communication"), "office.com": ("microsoft365", "communication"),
+    "sharepoint.com": ("sharepoint", "knowledge_base"),
+    "atlassian.io": ("atlassian", "knowledge_base"),
+    "myworkday.com": ("workday", "hr_people"),
+    "successfactors.com": ("successfactors", "hr_people"),
+    "service-now.com": ("servicenow", "support"), "zendesk.com": ("zendesk", "support"),
+    "githubusercontent.com": ("github", "code_hosting"),
+    "github.io": ("github", "code_hosting"),
+    "figma.com": ("figma", "design"), "miro.com": ("miro", "design"),
+    "snowflakecomputing.com": ("snowflake", "data_platform"),
+    "databricks.com": ("databricks", "data_platform"),
+    "datadoghq.com": ("datadog", "observability"), "sentry.io": ("sentry", "observability"),
+    "pagerduty.com": ("pagerduty", "observability"),
+    "grafana.net": ("grafana", "observability"),
+    "okta.com": ("okta", "security_iam"), "auth0.com": ("auth0", "security_iam"),
+    "docusign.net": ("docusign", "legal_contracts"),
+    "docusign.com": ("docusign", "legal_contracts"),
+    "hubspot.com": ("hubspot", "crm_sales"), "pipedrive.com": ("pipedrive", "crm_sales"),
+    "myshopify.com": ("shopify", "ecommerce"),
 }
 
 # ⚠️ A CLI PROGRAM IS A CLIENT FOR A SYSTEM, and the program name is usually NOT the brand.
@@ -163,19 +176,24 @@ CLI_CLIENT = {
     # REMOVED: each talks to whatever cluster or database you point it at, so it names no
     # product and says only that engineering happened. `aws`/`gcloud`/`az` stay -- those name
     # one vendor and nothing else.
-    "gh": "code_hosting", "glab": "code_hosting", "hub": "code_hosting",
-    "aws": "cloud_infra", "gcloud": "cloud_infra", "az": "cloud_infra",
-    "vercel": "cloud_infra", "netlify": "cloud_infra", "heroku": "cloud_infra",
-    "fly": "cloud_infra", "flyctl": "cloud_infra", "wrangler": "cloud_infra",
-    "doctl": "cloud_infra", "supabase": "cloud_infra", "firebase": "cloud_infra",
-    "railway": "cloud_infra", "render": "cloud_infra",
-    "snowsql": "data_platform", "fivetran": "data_platform",
-    "stripe": "finance_billing",
-    "jira": "issue_tracking", "linear": "issue_tracking",
-    "slack": "communication",
-    "sentry-cli": "observability", "datadog-ci": "observability",
-    "snyk": "security_iam", "op": "security_iam", "okta": "security_iam",
-    "hf": "ai_ml", "huggingface-cli": "ai_ml", "modal": "ai_ml", "wandb": "ai_ml",
+    "gh": ("github", "code_hosting"), "glab": ("gitlab", "code_hosting"),
+    "hub": ("github", "code_hosting"),
+    "aws": ("aws", "cloud_infra"), "gcloud": ("gcp", "cloud_infra"),
+    "az": ("azure", "cloud_infra"), "vercel": ("vercel", "cloud_infra"),
+    "netlify": ("netlify", "cloud_infra"), "heroku": ("heroku", "cloud_infra"),
+    "fly": ("fly", "cloud_infra"), "flyctl": ("fly", "cloud_infra"),
+    "wrangler": ("cloudflare", "cloud_infra"), "doctl": ("digitalocean", "cloud_infra"),
+    "supabase": ("supabase", "cloud_infra"), "firebase": ("firebase", "cloud_infra"),
+    "railway": ("railway", "cloud_infra"), "render": ("render", "cloud_infra"),
+    "snowsql": ("snowflake", "data_platform"), "fivetran": ("fivetran", "data_platform"),
+    "stripe": ("stripe", "finance_billing"),
+    "jira": ("jira", "issue_tracking"), "linear": ("linear", "issue_tracking"),
+    "slack": ("slack", "communication"),
+    "sentry-cli": ("sentry", "observability"), "datadog-ci": ("datadog", "observability"),
+    "snyk": ("snyk", "security_iam"), "op": ("onepassword", "security_iam"),
+    "okta": ("okta", "security_iam"),
+    "hf": ("huggingface", "ai_ml"), "huggingface-cli": ("huggingface", "ai_ml"),
+    "modal": ("modal", "ai_ml"), "wandb": ("wandb", "ai_ml"),
 }
 
 # Loopback and link-local are NOT external systems. 88.5% of one corpus's host evidence.
@@ -215,7 +233,7 @@ def category_for_host(host):
         return None
     if any(h == d or h.endswith("." + d) for d in NOT_A_SYSTEM):
         return None
-    for suffix, cat in _HOST_SUFFIX.items():
+    for suffix, (_vendor, cat) in _HOST_SUFFIX.items():
         if h == suffix or h.endswith("." + suffix):
             return cat
     if "." not in h:
@@ -246,11 +264,58 @@ def category_for_brand(token):
     return BRAND.get(t, "unrecognized")
 
 
+def vendor_for_host(host):
+    """The VENDOR a URL host belongs to, or None when it is not a recognised one.
+
+    Only ever a token from this module's own table -- never the raw host -- so the published
+    vocabulary stays closed even though it is larger than the category set. `acme.atlassian.net`
+    yields `atlassian`, never `acme`: a subdomain is frequently the CUSTOMER's own name and must
+    not cross.
+    """
+    h = (host or "").strip().lower().rstrip(".")
+    if not h or h in LOCAL_HOSTS or "." not in h:
+        return None
+    if any(h == d or h.endswith("." + d) for d in NOT_A_SYSTEM):
+        return None
+    for suffix, (vendor, _cat) in _HOST_SUFFIX.items():
+        if h == suffix or h.endswith("." + suffix):
+            return vendor
+    label = _strip_tld(h)
+    return label if label in BRAND else None
+
+
+def vendor_for_brand(token):
+    """The vendor an MCP brand token names, or None when the table does not know it."""
+    t = (token or "").strip().lower()
+    return t if t in BRAND else None
+
+
+def vendor_for_program(prog):
+    """The vendor a CLI program is a client for, or None."""
+    got = CLI_CLIENT.get((prog or "").strip().lower())
+    return got[0] if got else None
+
+
+def system_vendor(category, vendor):
+    """`<category>:<vendor>`, or None when either half is missing or the category is not a
+    recognised one.
+
+    ⚠️ `unrecognized` NEVER pairs. The whole content of this level is "we can name this", so a
+    pair whose vendor we could not name has nothing to say -- and the rendering decision it
+    supports is to show only nameable systems. An unnameable one is already carried by
+    `system_categories` as `unrecognized`, which is where that fact belongs.
+    """
+    if not category or not vendor or category == "unrecognized":
+        return None
+    return f"{category}:{vendor}"
+
+
 def category_for_program(prog):
     """Category for a CLI program, or None when it is not a client for an external system.
     None, not `unrecognized`: `ls` is not an uncategorised external system, it is not one at
     all, and counting every local command as unrecognized would drown the level."""
-    return CLI_CLIENT.get((prog or "").strip().lower())
+    got = CLI_CLIENT.get((prog or "").strip().lower())
+    return got[1] if got else None
 
 
 # ---------------------------------------------------------------------------------------

@@ -236,14 +236,60 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		// action rather than a guess -- a wrong verb is a false statement about what
 		// someone did in a system of record.
 		"system_actions": false,
+		// THE EIGHTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_vendors` names the PRODUCT inside the category -- `issue_tracking:jira`
+		// rather than `issue_tracking`. The obvious objection is that the vendor already
+		// crosses: `mcp_servers` publishes the bare brand, `external_systems` the raw host.
+		//
+		// ⚠️ THAT OBJECTION IS THE ARGUMENT. This adds NO new information -- it adds the
+		// PAIRING, which is not derivable downstream at any price because vendor ->
+		// category lives only in the sidecar's table. A consumer wanting "Issue tracker:
+		// Jira" must either receive the pair or keep its own copy of that table, and a
+		// copy is the thing to avoid: the table's whole operational value is that it grows
+		// client-side as connectors appear, and two copies drift in silence.
+		//
+		// ⚠️ A SUBDOMAIN NEVER CROSSES, the one privacy edge in this group. Enterprise
+		// SaaS hosts each customer on its own subdomain (`acme.atlassian.net`), so the
+		// first label is frequently the CUSTOMER'S OWN NAME. The vendor half is always a
+		// token from the table, never a slice of the host, pinned end to end by a test
+		// that publishes such URLs and asserts the subdomain appears in no published value.
+		//
+		// ⚠️ An UNRECOGNISED system publishes nothing here, unlike its siblings: the level
+		// means "we can name this", and that something could not be named is already said
+		// by `system_categories`.
+		"system_vendors": false,
+		// THE NINETEENTH AND TWENTIETH, AND THEIR ARGUMENT.
+		//
+		// The same two dimensions weighted by OUTPUT TOKENS rather than counted: how much
+		// the model WROTE while working in that system. They earn keys for the reason
+		// `activity_class_tokens` does -- `window.rollup` sums a level's `n`, so a weight
+		// needs a second level rather than a wider item shape, and the level's NAME is
+		// what says which denominator it carries.
+		//
+		// ⚠️ OUTPUT ONLY, MEASURED. Across 970 system-touching requests in two corpora the
+		// median uncached input is 2 tokens against a median cache_read of 355,776 --
+		// input is ~100% the conversation prefix replayed -- and total input rises 9.0x
+		// between a session's first ten turns and turn 50+ for the same kinds of call. A
+		// total-token figure would report a late Jira call as consuming nine times an
+		// early one for identical work. That is session depth wearing a vendor's name, and
+		// it is why the request to publish totals was answered with output.
+		//
+		// ⚠️ THEY DO NOT SUM TO THE BLOCK TOTAL and no consumer may treat them as shares.
+		// A call touching two systems counts fully toward both. Splitting would invent a
+		// ratio with nothing behind it -- the model did not spend half its output on each
+		// -- and the over-count double-attribution admits is bounded and small: 97.3% of
+		// system-touching requests touch exactly one system, 2.7% touch more.
+		"system_category_tokens": false,
+		"system_vendor_tokens":   false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all seventeen inventory keys and no others should be "+
-			"decodable — an eighteenth needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all twenty inventory keys and no others should be "+
+			"decodable — a twenty-first needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
