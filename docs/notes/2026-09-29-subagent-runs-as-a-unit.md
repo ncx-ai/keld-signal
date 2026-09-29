@@ -209,3 +209,69 @@ label a small unit, distribute a large one — rather than one rule for all.
 
 ⚠️ Untested: that band was found by looking, not predicted in advance. Treat it as a
 hypothesis for a pre-registered check, not a threshold to ship.
+
+---
+
+# The distributional question, 2026-09-29 — which is the one that mattered
+
+⚠️ **E3/E4 above measured COHERENCE — the share of a unit's requests in its single largest
+class. That is a single-label metric, and a single label was never the goal.** The question is
+whether a unit's DISTRIBUTION carries information. Re-measured on that basis, the answer
+inverts.
+
+## 1. Distributions ARE distinctive, and unlike coherence the signal SURVIVES AT SIZE
+
+Distance of a unit's mix from the corpus average, against a size-matched shuffle of the same
+requests (small units are far from any average by arithmetic, so the shuffle is the only
+honest baseline):
+
+| unit | 1–5 req | 6–20 req | **21+ req** |
+|---|---|---|---|
+| session (A / B) | +0.29 / +0.45 | +0.23 / +0.73 | **+0.21 / +0.21** |
+| block (A / B) | +0.21 / +0.33 | +0.14 / +0.24 | **+0.14 / +0.15** |
+| subagent run (A / B) | +0.07 / −0.02 | +0.05 / +0.08 | **+0.14 / +0.16** |
+
+**Compare with coherence, which collapsed to +0.07 / +0.01 / −0.21 in that same 21+ band.**
+The two metrics disagree because they ask different things: a 40/30/20/10 unit is
+"incoherent" and perfectly informative. **You cannot label a large unit; you can absolutely
+characterise it.**
+
+⚠️ This also corrects "the block is the worst unit" from the section above. It is the worst
+thing to LABEL. As a distribution-bearing reporting window it is fine: +0.14 to +0.33.
+
+## 2. Runs come in TWO recurring profiles, and they are the SAME two on both corpora
+
+k-means on the 9-dim mix, `k` chosen where the gap over a shuffled control is widest:
+
+    CORPUS A / subagent run   k=2, gain +0.35
+       61%   retrieve 35%  author_code 25%  operate 15%     <- implementing
+       39%   retrieve 77%  synthesize  9%  operate  6%     <- investigating
+
+    CORPUS B / subagent run   k=2, gain +0.30
+       58%   retrieve 41%  author_code 19%  operate 16%     <- implementing
+       42%   retrieve 80%  operate     6%  synthesize 4%    <- investigating
+
+**Two shapes, same shapes, similar proportions, two different people.** And they are the same
+split E2 found predictable from the brief at +0.245 across corpora — the profiles ARE
+"writes code" versus "does not", arrived at from the other direction.
+
+Sessions also cluster interpretably (corpus A, k=3, gain +0.41): 12% pure reporting
+(synthesize 69%), 39% investigation (retrieve 71%), 49% mixed build work.
+
+**Blocks are the most fragmented and the weakest**: k=5 at +0.20 (A) and k=6 at +0.12 (B),
+against k=2 at +0.30–0.35 for runs. More profiles, less structure — what an arbitrary time
+cut through several activities should look like.
+
+## What this supports building
+
+- **Publish the distribution for every unit** — sessions, blocks and runs all carry real
+  distributional signal at every size.
+- **Name the two run profiles.** Two stable, cross-person shapes is a product surface
+  ("this delegated task was an investigation"), not a table. E2 says the brief predicts which
+  one **before the run executes**.
+- **Do not label large units.** Coherence says any single label above ~20 requests is false.
+
+⚠️ `k` was chosen by maximising the gap over the shuffled control, which is a selection on the
+test statistic. The k=2 run result is robust to that (every k from 2 to 6 gives +0.25 to
++0.35), but the block k=5/k=6 picks are not — treat those profile counts as descriptive.
+⚠️ Corpus B sessions could not be clustered: only 13 have ≥6 requests.
