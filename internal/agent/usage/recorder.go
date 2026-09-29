@@ -12,6 +12,7 @@ package usage
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -22,11 +23,16 @@ import (
 
 // Sink is where rows land: ledger.Store.InsertRequests.
 type Sink interface {
-	InsertRequests(rows []ledger.RequestRow) int
+	InsertRequests(rows []ledger.RequestRow) (int, error)
 }
 
 // Price estimates one request's cost; ok is false for a model with no rate.
 type Price func(model string, input, output, cacheRead, cacheCreation int64) (usd float64, ok bool)
+
+// maxHeld bounds what a failing ledger can make the recorder hold. Past it
+// the oldest rows are dropped, and said so once: memory must stay bounded
+// even if the ledger never comes back.
+const maxHeld = 20 * defaultCap
 
 // defaultCap bounds the buffer between flushes. A poll that reads more
 // requests than this (a first read of a long session) writes in several
@@ -41,8 +47,9 @@ type Recorder struct {
 	price  Price
 	cap    int
 
-	mu  sync.Mutex
-	buf []ledger.RequestRow
+	mu      sync.Mutex
+	buf     []ledger.RequestRow
+	dropped int
 }
 
 func New(sink Sink, price Price) *Recorder {
@@ -95,16 +102,38 @@ func (r *Recorder) row(path string, q promptlog.Request) ledger.RequestRow {
 }
 
 // Flush writes whatever is buffered, in one insert, and returns how many rows
-// were new.
-func (r *Recorder) Flush() int {
+// were new. ⚠️ A FAILED WRITE IS KEPT, not dropped: the watcher's cursor has
+// already moved past those lines, so this buffer is their only copy. The next
+// flush tries them again, ahead of anything newer.
+func (r *Recorder) Flush() (int, error) {
 	r.mu.Lock()
 	batch := r.buf
 	r.buf = nil
 	r.mu.Unlock()
 	if len(batch) == 0 {
-		return 0
+		return 0, nil
 	}
-	return r.sink.InsertRequests(batch)
+	n, err := r.sink.InsertRequests(batch)
+	if err != nil {
+		r.mu.Lock()
+		r.buf = append(batch, r.buf...)
+		if over := len(r.buf) - maxHeld; over > 0 {
+			if r.dropped == 0 {
+				log.Printf("keld-agent: per-request usage: the ledger is not accepting writes; dropping the oldest %d held request(s) to stay bounded", over)
+			}
+			r.dropped += over
+			r.buf = append([]ledger.RequestRow(nil), r.buf[over:]...)
+		}
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+// Held is how many requests are buffered and not yet written.
+func (r *Recorder) Held() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.buf)
 }
 
 // Run flushes every `every` until ctx ends, then once more.

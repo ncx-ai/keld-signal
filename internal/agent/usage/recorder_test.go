@@ -3,12 +3,14 @@ package usage
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
+	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 )
 
 type memSink struct {
@@ -17,7 +19,7 @@ type memSink struct {
 	rows  map[string]ledger.RequestRow
 }
 
-func (m *memSink) InsertRequests(rows []ledger.RequestRow) int {
+func (m *memSink) InsertRequests(rows []ledger.RequestRow) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls++
@@ -32,7 +34,7 @@ func (m *memSink) InsertRequests(rows []ledger.RequestRow) int {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 func fixture(name string) string { return filepath.Join("..", "promptlog", "testdata", name) }
@@ -68,7 +70,7 @@ func TestRecorderBuffersAndPricesAtWrite(t *testing.T) {
 	if sink.calls != 0 {
 		t.Fatalf("wrote %d times before a flush, want 0", sink.calls)
 	}
-	if n := r.Flush(); n != 2+4+4 {
+	if n, _ := r.Flush(); n != 2+4+4 {
 		t.Fatalf("flush added %d, want 10 (2 Claude Code, 4 Codex, 4 Gemini)", n)
 	}
 	if sink.calls != 1 {
@@ -83,7 +85,7 @@ func TestRecorderBuffersAndPricesAtWrite(t *testing.T) {
 			t.Fatalf("row %s priced %v, want %v", row.Key, row.EstimateUSD, want)
 		}
 	}
-	if n := r.Flush(); n != 0 || sink.calls != 1 {
+	if n, _ := r.Flush(); n != 0 || sink.calls != 1 {
 		t.Fatalf("an empty flush wrote (n=%d, calls=%d)", n, sink.calls)
 	}
 }
@@ -94,7 +96,7 @@ func TestRecorderKeepsUnpricedRequests(t *testing.T) {
 	sink := &memSink{}
 	r := New(sink, func(string, int64, int64, int64, int64) (float64, bool) { return 0, false })
 	feed(t, r, "claude_code", "claude_code_session.jsonl")
-	if n := r.Flush(); n != 2 {
+	if n, _ := r.Flush(); n != 2 {
 		t.Fatalf("added %d, want 2", n)
 	}
 	for _, row := range sink.rows {
@@ -124,7 +126,7 @@ func TestRecorderIgnoresUnknownSources(t *testing.T) {
 	sink := &memSink{}
 	r := New(sink, flatPrice)
 	feed(t, r, "chatgpt", "claude_code_session.jsonl")
-	if n := r.Flush(); n != 0 {
+	if n, _ := r.Flush(); n != 0 {
 		t.Fatalf("added %d for an unknown source", n)
 	}
 }
@@ -164,4 +166,47 @@ func bytesLines(b []byte) [][]byte {
 		out = append(out, append([]byte(nil), sc.Bytes()...))
 	}
 	return out
+}
+
+// flakySink fails its first `fail` writes, then behaves like memSink.
+type flakySink struct {
+	memSink
+	fail int
+}
+
+func (f *flakySink) InsertRequests(rows []ledger.RequestRow) (int, error) {
+	if f.fail > 0 {
+		f.fail--
+		return 0, errors.New("database is locked")
+	}
+	return f.memSink.InsertRequests(rows)
+}
+
+// A write that fails is the only copy of those requests — the watcher has
+// moved past them — so the recorder keeps them and the next flush writes them.
+func TestRecorderKeepsAFailedBatchAndRetries(t *testing.T) {
+	sink := &flakySink{fail: 1}
+	r := New(sink, flatPrice)
+	feed(t, r, "codex", "codex_rollout.jsonl")
+	if _, err := r.Flush(); err == nil || r.Held() != 4 {
+		t.Fatalf("after a failed write: err=%v held=%d, want an error and 4 held", err, r.Held())
+	}
+	feed(t, r, "claude_code", "claude_code_session.jsonl")
+	if n, err := r.Flush(); err != nil || n != 6 || r.Held() != 0 {
+		t.Fatalf("retry wrote %d (err %v, held %d), want 6", n, err, r.Held())
+	}
+}
+
+// A ledger that never comes back cannot make the recorder grow without bound.
+func TestRecorderHoldIsBounded(t *testing.T) {
+	sink := &flakySink{fail: 1 << 30}
+	r := New(sink, flatPrice)
+	for i := 0; i < maxHeld/4+50; i++ {
+		feed(t, r, "codex", "codex_rollout.jsonl") // 4 held each, deduped only by the ledger
+		r.parser = promptlog.NewParser()           // re-read as new, to keep adding
+	}
+	r.Flush()
+	if r.Held() > maxHeld {
+		t.Fatalf("holding %d, bound is %d", r.Held(), maxHeld)
+	}
 }

@@ -208,3 +208,33 @@ func TestParserStateIsSeparateFromTheMirror(t *testing.T) {
 		t.Fatalf("mirror posted %d bodies after the parser read the file, want 4", n)
 	}
 }
+
+// A reader that joins a rollout mid-file seeds its running total from the head.
+// It must apply the full read's rule — a token_count with no per-request usage
+// does not move the total — or the two disagree about the next record.
+func TestCodexMidFileStartAgreesWithAFullRead(t *testing.T) {
+	lines := []string{
+		`{"timestamp":"2026-09-18T10:00:00.000Z","type":"session_meta","payload":{"id":"0199aaaa-0000-7000-8000-000000000001","cli_version":"0.40.0"}}`,
+		`{"timestamp":"2026-09-18T10:00:01.000Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-09-18T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":100},"last_token_usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100}}}}`,
+		`{"timestamp":"2026-09-18T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":150}}}}`,
+		`{"timestamp":"2026-09-18T10:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":150},"last_token_usage":{"input_tokens":40,"output_tokens":10,"total_tokens":50}}}}`,
+	}
+	path := filepath.Join(t.TempDir(), "rollout-a.jsonl")
+	body := ""
+	for _, l := range lines {
+		body += l + "\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	full := 0
+	p := NewParser()
+	for _, l := range lines {
+		full += len(p.Line(sourceCodex, path, []byte(l)))
+	}
+	joined := len(NewParser().Line(sourceCodex, path, []byte(lines[4])))
+	if full != 2 || joined != 1 {
+		t.Fatalf("full read priced %d (want 2), a reader joining at the last record priced %d (want 1)", full, joined)
+	}
+}

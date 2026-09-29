@@ -1,6 +1,7 @@
 package promptlog
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync"
 
@@ -60,6 +61,12 @@ func NewParser() *Parser {
 func (p *Parser) Line(source, path string, line []byte) []Request {
 	switch source {
 	case sourceClaudeCode, sourceCowork:
+		// Only a line carrying usage can be a request. Checked before decoding
+		// because the mirror already decodes every line it sees, and the
+		// big ones — tool results, megabytes each — never carry usage.
+		if !bytes.Contains(line, usageKey) {
+			return nil
+		}
 		r, msg, ok := decodeClaude(line)
 		if !ok || r.Type != "assistant" || msg.Usage == nil {
 			return nil
@@ -98,6 +105,8 @@ func (p *Parser) File(source, path string) []Request {
 }
 
 // --- Claude Code / Cowork ---
+
+var usageKey = []byte(`"usage"`)
 
 // claudeBook is the last requestId seen per transcript.
 type claudeBook map[string]string

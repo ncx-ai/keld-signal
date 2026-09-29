@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -161,4 +162,75 @@ func TestStoppedBackfillIsNotMarkedDone(t *testing.T) {
 	if b.Remaining() != 3 {
 		t.Fatalf("remaining %d, want all 3 files still to read", b.Remaining())
 	}
+}
+
+// A restart resumes: files already read are not read again, and the rest are
+// read newest first, so the days shown by default fill before older ones.
+func TestBackfillResumesNewestFirst(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := filepath.Join(t.TempDir(), "projects")
+	var paths []string
+	for i := 0; i < 6; i++ {
+		p := copyFixture(t, "claude_code_session.jsonl", dir, "s"+string(rune('a'+i))+".jsonl")
+		at := time.Now().Add(-time.Duration(6-i) * time.Hour) // sf is the newest
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	roots := func() []watch.Root { return []watch.Root{{SourceID: "claude_code", Dir: dir}} }
+	store := ledger.New()
+	b := NewBackfill(store, flatPrice, roots)
+	b.PerStep = 2
+	b.Step()
+	done, _ := store.BackfilledFiles()
+	if !done[paths[5]] || !done[paths[4]] || len(done) != 2 {
+		t.Fatalf("first step read %v, want the two newest", done)
+	}
+
+	// A new daemon run.
+	again := NewBackfill(ledger.New(), flatPrice, roots)
+	again.PerStep = 2
+	again.Step()
+	if again.Remaining() != 2 {
+		t.Fatalf("after resuming, %d remain, want 2 (6 − 2 done − 2 now)", again.Remaining())
+	}
+	done, _ = store.BackfilledFiles()
+	if !done[paths[3]] || !done[paths[2]] {
+		t.Fatalf("resumed step read %v, want the next two newest", done)
+	}
+}
+
+// A file whose rows could not be written is not recorded as done, and the
+// marker is not set: nothing is lost to a transient error.
+func TestBackfillFailedWriteIsNotRecordedAsDone(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	roots := machine(t)
+	real := ledger.New()
+	st := &failingStore{Store: real, fail: 1}
+	b := NewBackfill(st, flatPrice, func() []watch.Root { return roots })
+	b.PerStep = 10
+	if b.Step() {
+		t.Fatal("finished despite a failed write")
+	}
+	if real.RequestsBackfillDone() || b.Remaining() != 3 {
+		t.Fatalf("marker %v, remaining %d, want unset and all 3", real.RequestsBackfillDone(), b.Remaining())
+	}
+	runToEnd(t, b)
+	if got := len(allRows(t, real)); got != 10 {
+		t.Fatalf("after the retry %d requests, want 10", got)
+	}
+}
+
+type failingStore struct {
+	*ledger.Store
+	fail int
+}
+
+func (f *failingStore) InsertRequests(rows []ledger.RequestRow) (int, error) {
+	if f.fail > 0 {
+		f.fail--
+		return 0, errors.New("disk I/O error")
+	}
+	return f.Store.InsertRequests(rows)
 }

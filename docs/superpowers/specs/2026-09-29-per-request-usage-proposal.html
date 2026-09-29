@@ -88,8 +88,8 @@ table.tests td:nth-child(2){width:38%}
   <dt>Lines per request</dt><dd class="mono">1.79 · Claude Code writes a request's usage on every content line (measured, 40 transcripts)</dd>
   <dt>Codex repeated totals</dt><dd class="mono">9.3% of token records repeat the last total (measured, 10,061 records)</dd>
   <dt>Retention</dt><dd class="mono">every request kept for good · no rollup, no pruning (revised after review)</dd>
-  <dt>New table size</dt><dd class="mono">GUESS ~20–25 MB a year at your rate · row width × 141k rows · T11 measures it</dd>
-  <dt>Revisit threshold</dt><dd class="mono">GUESS 250 MB · ~10 years at your rate · add a rollup only if the table gets there</dd>
+  <dt>New table size</dt><dd class="mono">MEASURED 2026-09-29: ~310 bytes a row · ~1,200 requests a day here · ~130 MB a year (the first guess, 20–25 MB, was ~5× low)</dd>
+  <dt>Scale check</dt><dd class="mono">MEASURED: 3 years at 10× your rate = 9.25M rows, 2.7 GB · 30-day read 731 ms · startup under 1 ms · a rollup is revisited on read time, not size</dd>
 </dl>
 
 <h2>1 · Today — exact per-request data passes through, and only block totals are kept</h2>
@@ -254,7 +254,7 @@ table.tests td:nth-child(2){width:38%}
   <li><strong>Transcripts deleted later:</strong> nothing is lost. Today your ledger already holds 291 Claude Code blocks whose transcripts Claude Code has deleted.</li>
   <li><strong>What is lost:</strong> a transcript deleted before Signal read it. The daemon resumes from its saved position after a restart, so this only happens if it is off for longer than Claude Code keeps transcripts — 30 days.</li>
   <li><strong>History before this ships:</strong> the first time the new version starts, it reads every transcript still on disk once and counts it. That is the last 30 days of Claude Code and all your Codex rollouts, back to Sep 2025. Days older than that show no usage on the Overview (D2), with a note saying where each tool's data starts.</li>
-  <li><strong>No overload:</strong> the page only asks for its range, read through an index on time: 30 days is about 11,600 rows at your rate. The table grows by a GUESS of 20–25 MB a year, and <span class="mono">keld signal doctor</span> reports its size. A rollup is added only if it ever nears 250 MB.</li>
+  <li><strong>No overload:</strong> the page only asks for its range, read through an index on time: 30 days is about 36,000 requests here, sent as ~4,400 five-minute sums. The table grows by ~130 MB a year at your rate (measured), and <span class="mono">keld signal doctor</span> reports its size. At ten times your rate for three years a month still reads in 731 ms, so a rollup waits until reads slow, not until a size.</li>
 </ul>
 
 <h2>4 · What we test</h2>
@@ -331,7 +331,7 @@ table.tests td:nth-child(2){width:38%}
   <dt>What if the laptop is off for a month?</dt>
   <dd>Signal resumes from where it stopped. It loses only transcripts Claude Code deleted in the meantime — its 30-day cleanup. That is true today for blocks too.</dd>
   <dt>Why not roll old rows up to save space?</dt>
-  <dd>A rollup would save space, but it adds a second table to keep in sync and a pruning job. That only earns its place if space is a real problem. At a GUESS of 20–25 MB a year it is not, so the rollup waits until doctor shows the table nearing 250 MB.</dd>
+  <dd>A rollup would save space, but it adds a second table to keep in sync and a pruning job. That only earns its place if space or speed is a real problem. Measured, the table is ~130 MB a year at your rate and a month reads in under a second even at ten times that, so the rollup waits until reads slow.</dd>
   <dt>Why keep blocks at all?</dt>
   <dd>Tokens do not need them. "What was this work about" does: repo, project, and the activity grid are properties of a stretch of work, not of a single request. The join gives both.</dd>
 </dl>

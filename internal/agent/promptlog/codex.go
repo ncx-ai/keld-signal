@@ -189,10 +189,15 @@ func codexHead(path string, target []byte) codexState {
 	defer f.Close()
 	want := strings.TrimRight(string(target), "\r\n")
 	var st codexState
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		raw := strings.TrimRight(sc.Text(), "\r\n")
+	// A Reader, not a Scanner: a Scanner stops at its line cap and would
+	// return a head that ends early, with an out-of-date running total.
+	br := bufio.NewReaderSize(f, 256*1024)
+	for {
+		b, rerr := br.ReadBytes('\n')
+		if len(b) == 0 && rerr != nil {
+			break
+		}
+		raw := strings.TrimRight(string(b), "\r\n")
 		if want != "" && raw == want {
 			break // stop at the record being observed; later lines describe later turns
 		}
@@ -221,9 +226,13 @@ func codexHead(path string, target []byte) codexState {
 				st.turnID = p.TurnID
 			}
 		case "event_msg":
+			// The SAME rule stepCodex applies, or a reader that joined mid-file
+			// and one that read from the start disagree about the next record:
+			// a token_count with no per-request usage, or a zero total, never
+			// moves the running total there, so it must not move it here.
 			var ev codexEventMsg
 			if json.Unmarshal(ln.Payload, &ev) == nil && ev.Type == "token_count" &&
-				ev.Info != nil && ev.Info.Total != nil {
+				ev.Info != nil && ev.Info.Last != nil && ev.Info.Total != nil && ev.Info.Total.TotalTokens != 0 {
 				st.lastTotal = ev.Info.Total.TotalTokens
 			}
 		}

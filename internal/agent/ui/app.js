@@ -691,8 +691,15 @@ export function rangeWindow(range, now) {
   return { key: r.key, range: r, start: days[0], end: unixOf(dayAfter(first, count)), days, title: RANGE_TITLES[r.key], dates };
 }
 
+/** How far before the range the ledger is asked from. A block that starts
+ *  before the range and runs into it (23:50 → 00:10) holds requests made
+ *  INSIDE the range, and their repository and project come from it; blocks
+ *  are cut at 20 minutes, so an hour is ample. Such a block is joined, never
+ *  drawn: blocksInWindow still filters by the range. */
+export const LEDGER_LOOKBACK = 3600;
+
 export function rangeLedgerURL(win) {
-  return `/v1/ledger?since=${win.start}&limit=${LEDGER_LIMIT}`;
+  return `/v1/ledger?since=${win.start - LEDGER_LOOKBACK}&limit=${LEDGER_LIMIT}`;
 }
 
 /** `since` bounds only the start of a range; Custom's end is applied here. */
@@ -716,8 +723,10 @@ export function usageURL(win) {
   return `/v1/usage?since=${win.start}&until=${win.end}`;
 }
 
-/** The tools whose work is cut into focus blocks. */
-const BLOCK_SOURCES = new Set(["claude_code", "cowork"]);
+/** The tools whose work is cut into focus blocks. Codex is one (its blocks
+ *  are named after the rollout file, as its requests' transcript is); only
+ *  Gemini's work never is. */
+const BLOCK_SOURCES = new Set(["claude_code", "cowork", "codex"]);
 
 export const SOURCE_LABELS = { claude_code: "Claude Code", cowork: "Cowork", codex: "Codex", gemini_cli: "Gemini CLI" };
 
@@ -725,7 +734,7 @@ export const SOURCE_LABELS = { claude_code: "Claude Code", cowork: "Cowork", cod
  *  same transcript whose [start, end) contains the bucket's instant — exact,
  *  because block edges and buckets both sit on 5-minute boundaries. With no
  *  such block, `place` says why: "none" for a tool whose work is never cut into
- *  blocks (Codex, Gemini), "unknown" for one whose work is — still in an open
+ *  blocks (Gemini), "unknown" for one whose work is — still in an open
  *  block, or in one this page did not load. */
 export function usageItems(usage, blocks) {
   const bySession = new Map();

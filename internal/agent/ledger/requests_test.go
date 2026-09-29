@@ -32,10 +32,10 @@ func TestInsertRequestsTwiceChangesNothing(t *testing.T) {
 	s := New()
 	now := time.Now().Truncate(time.Millisecond)
 	batch := []RequestRow{req("r1", now, "m"), req("r2", now.Add(time.Second), "m")}
-	if n := s.InsertRequests(batch); n != 2 {
+	if n, _ := s.InsertRequests(batch); n != 2 {
 		t.Fatalf("first insert added %d, want 2", n)
 	}
-	if n := s.InsertRequests(batch); n != 0 {
+	if n, _ := s.InsertRequests(batch); n != 0 {
 		t.Fatalf("second insert added %d, want 0", n)
 	}
 	rows := allRequests(t, s)
@@ -57,7 +57,7 @@ func TestYearOldKeyReinsertedAddsNothing(t *testing.T) {
 	s.InsertRequests([]RequestRow{req("r1", old, "m")})
 	again := req("r1", old, "m")
 	again.Output = 999 // a re-read cannot rewrite history either
-	if n := s.InsertRequests([]RequestRow{again}); n != 0 {
+	if n, _ := s.InsertRequests([]RequestRow{again}); n != 0 {
 		t.Fatalf("re-insert added %d, want 0", n)
 	}
 	rows := allRequests(t, s)
@@ -76,7 +76,7 @@ func TestKeyIsScopedBySourceAndSession(t *testing.T) {
 	b.Session = "s2"
 	c := a
 	c.Source = "codex"
-	if n := s.InsertRequests([]RequestRow{a, b, c}); n != 3 {
+	if n, _ := s.InsertRequests([]RequestRow{a, b, c}); n != 3 {
 		t.Fatalf("added %d, want 3", n)
 	}
 }
@@ -154,7 +154,7 @@ func TestInsertRequestsRefusesBadIdentifiers(t *testing.T) {
 	badSource.Source = "chatgpt"
 	noTime := req("r3", time.Time{}, "m")
 	badModel := req("r4", now, "../etc/passwd")
-	if n := s.InsertRequests([]RequestRow{badSession, badKey, badSource, noTime, badModel}); n != 1 {
+	if n, _ := s.InsertRequests([]RequestRow{badSession, badKey, badSource, noTime, badModel}); n != 1 {
 		t.Fatalf("added %d, want 1 (only the bad-model row, unnamed)", n)
 	}
 	rows := allRequests(t, s)

@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE INDEX IF NOT EXISTS ix_requests_ts ON requests(ts);
 CREATE INDEX IF NOT EXISTS ix_requests_source_ts ON requests(source, ts);
 CREATE INDEX IF NOT EXISTS ix_requests_unpriced ON requests(model) WHERE estimate_usd = 0 AND model != '';
+CREATE TABLE IF NOT EXISTS requests_backfilled (
+  path TEXT PRIMARY KEY
+);
 CREATE TABLE IF NOT EXISTS ledger_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -73,43 +76,64 @@ type RequestRow struct {
 }
 
 // InsertRequests writes rows in ONE transaction, insert-or-ignore on the
-// tool's key, and returns how many were new. Fire-and-forget like every other
-// ledger write: a failure is logged once and reported as 0 new rows.
+// tool's key, and returns how many were new. A failure rolls the whole batch
+// back and is RETURNED, not only logged: the caller holds the only copy of
+// those rows (the watcher's cursor has moved on), so it must be able to keep
+// them and try again.
 //
 // A row with a session, key or source that fails its shape, or no instant, is
 // refused; a model that fails its shape is stored as unnamed, because the
 // tokens are still real.
-func (s *Store) InsertRequests(rows []RequestRow) int {
+func (s *Store) InsertRequests(rows []RequestRow) (int, error) {
 	if len(rows) == 0 {
-		return 0
+		return 0, nil
 	}
+	db := s.handle()
+	if db == nil {
+		return 0, errUnavailable
+	}
+	txn, err := db.Begin()
+	if err != nil {
+		s.logFailure("InsertRequests", err)
+		return 0, err
+	}
+	n, err := insertRequests(txn, rows)
+	if err == nil {
+		err = txn.Commit()
+	}
+	if err != nil {
+		_ = txn.Rollback()
+		s.logFailure("InsertRequests", err)
+		return 0, err
+	}
+	return n, nil
+}
+
+func insertRequests(txn *sql.Tx, rows []RequestRow) (int, error) {
+	stmt, err := txn.Prepare(`INSERT OR IGNORE INTO requests(source, session, request_key, transcript, ts, model,
+		input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimate_usd)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
 	n := 0
-	s.tx("InsertRequests", func(txn *sql.Tx) error {
-		stmt, err := txn.Prepare(`INSERT OR IGNORE INTO requests(source, session, request_key, transcript, ts, model,
-			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimate_usd)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+	for _, r := range rows {
+		session, ok := validSession(r.Session)
+		if !ok || !requestSources[r.Source] || !requestKeyShape.MatchString(r.Key) || r.At.IsZero() {
+			continue
+		}
+		transcript, _ := validSession(r.Transcript)
+		res, err := stmt.Exec(r.Source, session, r.Key, transcript, r.At.UnixMilli(), validModelID(r.Model),
+			r.Input, r.Output, r.CacheRead, r.CacheCreation, r.EstimateUSD)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		defer stmt.Close()
-		for _, r := range rows {
-			session, ok := validSession(r.Session)
-			if !ok || !requestSources[r.Source] || !requestKeyShape.MatchString(r.Key) || r.At.IsZero() {
-				continue
-			}
-			transcript, _ := validSession(r.Transcript)
-			res, err := stmt.Exec(r.Source, session, r.Key, transcript, r.At.UnixMilli(), validModelID(r.Model),
-				r.Input, r.Output, r.CacheRead, r.CacheCreation, r.EstimateUSD)
-			if err != nil {
-				return err
-			}
-			if k, _ := res.RowsAffected(); k > 0 {
-				n++
-			}
+		if k, _ := res.RowsAffected(); k > 0 {
+			n++
 		}
-		return nil
-	})
-	return n
+	}
+	return n, nil
 }
 
 // UsageRows returns every request with since <= ts < until, oldest first.
@@ -327,4 +351,42 @@ func (s *Store) UsageBuckets(since, until time.Time) ([]UsageBucket, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// BackfilledFiles is every transcript the one-time backfill has finished, so a
+// daemon restarted mid-way resumes rather than starting over. A machine that
+// restarts more often than a whole backfill takes would otherwise never reach
+// the files listed last (measured: Codex's root came after ~2,150 Claude Code
+// transcripts, ~45 minutes in).
+func (s *Store) BackfilledFiles() (map[string]bool, error) {
+	db := s.handle()
+	if db == nil {
+		return nil, errUnavailable
+	}
+	rows, err := db.Query(`SELECT path FROM requests_backfilled`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkFileBackfilled(path string) error {
+	db := s.handle()
+	if db == nil {
+		return errUnavailable
+	}
+	_, err := db.Exec(`INSERT OR IGNORE INTO requests_backfilled(path) VALUES(?)`, path)
+	if err != nil {
+		s.logFailure("MarkFileBackfilled", err)
+	}
+	return err
 }

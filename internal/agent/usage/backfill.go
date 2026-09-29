@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
@@ -30,9 +31,11 @@ import (
 // always happen after that start.
 //
 // Paced (PerStep files per poll, the watcher's own first-sight rate), because a
-// machine can hold thousands of transcripts and a 90 MB one. Restartable rather
-// than resumable: a daemon that stops mid-way starts over, and the rows it
-// already wrote collapse on their keys.
+// machine can hold thousands of transcripts and a 90 MB one. NEWEST FIRST, so
+// the days the Overview shows by default fill before the old ones, and
+// RESUMABLE: each finished file is recorded in the ledger, so a restart picks
+// up where it stopped. A file is recorded only once its rows are written; a
+// failed write leaves it to be read again.
 type Backfill struct {
 	PerStep int
 
@@ -55,6 +58,8 @@ type Store interface {
 	Sink
 	RequestsBackfillDone() bool
 	MarkRequestsBackfillDone(at time.Time)
+	BackfilledFiles() (map[string]bool, error)
+	MarkFileBackfilled(path string) error
 }
 
 // perStepDefault matches watch's firstSightPerPoll.
@@ -73,16 +78,29 @@ func (b *Backfill) Step() bool {
 		return true
 	}
 	if !b.listed {
-		b.listed = true
 		if b.store.RequestsBackfillDone() {
-			b.done = true
+			b.listed, b.done = true, true
 			return true
 		}
+		finished, err := b.store.BackfilledFiles()
+		if err != nil {
+			return false // the ledger is not readable yet; list again next poll
+		}
+		b.listed = true
 		for _, root := range b.roots() {
 			for _, p := range watch.TranscriptFiles(root) {
-				b.todo = append(b.todo, watch.Root{SourceID: root.SourceID, Dir: p})
+				if !finished[p] {
+					b.todo = append(b.todo, watch.Root{SourceID: root.SourceID, Dir: p})
+				}
 			}
 		}
+		mtime := map[string]time.Time{}
+		for _, f := range b.todo {
+			if st, err := os.Stat(f.Dir); err == nil {
+				mtime[f.Dir] = st.ModTime()
+			}
+		}
+		sort.SliceStable(b.todo, func(i, j int) bool { return mtime[b.todo[i].Dir].After(mtime[b.todo[j].Dir]) })
 	}
 	n := b.PerStep
 	if n <= 0 {
@@ -90,9 +108,16 @@ func (b *Backfill) Step() bool {
 	}
 	for ; n > 0 && len(b.todo) > 0 && !b.stop(); n-- {
 		f := b.todo[0]
+		if !b.read(f.SourceID, f.Dir) {
+			return false // stopped part-way: this file is read again next time
+		}
+		if _, err := b.rec.Flush(); err != nil {
+			return false // not written: keep the file, try again next poll
+		}
+		if b.store.MarkFileBackfilled(f.Dir) != nil {
+			return false
+		}
 		b.todo = b.todo[1:]
-		b.read(f.SourceID, f.Dir)
-		b.rec.Flush()
 	}
 	if len(b.todo) == 0 && !b.stop() {
 		b.store.MarkRequestsBackfillDone(time.Now())
@@ -101,16 +126,17 @@ func (b *Backfill) Step() bool {
 	return b.done
 }
 
-// read feeds one whole transcript to the recorder. Best-effort: a file that
-// vanished or cannot be read is skipped, never an error that stops the rest.
-func (b *Backfill) read(source, path string) {
+// read feeds one whole transcript to the recorder and reports whether it read
+// to the end. A file that vanished or cannot be opened counts as read — there
+// is nothing more to get from it — and never stops the rest.
+func (b *Backfill) read(source, path string) bool {
 	if watch.IsDocumentSource(source) {
 		b.rec.ObserveFile(source, path)
-		return
+		return true
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return
+		return true
 	}
 	defer f.Close()
 	// A Reader, not a Scanner: a transcript line carrying a tool result can
@@ -118,15 +144,14 @@ func (b *Backfill) read(source, path string) {
 	br := bufio.NewReaderSize(f, 256*1024)
 	for i := 0; ; i++ {
 		if i%1000 == 0 && b.stop() {
-			b.todo = append(b.todo, watch.Root{SourceID: source, Dir: path}) // not finished
-			return
+			return false
 		}
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
 			b.rec.Observe(source, path, line)
 		}
 		if err != nil {
-			return // io.EOF, or a read error: either way this file is done
+			return true // io.EOF, or a read error: either way this file is done
 		}
 	}
 }

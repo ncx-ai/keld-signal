@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   rangeWindow,
+  blocksInWindow,
   usageURL,
   usageItems,
   itemsInWindow,
@@ -102,14 +103,31 @@ test("T15: an open block's requests already count, as not attributed yet", () =>
   assert.equal(v.columns[6].tokens, 1000);
 });
 
-// A tool whose work is never cut into blocks has no repository or project —
-// "none", not "not attributed yet", which would promise an answer never coming.
-test("Codex usage counts, with no repository and no project", () => {
-  const items = usageItems(usage([bucket({ source: "codex", transcript: "rollout-1", model: "gpt-5.5" })]), []);
+// Gemini's work is never cut into blocks, so it has no repository or project
+// — "none", not "not attributed yet", which would promise an answer never
+// coming. Codex's work IS cut into blocks, so a Codex request no loaded block
+// holds is "not attributed yet", and one a block holds takes its values.
+test("Gemini usage counts, with no repository and no project", () => {
+  const items = usageItems(usage([bucket({ source: "gemini_cli", transcript: "session-1", model: "gemini-2.5-pro" })]), []);
   assert.equal(items[0].place, "none");
   assert.deepEqual(volumeSeries(items, [], week, "repo", catalog).categories.map((c) => c.label), [NO_REPO_LABEL]);
   assert.deepEqual(volumeSeries(items, [], week, "project", catalog).categories.map((c) => c.label), [NO_PROJECT_LABEL]);
-  assert.deepEqual(overviewStats([], items).byModel.tokens.top.map((e) => e.label), ["gpt-5.5"]);
+  assert.deepEqual(overviewStats([], items).byModel.tokens.top.map((e) => e.label), ["gemini-2.5-pro"]);
+});
+
+test("a Codex request joins its rollout's block, and without one is not attributed yet", () => {
+  const b = { ...block({ session: "rollout-2026-09-28T10-00-00-abc", h: 10, repo: "github.com/x/keld-atlas" }), source: "codex" };
+  const [inBlock, open] = usageItems(
+    usage([
+      bucket({ source: "codex", transcript: "rollout-2026-09-28T10-00-00-abc", h: 10, m: 5, model: "gpt-5.5" }),
+      bucket({ source: "codex", transcript: "rollout-2026-09-28T17-00-00-def", h: 17, model: "gpt-5.5" }),
+    ]),
+    [b]
+  );
+  assert.equal(inBlock.block, b);
+  assert.equal(open.place, "unknown");
+  const v = volumeSeries([inBlock, open], [b], week, "repo", catalog);
+  assert.deepEqual(v.categories.map((c) => c.label), ["keld-atlas", NOT_ATTRIBUTED_LABEL]);
 });
 
 // A block running past midnight spends its tokens on the day each request was
@@ -120,6 +138,18 @@ test("tokens land on the day the request was made", () => {
   const v = volumeSeries(items, [b], week, "tokens", catalog);
   assert.equal(v.columns[5].tokens, 1000);
   assert.equal(v.columns[6].tokens, 1000);
+});
+
+// A block that starts before the range and runs into it is fetched (the ledger
+// is asked from an hour earlier) and joined, but not drawn: its requests made
+// inside the range keep its repository.
+test("a block that started before the range still names the repository of requests inside it", () => {
+  const b = block({ d: 21, h: 23, m: 50, minutes: 20, repo: "github.com/x/keld-signal" });
+  const items = itemsInWindow(usageItems(usage([bucket({ d: 21, h: 23, m: 55 }), bucket({ d: 22, h: 0, m: 5 })]), [b]), week);
+  assert.equal(items.length, 1, "only the request made inside the range");
+  const v = volumeSeries(items, blocksInWindow([b], week), week, "repo", catalog);
+  assert.deepEqual(v.categories.map((c) => c.label), ["keld-signal"]);
+  assert.equal(v.columns[0].tokens, 1000);
 });
 
 // T16: before a tool's first recorded request there is no usage to show, and
