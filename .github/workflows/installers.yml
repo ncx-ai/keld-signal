@@ -319,21 +319,47 @@ jobs:
       #
       # The binary is copied into the payload staging dir like every other one,
       # so `sign-payload.ps1` catalogs and signs it with no signing change at all.
+      # ⚠️ `continue-on-error` BECAUSE THE APP IS A CONVENIENCE, AND SAYING SO IS
+      # NOT ENOUGH. The .iss marks its Source `skipifsourcedoesntexist` and the
+      # copy below tolerates absence — but that only covers a missing FILE, and a
+      # failing STEP still fails the job. Measured twice: a missing icon.ico and
+      # then a wrong output path each took the ENTIRE Windows installer down for
+      # a feature whose absence merely means `keld signal open` uses a browser,
+      # which is what every release before this did. The warning is loud so this
+      # never degrades silently.
       - name: Build the desktop app (Windows)
+        id: win-app
         if: matrix.os == 'windows-latest'
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cd app
           npx --yes @tauri-apps/cli@latest build --no-bundle
-          EXE="src-tauri/target/release/Keld Signal.exe"
-          if [ ! -f "$EXE" ]; then
-            echo "no app executable at $EXE"
-            ls -R src-tauri/target/release 2>/dev/null | head -40
+          # ⚠️ THE BINARY IS NAMED AFTER THE CARGO PACKAGE, NOT productName.
+          # `--no-bundle` skips the bundling step, and bundling is what renames
+          # the executable to "Keld Signal.exe" — so target/release holds
+          # keld-signal-app.exe. Rather than hardcode either name, take the one
+          # executable cargo left at the top of target/release: that survives a
+          # package rename, and the copy below gives it the name the CLI looks
+          # for (internal/cli/signalopen.go's windowsAppCandidates).
+          EXE="$(find src-tauri/target/release -maxdepth 1 -name '*.exe' -type f | head -1)"
+          if [ -z "$EXE" ]; then
+            echo "::warning title=No desktop app::cargo produced no executable; keld signal open will use the browser"
+            ls -R src-tauri/target/release 2>/dev/null | head -30
             exit 1
           fi
           cp "$EXE" "../stage/Keld Signal.exe"
-          echo "built $(du -h "$EXE" | cut -f1) desktop app"
+          echo "built $(du -h "$EXE" | cut -f1) desktop app from $(basename "$EXE")"
+
+      # continue-on-error hides a failure from the job's status, so surface it
+      # where a human will actually see it.
+      - name: Note a missing desktop app
+        if: matrix.os == 'windows-latest' && steps.win-app.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::warning title=Desktop app not built::keld signal open will fall back to a browser on this build."
+          echo "⚠️ **Desktop app not built** — \`keld signal open\` falls back to a browser." >> "$GITHUB_STEP_SUMMARY"
 
       # Import the Developer ID identities into a throwaway keychain. Without this the
       # APPLE_DEVELOPER_ID_* names resolve against nothing: they are only identity
