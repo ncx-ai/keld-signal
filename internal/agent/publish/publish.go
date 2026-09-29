@@ -140,12 +140,21 @@ type Enrichment struct {
 	// subagent's turns are a different transcript), and the SERVER where
 	// Integrations is the tool. Absent when the window used nothing in that
 	// dimension; never an empty list.
-	FileTypes           []enrich.NameCount `json:"file_types,omitempty"`
-	ShellVerbs          []enrich.NameCount `json:"shell_verbs,omitempty"`
-	Subagents           []enrich.NameCount `json:"subagents,omitempty"`
-	McpServers          []enrich.NameCount `json:"mcp_servers,omitempty"`
-	ActivityClasses     []enrich.NameCount `json:"activity_classes,omitempty"`
-	ActivityClassTokens []enrich.NameCount `json:"activity_class_tokens,omitempty"`
+	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
+	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
+	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
+	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
+	// ⚠️ activity_classes / activity_class_tokens are DELIBERATELY ABSENT here and
+	// live on the BLOCK row only (publish.AnalysisFacets, via facetsOf).
+	//
+	// This is a per-PROMPT row and its window facets cover the 60 MINUTES ENDING AT
+	// THAT PROMPT, so consecutive prompts' windows OVERLAP: a busy hour with ten
+	// prompts yields ten windows over largely the same requests. A distribution here
+	// therefore cannot be summed, averaged or aggregated by any consumer, and a
+	// field whose only correct use needs that warning is one somebody eventually
+	// sums without it. Blocks tile the ACTIVE part of a session and do not overlap,
+	// so they can carry it; the block cutter's span is 20 minutes, which is also the
+	// span this level was measured at.
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped. It is the visibility the truncation
 	// lacked before this: the pre-existing inventory dimensions truncated
