@@ -21,13 +21,19 @@ package mockatlas
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +66,17 @@ type Server struct {
 	counts map[string]int
 	seq    map[string]int
 	polls  map[string]int
+	// grants are the browser sign-in codes /cli/signal/authorize minted, each
+	// bound to the PKCE challenge it was minted for. A claimed grant stays here
+	// marked used, so a replay is refused rather than falling through to the
+	// accept-any-code behaviour setup codes keep.
+	grants map[string]*browserGrant
 	mux    *http.ServeMux
+}
+
+type browserGrant struct {
+	challenge string
+	used      bool
 }
 
 // New builds a Server and creates its state directory.
@@ -79,6 +95,7 @@ func New(opts Options) (*Server, error) {
 		counts: map[string]int{},
 		seq:    map[string]int{},
 		polls:  map[string]int{},
+		grants: map[string]*browserGrant{},
 		mux:    http.NewServeMux(),
 	}
 
@@ -87,6 +104,8 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("/v1/cli/device/poll", s.handleDevicePoll)
 	s.mux.HandleFunc("/v1/cli/enroll", s.handleEnroll)
 	s.mux.HandleFunc("/v1/cli/onboarding", s.handleOnboarding)
+	// The browser sign-in's Atlas page, collapsed to its outcome.
+	s.mux.HandleFunc("GET /cli/signal/authorize", s.handleAuthorize)
 
 	// Publish + control plane: ingest token required.
 	for _, p := range IngestRoutes {
@@ -241,7 +260,8 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	s.count(r.URL.Path)
 	var body struct {
-		Code string `json:"code"`
+		Code         string `json:"code"`
+		CodeVerifier string `json:"code_verifier"`
 	}
 	raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	json.Unmarshal(raw, &body)
@@ -250,7 +270,92 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnauthorized, map[string]any{"error": "invalid setup code"})
 		return
 	}
+	// C2: claim first, then check. A browser code is consumed whether or not the
+	// verifier matches, so a code copied out of browser history and replayed
+	// without it is worthless and burns the code for everyone.
+	s.mu.Lock()
+	g, browser := s.grants[strings.TrimSpace(body.Code)]
+	claimed := browser && !g.used
+	if browser {
+		g.used = true
+	}
+	s.mu.Unlock()
+	if browser && (!claimed || !verifierMatches(body.CodeVerifier, g.challenge)) {
+		writeJSONStatus(w, http.StatusGone, map[string]any{"detail": "invalid or expired code"})
+		return
+	}
 	writeJSON(w, s.session())
+}
+
+func verifierMatches(verifier, challenge string) bool {
+	if verifier == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	return subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(sum[:])), []byte(challenge)) == 1
+}
+
+// C1's rules, ported from Atlas's valid_loopback_redirect and its siblings.
+// Go's `$` is end-of-text (never before a trailing newline), so these patterns
+// reject whitespace and control characters exactly as the contract requires.
+var (
+	loopbackRedirect = regexp.MustCompile(`^http://127\.0\.0\.1:([0-9]{4,5})/auth/callback$`)
+	validState       = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
+	validChallenge   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+)
+
+func validLoopbackRedirect(uri string) bool {
+	m := loopbackRedirect.FindStringSubmatch(uri)
+	if m == nil {
+		return false
+	}
+	port, err := strconv.Atoi(m[1])
+	return err == nil && port >= 1024 && port <= 65535
+}
+
+// handleAuthorize stands in for Atlas's /cli/signal/authorize page and its
+// POST /api/cli/authorize: validate, mint a code bound to the challenge, and
+// send the browser back. The real page waits for a Continue click; a mock with
+// no session has nobody to ask, so it redirects straight back.
+func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	s.count(r.URL.Path)
+	q := r.URL.Query()
+	redirect, state, challenge := q.Get("redirect_uri"), q.Get("state"), q.Get("code_challenge")
+	switch {
+	case !validLoopbackRedirect(redirect):
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"detail": "invalid_redirect_uri"})
+		return
+	case !validState.MatchString(state):
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"detail": "invalid_state"})
+		return
+	case !validChallenge.MatchString(challenge) || q.Get("code_challenge_method") != "S256":
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"detail": "invalid_challenge"})
+		return
+	}
+	code := setupShapedCode()
+	s.mu.Lock()
+	s.grants[code] = &browserGrant{challenge: challenge}
+	s.mu.Unlock()
+
+	// Built the way Atlas's enroll_code builds a pairing code: host/CODE.
+	host := strings.TrimPrefix(strings.TrimPrefix(s.baseURL(r), "https://"), "http://")
+	back := url.Values{"pairing_code": {host + "/" + code}, "state": {state}}
+	http.Redirect(w, r, redirect+"?"+back.Encode(), http.StatusFound)
+}
+
+// setupShapedCode is XXXX-XXXX from Atlas's 32-symbol alphabet.
+func setupShapedCode() string {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, 8)
+	rand.Read(b)
+	out := make([]byte, 0, 9)
+	for i, c := range b {
+		if i == 4 {
+			out = append(out, '-')
+		}
+		out = append(out, alphabet[int(c)%len(alphabet)])
+	}
+	return string(out)
 }
 
 func (s *Server) session() map[string]any {

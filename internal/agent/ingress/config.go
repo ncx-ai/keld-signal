@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
@@ -15,7 +16,8 @@ import (
 // Atlas host that minted it.
 //
 // ⚠️ IT CALLS THE SAME FUNCTIONS `keld login --code` and `keld signal setup`
-// already use — auth.ParsePairingCode, auth.LoginWithCode, and the
+// already use — auth.ParsePairingCode, auth.LoginWithCode (via pair(), which the
+// browser sign-in's GET /auth/callback shares), and the
 // Onboarding + config.SaveHookConfig pair that writes hook.json — never a
 // reimplementation of that flow. It deliberately does NOT run the tool-adapter
 // half of `keld signal setup` (detecting and rewriting Claude Code/Codex/
@@ -67,21 +69,59 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	if base == "" {
 		base = paths.APIBase()
 	}
-	a, err := auth.LoginWithCode(api.NewClient(base, ""), code)
+	a, err := pair(base, code, "")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "login_failed")
-		return
-	}
-
-	ob, err := api.NewClient(a.APIURL, a.AccessToken).Onboarding()
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "onboarding_failed")
-		return
-	}
-	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
-		writeError(w, http.StatusInternalServerError, "hook_write_failed")
+		var pe *pairError
+		errors.As(err, &pe)
+		switch pe.stage {
+		case pairLogin:
+			writeError(w, http.StatusBadRequest, "login_failed")
+		case pairOnboarding:
+			writeError(w, http.StatusBadGateway, "onboarding_failed")
+		default:
+			writeError(w, http.StatusInternalServerError, "hook_write_failed")
+		}
 		return
 	}
 
 	writeJSON(w, http.StatusOK, configResponse{Host: a.APIURL, RestartRequired: true})
+}
+
+// pairStage names which step of pair() failed, so each caller can say so in
+// its own vocabulary (a JSON error code for /v1/config, a fixed page for the
+// browser sign-in's return).
+type pairStage int
+
+const (
+	pairLogin      pairStage = iota // Atlas refused or never answered the redeem
+	pairOnboarding                  // the redeem worked; fetching the ingest token did not
+	pairHookWrite                   // hook.json could not be written
+)
+
+type pairError struct {
+	stage pairStage
+	err   error
+}
+
+func (e *pairError) Error() string { return e.err.Error() }
+func (e *pairError) Unwrap() error { return e.err }
+
+// pair is THE ONE WAY this daemon pairs itself with an Atlas: redeem the code
+// at base (with the PKCE verifier when the code came from a browser sign-in),
+// fetch the onboarding hand-off, and write auth.json + hook.json. Both
+// POST /v1/config and GET /auth/callback call it, so there is exactly one
+// definition of what a pairing writes. Every error is a *pairError.
+func pair(base, code, verifier string) (*auth.AuthData, error) {
+	a, err := auth.LoginWithCodeVerifier(api.NewClient(base, ""), code, verifier)
+	if err != nil {
+		return nil, &pairError{stage: pairLogin, err: err}
+	}
+	ob, err := api.NewClient(a.APIURL, a.AccessToken).Onboarding()
+	if err != nil {
+		return nil, &pairError{stage: pairOnboarding, err: err}
+	}
+	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
+		return nil, &pairError{stage: pairHookWrite, err: err}
+	}
+	return a, nil
 }
