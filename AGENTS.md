@@ -1066,9 +1066,9 @@ with nowhere to be told about Atlas. `POST /v1/config` plus daemon/onboarding.go
 the constraint, so the flag was protecting a dead end that no longer exists.
 `--headless` is kept ACCEPTED AND INERT — it asks for what already happens —
 because cobra fails hard on an unknown flag and scripts, runbooks and MDM
-payloads outlive a release. Both `onboard.command` and `onboard.cmd` pass
-`--login --yes` on their fallback path; they relied on the old default and would
-otherwise have silently stopped onboarding anyone whose setup code failed.
+payloads outlive a release. (`onboard.command` and `onboard.cmd`, which passed
+`--login --yes` on their fallback path, were deleted on 2026-09-29: no installer
+prompts for anything any more — see Gotchas → installers.)
 
 ## Repo layout
 
@@ -1264,11 +1264,11 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   imported keychain, and each p12 must bundle the **G2 intermediate**.
   ⚠️ **The pkg ships WITHOUT the sidecar** (notarizing its ~15k files queued a
   submission 4+ hours), and **the installer does not download it** — except
-  `postinstall` on a SILENT/MDM install. The daemon fetches it automatically, once
-  per run, **pinned to its own release** (`internal/sidecarinstall`;
-  `GET /v1/engine` reads DISK, `POST /v1/engine/install` answers 202); the page
-  reports and only a failure offers Try again. `plugin_test.sh` inverts the old
-  assertions so a download put back into the pane fails there.
+  `postinstall` on a command-line/MDM install (`COMMAND_LINE_INSTALL` set, or no
+  Installer.app running). The daemon fetches it automatically, once per run,
+  **pinned to its own release** (`internal/sidecarinstall`; `GET /v1/engine` reads
+  DISK, `POST /v1/engine/install` answers 202); the page reports and only a failure
+  offers Try again.
   ⚠️ **The two halves ship separately, so their versions are COMPARED:** the frozen
   tree carries a root-level `VERSION` stamp (not PyInstaller `datas`), the pkg
   replaces a sidecar on mismatch or when it has no stamp, and the daemon emits
@@ -1301,20 +1301,24 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   worker-spawn gate locally (Linux); CI's installer smoke does the same for every
   shipped OS. Any change touching the worker/spawn/freeze path must keep those
   green.
-- **macOS onboarding UI** happens inside the installer wizard
-  (`installers/macos/plugin/`), before the Install step — ⚠️ a pane cannot follow
-  it, so everything interactive is pre-install and `scripts/postinstall` does every
-  destructive step afterwards. Two silent failures (a `SectionOrder` entry missing
-  `.bundle`; a bundle signed before its executable was recompiled) are pinned by
-  `installers/macos/plugin_test.sh`. `postinstall` opens `onboard.command` only
-  when the pane never ran AND no `hook.json` exists — never on either alone. See
-  `docs/macos-wizard-onboarding.md`.
-- **Windows onboarding UI** is `installers/windows/onboard.cmd`, opened by the
-  `[Run]` step with `postinstall shellexec skipifsilent`; it reports success from
-  OBSERVED STATE (an `ingest_token` in `hook.json`), never an exit code. ⚠️ **Do
-  not re-add `runhidden` to that `[Run]` line** — it idled every Windows machine
-  forever. The Inno `[Code]` wizard page an older doc described **never existed**,
-  and nothing here is verified on Windows.
+- **Installers only install — no installer asks anything about Keld** (since
+  2026-09-29; `docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html`,
+  AC-10, D10). No sign-in, no setup code, no tool picker: Signal asks on first open
+  (sign in with Atlas, or use locally only) and the daemon's auto-setup
+  (`auto_setup_integrations`, default ON) configures detected tools. **macOS**: the
+  pkg has no Installer.app section (`installers/macos/plugin/` is deleted);
+  `postinstall` registers the agent and, on a GUI install only
+  (`COMMAND_LINE_INSTALL` unset AND Installer.app running), opens Keld Signal.app —
+  a command-line/MDM install fetches the engine and opens nothing. **Windows**: no
+  wizard page; `ssPostInstall` registers through `RunQuiet` unconditionally and
+  waits for the new `agent.json`; the one `[Run]` entry is `keld.exe signal open`,
+  `postinstall shellexec skipifsilent nowait` — ⚠️ **never `runhidden`** (it idled
+  every Windows machine once). **Linux/curl**: without `--code`, `install.sh` ends
+  with `keld signal open` where a person is at a screen. `onboard.command` and
+  `onboard.cmd` are deleted. **Every `--code` / MDM path is unchanged.**
+  `plugin_test.sh`, `onboard_command_test.sh`, `postinstall_test.sh` and
+  `keld_agent_iss_test.sh` pin the absence (inverted, not deleted). Only
+  statically verified: no CI job can click Installer.app or Inno.
   Full entries: **`docs/architecture/packaging-and-installers.md`**.
 - **Windows code signing is THREE passes, and the order is load-bearing.**
   Windows 11 ships Smart App Control on by default and SAC evaluates a binary **as
@@ -1398,7 +1402,7 @@ must not break, and only the linked file will tell you what it cost to learn.
 | Model backends, install defaults, dev blocks, delivery reliability | `docs/architecture/model-backends-and-install-defaults.md` |
 | Project attribution, and a block in every matching project | `docs/architecture/project-attribution.md` |
 | Sidecar resource safety and input bounding | `docs/architecture/sidecar-resource-safety.md` |
-| Packaging and installers: signing, notarization, sidecar version skew, onboarding UIs | `docs/architecture/packaging-and-installers.md` |
+| Packaging and installers: signing, notarization, sidecar version skew, installers that only install | `docs/architecture/packaging-and-installers.md` |
 | Auto-update | `docs/auto-update.md` |
 | What each lane buffers, replays and loses | `docs/durability.md` |
 

@@ -9,8 +9,19 @@ That rule is **AC-12** of the Signal Integrations spec
 is not only about CI. A wizard cannot be driven at scale and cannot be driven by
 a test: Playwright covers our own page, and nothing we own can click Apple's
 Installer, Inno's pages or a native window. **An onboarding step that exists
-only as a window is untestable and undeployable at once.** The wizards are
-shells around these same commands.
+only as a window is untestable and undeployable at once.**
+
+⚠️ **Since 2026-09-29 no installer asks anything about Keld** — no sign-in, no
+setup code, no tool picker
+(`docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html`, AC-10).
+There are two paths, and only the second is what this page is mostly about:
+
+- **Interactive** (double-click the pkg, run `keld-setup.exe`, `curl … | sh` in a
+  terminal): the installer installs, registers the service, and **opens Signal**.
+  Signal asks the one real question on first open — sign in with Atlas, or use it
+  locally only — and the daemon's auto-setup configures the AI tools it detects.
+- **Silent / MDM**: installs, registers, opens nothing, and is paired with
+  `keld-agent install --code <CODE>` — **unchanged**.
 
 ---
 
@@ -30,8 +41,8 @@ keld signal setup --yes         # point the AI tools at the daemon, with backups
 keld-agent install              # register the per-user service and start it
 ```
 
-`keld-agent install --code <CODE>` runs all three in one call. That is what the
-installers themselves invoke, and it is the single command an MDM payload needs
+`keld-agent install --code <CODE>` runs all three in one call. That is what
+`install.sh --code` invokes, and it is the single command an MDM payload needs
 once the package is on the machine.
 
 ---
@@ -45,27 +56,25 @@ keld signal setup --yes
 keld-agent install
 ```
 
-⚠️ **The silent path does NOT use the onboarding pane, and must not be written
-as if it could.** Since 2026-09 the pkg carries a custom Installer.app section
-(`installers/macos/plugin/`) ordered **before** the install step: it redeems the
-setup code, downloads the analysis sidecar with a progress bar, and asks which
-AI tools to configure. `installer -pkg` runs no UI at all, so:
+The pkg has **no Keld screen** — the Installer.app pane that used to sign people
+in and pick tools was removed on 2026-09-29. What `scripts/postinstall` does
+depends on how the install was started:
 
-- the pane never runs and writes no handoff file;
-- `scripts/postinstall` therefore sees `paired=false` and **configures no
-  tools**, which is correct — it must not act on a choice nobody made;
-- it still symlinks the CLIs, kicks off the sidecar fetch, and runs
-  `keld-agent install`, so the machine ends up **registered and unpaired** — the
-  documented `awaitConfig` idle state, not a crash;
-- its `onboard.command` fallback opens a **Terminal window**, which an
-  unattended machine cannot answer either.
+- `installer -pkg` sets `COMMAND_LINE_INSTALL` (`man installer`), so a silent
+  install is recognised as one. It symlinks the CLIs, starts the analysis-engine
+  fetch in the background, runs `keld-agent install`, and **opens nothing**. The
+  machine ends up **registered and unpaired**, collecting and holding what it
+  would send; the command above pairs it.
+- A double-clicked pkg (`COMMAND_LINE_INSTALL` unset **and** Installer.app
+  running) does the same minus the engine fetch — the daemon fetches that itself —
+  and then opens `/Applications/Keld Signal.app` for the console user.
+- An MDM agent that drives installd without `installer` sets neither, and is
+  treated as silent: nothing opens on a screen nobody clicked.
 
-So the three commands above are not a convenience: they are the only way to
-finish a silent macOS install. `keld signal setup` is what configures the tools
-the pane would otherwise have collected.
+`keld signal setup --yes` is still how a script configures the tools at once;
+without it the daemon's auto-setup does it within a poll.
 
-**What the pkg puts where:** `/usr/local/keld` (binaries + `VERSION` +
-`onboard.command`), symlinks in `/usr/local/bin`, `/Applications/Keld
+**What the pkg puts where:** `/usr/local/keld` (binaries + `VERSION`), symlinks in `/usr/local/bin`, `/Applications/Keld
 Signal.app`. The **analysis sidecar is not in the payload** — Apple's notary
 scans every one of its ~15,000 files — so `postinstall` fetches it into
 `~/.local/bin` in the background. A machine without it yet is *late*, not
@@ -91,8 +100,10 @@ after 30 days, so pinning one — or a machine running one fetching its own
 version's engine — stops working after that. Never put a `-` in a stable tag:
 every consumer, the publish workflow included, reads it as a pre-release.
 
-With a code it onboards non-interactively; without one it installs, registers
-the service, and prints the two commands that finish it. It **aborts** if the
+With a code it onboards non-interactively, exactly as before. Without one it
+installs, registers the service, and **opens Signal** (`keld signal open`) when a
+person is at a screen — a terminal, not CI, not SSH, and on Linux a `DISPLAY` or
+`WAYLAND_DISPLAY`; otherwise it prints `Open Signal: keld signal open`. It **aborts** if the
 analysis sidecar cannot be installed — without it Keld derives nothing from a
 transcript — and it refuses on a **checksum mismatch**, while a *missing*
 published checksum is a warning (see the reasoning in the script).
@@ -108,15 +119,17 @@ keld-agent.exe install --code "%CODE%"
 and the payload is the frozen sidecar's ~15,000 files, so that window lives for
 minutes on a machine nobody is watching.
 
-⚠️ **What the silent path runs, and what it deliberately does not.** The `.iss`
-has two `[Run]` entries. The first — `keld-agent.exe install --headless` — has
-no `skipifsilent` and **always** runs: it writes the v2 config, registers the
-`KeldAgent` logon task, starts the daemon and prompts for nothing. It is
-unconditional because putting registration behind the postinstall checkbox meant
-an MDM `/SILENT` push installed the files and **registered nothing**. The
-second — `onboard.cmd` — *is* `skipifsilent`, so no console opens at a human who
-is not there. A silently-installed machine is therefore registered and unpaired,
-and `keld-agent install --code <CODE>` from the management tool finishes it.
+⚠️ **What the silent path runs, and what it deliberately does not.** The
+installer asks nothing (its "Set up Keld" page and `onboard.cmd` were removed on
+2026-09-29). Registration — `keld-agent install --headless`, which writes the v2
+config, registers the `KeldAgent` logon task and starts the daemon — runs in
+`ssPostInstall` **unconditionally**, silent or not: putting it behind anything a
+person does once meant an MDM `/SILENT` push installed the files and
+**registered nothing**. The one `[Run]` entry, `keld.exe signal open`, is
+`skipifsilent`, so an interactive install ends with Signal open and a silent one
+opens nothing. A silently-installed machine is therefore registered and
+unpaired, and `keld-agent install --code <CODE>` from the management tool
+finishes it.
 
 Unlike macOS, the Windows payload **bundles** the sidecar, so there is nothing
 to fetch afterwards.
