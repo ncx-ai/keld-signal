@@ -7,9 +7,10 @@
 # the whole point of the criterion and it is a lesson this repo has already
 # paid for twice: `keld-agent install` can exit 0 having only registered the
 # scheduled task, and the Windows `[Run]` step exited 0 while every machine
-# idled on `awaitConfig` forever. `onboard.cmd` already states the rule — "claim
-# success only if it is true: setup is done when an ingest token exists in
-# hook.json" — and these scripts are the same rule applied to all three
+# idled on `awaitConfig` forever. The rule the old `onboard.cmd` stated (removed
+# 2026-09-29, when installers stopped signing in) still holds — "claim success
+# only if it is true: setup is done when an ingest token exists in hook.json" —
+# and these scripts are the same rule applied to all three
 # installers.
 #
 # So: the binaries are checked by RUNNING them, the service by asking the
