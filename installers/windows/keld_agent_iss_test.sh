@@ -7,7 +7,35 @@
 # hidden where no human can complete it. Both of those reached main.
 #
 # Run: bash installers/windows/keld_agent_iss_test.sh
-set -euo pipefail
+#
+# ⚠️ `pipefail` IS DELIBERATELY ABSENT, AND PUTTING IT BACK MAKES THIS SUITE
+# FAIL AT RANDOM ON CORRECT INPUT. Every assertion here pipes a variable into
+# `grep -q`, which exits on its FIRST match and closes the pipe; the writer then
+# takes EPIPE and returns non-zero, and pipefail hands that status to the whole
+# pipeline — so `<writer> | grep -q X || fail` FAILS ON A MATCH. It bites only
+# when the match is early and the payload outlasts the 64 KB pipe buffer, which
+# is what made it intermittent rather than obvious.
+#
+# Measured 2026-09-29: it took down `installer-guards` in CI on a branch whose
+# .iss was correct (run 36610376548) — "printf: write error: Broken pipe"
+# followed by a FAIL for a condition the workflow plainly satisfied. Reproduced
+# 200/200 with a 400 KB payload matching at byte 0, 0/200 with pipefail off, and
+# 0/300 with the same payload matching at the END. `| head -1` and `| tail -1`,
+# used throughout this file, have exactly the same shape.
+#
+# ⚠️ THE FALSE-FAILURE DIRECTION IS NOT THE DANGEROUS ONE. The negative
+# assertions read `if <writer> | grep -q X; then fail; fi` — there a match plus
+# EPIPE makes the pipeline non-zero, the `if` reads FALSE, and the guard
+# silently does NOT fire. A false pass, on exactly the condition it exists to
+# catch.
+#
+# Nothing is lost by dropping it: every assertion's verdict comes from the LAST
+# command in its pipeline, and a writer that produced nothing still reaches grep
+# as empty input, which fails the assertion the same way.
+#
+# ⚠️ `set -e` IS STILL ON, so the `|| true` on the command substitutions below
+# remains load-bearing — that was never a pipefail matter.
+set -eu
 d="$(cd "$(dirname "$0")" && pwd)"
 iss="$d/keld-agent.iss"
 cmd="$d/onboard.cmd"
@@ -54,7 +82,7 @@ reg_call="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss" \
 # 1a. It must NOT sit inside the `if Paired then` block. Checked structurally:
 #     the registration has to appear AFTER that block has closed.
 body="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss")"
-# ⚠️ `|| true` ON EVERY ONE. Under `set -euo pipefail` a command substitution
+# ⚠️ `|| true` ON EVERY ONE. Under `set -eu` a command substitution
 # whose grep matches nothing kills this script SILENTLY — exit 1, no message, no
 # indication which check died. That is strictly worse than a failed assertion,
 # because it looks like a crash rather than a finding, and it is what happened
@@ -377,8 +405,23 @@ grep -q 'name: Build the desktop app (Windows)' "$wf" || \
   fail "nothing builds the desktop app on the Windows leg; the Source above would never exist"
 # ⚠️ --bundles app is a macOS FORMAT; on Windows it would emit nsis/msi, i.e. a
 #    second installer beside keld-setup.exe. We want the bare executable.
-app_step="$(sed -n '/name: Build the desktop app (Windows)/,/name: Restore HuggingFace/p' "$wf")"
-printf '%s\n' "$app_step" | grep -q -- '--no-bundle' || \
+# ⚠️ BOUND THIS AT THE NEXT STEP HEADER, NOT AT A NAMED LATER STEP. This read
+#    `,/name: Restore HuggingFace/`, and the nearest such step AFTER the app
+#    build is 567 lines further down — so $app_step was 34 KB of unrelated
+#    workflow and the assertion below passed if ANY step in that span said
+#    --no-bundle. It also fed the pipefail race described at the top of this
+#    file: 34 KB to write with the match at byte 269. Measured 2026-09-29.
+app_step="$(awk '/^      - name: Build the desktop app \(Windows\)/{f=1; print; next}
+                 f && /^      - name:/{exit} f' "$wf")"
+[ -n "$app_step" ] || fail "cannot isolate the Windows app build step - this guard would pass vacuously"
+# ⚠️ STRIP THE # COMMENTS, OR THIS READS THE PROSE THAT EXPLAINS THE FLAG. The
+#    step carries two comment lines naming `--no-bundle` while justifying it, so
+#    the assertion passed with the flag deleted from the actual npx command.
+#    Verified by mutation 2026-09-29 — it was vacuous from the day it was
+#    written. Fifth occurrence of this exact defect in this file; see the note
+#    on it in 10e.
+app_cmd="$(printf '%s\n' "$app_step" | grep -v '^[[:space:]]*#' || true)"
+printf '%s\n' "$app_cmd" | grep -q -- '--no-bundle' || \
   fail "the Windows app build does not use --no-bundle - it would produce a second installer"
 
 # 10d. ⚠️ THE APP MUST OPEN WHEN THE INSTALLER FINISHES, AND THAT ENTRY'S FLAGS
