@@ -1,9 +1,5 @@
 package promptlog
 
-import (
-	"github.com/ncx-ai/keld-signal/internal/geminichat"
-)
-
 // The Gemini mirror. Gemini CLI's token-bearing event is `gemini_cli.api_response`
 // — NOT `api_request`, which is the request side and carries no tokens — and its
 // token attributes have their own spellings (`input_token_count` /
@@ -19,10 +15,8 @@ const eventGeminiAPIResponse = "gemini_cli.api_response"
 // observeGeminiFile mirrors the model turns a chat file has gained since the last
 // call.
 //
-// ⚠️ **GEMINI REWRITES THE WHOLE DOCUMENT ON EVERY TURN**, so there is no
-// appended-bytes cursor to read and the file must be re-parsed each poll. The
-// cursor here counts MODEL TURNS ALREADY MIRRORED — the same shape
-// `watch.scanDocument`'s prompt cursor takes, and for the same reason.
+// Which turns are new is freshGemini's decision, shared with the local count;
+// the mirror keeps its own cursor (t.gemini) so the two never move each other.
 //
 // The cursor is a cost control, not the dedup mechanism. Atlas keys a Gemini row
 // on a content HASH of its attributes, so what actually prevents a double count
@@ -31,22 +25,7 @@ const eventGeminiAPIResponse = "gemini_cli.api_response"
 // whole session therefore produces byte-identical rows that upsert onto
 // themselves — which is also why the cursor need not be persisted.
 func (t *Telemetry) observeGeminiFile(source, path string) {
-	s, ok := geminichat.Read(path)
-	if !ok {
-		// Unreadable, or caught mid-rewrite. A document has no valid prefix, so
-		// there is nothing to salvage; the next poll reads the file whole.
-		return
-	}
-
-	t.mu.Lock()
-	done := t.gemini[path]
-	if done > len(s.Responses) {
-		done = 0 // a new session reusing the path, or a truncation
-	}
-	fresh := s.Responses[done:]
-	t.gemini[path] = len(s.Responses)
-	t.mu.Unlock()
-
+	s, fresh := freshGemini(&t.mu, t.gemini, path)
 	if len(fresh) == 0 {
 		return
 	}

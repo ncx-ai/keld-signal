@@ -83,112 +83,26 @@ type codexEventMsg struct {
 }
 
 func (t *Telemetry) observeCodexLine(path string, line []byte) {
-	var ln codexLine
-	if json.Unmarshal(line, &ln) != nil {
-		return
+	switch s := stepCodex(&t.mu, t.codex, path, line); s.kind {
+	case codexStepPrompt:
+		t.observeCodexPrompt(s)
+	case codexStepPriced:
+		t.observeCodexPriced(s)
 	}
-	switch ln.Type {
-	case "session_meta":
-		var p codexSessionMeta
-		if json.Unmarshal(ln.Payload, &p) != nil {
-			return
-		}
-		id := p.ID
-		if id == "" {
-			id = p.SessionID
-		}
-		if id == "" {
-			return
-		}
-		t.mu.Lock()
-		st := t.codexStateLocked(path)
-		st.sessionID, st.cliVersion, st.originator, st.seeded = id, p.CLIVersion, p.Originator, true
-		st.subagent = p.ThreadSource == "subagent"
-		t.mu.Unlock()
-		return
-	case "turn_context":
-		var p codexTurnContext
-		if json.Unmarshal(ln.Payload, &p) != nil {
-			return
-		}
-		t.mu.Lock()
-		st := t.codexStateLocked(path)
-		if p.Model != "" {
-			st.model = p.Model
-		}
-		st.turnID = p.TurnID
-		t.mu.Unlock()
-		return
-	case "event_msg":
-		// handled below
-	default:
-		return
-	}
+}
 
-	if _, ok := watch.CodexHumanTurn(ln.Payload); ok {
-		t.observeCodexPrompt(path, line, ln)
-		return
-	}
-
-	var ev codexEventMsg
-	if json.Unmarshal(ln.Payload, &ev) != nil || ev.Type != "token_count" {
-		return
-	}
-	// ⚠️ `info` is NULLABLE on a real token_count record (Codex writes one with
-	// no usage at all when the context is cleared). A nil deref here would take
-	// down the watcher's observe hook for the whole poll.
-	if ev.Info == nil || ev.Info.Last == nil {
-		return
-	}
-	last := ev.Info.Last
-	total := 0
-	if ev.Info.Total != nil {
-		total = ev.Info.Total.TotalTokens
-	}
-
-	t.mu.Lock()
-	st := t.codexSeededLocked(path, line)
-	// ⚠️ **936 OF 10,061 REAL `token_count` RECORDS ARE RE-EMISSIONS.** Measured
-	// over the 23 most recent rollouts on this machine, 936 records (9.3%) repeat
-	// the previous record's `total_token_usage` EXACTLY while still carrying a
-	// non-zero `last_token_usage` — Codex re-states the counter without a new
-	// request having happened. Pricing every record double-counts those.
-	// `total_token_usage` is cumulative and is therefore the honest gate: take
-	// the record only where it ADVANCED. On the same corpus, summing the priced
-	// records' usage reconciles with the session's own final total on 22 of 23
-	// rollouts; the 23rd is the one rollout whose total DECREASED, which is a
-	// context reset and is admitted below for that reason.
-	if total != 0 && total == st.lastTotal {
-		t.mu.Unlock()
-		return
-	}
-	if total != 0 {
-		st.lastTotal = total
-	}
-	sessionID, model, cliVersion, originator, turnID := st.sessionID, st.model, st.cliVersion, st.originator, st.turnID
-	t.mu.Unlock()
-
-	if sessionID == "" {
-		return // a rollout whose head we could not read names nothing Atlas can group on
-	}
-
-	// Codex sends NO request id of its own, so Atlas's dedup falls through to a
-	// content hash of the whole attribute set. Supplying a request_id derived
-	// from the record alone gives it a stable natural key instead, and the
-	// rollout ordinal disambiguates the (rare) two records sharing a
-	// millisecond.
-	requestID := sessionID + "@" + ln.Timestamp
-	if ln.Ordinal != nil {
-		requestID += "#" + itoa(*ln.Ordinal)
-	}
-
+// observeCodexPriced mirrors one priced token_count record as
+// `codex.sse_event` / `response.completed`. Which records are priced is
+// stepCodex's decision, shared with the local count.
+func (t *Telemetry) observeCodexPriced(s codexStep) {
+	last, st, ln := s.last, s.st, s.ln
 	attrs := []kv{
 		attr("event.name", eventCodexSSE),
 		attr("event.kind", "response.completed"),
 		attr("event.timestamp", ln.Timestamp),
-		attr("conversation.id", sessionID),
-		attr("request_id", requestID),
-		attr("model", model),
+		attr("conversation.id", st.sessionID),
+		attr("request_id", codexRequestKey(st.sessionID, ln)),
+		attr("model", st.model),
 		attrInt("input_tokens", last.InputTokens),
 		attrInt("cached_tokens", last.CachedInputTokens),
 		attrInt("cache_write_tokens", last.CacheWriteInputTokens),
@@ -196,11 +110,11 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 		attrInt("reasoning_output_tokens", last.ReasoningOutput),
 		attrInt("total_tokens", last.TotalTokens),
 	}
-	if cliVersion != "" {
-		attrs = append(attrs, attr("app.version", cliVersion))
+	if st.cliVersion != "" {
+		attrs = append(attrs, attr("app.version", st.cliVersion))
 	}
-	if turnID != "" {
-		attrs = append(attrs, attr("turn.id", turnID))
+	if st.turnID != "" {
+		attrs = append(attrs, attr("turn.id", st.turnID))
 	}
 	ns := timeNano(ln.Timestamp)
 	rec := logRecord{
@@ -210,30 +124,9 @@ func (t *Telemetry) observeCodexLine(path string, line []byte) {
 		SeverityText:         "INFO",
 		Attributes:           pruneEmpty(attrs),
 	}
-	t.postLogs(codexResource(originator, cliVersion), []logRecord{rec})
+	t.postLogs(codexResource(st.originator, st.cliVersion), []logRecord{rec})
 	// No metrics: Atlas prices Codex entirely off this log record, and there is
 	// no captured Codex metric name to mirror — inventing one would be a guess.
-}
-
-// codexSeededLocked returns the rollout's state, seeding it from the file head
-// when this mirror started reading mid-file — the way watch/codex.go recovers
-// its session_meta. Without the running total the first record after a daemon
-// restart cannot be told from a re-emission. Called with t.mu held; releases
-// and re-acquires it around the file read.
-func (t *Telemetry) codexSeededLocked(path string, line []byte) *codexState {
-	st := t.codexStateLocked(path)
-	if st.seeded {
-		return st
-	}
-	t.mu.Unlock()
-	head := codexHead(path, line)
-	t.mu.Lock()
-	st = t.codexStateLocked(path)
-	if !st.seeded {
-		*st = head
-		st.seeded = true
-	}
-	return st
 }
 
 // observeCodexPrompt mirrors one genuine human turn as `codex.user_prompt`.
@@ -254,49 +147,34 @@ func (t *Telemetry) codexSeededLocked(path string, line []byte) *codexState {
 //
 // Never the text: the predicate and the rune count come from the watcher's own
 // exported helpers, and privacy_test.go's Codex canary rides this path.
-func (t *Telemetry) observeCodexPrompt(path string, line []byte, ln codexLine) {
-	t.mu.Lock()
-	st := t.codexSeededLocked(path, line)
-	sessionID, model, cliVersion, originator, turnID, sub := st.sessionID, st.model, st.cliVersion, st.originator, st.turnID, st.subagent
-	t.mu.Unlock()
-	if sessionID == "" || sub {
+func (t *Telemetry) observeCodexPrompt(s codexStep) {
+	st, ln := s.st, s.ln
+	if st.sessionID == "" || st.subagent {
 		return
 	}
+	turnID := st.turnID
 	if id, _ := watch.CodexHumanTurn(ln.Payload); id != "" {
 		turnID = id
-	}
-	requestID := sessionID + "@" + ln.Timestamp
-	if ln.Ordinal != nil {
-		requestID += "#" + itoa(*ln.Ordinal)
 	}
 	attrs := []kv{
 		attr("event.name", eventCodexUserPrompt),
 		attr("event.timestamp", ln.Timestamp),
-		attr("conversation.id", sessionID),
-		attr("request_id", requestID),
-		attr("model", model),
+		attr("conversation.id", st.sessionID),
+		attr("request_id", codexRequestKey(st.sessionID, ln)),
+		attr("model", st.model),
 		attrInt("prompt_length", watch.CodexHumanTurnLength(ln.Payload)),
 	}
-	if cliVersion != "" {
-		attrs = append(attrs, attr("app.version", cliVersion))
+	if st.cliVersion != "" {
+		attrs = append(attrs, attr("app.version", st.cliVersion))
 	}
 	if turnID != "" {
 		attrs = append(attrs, attr("turn.id", turnID))
 	}
 	ns := timeNano(ln.Timestamp)
-	t.postLogs(codexResource(originator, cliVersion), []logRecord{{
+	t.postLogs(codexResource(st.originator, st.cliVersion), []logRecord{{
 		TimeUnixNano: ns, ObservedTimeUnixNano: ns, SeverityNumber: 9, SeverityText: "INFO",
 		Attributes: pruneEmpty(attrs),
 	}})
-}
-
-func (t *Telemetry) codexStateLocked(path string) *codexState {
-	st := t.codex[path]
-	if st == nil {
-		st = &codexState{}
-		t.codex[path] = st
-	}
-	return st
 }
 
 // codexHead scans a rollout from the start for the state a mid-file reader
