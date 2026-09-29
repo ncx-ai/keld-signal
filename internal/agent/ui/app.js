@@ -2596,7 +2596,7 @@ if (typeof document !== "undefined") {
         el(
           "p",
           { class: "ov-note" },
-          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Work before ${formatDateHeading(loadedFrom)} is shaded "not loaded", not zero.`
+          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Tokens and spend are complete; repositories, projects and the histogram before ${formatDateHeading(loadedFrom)} are shaded "not loaded", not zero.`
         )
       );
     }

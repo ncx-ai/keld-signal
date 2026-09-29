@@ -1,4 +1,43 @@
+import fs from "node:fs";
+import path from "node:path";
 import { test, expect } from "./support/fixtures";
+
+/** Every request in the generated corpus, read straight off its transcripts:
+ *  one per (session, request id), from its first line, as Claude Code writes
+ *  a request's usage on every line of it. Independent of the daemon's reader. */
+function corpusRequests(dir: string): { count: number; tokens: number; unnamed: number } {
+  const seen = new Set<string>();
+  let tokens = 0;
+  let unnamed = 0;
+  const walk = (d: string): string[] =>
+    fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".jsonl") ? [path.join(d, e.name)] : []));
+  for (const file of walk(dir)) {
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      if (!line.includes('"usage"')) continue;
+      let r: any;
+      try {
+        r = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const u = r.type === "assistant" && r.message && r.message.usage;
+      const id = r.requestId || (r.message && r.message.id);
+      if (!u || !id || seen.has(`${r.sessionId}|${id}`)) continue;
+      seen.add(`${r.sessionId}|${id}`);
+      tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+      if (!r.message.model) unnamed++;
+    }
+  }
+  return { count: seen.size, tokens, unnamed };
+}
+
+/** app.js's formatVolume, for comparing a tile against a count. */
+function formatVolume(v: number): string {
+  if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+  return `${v}`;
+}
 
 // The Overview, as a person sees it: Signal opens on it, it draws the range
 // they last picked, and every figure on it comes from the same ledger the
@@ -94,9 +133,18 @@ test.describe("Overview", () => {
     await page.route(/\/v1\/ledger\?since=\d+&limit=2000$/, (route) =>
       route.fulfill({ json: { generated_at: new Date().toISOString(), health: [], blocks, pending: [] } })
     );
+    // Usage that starts well before the range, so a capped column is one with
+    // data whose blocks were not loaded — not one with no usage at all.
+    await page.route(/\/v1\/usage\?since=\d+&until=\d+$/, (route) =>
+      route.fulfill({ json: { bucket_seconds: 300, backfill_done: true, sources: { claude_code: { first_at: now - 30 * 86400 } },
+        buckets: [{ at: now - 1800, source: "claude_code", transcript: "s0", model: "m", requests: 1, tokens: { input: 1, output: 1, cache_read: 0, cache_creation: 0 }, estimate_usd: 0.01 }] } })
+    );
     await signal.open("overview");
     await expect(page.getByText(/oldest were not loaded/)).toBeVisible();
-    expect(await page.locator(".ov-col.not-loaded").count()).toBeGreaterThanOrEqual(1);
+    // Tokens come from requests, which the cap does not touch; the splits read
+    // off blocks are the ones it cuts.
+    await page.getByRole("toolbar", { name: "Split" }).getByRole("button", { name: "By project" }).click();
+    expect(await page.locator('.ov-col.not-loaded[title$="· not loaded"]').count()).toBeGreaterThanOrEqual(1);
   });
 
   test("a past range the row cap never reached says it was not loaded, not that it was empty", async ({ signal, page }) => {
@@ -126,6 +174,34 @@ test.describe("Overview", () => {
     await page.reload();
     await expect(page.getByText(/showing this range as it was last loaded/)).toBeVisible();
     await expect(page.locator(".ov-tile")).toHaveCount(4);
+  });
+
+  // T17: tokens are counted per request. The Overview's Tokens tile is the sum
+  // of the corpus's own requests, the daemon's /v1/usage agrees with the
+  // transcripts, and no request that names a model shows as "no model".
+  test("T17: the Tokens tile is the corpus's requests, and none is 'no model'", async ({ signal, page, state }) => {
+    const corpus = corpusRequests(path.join(state.work, "corpus"));
+    expect(corpus.count).toBeGreaterThan(0);
+    expect(corpus.unnamed).toBe(0);
+    const now = Math.floor(Date.now() / 1000);
+    const res = await page.request.get(`${state.baseURL}/v1/usage?since=0&until=${now + 86400}`, {
+      headers: { "x-keld-agent-secret": state.secret },
+    });
+    expect(res.ok()).toBe(true);
+    const usage = await res.json();
+    const served = usage.buckets.reduce(
+      (acc: { n: number; t: number }, b: any) => ({ n: acc.n + b.requests, t: acc.t + b.tokens.input + b.tokens.output + b.tokens.cache_read + b.tokens.cache_creation }),
+      { n: 0, t: 0 }
+    );
+    expect(served).toEqual({ n: corpus.count, t: corpus.tokens });
+    expect(usage.buckets.filter((b: any) => !b.model)).toHaveLength(0);
+
+    await signal.open("overview");
+    const tokensTile = page.locator(".ov-tile").nth(0);
+    await expect(tokensTile.locator(".v")).toContainText(formatVolume(corpus.tokens));
+    await tokensTile.hover();
+    await expect(tokensTile.locator(".ov-breakdown")).toBeVisible();
+    await expect(tokensTile.locator(".ov-blabel", { hasText: "no model" })).toHaveCount(0);
   });
 
   for (const width of [1280, 400]) {

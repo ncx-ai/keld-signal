@@ -2,10 +2,15 @@ package daemon
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,5 +159,108 @@ func TestBackfillSendsNothingToAtlas(t *testing.T) {
 	}
 	if got := len(requestRows(t, store)); got != 4 {
 		t.Fatalf("backfill wrote %d requests, want 4", got)
+	}
+}
+
+// T8: the local table and the Atlas mirror, fed by the same parse, sum to the
+// same tokens — the mirror's records read the way Atlas reads them
+// (services/codex.py and gemini.py subtract the cached prefix; thoughts bill
+// as output).
+func TestTableAndMirrorSumTheSame(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	var bodies []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/logs") {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	all := map[string]bool{"claude_code": true, "codex": true, "gemini_cli": true}
+	tel := promptlog.New(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", func() string { return "tok" }, all)
+	store := ledger.New()
+	rec := usage.New(store, priceStored)
+	line, doc := transcriptObservers(tel, rec)
+	feedTranscript(t, line, "claude_code", "claude_code_session.jsonl")
+	feedTranscript(t, line, "codex", "codex_rollout.jsonl")
+	feedTranscript(t, line, "codex", "codex_reemission.jsonl")
+	doc("gemini_cli", filepath.Join("..", "promptlog", "testdata", "gemini_session.json"))
+	rec.Flush()
+
+	type sums struct{ in, out, cr, cc, n int64 }
+	mirror := map[string]*sums{}
+	for _, body := range bodies {
+		var p struct {
+			ResourceLogs []struct {
+				ScopeLogs []struct {
+					LogRecords []struct {
+						Attributes []struct {
+							Key   string `json:"key"`
+							Value struct {
+								S string `json:"stringValue"`
+								I string `json:"intValue"`
+							} `json:"value"`
+						} `json:"attributes"`
+					} `json:"logRecords"`
+				} `json:"scopeLogs"`
+			} `json:"resourceLogs"`
+		}
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		for _, rl := range p.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, lr := range sl.LogRecords {
+					a := map[string]string{}
+					for _, kv := range lr.Attributes {
+						a[kv.Key] = kv.Value.S + kv.Value.I
+					}
+					n := func(k string) int64 { v, _ := strconv.ParseInt(a[k], 10, 64); return v }
+					var src string
+					var s sums
+					switch a["event.name"] {
+					case "api_request":
+						src = "claude_code"
+						s = sums{n("input_tokens"), n("output_tokens"), n("cache_read_tokens"), n("cache_creation_tokens"), 1}
+					case "codex.sse_event":
+						src = "codex"
+						s = sums{n("input_tokens") - n("cached_tokens"), n("output_tokens"), n("cached_tokens"), n("cache_write_tokens"), 1}
+					case "gemini_cli.api_response":
+						src = "gemini_cli"
+						s = sums{n("input_token_count") - n("cached_content_token_count"),
+							n("output_token_count") + n("thoughts_token_count"), n("cached_content_token_count"), 0, 1}
+					default:
+						continue
+					}
+					m := mirror[src]
+					if m == nil {
+						m = &sums{}
+						mirror[src] = m
+					}
+					m.in, m.out, m.cr, m.cc, m.n = m.in+s.in, m.out+s.out, m.cr+s.cr, m.cc+s.cc, m.n+s.n
+				}
+			}
+		}
+	}
+	table := map[string]*sums{}
+	for _, r := range requestRows(t, store) {
+		m := table[r.Source]
+		if m == nil {
+			m = &sums{}
+			table[r.Source] = m
+		}
+		m.in, m.out, m.cr, m.cc, m.n = m.in+r.Input, m.out+r.Output, m.cr+r.CacheRead, m.cc+r.CacheCreation, m.n+1
+	}
+	if len(table) != 3 || len(mirror) != 3 {
+		t.Fatalf("sources: table %d, mirror %d, want all three in both", len(table), len(mirror))
+	}
+	for src, want := range mirror {
+		if got := table[src]; got == nil || *got != *want {
+			t.Fatalf("%s: table %+v, mirror %+v", src, got, want)
+		}
 	}
 }
