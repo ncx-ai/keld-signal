@@ -104,6 +104,29 @@ type WindowAnalysis struct {
 	// synthesize over 11,575 tool-free turns). The vocabulary is OPEN for that
 	// reason, and `unclassified` is the instrument: a population it does not fit
 	// announces itself by its residual, with no labels and no transcripts.
+	//
+	// ⚠️ ATLAS ACCEPTS THIS AND WILL SHOW NOTHING, WHICH IS EXPECTED, NOT A BUG.
+	// Checked against keld-atlas origin/main on 2026-09-29, by RUNNING the
+	// validators rather than reading them:
+	//   - Both ingests are lenient. `BlockIn` declares extra="ignore"; the
+	//     enrichment path's `EnrichmentIn` declares no model_config and so gets
+	//     pydantic v2's default. An extra field is dropped, never a 422, and the
+	//     untouched body is stored as raw JSONB on both routes.
+	//   - But Atlas filters inventories through TWO FIXED LISTS and this key is in
+	//     neither: `INVENTORY_KEYS` (services/blocks.py) decides what reaches the
+	//     `Block.inventories` column, and `PUBLISHED_INVENTORY_LEVELS`
+	//     (web/lib/workstream-catalog.ts) decides what the UI can describe. So the
+	//     field arrives, lands in `raw`, and is SILENTLY ABSENT from the column and
+	//     the catalog.
+	// It therefore fails QUIET on the Atlas side. Seeing no activity classes in
+	// Atlas after this merges is the expected state, not evidence of a Signal bug.
+	// Making it usable needs an Atlas change (both lists, plus a re-POST or
+	// backfill to populate the column for blocks already stored) and is not
+	// attempted here.
+	//
+	// ⚠️ The enrichment route's leniency is an UNDECLARED DEFAULT, not a contract:
+	// nothing Atlas-side pins it, and anyone adding extra="forbid" to
+	// `EnrichmentIn` would turn this additive field into a 422 on live traffic.
 	ActivityClasses []NameCount
 	Dimensions      map[string]Labeled
 	Dynamics        map[string]Dynamic
