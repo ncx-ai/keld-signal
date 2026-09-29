@@ -40,6 +40,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/singleton"
+	"github.com/ncx-ai/keld-signal/internal/agent/usage"
 	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -1392,12 +1393,19 @@ func Run(ctx context.Context) error {
 		// hour is one fact, not three hundred, and the count rides `fields`.
 		tel.OnDrop(mirrorDropReporter(emitter, tel.Dropped))
 		offer := watchOffer(q)
-		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
+		// The local per-request count rides the same two hooks and ALWAYS
+		// runs — unpaired, Atlas off, either `tool_otlp` setting — because it
+		// is what the page's tokens and spend are summed from
+		// (docs/v3/contracts.md → `requests`). It reads the same parse as the
+		// mirror with its own bookkeeping, so it cannot move what Atlas gets.
+		rec := usage.New(sig.ledger, priceStored)
+		go rec.Run(ctx, watch.PollFromEnv())
+		observe, observeDoc := transcriptObservers(tel, rec)
 		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its
 		// usage mirror cannot ride the per-line observe hook — same telemetry,
 		// other seam. (WS3 owns which sources are mirrored, via tel.SetSources.)
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv()).
-			WithDocumentObserver(tel.ObserveFile).
+			WithDocumentObserver(observeDoc).
 			// The lane record's real seam: a first sighting offers no pointer,
 			// so without this a session that lived entirely between two polls
 			// read `broken · watcher` while capturing perfectly.

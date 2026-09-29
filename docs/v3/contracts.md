@@ -163,6 +163,9 @@ Rules:
 - A `ledger_meta` row, `requests_backfill_done`, records that the one-time backfill of
   transcripts on disk finished. It lives in this file, so deleting `ledger.db` refills it.
 - Local only. Nothing in this table is sent to Atlas; the mirror sends its own records.
+- Fed by the transcript watcher (`internal/agent/usage`), whatever the pairing, Send to
+  Atlas or `tool_otlp` say. It stops only where the watcher does: `ml_backend: "off"`
+  or `KELD_WATCH=0`.
 
 Spec: `docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html`.
 
