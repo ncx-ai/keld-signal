@@ -2,3 +2,4 @@ node_modules/
 .e2e-work/
 test-results/
 playwright-report/
+playwright-report-signin/

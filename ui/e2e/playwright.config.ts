@@ -54,12 +54,14 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport },
-      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
+      // signin/firstrun run under signin.config.ts, against their own unpaired daemons.
+      testIgnore: /(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport },
-      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
+      // signin/firstrun run under signin.config.ts, against their own unpaired daemons.
+      testIgnore: /(not-running|devgen|map-project|integrations|signin|firstrun)\.spec\.ts$/,
     },
     {
       // The page with NO daemon behind it: a tiny static server serves the
