@@ -257,6 +257,18 @@
    "cache_write": 6.25e-06,
    "cache_read": 5e-07
   },
+  "claude-opus-5-5": {
+   "in": 4e-06,
+   "out": 2e-05,
+   "cache_write": 5e-06,
+   "cache_read": 2e-07
+  },
+  "claude-opus-5-5@default": {
+   "in": 4e-06,
+   "out": 2e-05,
+   "cache_write": 5e-06,
+   "cache_read": 2e-07
+  },
   "claude-opus-5@default": {
    "in": 5e-06,
    "out": 2.5e-05,

@@ -57,3 +57,62 @@ func (s *Store) BackfillSessionDims(session string, d Dims, at time.Time) {
 		return nil
 	})
 }
+
+// RepriceUnpriced prices every measured block that names a model but carries a
+// $0 estimate, wherever `price` now knows that model, and returns how many rows
+// it changed.
+//
+// ⚠️ **A block is priced ONCE, at measurement, so a model the price table
+// learns later stays $0 forever without this.** Measured 2026-09-29: 85 Claude
+// Opus 5.5 blocks, 805M tokens in 30 days, all at $0 because the table
+// predated the model. The row keeps the model and all four token classes, so
+// this is the same arithmetic the measurement would have done — exact, not an
+// estimate of an estimate — and the ledger and the page keep reading one
+// number.
+//
+// Touches only rows where it can do something true: a model this table still
+// does not know keeps $0 (never a guessed rate), a block with no model is left
+// alone, and a block that already has a price is never re-priced.
+func (s *Store) RepriceUnpriced(price func(model string, input, output, cacheRead, cacheCreation int64) (float64, bool)) int {
+	db := s.handle()
+	if db == nil {
+		return 0
+	}
+	type row struct {
+		session         string
+		start           int64
+		model           string
+		in, out, cr, cc int64
+	}
+	rows, err := db.Query(`SELECT session, start, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+		FROM blocks WHERE measured_status = ? AND model != '' AND estimate_usd = 0`, string(StatusOK))
+	if err != nil {
+		s.logFailure("RepriceUnpriced", err)
+		return 0
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.session, &r.start, &r.model, &r.in, &r.out, &r.cr, &r.cc); err == nil {
+			todo = append(todo, r)
+		}
+	}
+	rows.Close()
+
+	n := 0
+	s.tx("RepriceUnpriced", func(txn *sql.Tx) error {
+		for _, r := range todo {
+			usd, ok := price(r.model, r.in, r.out, r.cr, r.cc)
+			if !ok || usd <= 0 {
+				continue
+			}
+			if _, err := txn.Exec(`UPDATE blocks SET estimate_usd=? WHERE session=? AND start=? AND estimate_usd = 0`,
+				usd, r.session, r.start); err != nil {
+				return err
+			}
+			n++
+		}
+		return nil
+	})
+	return n
+}

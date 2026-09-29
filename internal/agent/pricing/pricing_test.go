@@ -91,3 +91,18 @@ func TestSnapshotIsPopulatedAndDated(t *testing.T) {
 		}
 	}
 }
+
+// Opus 5.5 was not in the upstream table when this snapshot was taken, and on
+// one machine it carried 805M tokens in 30 days at $0 (2026-09-29). Its rates
+// ride scripts/refresh-prices.py's PENDING_UPSTREAM until LiteLLM lists it.
+func TestOpus55IsPriced(t *testing.T) {
+	usd, ok := Estimate("claude-opus-5-5", Tokens{Input: 1_000_000, Output: 1_000_000, CacheRead: 1_000_000, CacheCreation: 1_000_000})
+	if !ok {
+		t.Fatal("claude-opus-5-5 must have an estimate")
+	}
+	// $4 in + $20 out + $0.20 cache read + $5 cache write (1.25x input, the
+	// Opus rows' own ratio).
+	if want := 29.20; usd < want-1e-9 || usd > want+1e-9 {
+		t.Fatalf("want $%.2f, got $%.4f", want, usd)
+	}
+}
