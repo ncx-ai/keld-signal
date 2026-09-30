@@ -1187,6 +1187,60 @@ the code. A wrong criterion is recorded as <span class="mono">MISSED</span>, wit
 </div>
 <p class="small" style="color:var(--muted);font-size:13px">Numbers I chose rather than measured, open to change: browser codes live 120 s, Signal holds at most 4 pending sign-ins for 10 min, the canary runs every 6 h.</p>
 
+<h2 id="prs">Pull requests</h2>
+<p class="lede">Added 2026-09-30. State as read from GitHub that day. None of this work's PRs is
+open yet; this is what opening them (<a href="#a-1">A1</a>) involves.</p>
+
+<h3>Open PRs today that touch the same ground</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Repo · PR</th><th>What it does</th><th>How it meets this work</th></tr></thead>
+<tbody>
+  <tr><td class="mono">keld-atlas #305</td><td>Edge hardening: real client IP, token redaction, security headers, CSP, read-only root filesystem.</td><td>No shared files, but a new CSP and headers could change how the authorize page behaves. Merge it <strong>before</strong> ours and re-run the local end-to-end suite.</td></tr>
+  <tr><td class="mono">keld-atlas #277</td><td>Moves the Bedrock collector to its own repo (yours; your local checkout's old branch).</td><td>Shares <span class="mono">.github/workflows/ci.yml</span> only. Either order; the second one rebases.</td></tr>
+  <tr><td class="mono">keld-atlas #302 #306 #307 #309 #247</td><td>Admin token usage, admin refunds, an alert fix, quarter-end tests, SDK card text.</td><td>No overlap. Independent.</td></tr>
+  <tr><td class="mono">keld-atlas-canary #6 #7</td><td>Reasoning tokens for TTFT; keep canary jobs under a billed minute, heartbeat gets an env input.</td><td>Share <span class="mono">README.md</span> and <span class="mono">tests/heartbeat.spec.ts</span> with ours. Merge them first; ours rebases.</td></tr>
+  <tr><td class="mono">keld-signal</td><td>No open PRs. #53–#57 merged since this branch was cut (Overview, per-request usage, Windows desktop app, installer-guards fix, Codex in conformance).</td><td>Main moved 56 commits under us.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Before opening: bring each branch up to main</h3>
+<p>A trial merge against today's <span class="mono">main</span> conflicts in every repo. Each branch
+is merged with <span class="mono">main</span>, conflicts resolved, and every suite re-run before its PR opens.</p>
+<div class="wrap">
+<table>
+<thead><tr><th>Branch</th><th>Conflicts with main</th><th>Why</th></tr></thead>
+<tbody>
+  <tr><td class="mono">keld-signal feat/web-signin</td><td class="mono">internal/agent/ui/app.js · installers/windows/keld_agent_iss_test.sh</td><td>#53/#54 reworked the page; #55 ships the Windows desktop app, so the Windows installer should open <strong>that app</strong>, not <span class="mono">keld signal open</span>.</td></tr>
+  <tr><td class="mono">keld-atlas feat/signal-web-signin</td><td class="mono">services/web/app/login/* · services/web/app/signup/finish/*</td><td>#304 moved those forms to react-hook-form + zod.</td></tr>
+  <tr><td class="mono">keld-atlas-canary feat/signal-signin</td><td class="mono">README.md · src/browser/login.ts</td><td>Main gained its own <span class="mono">src/browser/login.ts</span>; keep one helper, not two.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>This work's PRs, and the order to merge them</h3>
+<ol>
+  <li><strong>keld-atlas — <span class="mono">feat/signal-web-signin</span> → main.</strong> 17 commits, 27 files. After #305.
+    Adds the authorize page and the two authorize routes, binds browser codes to a verifier, closes the
+    <span class="mono">/\evil.com</span> redirect in all three <span class="mono">next</span> checks, and keeps a new
+    Google/GitHub signup on its way back to Signal. Also: approve only pending grants (a fix beyond the
+    plan), the prod-promotion gate in report mode, and the post-deploy canary dispatch. Inert until a
+    Signal build links to it.</li>
+  <li><strong>keld-atlas-canary — <span class="mono">feat/signal-signin</span> → main.</strong> 6 commits, 11 files. After #6 and #7, and after Atlas reaches dev.
+    Adds the <span class="mono">signal-signin</span> check for dev and prod every 6 hours, a small
+    stand-in for Signal that does the loopback return, and the shipped-binary step, switched off until
+    the Signal release.</li>
+  <li><strong>keld-signal — <span class="mono">feat/web-signin</span> → main, or a release branch for an RC first.</strong> 31 commits, 74 files. Last.
+    Adds the start/callback/state routes and the shared pairing function, the first-open choice and
+    sign-in on the Signal page, and the mock-Atlas and real-Atlas Playwright suites plus a CI job.
+    Removes every installer's sign-in: the macOS installer screen, the Windows "Set up Keld" page and
+    both onboarding scripts. <span class="mono">--code</span> is unchanged.</li>
+</ol>
+<p class="small" style="color:var(--muted);font-size:13px">Why this order: Atlas must be live before any
+Signal build points at it, and the canary needs Atlas on dev to go green. Signal goes last because its
+installers stop asking for sign-in the moment it ships.</p>
+
 <h2 id="actions">What's left — actions, one by one</h2>
 <p class="lede">Added 2026-09-30, after the review. The code is built, merged on the three integration
 branches and green; nothing is pushed. Each item below is one step to discuss and take in order.
