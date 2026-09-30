@@ -44,7 +44,7 @@ def frame(root, tag, store, out):
                 print(f"  skip {fn}: {type(e).__name__}", file=sys.stderr)
                 continue
             for b in ans.get("blocks", []):
-                inv = (b.get("dimensions") or {}).get("inventory") or {}
+                inv = b.get("inventory") or {}
                 out.write(json.dumps({
                     "corpus": tag,
                     "session": b.get("session"),
