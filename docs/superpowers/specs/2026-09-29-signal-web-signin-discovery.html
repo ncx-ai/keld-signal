@@ -1187,4 +1187,73 @@ the code. A wrong criterion is recorded as <span class="mono">MISSED</span>, wit
 </div>
 <p class="small" style="color:var(--muted);font-size:13px">Numbers I chose rather than measured, open to change: browser codes live 120 s, Signal holds at most 4 pending sign-ins for 10 min, the canary runs every 6 h.</p>
 
+<h2 id="actions">What's left — actions, one by one</h2>
+<p class="lede">Added 2026-09-30, after the review. The code is built, merged on the three integration
+branches and green; nothing is pushed. Each item below is one step to discuss and take in order.
+Answers get recorded here with the date.</p>
+
+<figure><div class="wrap">
+<svg viewBox="0 0 880 250" role="img" aria-label="Rollout order in three lanes. Atlas lane: A1 push and open the Atlas pull request, A2 merge and deploy Atlas to dev and then prod with the gate only reporting. Canary lane: A3 add the two canary tokens to keld-atlas, A4 merge the canary pull request so its first dev run goes green, A5 turn the gate to enforce. Signal lane: A6 manual installs on a spare Mac and a Windows machine, A7 cut the Signal release candidate and switch on the shipped-binary canary. Arrows show Atlas going first, the canary second, and Signal last.">
+  <defs>
+    <marker id="r-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-ink"/></marker>
+  </defs>
+  <text x="20" y="44" class="lanelbl">ATLAS</text>
+  <text x="20" y="124" class="lanelbl">CANARY</text>
+  <text x="20" y="204" class="lanelbl">SIGNAL</text>
+  <line x1="20" y1="84" x2="860" y2="84" class="lane"/>
+  <line x1="20" y1="164" x2="860" y2="164" class="lane"/>
+  <rect x="90" y="18" width="170" height="52" rx="4" class="b-daemon"/>
+  <text x="175" y="40" text-anchor="middle" class="bold">A1 push + PRs</text>
+  <text x="175" y="58" text-anchor="middle" class="small">Atlas, canary, Signal</text>
+  <path d="M260 44H296" class="arr" marker-end="url(#r-ah)"/>
+  <rect x="296" y="18" width="190" height="52" rx="4" class="b-daemon"/>
+  <text x="391" y="40" text-anchor="middle" class="bold">A2 Atlas → dev → prod</text>
+  <text x="391" y="58" text-anchor="middle" class="small">gate only reports</text>
+  <rect x="296" y="98" width="130" height="52" rx="4" class="b-enc"/>
+  <text x="361" y="120" text-anchor="middle" class="bold">A3 tokens</text>
+  <text x="361" y="138" text-anchor="middle" class="small">2 secrets</text>
+  <path d="M426 124H456" class="arr" marker-end="url(#r-ah)"/>
+  <rect x="456" y="98" width="170" height="52" rx="4" class="b-enc"/>
+  <text x="541" y="120" text-anchor="middle" class="bold">A4 canary merged</text>
+  <text x="541" y="138" text-anchor="middle" class="small">first green dev run</text>
+  <path d="M626 124H656" class="arr" marker-end="url(#r-ah)"/>
+  <rect x="656" y="98" width="204" height="52" rx="4" class="b-enc"/>
+  <text x="758" y="120" text-anchor="middle" class="bold">A5 gate → enforce</text>
+  <text x="758" y="138" text-anchor="middle" class="small">SIGNIN_CANARY_GATE</text>
+  <path d="M391 70V96" class="arr" marker-end="url(#r-ah)"/>
+  <rect x="456" y="178" width="190" height="52" rx="4" class="b-good"/>
+  <text x="551" y="200" text-anchor="middle" class="bold">A6 manual installs</text>
+  <text x="551" y="218" text-anchor="middle" class="small">spare Mac + Windows</text>
+  <path d="M646 204H676" class="arr" marker-end="url(#r-ah)"/>
+  <rect x="676" y="178" width="184" height="52" rx="4" class="b-good"/>
+  <text x="768" y="200" text-anchor="middle" class="bold">A7 Signal RC</text>
+  <text x="768" y="218" text-anchor="middle" class="small">+ real-binary canary</text>
+  <path d="M486 50H641V176" class="arr" marker-end="url(#r-ah)"/>
+  <text x="500" y="42" class="small">Atlas live on dev first</text>
+</svg></div>
+<figcaption>Atlas goes first and sits inert until Signal links to it. The gate is switched on only
+after the canary has proved itself on dev. Signal ships last, because its installers stop asking
+for sign-in and the new flow needs Atlas already live.</figcaption>
+</figure>
+
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Action</th><th>Why</th><th>Needs</th><th>Done when</th></tr></thead>
+<tbody>
+  <tr id="a-1"><td class="mono">A1</td><td>Push the three integration branches and open PRs: keld-atlas <span class="mono">feat/signal-web-signin</span>, keld-atlas-canary <span class="mono">feat/signal-signin</span>, keld-signal <span class="mono">feat/web-signin</span>.</td><td>Nothing leaves this Mac until then. CI (conformance, the new <span class="mono">ui-e2e-signin</span> job) only runs on a push.</td><td>Your go-ahead. Signal's PR base: <span class="mono">main</span> or a <span class="mono">release/v3.0.x</span> branch for an RC first. PRs #53/#54 are also open against main and may conflict.</td><td>Three PRs open, CI green on each.</td></tr>
+  <tr id="a-2"><td class="mono">A2</td><td>Merge the Atlas PR; let it reach dev, then promote to prod.</td><td>The authorize page and routes are inert until a Signal build links to them, so shipping early is safe.</td><td>A review of the Atlas PR. The gate reports only, so promotion is not blocked.</td><td>atlas-dev and atlas.keld.co serve <span class="mono">/cli/signal/authorize</span>.</td></tr>
+  <tr id="a-3"><td class="mono">A3</td><td>Add <span class="mono">CANARY_READ_TOKEN</span> (Actions: read) and <span class="mono">CANARY_DISPATCH_TOKEN</span> (Contents: write) to keld-atlas, both scoped to keld-atlas-canary.</td><td>The gate reads the canary's result; the dev deploy asks the canary to run.</td><td>Someone with org admin to mint a fine-grained token or GitHub App. Documented in keld-atlas <span class="mono">docs/cicd.md</span>.</td><td>Both secrets listed in keld-atlas.</td></tr>
+  <tr id="a-4"><td class="mono">A4</td><td>Merge the canary PR.</td><td><span class="mono">signal-signin.yml</span> only runs from the default branch. Its prod leg fails until A2 reaches prod — expected.</td><td>A2 on dev at least.</td><td>A green dev run of <span class="mono">signal-signin</span>, and <span class="mono">canary_check_success{check="signal_signin"}</span> in the Pushgateway.</td></tr>
+  <tr id="a-5"><td class="mono">A5</td><td>Set the keld-atlas variable <span class="mono">SIGNIN_CANARY_GATE=enforce</span>.</td><td>This is D4 made real: prod promotion waits for a green dev sign-in.</td><td>A3 and A4 done.</td><td>A promote-prod run shows the gate enforced and passing.</td></tr>
+  <tr id="a-6"><td class="mono">A6</td><td>Manual installs: the pkg on a spare Mac or VM, the exe on a Windows VM. Each twice — by double-click, and silently with <span class="mono">--code</span>. Plus one sign-in in Safari and in Firefox.</td><td>Finishes AC-10. Checks what no test here can: the installer shows no Keld screen, opens Signal, tells a GUI install from a silent one, and the browser allows the return to 127.0.0.1 (§8 #6).</td><td>A spare Mac/VM and a Windows VM — not this Mac, whose Signal the pkg would replace. A dev build of the pkg/exe from the Signal PR.</td><td>A written pass/fail per check, added here.</td></tr>
+  <tr id="a-7"><td class="mono">A7</td><td>Cut a Signal release candidate from the merged branch, then set <span class="mono">SIGNAL_SIGNIN_REAL_BINARY=true</span> in keld-atlas-canary.</td><td>Ships the button, the first-open screen and the installer changes together (D7). The canary then signs in the shipped binary, closing AC-11.</td><td>A1, A2 and A6 done.</td><td>The canary's <span class="mono">signin-real-binary</span> step green on dev.</td></tr>
+  <tr id="a-8"><td class="mono">A8</td><td>Turn on required status checks for <span class="mono">main</span> in keld-signal and keld-atlas.</td><td>Finishes AC-9. Neither repo requires any check today, so a red test cannot block a merge.</td><td>Your choice of which checks: at least Signal's <span class="mono">test</span> + <span class="mono">ui-e2e-signin</span>, Atlas's <span class="mono">api-tests</span> + <span class="mono">web-tests</span>.</td><td>A PR with a failing check cannot be merged.</td></tr>
+  <tr id="a-9"><td class="mono">A9</td><td>Send the canary's <span class="mono">atlas-dev-deployed</span> event from ncx-ai/infrastructure's <span class="mono">deploy-atlas-dev.yml</span> on success, and drop the early one in keld-atlas <span class="mono">ci.yml</span>.</td><td>Today it fires when the deploy starts, so that run tests the previous build.</td><td>A change in the infrastructure repo.</td><td>The canary's post-deploy run tests the build just deployed.</td></tr>
+  <tr id="a-10"><td class="mono">A10</td><td>Switch the local keld-atlas checkout back from <span class="mono">feat/signal-web-signin</span> to <span class="mono">chore/extract-bedrock-collector</span>, when you want.</td><td>It was switched so the local stack could serve the new code for the end-to-end tests.</td><td>Nothing. Migrations 0097–0100 stay applied to the local database.</td><td>Your local Atlas runs the branch you want.</td></tr>
+  <tr id="a-11"><td class="mono">A11</td><td>Small follow-ups, each its own ticket: the restart bar after "Use locally only"; the inert installer <span class="mono">api_url</span> input.</td><td>Found in review; neither blocks.</td><td>Nothing now.</td><td>Tickets filed.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="small" style="color:var(--muted);font-size:13px">Already filed: <a href="https://app.notion.com/p/3ea0f0c5fd608169b96bed8b3f6e3cf8">setup-code guessing limit</a> (D5) and <a href="https://app.notion.com/p/3ea0f0c5fd6081a4b449cf1a8153f4a5">server-side token revoke</a> (D6).</p>
+
 </main>
