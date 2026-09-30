@@ -1005,6 +1005,16 @@ export function axisTop(v) {
   return Number((nice * exp * 3).toPrecision(12));
 }
 
+/** Axis tick labels: axisTop makes every tick round, so "600.0M" and
+ *  "$180.00" carry zeros that say nothing. Tiles and summaries keep the full
+ *  formatVolume / formatUSD. */
+export function axisLabelTokens(v) {
+  return formatVolume(v).replace(/\.0(?=[KMB]?$)/, "");
+}
+export function axisLabelUSD(v) {
+  return formatUSD(v).replace(/\.00$/, "");
+}
+
 const MIN_HOUR_COLUMNS = 4;
 
 function hourBuckets(win, items, blocks) {
@@ -2450,11 +2460,11 @@ if (typeof document !== "undefined") {
     }
 
     const ticks = [1, 2 / 3, 1 / 3];
-    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatVolume(series.topTokens * t))), el("span", {}, "0"));
+    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, axisLabelTokens(series.topTokens * t))), el("span", {}, "0"));
     const rightAxis = el(
       "div",
       { class: "ov-axis right mono" },
-      ...ticks.map((t) => el("span", {}, series.topUsd ? formatUSD(series.topUsd * t) : "")),
+      ...ticks.map((t) => el("span", {}, series.topUsd ? axisLabelUSD(series.topUsd * t) : "")),
       el("span", {}, "$0")
     );
 
