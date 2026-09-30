@@ -2431,7 +2431,7 @@ if (typeof document !== "undefined") {
     // ⚠️ A range with blocks but no measured tokens has no scale to draw
     // against; an axis reading "0" top to bottom would be a chart of nothing.
     if (!series.maxTokens) {
-      return el("section", { class: "ov-chart" }, head, summary, el("p", { class: "ov-note" }, "No requests recorded in this range yet."));
+      return el("section", { class: "ov-chart ov-chart-empty" }, head, summary, el("p", { class: "ov-note" }, "No requests recorded in this range yet."));
     }
 
     const ticks = [1, 2 / 3, 1 / 3];
@@ -2540,9 +2540,9 @@ if (typeof document !== "undefined") {
     const meta = split === "tokens" ? "20-minute cells · one row per day · shaded by the block's tokens" : `20-minute cells · one row per day · ${SPLITS.find((s) => s.key === split).label.toLowerCase()}`;
     return el(
       "section",
-      { class: "ov-hist" },
+      { class: "ov-hist", style: `--rows:${rows.length}` },
       el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Histogram"), el("span", { class: "ov-meta mono" }, meta)),
-      el("div", { class: "ov-hbody" }, ...rows, hours),
+      el("div", { class: "ov-hbody" }, el("div", { class: "ov-hgrid" }, ...rows), hours),
       split === "tokens" ? levelLegend(grid.categories) : el("div", { class: "ov-legend mono" }, ...grid.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
     );
   }
@@ -4219,6 +4219,9 @@ if (typeof document !== "undefined") {
     // content in a box. A class here is what keeps that impossible rather than
     // careful.
     document.body.classList.toggle("pane-today", pane === "today");
+    // The Overview fills the window the same way: the chart takes what is
+    // left, the histogram sits at the bottom (see app.css, body.pane-overview).
+    document.body.classList.toggle("pane-overview", pane === "overview");
     const root = document.getElementById("paneRoot");
     if (pane === "overview") renderOverview(root);
     else if (pane === "today") renderToday(root);

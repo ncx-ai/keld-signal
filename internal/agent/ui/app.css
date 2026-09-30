@@ -788,21 +788,80 @@ fieldset:disabled { opacity: .55; }
    zero-height so it can never make its row taller than the cells in it. The
    cells keep a legible minimum and scroll inside the section on a narrow
    screen rather than shrinking to dots. */
-.ov-hbody { display: grid; gap: 2px; margin-top: 10px; overflow-x: auto; }
-.ov-hrow, .ov-hhours { display: grid; grid-template-columns: 58px minmax(720px, 1fr); gap: 10px; align-items: center; }
+.ov-hbody { margin-top: 10px; overflow-x: auto; }
+/* Rows are square cells at their natural size — one row for a day, seven for a
+   week — and SHRINK, never overflow, when the window cannot fit them under the
+   chart: the row track is 1fr of a grid whose height is a flex basis. --cell is
+   the width of one cell, so the natural height is exactly square. */
+.ov-hbody { --cell: 14px; }
+@supports (width: 1cqw) {
+  .ov-hist { container-type: inline-size; }
+  .ov-hbody { --cell: max(10px, calc((100cqw - 210px) / 72)); }
+}
+.ov-hgrid {
+  display: grid; gap: 2px;
+  grid-template-rows: repeat(var(--rows), minmax(0, 1fr));
+  height: calc(var(--rows) * var(--cell) + (var(--rows) - 1) * 2px);
+}
+.ov-hrow, .ov-hhours { display: grid; grid-template-columns: 58px minmax(720px, 1fr); gap: 10px; align-items: stretch; min-height: 0; }
 .ov-hhours { margin-top: 4px; }
 .ov-hlabel {
-  height: 0; display: flex; align-items: center; justify-content: flex-end; overflow: visible;
+  height: 0; align-self: center; display: flex; align-items: center; justify-content: flex-end; overflow: visible;
   font-size: 9.5px; line-height: 1; color: var(--muted); white-space: nowrap;
 }
 .ov-hcells { display: grid; grid-template-columns: repeat(72, minmax(0, 1fr)); gap: 2px; }
-.ov-cell { aspect-ratio: 1; max-width: 100%; border-radius: 2px; background: var(--ov-empty); }
+.ov-cell { min-height: 0; border-radius: 2px; background: var(--ov-empty); }
 .ov-hrow.not-loaded .ov-hcells { background: var(--ov-not-loaded); }
 .ov-hrow.not-loaded .ov-cell { background: transparent; }
 .ov-hhours div { display: grid; grid-template-columns: repeat(4, 1fr); font-size: 10px; color: var(--muted); }
 .ov-hist .ov-legend { margin-left: 68px; }
 .ov-levels > span:first-child { gap: 3px; }
 .ov-levels > span:first-child .ov-key { width: 10px; height: 10px; }
+
+/* ---- The Overview fills the window: body.pane-overview (set in route()) ----
+   The pane-today pattern above, for a chart and a histogram instead of a list.
+   The chart takes the height the window leaves (never below 30% of it); the histogram sits at the bottom at its natural height, and on a window
+   too short for both its rows get shorter rather than the page running past
+   the bottom. A window shorter than even that scrolls inside the pane. */
+/* Desktop widths only: on a phone the tiles alone are taller than the screen,
+   so fitting the window would squash the histogram while the page scrolls
+   anyway. There the pane stays an ordinary scrolling document. */
+@media (min-width: 721px) {
+  body.pane-overview { overflow: hidden; }
+  body.pane-overview .shell { height: 100vh; min-height: 0; }
+  body.pane-overview main { min-height: 0; display: flex; flex-direction: column; }
+  /* The PANE scrolls, not .ov: a scroller clips at its padding box, and the
+     chart's right-axis labels hang into the pane's gutter (a scrolling .ov cut
+     "$1099.37" to "$1099.3" at 400px). */
+  body.pane-overview .pane-root { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 16px; overflow-y: auto; }
+  /* Exactly the pane's height (min-height 0: a flex column's automatic minimum is
+     its content's NATURAL height, which would stop the histogram shrinking). On a
+     window shorter than the floors below, the children overflow it, visibly, and
+     the pane scrolls. */
+  body.pane-overview .ov { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  body.pane-overview .ov > * { flex: 0 0 auto; }
+  body.pane-overview .ov-chart:not(.ov-chart-empty) { flex: 1 1 0; min-height: max(240px, 30vh); display: flex; flex-direction: column; }
+  body.pane-overview .ov-frame { flex: 1 1 auto; min-height: 0; }
+  body.pane-overview .ov-axis { height: auto; padding-bottom: 21px; }
+  body.pane-overview .ov-main { display: flex; flex-direction: column; min-height: 0; }
+  body.pane-overview .ov-plot { flex: 1 1 auto; height: auto; min-height: 120px; }
+  body.pane-overview .ov-x { flex: none; height: 15px; line-height: 15px; }
+  /* The histogram may shrink only to its rows' floor. ⚠️ `.ov-hbody` scrolls
+     sideways, and a scrolling flex item's automatic minimum height is ZERO, so
+     without an explicit floor it clipped a month's last rows instead of letting
+     the pane scroll (seen at 1280x720). The floor is the rows plus the hour line,
+     and the section's own adds its head and legend (~80px). */
+  body.pane-overview .ov-hist { flex: 0 1 auto; min-height: calc(var(--rows) * 7px + 100px); display: flex; flex-direction: column; }
+  body.pane-overview .ov-hbody { flex: 0 1 auto; min-height: calc(var(--rows) * 7px + 20px); display: flex; flex-direction: column; }
+  body.pane-overview .ov-hgrid { flex: 0 1 auto; min-height: calc(var(--rows) * 7px); }
+  /* When the rows shrink (a month on a short window), the day labels shrink with
+     them so neighbours never overlap: 100cqh is the grid's own height. */
+  @supports (height: 1cqh) {
+    body.pane-overview .ov-hgrid { container-type: size; }
+    body.pane-overview .ov-hlabel { font-size: clamp(6.5px, calc(100cqh / var(--rows) - 1px), 9.5px); }
+  }
+  body.pane-overview .ov-hhours { flex: none; }
+}
 
 @media (max-width: 720px) {
   .ov-tiles { grid-template-columns: repeat(2, 1fr); }
