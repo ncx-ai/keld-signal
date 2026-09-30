@@ -137,3 +137,13 @@ test("the axis top leaves headroom and lands on a round number", async () => {
   assert.equal(s.topTokens, axisTop(s.maxTokens));
   assert.equal(s.topUsd, axisTop(s.maxUsd));
 });
+
+// Axis ticks are round numbers, so they are written without trailing zeros.
+test("axis tick labels drop the trailing zeros a round number does not need", async () => {
+  const { axisLabelTokens, axisLabelUSD } = await import("../app.js");
+  assert.equal(axisLabelTokens(600e6), "600M");
+  assert.equal(axisLabelTokens(1.5e9), "1.5B");
+  assert.equal(axisLabelTokens(0), "0");
+  assert.equal(axisLabelUSD(180), "$180");
+  assert.equal(axisLabelUSD(1.5), "$1.50");
+});
