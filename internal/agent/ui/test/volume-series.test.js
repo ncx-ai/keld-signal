@@ -123,3 +123,21 @@ test("late in the evening the four hours end at midnight rather than running pas
   const s = series([block({ h: 22 })], today, "tokens");
   assert.deepEqual(s.columns.map((c) => c.label), ["20:00", "21:00", "22:00", "23:00"]);
 });
+
+// The tallest bar never touches the top: the axis ends at a round number at
+// least 10% above the largest value, with three even ticks below it.
+test("the axis top leaves headroom and lands on a round number", async () => {
+  const { axisTop } = await import("../app.js");
+  assert.equal(axisTop(490.7e6), 600e6, "3 × 200M");
+  assert.equal(axisTop(146.01), 180, "3 × 60");
+  assert.equal(axisTop(1000), 1200, "3 × 400");
+  assert.equal(axisTop(0), 0);
+  for (const v of [1, 7, 33.4e6, 1.4e9, 999, 1234.5]) {
+    const top = axisTop(v);
+    assert.ok(top >= v * 1.1, `${v}: top ${top} leaves under 10%`);
+    assert.ok(top <= v * 1.6, `${v}: top ${top} wastes the chart`);
+  }
+  const s = volumeSeries([block({ usd: 2 })], week, "tokens", catalog);
+  assert.equal(s.topTokens, axisTop(s.maxTokens));
+  assert.equal(s.topUsd, axisTop(s.maxUsd));
+});
