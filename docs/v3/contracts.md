@@ -61,6 +61,12 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
 ```
 
 Rules: a cell that never happened is **absent from `cells`**, never `{"status":"failed"}`.
+`measured.model` is the model that served most of the block's requests — the sidecar's
+leading value **whatever its evidence status** (since 2026-09-29; until then a block under the
+5-observation floor recorded `""` and so no price). A model is read off each request, not
+inferred, so the floor that governs a *published* dimension does not apply to pricing. The
+block published to Atlas still carries its `model` dimension with its own status. `""` now
+means no request named a model, and rows written before the change keep their `""`.
 `estimate_usd` is 0 when no price applies; the page prints "est." on every dollar figure
 regardless. `pending` holds sessions for which blocks could not be asked for at all.
 
@@ -115,8 +121,89 @@ Three rules, and each was paid for:
   machine running both passes, which will not exist until this ships. A consumer that
   renders one of them as "the" project is making that decision on evidence nobody has.
 
+### `dims` — the block's repository and branch, added 2026-09-28
+
+```json
+"dims": {"repo": "github.com/ncx-ai/keld-signal", "branch": "main"}
+```
+
+The values `Observe` already stores for the Projects pane (`dim_repo`, `dim_branch`),
+now read back so the Overview can split work by repository. Each key is present only
+when a value is stored, and `dims` itself is **absent** when neither is — a Codex
+block, or a row cut before its dims arrived. Absent means "no repository recorded",
+never an empty string to be shown. The workspace dim is not served: nothing on the
+page reads it. Loopback only; the same identifiers already published to Atlas as
+dimension values. Spec: `docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html`.
+
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).
+
+## `requests` (`~/.keld/state/ledger.db`) — one row per model request, added 2026-09-29
+
+The Overview counts tokens and spend **per request**, not per block. Each row is one
+model request read off a transcript by `promptlog.Parser` — the same parse the Atlas
+mirror uses, with bookkeeping of its own.
+
+| Column | Meaning |
+|---|---|
+| `source` | `claude_code`, `cowork`, `codex` or `gemini_cli` (closed set) |
+| `session` | the tool's session id |
+| `request_key` | the tool's own id for the request: Claude Code's `requestId`; Codex `session@timestamp#ordinal`; Gemini's message id |
+| `ts` | the request's own instant, unix milliseconds (indexed) |
+| `model` | as the transcript names it; `''` when it names none, and the row is still counted |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` | Atlas's normalisation: input is fresh input, disjoint from the cache classes; output includes reasoning |
+| `estimate_usd` | priced at write with `pricing.Estimate`; `0` for a model the table does not know, re-priced when it learns one |
+
+Rules:
+
+- **Primary key `(source, session, request_key)`, insert-or-ignore.** A key is read off
+  the transcript, never a counter, so re-reading a transcript adds nothing.
+- **Rows are kept for good.** No rollup, no pruning. A deleted transcript keeps its rows.
+- **Only what the table holds is shown.** Days before a source's first row show no usage.
+- A `ledger_meta` row, `requests_backfill_done`, records that the one-time backfill of
+  transcripts on disk finished. It lives in this file, so deleting `ledger.db` refills it.
+- Local only. Nothing in this table is sent to Atlas; the mirror sends its own records.
+- **Size, measured 2026-09-29.** ~310 bytes a row with its indexes. This machine makes
+  ~1,200 requests a day (36,472 in the last 30 days), so three years is ~1.3M rows, ~400 MB.
+  At ten times that rate for three years (`requests_scale_test.go`, 9.25M rows, 2.7 GB): a
+  30-day `/v1/usage` read 731 ms, each source's first request 2 ms, the startup re-price
+  under 1 ms (partial index on unpriced rows), doctor's row count 3.6 s.
+- `keld signal status` and `doctor` print one line: rows, since when, and the ledger's
+  size in use, read-only off disk.
+- Fed by the transcript watcher (`internal/agent/usage`), whatever the pairing, Send to
+  Atlas or `tool_otlp` say. It stops only where the watcher does: `ml_backend: "off"`
+  or `KELD_WATCH=0`. `KELD_USAGE=0` switches the recorder and the backfill off on
+  their own; the Atlas mirror is unaffected and rows already written stay.
+
+Spec: `docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html`.
+
+## `GET /v1/usage?since=<unix>&until=<unix>` — per-request usage, added 2026-09-29
+
+```json
+{
+  "since": 1790000000, "until": 1790604800, "bucket_seconds": 300,
+  "backfill_done": true,
+  "sources": {"claude_code": {"first_at": 1788000000}, "codex": {"first_at": 1789000000}},
+  "buckets": [
+    {"at": 1790000100, "source": "claude_code", "transcript": "2a3adbf8-…", "model": "claude-opus-5",
+     "requests": 3, "tokens": {"input": 12, "output": 900, "cache_read": 81000, "cache_creation": 4000},
+     "estimate_usd": 0.41}
+  ]
+}
+```
+
+The `requests` table summed per **5-minute bucket**, per source, transcript and model,
+for `since <= ts < until` (both required, unix seconds). Sums rather than rows because a
+month here is ~25,000 requests; the sums are exact for the page, since every block edge
+sits on a 5-minute epoch boundary and every timezone offset is a multiple of 15 minutes.
+
+- `transcript` is the file's own name, the way a block row names its session
+  (`blocks.SessionIDFor`). The page joins a bucket to the block of that session whose
+  `[start, end)` holds `at`, for repo and projects; no such block means none.
+- `sources[s].first_at` is the source's earliest request ever held. The page shows no
+  usage for a source before it (D2).
+- `backfill_done` is false while the one-time read of transcripts on disk is running.
+- `model` is `""` when the transcript named none. Loopback only, secret-gated.
 
 ## The page's own conventions — settled 2026-09-05, after lane D asked
 

@@ -125,7 +125,9 @@ installer asks nothing (its "Set up Keld" page and `onboard.cmd` were removed on
 config, registers the `KeldAgent` logon task and starts the daemon — runs in
 `ssPostInstall` **unconditionally**, silent or not: putting it behind anything a
 person does once meant an MDM `/SILENT` push installed the files and
-**registered nothing**. The one `[Run]` entry, `keld.exe signal open`, is
+**registered nothing**. Exactly one `[Run]` entry then applies — the Keld Signal
+desktop app when the build shipped it (`Check: AppPresent`), otherwise
+`keld.exe signal open` (`Check: not AppPresent`, a browser tab) — and both are
 `skipifsilent`, so an interactive install ends with Signal open and a silent one
 opens nothing. A silently-installed machine is therefore registered and
 unpaired, and `keld-agent install --code <CODE>` from the management tool

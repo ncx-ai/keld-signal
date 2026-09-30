@@ -109,6 +109,7 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// the interval; see daemon/devgen.go for why that is the button's whole
 	// correctness, not a shortcut.
 	setBlockSweep(em.SweepPath)
+	setBlockModelLookup(em.ModelsFor)
 	go em.Run(ctx, interval)
 	return em.Advance
 }

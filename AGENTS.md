@@ -1311,9 +1311,10 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   (`COMMAND_LINE_INSTALL` unset AND Installer.app running), opens Keld Signal.app —
   a command-line/MDM install fetches the engine and opens nothing. **Windows**: no
   wizard page; `ssPostInstall` registers through `RunQuiet` unconditionally and
-  waits for the new `agent.json`; the one `[Run]` entry is `keld.exe signal open`,
-  `postinstall shellexec skipifsilent nowait` — ⚠️ **never `runhidden`** (it idled
-  every Windows machine once). **Linux/curl**: without `--code`, `install.sh` ends
+  waits for the new `agent.json`; then exactly one `[Run]` entry opens Signal —
+  the desktop app (`Check: AppPresent`) or, when the build has none, `keld.exe
+  signal open` (`Check: not AppPresent`), both `postinstall skipifsilent` —
+  ⚠️ **never `runhidden`** (it idled every Windows machine once). **Linux/curl**: without `--code`, `install.sh` ends
   with `keld signal open` where a person is at a screen. `onboard.command` and
   `onboard.cmd` are deleted. **Every `--code` / MDM path is unchanged.**
   `plugin_test.sh`, `onboard_command_test.sh`, `postinstall_test.sh` and

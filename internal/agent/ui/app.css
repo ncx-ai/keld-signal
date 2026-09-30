@@ -735,3 +735,190 @@ fieldset:disabled { opacity: .55; }
   0%   { margin-left: -30%; }
   100% { margin-left: 100%; }
 }
+
+/* ---- Overview (docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html) ----
+   New rules only, all under `.ov`, so no rule above this line changes. The
+   split palette is the 2C design's own; it is scoped here rather than added to
+   :root because nothing else on the page uses it. */
+.ov {
+  --ov-c1: #4E9A6B;
+  --ov-c2: #E0A458;
+  --ov-c3: #6E8FC9;
+  --ov-several: #8E7CC3;
+  --ov-other: #B9B4A7;
+  --ov-none: #DCD8CD;
+  --ov-unknown: repeating-linear-gradient(135deg, #CFCABD 0 2px, #EDEAE2 2px 5px);
+  --ov-cache: #A8CCAF;
+  --ov-fresh: var(--green-strong);
+  /* Token shades, lightest to darkest — the design system's own greens. */
+  --ov-t1: #C5E2CA;
+  --ov-t2: #7DBB8A;
+  --ov-t3: #2D7A48;
+  --ov-t4: #1A4D24;
+  --ov-empty: var(--deep);
+  --ov-not-loaded: repeating-linear-gradient(135deg, var(--rule) 0 2px, transparent 2px 6px);
+}
+.ov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 0 0 16px; }
+.ov-title { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+.ov-dates { color: var(--muted); font-size: 14px; margin-left: 10px; white-space: nowrap; }
+.ov-range-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ov-range { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 6px; overflow: hidden; }
+.ov-range button {
+  border: 0; border-right: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+  font: 500 11.5px var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 7px 12px; cursor: pointer;
+}
+.ov-range button:last-child { border-right: 0; }
+.ov-range button:hover { background: var(--mid); }
+.ov-range button.on { background: var(--forest); color: var(--on-dark); }
+.ov-range button:focus-visible, .ov-splits button:focus-visible, .ov-tile:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.ov-dates-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ov-dates-pick input { border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; background: var(--surface); font: 12px var(--mono); color: var(--ink); }
+
+.ov-note { color: var(--amber-strong); background: var(--amber-soft); border: 1px solid var(--amber); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin: 0 0 14px; max-width: 72ch; }
+.ov-empty { border: 1px dashed var(--rule-strong); border-radius: 12px; padding: 40px 24px; text-align: center; color: var(--ink-2); }
+.ov-empty-title { font-size: 18px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+.ov-empty p { max-width: 52ch; margin: 0 auto; font-size: 13.5px; }
+
+/* Tiles: the headline at rest, the breakdown on hover or keyboard focus. The
+   breakdown OVERLAYS the tile at exactly the tile's own size — three rows fit,
+   and nothing on the page moves when a pointer passes over the row. */
+.ov-tile { position: relative; min-height: 86px; cursor: default; }
+.ov-tile .l { position: relative; z-index: 4; }
+.ov-breakdown {
+  display: none; gap: 3px; position: absolute; z-index: 3; inset: -1px; overflow: hidden;
+  padding: 31px 14px 8px; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 12px; box-shadow: var(--shadow);
+  align-content: start;
+}
+.ov-tile:hover .ov-breakdown, .ov-tile:focus-within .ov-breakdown { display: grid; }
+.ov-brow { display: grid; grid-template-columns: minmax(0, 108px) minmax(0, 1fr) auto; gap: 6px; align-items: center; font: 10.5px/1.25 var(--mono); color: var(--ink-2); }
+.ov-blabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-bval { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.ov-track { height: 6px; border-radius: 4px; background: var(--deep); position: relative; overflow: hidden; }
+.ov-fill { position: absolute; inset: 0 auto 0 0; background: var(--sage); border-radius: 4px; }
+
+.ov-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ov-section-title { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+.ov-meta { font-size: 11px; color: var(--muted); }
+.ov-splits { display: inline-flex; gap: 16px; }
+.ov-splits button {
+  border: 0; background: none; padding: 0; cursor: pointer; font: 12px var(--mono); color: var(--muted);
+  text-decoration-style: dotted; text-underline-offset: 4px;
+}
+.ov-splits button:hover { color: var(--ink); }
+.ov-splits button.on { color: var(--forest); text-decoration-line: underline; }
+.ov-summary { font-size: 11.5px; color: var(--muted); margin: 6px 0 12px; }
+
+.ov-chart { margin: 4px 0 18px; }
+.ov-frame { display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 10px; }
+.ov-axis { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px; color: var(--muted); height: 220px; }
+.ov-axis.left { text-align: right; }
+.ov-axis span { line-height: 1; }
+.ov-main { min-width: 0; }
+.ov-plot { position: relative; height: 220px; border-bottom: 1px solid var(--rule-strong); }
+.ov-grid { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(var(--rule) 1px, transparent 1px) 0 0 / 100% calc(100% / 3); }
+.ov-bars { position: absolute; inset: 0; display: grid; gap: 8px; align-items: end; }
+.ov-col { height: 100%; display: flex; flex-direction: column-reverse; min-width: 0; }
+.ov-col.not-loaded { background: var(--ov-not-loaded); border-radius: 4px 4px 0 0; }
+.ov-seg { display: block; width: 100%; flex: none; }
+.ov-col .ov-seg:last-child { border-radius: 4px 4px 0 0; }
+.ov-line { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.ov-line polyline { stroke: var(--ink); stroke-width: 1.5; }
+.ov-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--surface); border: 1.5px solid var(--ink); box-sizing: border-box; pointer-events: none; }
+.ov-x { display: grid; gap: 8px; font-size: 10px; color: var(--muted); margin-top: 6px; }
+.ov-x span { text-align: center; white-space: nowrap; overflow: hidden; }
+.ov-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 10.5px; color: var(--ink-2); margin: 10px 0 0 58px; }
+.ov-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ov-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.ov-key.line { width: 14px; height: 0; border-top: 1.5px solid var(--ink); border-radius: 0; }
+
+.ov-hist { border-top: 1px solid var(--rule); padding-top: 14px; }
+/* A contribution grid, as GitHub draws one: the gap between rows is the gap
+   between cells, so a week reads as one block of squares. The day label is
+   zero-height so it can never make its row taller than the cells in it. The
+   cells keep a legible minimum and scroll inside the section on a narrow
+   screen rather than shrinking to dots. */
+.ov-hbody { margin-top: 10px; overflow-x: auto; }
+/* Rows are square cells at their natural size — one row for a day, seven for a
+   week — and SHRINK, never overflow, when the window cannot fit them under the
+   chart: the row track is 1fr of a grid whose height is a flex basis. --cell is
+   the width of one cell, so the natural height is exactly square. */
+.ov-hbody { --cell: 14px; }
+@supports (width: 1cqw) {
+  .ov-hist { container-type: inline-size; }
+  .ov-hbody { --cell: max(10px, calc((100cqw - 210px) / 72)); }
+}
+.ov-hgrid {
+  display: grid; gap: 2px;
+  grid-template-rows: repeat(var(--rows), minmax(0, 1fr));
+  height: calc(var(--rows) * var(--cell) + (var(--rows) - 1) * 2px);
+}
+.ov-hrow, .ov-hhours { display: grid; grid-template-columns: 58px minmax(720px, 1fr); gap: 10px; align-items: stretch; min-height: 0; }
+.ov-hhours { margin-top: 4px; }
+.ov-hlabel {
+  height: 0; align-self: center; display: flex; align-items: center; justify-content: flex-end; overflow: visible;
+  font-size: 9.5px; line-height: 1; color: var(--muted); white-space: nowrap;
+}
+.ov-hcells { display: grid; grid-template-columns: repeat(72, minmax(0, 1fr)); gap: 2px; }
+.ov-cell { min-height: 0; border-radius: 2px; background: var(--ov-empty); }
+.ov-hrow.not-loaded .ov-hcells { background: var(--ov-not-loaded); }
+.ov-hrow.not-loaded .ov-cell { background: transparent; }
+.ov-hhours div { display: grid; grid-template-columns: repeat(4, 1fr); font-size: 10px; color: var(--muted); }
+.ov-hist .ov-legend { margin-left: 68px; }
+.ov-levels > span:first-child { gap: 3px; }
+.ov-levels > span:first-child .ov-key { width: 10px; height: 10px; }
+
+/* ---- The Overview fills the window: body.pane-overview (set in route()) ----
+   The pane-today pattern above, for a chart and a histogram instead of a list.
+   The chart takes the height the window leaves (never below 30% of it); the histogram sits at the bottom at its natural height, and on a window
+   too short for both its rows get shorter rather than the page running past
+   the bottom. A window shorter than even that scrolls inside the pane. */
+/* Desktop widths only: on a phone the tiles alone are taller than the screen,
+   so fitting the window would squash the histogram while the page scrolls
+   anyway. There the pane stays an ordinary scrolling document. */
+@media (min-width: 721px) {
+  body.pane-overview { overflow: hidden; }
+  body.pane-overview .shell { height: 100vh; min-height: 0; }
+  body.pane-overview main { min-height: 0; display: flex; flex-direction: column; }
+  /* The PANE scrolls, not .ov: a scroller clips at its padding box, and the
+     chart's right-axis labels hang into the pane's gutter (a scrolling .ov cut
+     "$1099.37" to "$1099.3" at 400px). */
+  body.pane-overview .pane-root { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 16px; overflow-y: auto; }
+  /* Exactly the pane's height (min-height 0: a flex column's automatic minimum is
+     its content's NATURAL height, which would stop the histogram shrinking). On a
+     window shorter than the floors below, the children overflow it, visibly, and
+     the pane scrolls. */
+  body.pane-overview .ov { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  body.pane-overview .ov > * { flex: 0 0 auto; }
+  body.pane-overview .ov-chart:not(.ov-chart-empty) { flex: 1 1 0; min-height: max(240px, 30vh); display: flex; flex-direction: column; }
+  body.pane-overview .ov-frame { flex: 1 1 auto; min-height: 0; }
+  body.pane-overview .ov-axis { height: auto; padding-bottom: 21px; }
+  body.pane-overview .ov-main { display: flex; flex-direction: column; min-height: 0; }
+  body.pane-overview .ov-plot { flex: 1 1 auto; height: auto; min-height: 120px; }
+  body.pane-overview .ov-x { flex: none; height: 15px; line-height: 15px; }
+  /* The histogram may shrink only to its rows' floor. ⚠️ `.ov-hbody` scrolls
+     sideways, and a scrolling flex item's automatic minimum height is ZERO, so
+     without an explicit floor it clipped a month's last rows instead of letting
+     the pane scroll (seen at 1280x720). The floor is the rows plus the hour line,
+     and the section's own adds its head and legend (~80px). */
+  body.pane-overview .ov-hist { flex: 0 1 auto; min-height: calc(var(--rows) * 7px + 100px); display: flex; flex-direction: column; }
+  body.pane-overview .ov-hbody { flex: 0 1 auto; min-height: calc(var(--rows) * 7px + 20px); display: flex; flex-direction: column; }
+  body.pane-overview .ov-hgrid { flex: 0 1 auto; min-height: calc(var(--rows) * 7px); }
+  /* When the rows shrink (a month on a short window), the day labels shrink with
+     them so neighbours never overlap: 100cqh is the grid's own height. */
+  @supports (height: 1cqh) {
+    body.pane-overview .ov-hgrid { container-type: size; }
+    body.pane-overview .ov-hlabel { font-size: clamp(6.5px, calc(100cqh / var(--rows) - 1px), 9.5px); }
+  }
+  body.pane-overview .ov-hhours { flex: none; }
+}
+
+@media (max-width: 720px) {
+  .ov-tiles { grid-template-columns: repeat(2, 1fr); }
+  .ov-frame { grid-template-columns: 40px minmax(0, 1fr) 40px; gap: 6px; }
+  .ov-bars, .ov-x { gap: 3px; }
+  .ov-x span:nth-child(even) { visibility: hidden; }
+  .ov-x span { overflow: visible; }
+  .ov-legend, .ov-hist .ov-legend { margin-left: 0; }
+}

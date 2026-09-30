@@ -1,0 +1,223 @@
+package usage
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
+	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
+)
+
+type memSink struct {
+	mu    sync.Mutex
+	calls int
+	rows  map[string]ledger.RequestRow
+}
+
+func (m *memSink) InsertRequests(rows []ledger.RequestRow) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.rows == nil {
+		m.rows = map[string]ledger.RequestRow{}
+	}
+	n := 0
+	for _, r := range rows {
+		k := r.Source + "|" + r.Session + "|" + r.Key
+		if _, ok := m.rows[k]; !ok {
+			m.rows[k] = r
+			n++
+		}
+	}
+	return n, nil
+}
+
+func fixture(name string) string { return filepath.Join("..", "promptlog", "testdata", name) }
+
+func feed(t *testing.T, r *Recorder, source, name string) {
+	t.Helper()
+	f, err := os.Open(fixture(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		r.Observe(source, fixture(name), append([]byte(nil), sc.Bytes()...))
+	}
+}
+
+func flatPrice(model string, in, out, cr, cc int64) (float64, bool) {
+	if model == "" {
+		return 0, false
+	}
+	return float64(in+out+cr+cc) / 1e6, true
+}
+
+// One poll's records are written in ONE insert, priced at write.
+func TestRecorderBuffersAndPricesAtWrite(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, flatPrice)
+	feed(t, r, "claude_code", "claude_code_session.jsonl")
+	feed(t, r, "codex", "codex_rollout.jsonl")
+	r.ObserveFile("gemini_cli", fixture("gemini_session.json"))
+	if sink.calls != 0 {
+		t.Fatalf("wrote %d times before a flush, want 0", sink.calls)
+	}
+	if n, _ := r.Flush(); n != 2+4+4 {
+		t.Fatalf("flush added %d, want 10 (2 Claude Code, 4 Codex, 4 Gemini)", n)
+	}
+	if sink.calls != 1 {
+		t.Fatalf("one flush made %d inserts, want 1", sink.calls)
+	}
+	for _, row := range sink.rows {
+		if row.At.IsZero() {
+			t.Fatalf("row with no instant: %+v", row)
+		}
+		want, _ := flatPrice(row.Model, row.Input, row.Output, row.CacheRead, row.CacheCreation)
+		if row.EstimateUSD != want {
+			t.Fatalf("row %s priced %v, want %v", row.Key, row.EstimateUSD, want)
+		}
+	}
+	if n, _ := r.Flush(); n != 0 || sink.calls != 1 {
+		t.Fatalf("an empty flush wrote (n=%d, calls=%d)", n, sink.calls)
+	}
+}
+
+// A model with no rate is still counted, at $0, for RepriceUnpricedRequests to
+// fill in later.
+func TestRecorderKeepsUnpricedRequests(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, func(string, int64, int64, int64, int64) (float64, bool) { return 0, false })
+	feed(t, r, "claude_code", "claude_code_session.jsonl")
+	if n, _ := r.Flush(); n != 2 {
+		t.Fatalf("added %d, want 2", n)
+	}
+	for _, row := range sink.rows {
+		if row.EstimateUSD != 0 || row.Model == "" {
+			t.Fatalf("got %+v", row)
+		}
+	}
+}
+
+// The buffer is bounded: a burst larger than the cap flushes itself.
+func TestRecorderFlushesAtItsCap(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, flatPrice)
+	r.cap = 3
+	feed(t, r, "codex", "codex_rollout.jsonl") // 4 requests
+	if sink.calls != 1 || len(sink.rows) != 3 {
+		t.Fatalf("calls=%d rows=%d, want one self-flush of 3", sink.calls, len(sink.rows))
+	}
+	r.Flush()
+	if len(sink.rows) != 4 {
+		t.Fatalf("rows=%d after the final flush, want 4", len(sink.rows))
+	}
+}
+
+// Sources the reader does not know yield nothing rather than a guessed row.
+func TestRecorderIgnoresUnknownSources(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, flatPrice)
+	feed(t, r, "chatgpt", "claude_code_session.jsonl")
+	if n, _ := r.Flush(); n != 0 {
+		t.Fatalf("added %d for an unknown source", n)
+	}
+}
+
+// A request is joined to its block by the transcript's own name — for a
+// subagent that is its `agent-…` file, not the parent's session id it carries.
+func TestRecorderNamesTheTranscriptLikeABlock(t *testing.T) {
+	sink := &memSink{}
+	r := New(sink, flatPrice)
+	b, err := os.ReadFile(fixture("claude_code_session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(t.TempDir(), "parent", "subagents", "agent-a583879c32a156d30.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sub, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range bytesLines(b) {
+		r.Observe("claude_code", sub, l)
+	}
+	r.Flush()
+	for _, row := range sink.rows {
+		if row.Transcript != "agent-a583879c32a156d30" || row.Session == row.Transcript {
+			t.Fatalf("transcript %q session %q", row.Transcript, row.Session)
+		}
+	}
+}
+
+func bytesLines(b []byte) [][]byte {
+	var out [][]byte
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		out = append(out, append([]byte(nil), sc.Bytes()...))
+	}
+	return out
+}
+
+// flakySink fails its first `fail` writes, then behaves like memSink.
+type flakySink struct {
+	memSink
+	fail int
+}
+
+func (f *flakySink) InsertRequests(rows []ledger.RequestRow) (int, error) {
+	if f.fail > 0 {
+		f.fail--
+		return 0, errors.New("database is locked")
+	}
+	return f.memSink.InsertRequests(rows)
+}
+
+// A write that fails is the only copy of those requests — the watcher has
+// moved past them — so the recorder keeps them and the next flush writes them.
+func TestRecorderKeepsAFailedBatchAndRetries(t *testing.T) {
+	sink := &flakySink{fail: 1}
+	r := New(sink, flatPrice)
+	feed(t, r, "codex", "codex_rollout.jsonl")
+	if _, err := r.Flush(); err == nil || r.Held() != 4 {
+		t.Fatalf("after a failed write: err=%v held=%d, want an error and 4 held", err, r.Held())
+	}
+	feed(t, r, "claude_code", "claude_code_session.jsonl")
+	if n, err := r.Flush(); err != nil || n != 6 || r.Held() != 0 {
+		t.Fatalf("retry wrote %d (err %v, held %d), want 6", n, err, r.Held())
+	}
+}
+
+// A ledger that never comes back cannot make the recorder grow without bound.
+func TestRecorderHoldIsBounded(t *testing.T) {
+	sink := &flakySink{fail: 1 << 30}
+	r := New(sink, flatPrice)
+	for i := 0; i < maxHeld/4+50; i++ {
+		feed(t, r, "codex", "codex_rollout.jsonl") // 4 held each, deduped only by the ledger
+		r.parser = promptlog.NewParser()           // re-read as new, to keep adding
+	}
+	r.Flush()
+	if r.Held() > maxHeld {
+		t.Fatalf("holding %d, bound is %d", r.Held(), maxHeld)
+	}
+}
+
+// KELD_USAGE=0 turns the local count off — the one switch an operator has
+// short of reinstalling an older build. On by default, like KELD_WATCH.
+func TestEnabledFromEnv(t *testing.T) {
+	for v, want := range map[string]bool{"": true, "1": true, "on": true, "0": false, "off": false, "FALSE": false} {
+		t.Setenv("KELD_USAGE", v)
+		if got := EnabledFromEnv(); got != want {
+			t.Fatalf("KELD_USAGE=%q: enabled=%v, want %v", v, got, want)
+		}
+	}
+}

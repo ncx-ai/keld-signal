@@ -182,16 +182,20 @@ See also `docs/macos-signing-and-notarization.md` and `docs/install.md`;
   (`keld-wizard-host --run`, so no console) with `--headless`, unconditionally,
   then waits up to 10 s for the NEW daemon's `agent.json` — earlier, `keld
   signal open` finds no daemon on a first install or the previous one's port on
-  an upgrade. The one `[Run]` entry is `keld.exe signal open` with `postinstall
-  shellexec skipifsilent nowait`: a ticked checkbox on the Finished page, and
-  nothing at all on a `/SILENT` or `/VERYSILENT` push, which is paired with
-  `keld-agent install --code <CODE>` from the management tool.
-  ⚠️ **Do not add `runhidden` to that line** — it is how `onboard.cmd` once ran an
+  an upgrade. Exactly ONE of two `[Run]` entries then applies, by mutually
+  exclusive Checks (merge of main's desktop app, 2026-09-30): `Keld Signal.exe`
+  (shipped beside `keld.exe`, optional) with `Check: AppPresent`, or — only when
+  the build has no app — `keld.exe signal open` with `Check: not AppPresent`.
+  Both are `postinstall … skipifsilent nowait`: one ticked checkbox on the
+  Finished page, and nothing at all on a `/SILENT` or `/VERYSILENT` push, which
+  is paired with `keld-agent install --code <CODE>` from the management tool.
+  ⚠️ **Do not add `runhidden` to either line** — it is how `onboard.cmd` once ran an
   interactive login where nobody could see it, and every Windows machine idled
   forever. `keld-wizard-host.exe` stays installed: `RunQuiet` and the KeldAgent
   logon task (`--spawn`) both use it. Pinned by
   `installers/windows/keld_agent_iss_test.sh`.
   ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves it
   parses and stages; it cannot show that the Finished page opened Signal.
-  `keld.exe` is a console binary, so the page-open step likely flashes a console
-  for the moment it runs — unmeasured.
+  `keld.exe` is a console binary, so the browser fallback likely flashes a
+  console for the moment it runs — unmeasured, and reached only by builds that
+  shipped no app.

@@ -54,13 +54,9 @@ type tUsage struct {
 }
 
 func (t *Telemetry) observeClaudeLine(source, transcriptPath string, line []byte) {
-	var r tRecord
-	if json.Unmarshal(line, &r) != nil {
+	r, msg, ok := decodeClaude(line)
+	if !ok {
 		return
-	}
-	var msg tMessage
-	if len(r.Message) > 0 {
-		_ = json.Unmarshal(r.Message, &msg)
 	}
 	id := t.ids.forCowork(transcriptPath)
 	res := claudeResource(source, r.Version)
@@ -102,10 +98,7 @@ func (t *Telemetry) observeClaudeLine(source, transcriptPath string, line []byte
 		if msg.Usage == nil {
 			return
 		}
-		requestID := r.RequestID
-		if requestID == "" {
-			requestID = msg.ID // pre-requestId transcripts; the message id is the request's
-		}
+		requestID := claudeRequestID(r, msg)
 		if requestID == "" {
 			return
 		}
@@ -162,11 +155,7 @@ func (t *Telemetry) observeClaudeLine(source, transcriptPath string, line []byte
 func (t *Telemetry) firstLineOfRequest(path, requestID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.lastReq[path] == requestID {
-		return false
-	}
-	t.lastReq[path] = requestID
-	return true
+	return t.lastReq.firstLine(path, requestID)
 }
 
 func claudeRecord(ts, event string, attrs []kv) logRecord {

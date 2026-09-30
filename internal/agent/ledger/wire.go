@@ -68,7 +68,16 @@ type BlockEntry struct {
 	Source      string                    `json:"source"`
 	StartReason string                    `json:"start_reason"`
 	EndReason   string                    `json:"end_reason"`
+	Dims        *DimsEntry                `json:"dims,omitempty"`
 	Cells       map[string]map[string]any `json:"cells"`
+}
+
+// DimsEntry is the block's stored repository and branch (Observe's values).
+// Nil when neither is stored, so the key is absent rather than an empty
+// object: "no repository recorded" must not read as a repository named "".
+type DimsEntry struct {
+	Repo   string `json:"repo,omitempty"`
+	Branch string `json:"branch,omitempty"`
 }
 
 // Reader is what the ingress ledger route calls. Unlike Recorder's write

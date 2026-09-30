@@ -55,6 +55,7 @@ Fonts, so screenshots use the fallback fonts).
 
 | spec | what a user sees |
 |---|---|
+| `overview.spec.ts` | Signal opens on the **Overview**; Focus blocks is the old Today at `#/focus` (and `#/today`); four tiles, the chart and a 72-cell histogram for the last 7 days; a tile's hover breakdown; the range picked survives a reload; By repo gives the chart and histogram one legend; an empty range draws no axes; a range cut by the 2000-row cap says so and shades what was not loaded; no sideways scroll at 1280 and 400 px |
 | `today.spec.ts` | ≥ 1 focus block card with a time range, a project or "no project", a token figure and an "est." price; the date line; the health strip with **Signal** and **Analysis service** up; no "not running" banner |
 | `breaks.spec.ts` | "Show breaks" reveals a break row (≥ 15 min) between two blocks, and hides it again |
 | `details.spec.ts` | "Show details" reveals the per-stage reason/status line, hidden by default |
@@ -62,7 +63,7 @@ Fonts, so screenshots use the fallback fonts).
 | `flat-projects.spec.ts` | (mocked Revision 4 catalog) one flat list of projects — no group heading, switcher, "Groups on" tile or "counts for my work" toggle; a block shared by two projects shows in both and counts in full in each; a hidden project can be shown again; no sideways scroll at 1280 and 400 px |
 | `settings.spec.ts` | Send to Atlas shows off (pinned by `KELD_ATLAS=0`); developer granularity is enabled because Atlas is off; "Show breaks" persists across reload; "Start at login" is disabled with "in the desktop app". Skips with a reason if `GET /v1/settings` is not mounted on the build under test. |
 | `not-running.spec.ts` | with no daemon (a tiny static server serves the page and forwards `/v1/*` to a dead port), the page says **Signal is not running on this machine** and how to start it — never a blank page |
-| `visual.spec.ts` | a screenshot of the Today pane per browser against the committed baselines in `visual.spec.ts-snapshots/`, 2 % pixel tolerance, with the date line, time and project columns and the rhythm strip masked (they legitimately move between runs) |
+| `visual.spec.ts` | a screenshot of the Focus blocks pane (the old Today) and of the Overview's frame per browser against the committed baselines in `visual.spec.ts-snapshots/`, 2 % pixel tolerance, with the date line, time and project columns and the rhythm strip masked (they legitimately move between runs) |
 
 The suite **fails, rather than passes vacuously, when the daemon is not
 reachable**: `global-setup` throws if the bring-up fails, and every fixture throws

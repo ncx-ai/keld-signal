@@ -1,0 +1,586 @@
+<title>Signal 2C Overview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1; --panel:#FFFFFF;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:46px 0 8px;text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3 .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+p{max-width:66ch;margin:0 0 12px}
+ul{max-width:68ch;margin:0 0 12px;padding-left:20px}
+li{margin:0 0 4px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* header block */
+.meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:14px 0 0;
+  font-size:13px;color:var(--muted)}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.06em;text-transform:uppercase}
+.chip-draft{background:var(--enc-soft);color:var(--enc);border:1px solid var(--enc)}
+.chip-signed{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+.chip-reviewed{background:var(--daemon-soft);color:var(--daemon);border:1px solid var(--daemon)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:18px 0 0;max-width:680px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+
+/* tables */
+.wrap{overflow-x:auto;margin:0 0 4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase;white-space:nowrap}
+td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.ac td:first-child,table.tests td:first-child{width:52px;color:var(--muted);white-space:nowrap}
+table.ac td:nth-child(2){width:42%}
+table.tests td:nth-child(2){width:38%}
+tr:target td{background:var(--daemon-soft)}
+
+/* verdict + level pills */
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font:500 11px "IBM Plex Mono",monospace;
+  letter-spacing:.04em;white-space:nowrap}
+.p-met{background:var(--good-soft);color:var(--good)}
+.p-partial{background:var(--enc-soft);color:var(--enc)}
+.p-missed{background:var(--bad-soft);color:var(--bad)}
+.p-unver{background:var(--rule);color:var(--muted)}
+.p-reuse{background:var(--good-soft);color:var(--good)}
+.p-extend{background:var(--daemon-soft);color:var(--daemon)}
+.p-new{background:var(--enc-soft);color:var(--enc)}
+.p-pattern{background:var(--bad-soft);color:var(--bad)}
+.p-h{background:var(--bad-soft);color:var(--bad)}
+.p-m{background:var(--enc-soft);color:var(--enc)}
+.p-l{background:var(--good-soft);color:var(--good)}
+
+/* gherkin */
+pre.gherkin{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--daemon);
+  border-radius:4px;padding:14px 16px;margin:0 0 12px;overflow-x:auto;
+  font:13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+pre.gherkin .kw{color:var(--daemon);font-weight:500}
+pre.gherkin .cov{color:var(--muted)}
+
+/* callouts */
+.note{border-left:3px solid var(--enc);background:var(--enc-soft);padding:10px 14px;
+  margin:0 0 14px;max-width:68ch;font-size:14px}
+.note strong{color:var(--enc)}
+
+/* figures + SVG palette via classes so both themes resolve from tokens */
+figure{margin:18px 0 0;padding:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.lane{stroke:var(--rule);stroke-width:1}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.small{fill:var(--muted);font-size:11px}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-new{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4;stroke-dasharray:5 3}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.tick{stroke:var(--rule);stroke-width:1}
+
+/* objections */
+.qa{border-top:1px solid var(--rule);margin-top:48px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+</style>
+
+<main>
+
+<h1>Signal 2C Overview — Discovery</h1>
+<p class="lede">Settles how the 2C Overview lands on Signal's page without touching anything else. If this is wrong, the page shows ranged numbers the ledger cannot back.</p>
+
+<div class="meta">
+  <span class="chip chip-reviewed">Reviewed — 2026-09-28</span>
+  <span>Opus 5.5 (1M context) — thinking: high</span>
+  <span class="mono">2026-09-28 · revision 2</span>
+</div>
+
+<div class="note"><strong>Revision 2 — scope narrowed.</strong> Revision 1 planned the whole 2C app. Per Gabriel on 2026-09-28: add the Overview only, rename Today to Focus blocks, and leave every other pane and the shell as they are.</div>
+
+<dl class="kv">
+  <dt>Repo / branch</dt><dd class="mono">keld-signal · feat/signal-2c (off main 2f19ba19)</dd>
+  <dt>Spec source</dt><dd class="mono">docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html</dd>
+  <dt>Design source</dt><dd class="mono">claude.ai/design c36eef1b · Keld Signal Alt.dc.html · option 2c, Overview only (the 3d chart + histogram)</dd>
+  <dt>Blocks, last 30 days</dt><dd class="mono">905 · live GET /v1/ledger on this Mac, 2026-09-28</dd>
+  <dt>30-day ledger read</dt><dd class="mono">91 ms · one call, limit=2000, same machine, measured once</dd>
+  <dt>Busiest single day</dt><dd class="mono">143 blocks · ledger.db, 2026-09-01</dd>
+  <dt>Ledger row cap</dt><dd class="mono">2000 · daemon/servicehealth_route.go:79 · ordered start DESC, so the OLDEST rows drop</dd>
+  <dt>Blocks with a repo</dt><dd class="mono">382 / 905 (42%) · ledger.db dim_repo · Codex blocks carry none</dd>
+  <dt>Blocks with a project</dt><dd class="mono">369 / 905 (41%) · live attribution · 0 in more than one project</dd>
+  <dt>Blocks with a model</dt><dd class="mono">834 / 905 · ledger.db model</dd>
+  <dt>Effort</dt><dd class="mono">GUESS · 2–3 days across 5 slices · not measured</dd>
+</dl>
+
+<h2 id="s1">1 · Hypothesis &amp; scope</h2>
+
+<h3>The why</h3>
+<ul>
+  <li><strong>Problem:</strong> The page answers "what happened today" only. It has no range, no trend and no split.</li>
+  <li><strong>Who feels it:</strong> An engineer checking their own AI spend at the end of a week.</li>
+  <li><strong>Business value:</strong> One pane answers how much, on what, and when — for a day, week or month.</li>
+  <li><strong>Hypothesis:</strong> The existing ledger backs every 2C Overview number with one additive field. Falsified if a tile or bar needs a new store, or disagrees with <span class="mono">/v1/ledger</span>.</li>
+</ul>
+
+<h3>Goals</h3>
+<ul>
+  <li><strong>G1</strong> — The 2C Overview on real data: range control, four tiles, cost &amp; volume chart, 20-minute histogram.</li>
+  <li><strong>G2</strong> — Overview is where Signal opens. Today keeps its content under a new name, Focus blocks.</li>
+  <li><strong>G3</strong> — Nothing else in the UI changes: shell, nav style, Projects, Integrations, Settings.</li>
+  <li><strong>G4</strong> — No new store, no new route, no new pattern. One additive field on one route.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<p>Binary, observable at a seam, each naming its own verification. The reviewer grades these IDs.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="ac-1"><td class="mono">AC-1</td><td>The nav reads Overview · Focus blocks · Projects · Integrations · Settings. An empty hash opens Overview. <span class="mono">#/focus</span> opens Focus blocks, and <span class="mono">#/today</span> still does.</td><td>rendered nav, topbar title, <span class="mono">location.hash</span></td><td class="mono">ui/e2e/overview.spec.ts (new) · chromium + webkit</td></tr>
+  <tr id="ac-2"><td class="mono">AC-2</td><td>Focus blocks shows exactly what Today shows now: same fetch, tiles, rhythm, table, health strip, pending and engine card. Only its name changed.</td><td>rendered pane, ledger request URL</td><td class="mono">today / breaks / details / durability specs pass · today-window.test.js unchanged</td></tr>
+  <tr id="ac-3"><td class="mono">AC-3</td><td>Today / 7d / 1m / Custom set the Overview's ledger <span class="mono">since</span> to local midnight today, 6 days back, 29 days back. Custom filters to its two dates client-side. The last range picked is remembered per viewer; 7d when none is stored. A response of exactly <span class="mono">limit</span> rows says so, and earlier days read "not loaded", never zero.</td><td>ledger request URL, range title, truncation notice</td><td class="mono">node --test test/range.test.js · overview.spec.ts</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td>Tiles show tokens (the four-class sum) with cache share, est. spend with $ per million, active time (sum of block spans), and sessions (distinct <span class="mono">key.session</span>) with median span. Hover shows the top three plus "others".</td><td>tile text</td><td class="mono">node --test test/overview-stats.test.js</td></tr>
+  <tr id="ac-5"><td class="mono">AC-5</td><td>The chart draws one column per hour (Today, trimmed to active hours) or per local day. It stacks by split — Tokens (cache vs fresh), By model, By repo, By project — as top three, "other" and "none". Column height equals its blocks' token sum. Spend is a line on the right axis.</td><td>chart DOM, <span class="mono">volumeSeries()</span></td><td class="mono">node --test test/volume-series.test.js</td></tr>
+  <tr id="ac-6"><td class="mono">AC-6</td><td>A block in more than one project stacks once, under "several projects". No column counts a block twice.</td><td><span class="mono">volumeSeries()</span></td><td class="mono">node --test test/volume-series.test.js</td></tr>
+  <tr id="ac-7"><td class="mono">AC-7</td><td>The histogram draws one row per local day, 72 cells of 20 minutes. A cell takes the split colour of the block covering its midpoint; empty is neutral. Its legend matches the chart's.</td><td><span class="mono">slotGrid()</span>, histogram DOM</td><td class="mono">node --test test/slot-grid.test.js</td></tr>
+  <tr id="ac-8"><td class="mono">AC-8</td><td><span class="mono">GET /v1/ledger</span> blocks carry <span class="mono">dims: {repo, branch}</span> when stored, and no key when both are empty. <span class="mono">docs/v3/contracts.md</span> documents it.</td><td>route JSON</td><td class="mono">go test ./internal/agent/ledger/... ./internal/agent/daemon/...</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td>A range with no blocks shows an empty state with no axes. With the daemon down, Overview shows the existing offline banner and its last cached range, or says it has none.</td><td>Overview DOM</td><td class="mono">overview.spec.ts · not-running.spec.ts</td></tr>
+  <tr id="ac-10"><td class="mono">AC-10</td><td>No other pane or shell style changes. The diff leaves <span class="mono">renderProjects</span>, <span class="mono">renderSettings</span>, <span class="mono">renderIntegrations</span> and existing CSS rules untouched.</td><td>git diff, visual baselines</td><td class="mono">git diff main -- internal/agent/ui · Focus blocks baseline differs only in nav + title</td></tr>
+  <tr id="ac-11"><td class="mono">AC-11</td><td>All suites pass: node, Go, full Playwright, and the vocabulary check.</td><td>CI</td><td class="mono">node --test · go test ./... · npx playwright test · scripts/check_vocabulary.sh</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Explicit exclusions</h3>
+<ul>
+  <li><strong>The 2C shell.</strong> No logo sidebar, no status foot, no token changes. The Overview uses today's <span class="mono">app.css</span> tokens.</li>
+  <li><strong>Activity, Sessions and the 2C Workstreams pane.</strong> Not built.</li>
+  <li><strong>Restyling Projects, Integrations or Settings.</strong> Untouched.</li>
+  <li><strong>A range on Focus blocks.</strong> It stays today-only, exactly as Today is now.</li>
+  <li><strong>Dark theme.</strong> The page is light-only by design (<span class="mono">app.css:1</span>).</li>
+</ul>
+
+<h2 id="s2">2 · Proposed solution</h2>
+
+<h3>Prior art — what this builds on</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Existing thing</th><th>Path</th><th>Role here</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">GET /v1/ledger?since=&amp;limit=</span></td><td class="mono">internal/agent/daemon/servicehealth_route.go:86</td><td><span class="pill p-reuse">reuse</span> the range is just <span class="mono">since</span></td></tr>
+  <tr><td>Ledger read</td><td class="mono">internal/agent/ledger/store.go:937</td><td><span class="pill p-extend">extend</span> select two stored columns</td></tr>
+  <tr><td><span class="mono">dim_repo</span>, <span class="mono">dim_branch</span></td><td class="mono">internal/agent/ledger/store.go:45 · written by Observe, :605</td><td><span class="pill p-reuse">reuse</span> already stored</td></tr>
+  <tr><td>Block wire shape</td><td class="mono">internal/agent/ledger/wire.go:66</td><td><span class="pill p-extend">extend</span> + <span class="mono">Dims</span>, omitempty</td></tr>
+  <tr><td>Live attribution on read</td><td class="mono">internal/agent/daemon/v3blocks.go:356</td><td><span class="pill p-reuse">reuse</span> By project reads the cell the table reads</td></tr>
+  <tr><td><span class="mono">focusStats</span>, <span class="mono">totalTokens</span>, <span class="mono">measuredOf</span>, <span class="mono">projectsOf</span></td><td class="mono">internal/agent/ui/app.js:311, 165, 212, 241</td><td><span class="pill p-reuse">reuse</span> inside <span class="mono">overviewStats</span></td></tr>
+  <tr><td><span class="mono">startOfLocalDay</span>, <span class="mono">todayLedgerURL</span></td><td class="mono">internal/agent/ui/app.js:607–615</td><td><span class="pill p-reuse">reuse</span> <span class="mono">rangeLedgerURL</span> builds on the first; the second stays for Focus blocks</td></tr>
+  <tr><td>Pane routing</td><td class="mono">internal/agent/ui/app.js:1635 (<span class="mono">paneFromHash</span>), 3238 (<span class="mono">route</span>)</td><td><span class="pill p-extend">extend</span> + overview, <span class="mono">#/today</span> alias</td></tr>
+  <tr><td><span class="mono">renderToday</span></td><td class="mono">internal/agent/ui/app.js:1703</td><td><span class="pill p-reuse">reuse</span> unchanged, now labelled Focus blocks</td></tr>
+  <tr><td>Offline banner, <span class="mono">serviceAlert</span>, ledger cache</td><td class="mono">index.html · app.js:1036, 1479</td><td><span class="pill p-reuse">reuse</span></td></tr>
+  <tr><td>Playwright harness + fixtures</td><td class="mono">ui/e2e/support/fixtures.ts</td><td><span class="pill p-reuse">reuse</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reuse ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">dims</span> on <span class="mono">/v1/ledger</span></td><td><span class="pill p-extend">extend</span></td><td>By repo, and hover-by-repo on two tiles, have no other source. The data is stored already.</td></tr>
+  <tr><td>Overview's own ledger fetch</td><td><span class="pill p-reuse">reuse</span></td><td>Same route, a different <span class="mono">since</span>. Kept apart from <span class="mono">loadAll</span>'s today fetch so Focus blocks is untouched. <em>Amended after review:</em> it runs for Today too, rather than being skipped — see section 9.</td></tr>
+  <tr><td><span class="mono">rangeWindow</span>, <span class="mono">rangeLedgerURL</span>, <span class="mono">overviewStats</span>, <span class="mono">topN</span>, <span class="mono">volumeSeries</span>, <span class="mono">slotGrid</span></td><td><span class="pill p-new">new</span></td><td>Pure exported functions in <span class="mono">app.js</span>, the <span class="mono">focusStats</span> pattern, tested under <span class="mono">node --test</span>.</td></tr>
+  <tr><td><span class="mono">renderOverview</span> + <span class="mono">.ov-*</span> CSS</td><td><span class="pill p-new">new</span></td><td>New rules only, appended to <span class="mono">app.css</span> under a prefix, so no existing rule moves.</td></tr>
+  <tr><td>Split palette: 3 categorical + other + none</td><td><span class="pill p-new">new</span></td><td>CSS tokens taken from the 2C file (<span class="mono">#4E9A6B</span>, <span class="mono">#E0A458</span>, <span class="mono">#6E8FC9</span>).</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>New patterns introduced:</strong> None. No framework, no charting library, no new route.</li>
+  <li><strong>Shared-decision helpers:</strong> headline tokens = <span class="mono">totalTokens</span>. A block's projects = <span class="mono">projectsOf</span>, as the Focus blocks table uses. Top three + other = one <span class="mono">topN</span>, used by tiles, chart and histogram, so legend and bars cannot disagree.</li>
+</ul>
+
+<h3>Technical design</h3>
+<ul>
+  <li><strong>Data:</strong> No migration. <span class="mono">Store.Read</span> selects <span class="mono">dim_repo</span>, <span class="mono">dim_branch</span>. Old rows with empty dims get no key and read "no repository".</li>
+  <li><strong>API:</strong> Blocks gain optional <span class="mono">"dims": {"repo","branch"}</span>. Additive; auth unchanged. <span class="mono">contracts.md</span> is edited first, per its own rule.</li>
+  <li><strong>Read path:</strong> Overview fetches <span class="mono">rangeLedgerURL(range, now)</span> on entry and on range change. The last range picked lives in <span class="mono">localStorage</span> (page convention 3); 7d only on first open. The response caches under its own key.</li>
+  <li><strong>Layout:</strong> 2C's Overview — title + range buttons, four tiles, chart with its split links, histogram strip. Built in the page's existing tokens and type.</li>
+  <li><strong>Invariants respected:</strong> "est." on every dollar figure. An absent cell is never "failed". Headline tokens exclude <span class="mono">request</span>. No prompt text reaches the page. Vocabulary denylist. WebKit rendering, since Tauri hosts the page.</li>
+</ul>
+
+<h3>Implementation plan — five slices, one commit each, tests first</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Slice</th><th>Tests written first</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">S1</td><td>Go: <span class="mono">dims</span> on <span class="mono">/v1/ledger</span>. Contract doc, then wire, then <span class="mono">Store.Read</span>.</td><td class="mono">ledger store + route tests</td><td class="mono"><a href="#ac-8">AC-8</a></td></tr>
+  <tr><td class="mono">S2</td><td>Pure helpers: <span class="mono">rangeWindow</span>, <span class="mono">rangeLedgerURL</span>, <span class="mono">overviewStats</span>, <span class="mono">topN</span>, <span class="mono">volumeSeries</span>, <span class="mono">slotGrid</span>.</td><td class="mono">range / overview-stats / volume-series / slot-grid .test.js</td><td class="mono"><a href="#ac-3">AC-3</a>–<a href="#ac-7">AC-7</a></td></tr>
+  <tr><td class="mono">S3</td><td>Routing and names: Overview first and default; Today relabelled Focus blocks at <span class="mono">#/focus</span>; <span class="mono">#/today</span> alias.</td><td class="mono">devpanes.test.js updated · not-running.spec.ts link name</td><td class="mono"><a href="#ac-1">AC-1</a>, <a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">S4</td><td><span class="mono">renderOverview</span>: range control, tiles + hover, chart, histogram, empty / truncated / offline states.</td><td class="mono">overview.spec.ts</td><td class="mono"><a href="#ac-3">AC-3</a>–<a href="#ac-7">7</a>, <a href="#ac-9">AC-9</a></td></tr>
+  <tr><td class="mono">S5</td><td>Full suite, new Overview baseline, Focus blocks baseline refreshed (nav + title only), then phase-2 review against this page.</td><td class="mono">visual.spec.ts</td><td class="mono"><a href="#ac-10">AC-10</a>, <a href="#ac-11">AC-11</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>System diagram</h3>
+<figure>
+<svg viewBox="0 0 880 360" role="img" aria-label="Three lanes: the page in the browser or Tauri web view, the keld-agent daemon, and the ledger database. In the page, the existing loadAll function still asks GET /v1/ledger for today and feeds the Focus blocks pane, which is the old Today pane under a new name. A new range control feeds a new Overview fetch, which asks the same route with the range's since and a limit of 2000. The changed ledger route selects two extra columns, dim_repo and dim_branch, which the database already stores. Live attribution, unchanged, fills each block's attributed cell on read. The Overview's blocks go through four new pure helpers into the new Overview pane. Projects, Integrations and Settings are untouched.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="txt"/></marker>
+  </defs>
+  <line x1="20" y1="158" x2="860" y2="158" class="lane"/>
+  <line x1="20" y1="268" x2="860" y2="268" class="lane"/>
+  <text x="20" y="18" class="lanelbl">PAGE · browser / Tauri web view</text>
+  <text x="20" y="178" class="lanelbl">DAEMON · keld-agent</text>
+  <text x="20" y="288" class="lanelbl">STORE · ~/.keld/state/ledger.db</text>
+
+  <rect x="20" y="30" width="120" height="44" rx="4" class="b-new"/>
+  <text x="80" y="50" text-anchor="middle" class="txt">Range control</text>
+  <text x="80" y="66" text-anchor="middle" class="small">Today · 7d · 1m · Custom</text>
+  <path d="M140 52H176" class="arr" marker-end="url(#ah)"/>
+  <text x="158" y="44" text-anchor="middle" class="small">since</text>
+  <rect x="176" y="30" width="130" height="44" rx="4" class="b-new"/>
+  <text x="241" y="50" text-anchor="middle" class="txt">Overview fetch</text>
+  <text x="241" y="66" text-anchor="middle" class="small">every range, limit 2000</text>
+  <rect x="176" y="96" width="130" height="44" rx="4" class="b-plain"/>
+  <text x="241" y="116" text-anchor="middle" class="txt">loadAll</text>
+  <text x="241" y="132" text-anchor="middle" class="small">today fetch, unchanged</text>
+  <rect x="350" y="30" width="180" height="44" rx="4" class="b-new"/>
+  <text x="440" y="50" text-anchor="middle" class="txt">Pure helpers</text>
+  <text x="440" y="66" text-anchor="middle" class="small">overviewStats · volumeSeries · slotGrid</text>
+  <path d="M306 52H350" class="arr" marker-end="url(#ah)"/>
+  <rect x="580" y="30" width="280" height="30" rx="4" class="b-new"/>
+  <text x="720" y="50" text-anchor="middle" class="txt">Overview pane · lands here</text>
+  <rect x="580" y="68" width="280" height="30" rx="4" class="b-enc"/>
+  <text x="720" y="88" text-anchor="middle" class="txt">Focus blocks · was Today, renamed</text>
+  <rect x="580" y="106" width="280" height="30" rx="4" class="b-plain"/>
+  <text x="720" y="126" text-anchor="middle" class="txt">Projects · Integrations · Settings</text>
+  <path d="M530 50H580" class="arr" marker-end="url(#ah)"/>
+  <path d="M306 118L580 86" class="arr" marker-end="url(#ah)"/>
+
+  <rect x="176" y="196" width="160" height="52" rx="4" class="b-enc"/>
+  <text x="256" y="218" text-anchor="middle" class="txt">GET /v1/ledger</text>
+  <text x="256" y="236" text-anchor="middle" class="small">+ dims {repo, branch}</text>
+  <rect x="380" y="196" width="160" height="52" rx="4" class="b-plain"/>
+  <text x="460" y="218" text-anchor="middle" class="txt">Live attribution</text>
+  <text x="460" y="236" text-anchor="middle" class="small">unchanged</text>
+  <rect x="600" y="196" width="240" height="52" rx="4" class="b-plain"/>
+  <text x="720" y="218" text-anchor="middle" class="txt">/v1/projects · settings · …</text>
+  <text x="720" y="236" text-anchor="middle" class="small">unchanged</text>
+
+  <rect x="176" y="300" width="160" height="46" rx="4" class="b-plain"/>
+  <text x="256" y="320" text-anchor="middle" class="txt">blocks table</text>
+  <text x="256" y="337" text-anchor="middle" class="small">dim_repo · dim_branch stored</text>
+
+  <path d="M200 74V96" class="tick"/>
+  <path d="M190 140V196" class="arr" marker-end="url(#ah)"/>
+  <text x="112" y="172" class="small">?since=today</text>
+  <path d="M290 74V196" class="arr" marker-end="url(#ah)"/>
+  <text x="296" y="150" class="small">?since=range&amp;limit=2000</text>
+  <path d="M256 248V300" class="arr" marker-end="url(#ah)"/>
+  <text x="262" y="278" class="small">SELECT + 2 columns</text>
+  <path d="M380 222H336" class="arr" marker-end="url(#ah)"/>
+  <text x="358" y="214" text-anchor="middle" class="small">cell</text>
+  <path d="M720 196V136" class="arr" marker-end="url(#ah)"/>
+  <text x="726" y="170" class="small">as today</text>
+</svg>
+<figcaption>Focus blocks keeps its own fetch, so nothing it shows can change. The Overview is a second reader of the same route.</figcaption>
+</figure>
+
+<h2 id="s3">3 · Alternatives considered</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>One ranged fetch; Focus blocks filters it to today</td><td>Changes Focus blocks' data path, which this scope promises not to touch. Saves ~90 ms once.</td></tr>
+  <tr><td class="mono">B</td><td>A new <span class="mono">/v1/overview</span> route that aggregates in Go</td><td>A second copy of the headline-token and project rules. The page already derives both from the ledger.</td></tr>
+  <tr><td class="mono">C</td><td>A charting library (Chart.js, uPlot)</td><td>The page loads nothing but Google Fonts (contracts D6). 2C's charts are bars and one line.</td></tr>
+  <tr><td class="mono">D</td><td>Skip <span class="mono">dims</span>; drop "By repo"</td><td>Removes one of 2C's four splits and the hover on two tiles. The data is already stored.</td></tr>
+  <tr><td class="mono">E</td><td>Do nothing</td><td>No answer to "what did I spend this week" without Atlas.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Closest call:</strong> option A. It is simpler code. It lost because "leave everything as it is" is the scope, and a separate fetch guarantees it.</p>
+
+<h2 id="s4">4 · Behaviour &amp; test specification</h2>
+
+<h3>User flow</h3>
+<figure>
+<svg viewBox="0 0 880 420" role="img" aria-label="The person opens Signal and lands on the Overview with their remembered range. If the daemon does not answer, the page shows the existing offline banner over the last cached range, if any. If it answers, the Overview asks the ledger for the range. If the range holds no blocks, it shows an empty state with no chart axes. If the response is truncated at the 2000-row cap, it says so and marks earlier days as not loaded. Otherwise it draws four tiles, the chart and the histogram. A split choice recolours the chart and histogram together, and hovering a tile shows its top three. Focus blocks is one click away and unchanged.">
+  <defs>
+    <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="txt"/></marker>
+    <marker id="f-ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+    <marker id="f-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+  </defs>
+  <rect x="300" y="16" width="240" height="44" rx="4" class="b-plain"/>
+  <text x="420" y="43" text-anchor="middle" class="txt">Open Signal → Overview</text>
+  <path d="M420 60V88" class="arr" marker-end="url(#f-ah)"/>
+  <rect x="300" y="88" width="240" height="44" rx="4" class="b-plain"/>
+  <text x="420" y="115" text-anchor="middle" class="txt">Daemon answers /v1/ledger?</text>
+  <path d="M540 110H640" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="590" y="102" text-anchor="middle" class="small">no</text>
+  <rect x="640" y="88" width="220" height="44" rx="4" class="b-bad"/>
+  <text x="750" y="108" text-anchor="middle" class="txt">Offline banner</text>
+  <text x="750" y="124" text-anchor="middle" class="small">cached range, if any</text>
+  <path d="M420 132V160" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="430" y="150" class="small">yes</text>
+  <rect x="300" y="160" width="240" height="44" rx="4" class="b-plain"/>
+  <text x="420" y="187" text-anchor="middle" class="txt">Any blocks in range?</text>
+  <path d="M540 182H640" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="590" y="174" text-anchor="middle" class="small">no</text>
+  <rect x="640" y="160" width="220" height="44" rx="4" class="b-bad"/>
+  <text x="750" y="180" text-anchor="middle" class="txt">Empty state</text>
+  <text x="750" y="196" text-anchor="middle" class="small">no axes, no zero bars</text>
+  <path d="M420 204V232" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <rect x="300" y="232" width="240" height="44" rx="4" class="b-plain"/>
+  <text x="420" y="259" text-anchor="middle" class="txt">Rows == limit (2000)?</text>
+  <path d="M540 254H640" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="590" y="246" text-anchor="middle" class="small">yes</text>
+  <rect x="640" y="232" width="220" height="44" rx="4" class="b-enc"/>
+  <text x="750" y="252" text-anchor="middle" class="txt">Truncation notice</text>
+  <text x="750" y="268" text-anchor="middle" class="small">earlier days "not loaded"</text>
+  <path d="M750 276V330H540" class="arr" marker-end="url(#f-ah)"/>
+  <path d="M420 276V304" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="430" y="294" class="small">no</text>
+  <rect x="300" y="304" width="240" height="52" rx="4" class="b-good"/>
+  <text x="420" y="326" text-anchor="middle" class="txt">Tiles · chart · histogram</text>
+  <text x="420" y="344" text-anchor="middle" class="small">split and hover re-render in place</text>
+  <path d="M420 356V384" class="arr" marker-end="url(#f-ah)"/>
+  <text x="420" y="404" text-anchor="middle" class="small">Focus blocks: one click, unchanged</text>
+</svg>
+<figcaption>Three ways to not have a full picture, and each one says which it is. None of them draws a zero it did not measure.</figcaption>
+</figure>
+
+<h3>Behavioural specs</h3>
+<pre class="gherkin"><span class="kw">Feature:</span> Signal 2C Overview
+
+  <span class="cov"># Covers: AC-1, AC-3</span>
+  <span class="kw">Scenario:</span> Landing on a week
+    <span class="kw">Given</span> a running daemon and no stored range preference
+    <span class="kw">When</span>  I open <span class="mono">/</span>
+    <span class="kw">Then</span>  Overview is active and titled "Last 7 days"
+    <span class="kw">And</span>   the ledger was asked with since = local midnight six days ago
+
+  <span class="cov"># Covers: AC-1, AC-2</span>
+  <span class="kw">Scenario:</span> Focus blocks is the old Today
+    <span class="kw">Given</span> a bookmark to <span class="mono">#/today</span>
+    <span class="kw">When</span>  I open it
+    <span class="kw">Then</span>  the Focus blocks pane shows today's tiles, rhythm and table
+    <span class="kw">And</span>   its ledger request is since = local midnight today
+
+  <span class="cov"># Covers: AC-4</span>
+  <span class="kw">Scenario:</span> Tiles agree with the ledger
+    <span class="kw">Given</span> a fixture of 5 blocks in 3 sessions on 2 models
+    <span class="kw">When</span>  the Overview renders
+    <span class="kw">Then</span>  tokens equal the four-class sum of all 5 blocks
+    <span class="kw">And</span>   sessions reads 3, and spend reads "est."
+
+  <span class="cov"># Covers: AC-5, AC-6</span>
+  <span class="kw">Scenario:</span> Split by project with a shared block
+    <span class="kw">Given</span> one block attributed to two projects
+    <span class="kw">When</span>  I choose "By project"
+    <span class="kw">Then</span>  that block stacks once, under "several projects"
+
+  <span class="cov"># Covers: AC-3</span>
+  <span class="kw">Scenario:</span> A month that hits the row cap
+    <span class="kw">Given</span> the ledger returns exactly 2000 blocks for 1m
+    <span class="kw">When</span>  the Overview renders
+    <span class="kw">Then</span>  it says the oldest blocks were not loaded
+    <span class="kw">And</span>   days before the oldest block show "not loaded", not zero
+
+  <span class="cov"># Covers: AC-9</span>
+  <span class="kw">Scenario:</span> Nothing captured yet
+    <span class="kw">Given</span> the ledger returns no blocks
+    <span class="kw">When</span>  the Overview renders
+    <span class="kw">Then</span>  the empty state shows and no chart axis is drawn</pre>
+
+<h3>Decision table — where one block lands in the chart</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Split</th><th>Block has</th><th>Measured?</th><th>Expected stack</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Tokens</td><td>cache_read 900, fresh 100</td><td>yes</td><td>900 cache + 100 fresh</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">2</td><td>By model</td><td>model outside top three</td><td>yes</td><td>"other"</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">3</td><td>By repo</td><td>no <span class="mono">dims</span> (Codex)</td><td>yes</td><td>"no repository"</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">4</td><td>By project</td><td>no project</td><td>yes</td><td>"no project"</td><td class="mono"><a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">5</td><td>By project</td><td>two projects</td><td>yes</td><td>"several projects", once</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">6</td><td>any</td><td>anything</td><td>no (cell absent)</td><td>no height; histogram still marks the time active</td><td class="mono"><a href="#ac-5">AC-5</a>, <a href="#ac-7">AC-7</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5">5 · Integration, dependencies &amp; security surface</h2>
+
+<h3>System contacts</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>System</th><th>Direction</th><th>Change</th></tr></thead>
+<tbody>
+  <tr><td class="mono">GET /v1/ledger</td><td>read</td><td>Blocks gain optional <span class="mono">dims</span>. A second caller, with a ranged <span class="mono">since</span>.</td></tr>
+  <tr><td class="mono">ledger.db blocks</td><td>read</td><td>Two already-written columns join the SELECT.</td></tr>
+  <tr><td class="mono">localStorage</td><td>both</td><td>Remembers the range; caches the Overview's last response under its own key.</td></tr>
+  <tr><td class="mono">docs/v3/contracts.md</td><td>write</td><td>Documents <span class="mono">dims</span> before the code changes.</td></tr>
+  <tr><td class="mono">Every other route</td><td>—</td><td>None.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Data privacy</h3>
+<ul>
+  <li><strong>New PII:</strong> None. A repo remote and branch now appear per block on the loopback page. The Projects pane already shows repo values in its suggestions.</li>
+  <li><strong>Cross-boundary data:</strong> None. Nothing new leaves the machine.</li>
+  <li><strong>Auth surface:</strong> Unchanged. Every <span class="mono">/v1/*</span> call rides the <span class="mono">keld_secret</span> cookie.</li>
+</ul>
+
+<h2 id="s6">6 · Success metrics</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline today</th><th>Target</th><th>Where read</th></tr></thead>
+<tbody>
+  <tr><td>Answer "what did I spend this week?" on the page</td><td class="mono">not possible · Today only</td><td class="mono">zero clicks (lands on 7d)</td><td>manual, this Mac</td></tr>
+  <tr><td>30-day ledger response</td><td class="mono">91 ms · 905 blocks</td><td class="mono">≤ 110 ms with dims · GUESS bound</td><td>same probe, rerun after S1</td></tr>
+  <tr><td>Suites</td><td class="mono">green on main</td><td class="mono">green</td><td>CI</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s7">7 · Risks, observability &amp; rollback</h2>
+
+<h3>Risk evaluation</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Class</th><th>Mitigation</th></tr></thead>
+<tbody>
+  <tr><td>Landing on Overview puts the health strip one click away</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Service and offline banners and the nav health dot already show on every pane.</td></tr>
+  <tr><td>By project reads mostly "no project"</td><td><span class="pill p-h">H</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-m">Med</span></td><td>59% of blocks have none here. Show the bucket; it shrinks as projects are defined.</td></tr>
+  <tr><td>WebKit renders the chart differently (Tauri host)</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>webkit Playwright project and baseline; no Chromium-only CSS.</td></tr>
+  <tr><td>Row cap truncates a heavy month</td><td><span class="pill p-l">L</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">Low</span></td><td>Stated, with "not loaded" days (<a href="#ac-3">AC-3</a>). 905 of 2000 here.</td></tr>
+  <tr><td>Specs assume Signal opens on Today</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Most navigate by hash; <span class="mono">#/today</span> keeps working. Fix the ones that open <span class="mono">/</span>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Signal opens on Overview, not Today</td><td>yes · revert</td><td>Tauri opens <span class="mono">/</span>; habit</td><td>Focus blocks is the next nav item</td></tr>
+  <tr><td>"Today" renamed "Focus blocks"</td><td>yes</td><td>bookmarks, docs that say "Today"</td><td><span class="mono">#/today</span> alias (<a href="#ac-1">AC-1</a>)</td></tr>
+  <tr><td><span class="mono">/v1/ledger</span> wire gains <span class="mono">dims</span></td><td>yes · additive</td><td>the page only</td><td>omitempty; contract edited first (<a href="#ac-8">AC-8</a>)</td></tr>
+  <tr><td>Today visual baseline replaced</td><td>yes</td><td>visual.spec.ts</td><td>diff limited to nav + title (<a href="#ac-10">AC-10</a>)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Observability</h3>
+<ul>
+  <li><strong>Reused signals:</strong> the health strip, <span class="mono">serviceAlert</span>, the nav health dot, the offline banner.</li>
+  <li><strong>New signals:</strong> None.</li>
+</ul>
+
+<h3>Rollback plan</h3>
+<ul>
+  <li><strong>Flag:</strong> None. The page is embedded in the binary and holds no server-side state.</li>
+  <li><strong>Steps:</strong> Revert the merge. Nothing is written by this change, so nothing needs cleaning.</li>
+</ul>
+
+<h2 id="s8">8 · Open gaps &amp; technical debt</h2>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Unknown or debt</th><th>Blocks?</th><th>Needs</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Default range. <strong>Decided by Gabriel, 2026-09-28: the last range the viewer picked.</strong> 7d only when nothing is stored yet.</td><td>no</td><td>resolved</td></tr>
+  <tr><td class="mono">2</td><td>2C's "46% of clock" under running time is undefined. <strong>Taken: "N blocks" instead</strong> (no objection at sign-off).</td><td>no</td><td>resolved</td></tr>
+  <tr><td class="mono">3</td><td>Overview's By project follows the range; the Projects pane's totals stay "this week" (<span class="mono">ingress/projects.go:263</span>).</td><td>no</td><td>a <span class="mono">since</span> param, later</td></tr>
+  <tr><td class="mono">4</td><td>The rest of 2C (shell, Activity, Sessions, groups, restyles) is revision 1 of this page and is parked.</td><td>no</td><td>a later discovery</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s9">9 · Review log</h2>
+<p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
+<p><strong>7/11 criteria met</strong> — ship with follow-ups. Graded by an independent reviewer agent against commits <span class="mono">98cfb4d8</span>…<span class="mono">57b88375</span>. Verdicts below are as graded; they were not edited after the fixes.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>AC</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="#ac-1">AC-1</a></td><td><span class="pill p-met">MET</span></td><td class="mono">index.html:18-23 · app.js paneForHash · pane-routing.test.js · overview.spec.ts:9</td></tr>
+  <tr><td class="mono"><a href="#ac-2">AC-2</a></td><td><span class="pill p-met">MET</span></td><td class="mono">no hunk in renderToday / loadAll · today-window.test.js unchanged</td></tr>
+  <tr><td class="mono"><a href="#ac-3">AC-3</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">range.test.js · overview.spec.ts · a past Custom range beyond the cap read "Nothing captured" under the truncation note</td></tr>
+  <tr><td class="mono"><a href="#ac-4">AC-4</a></td><td><span class="pill p-met">MET</span></td><td class="mono">overviewStats · overview-stats.test.js · overview.spec.ts hover</td></tr>
+  <tr><td class="mono"><a href="#ac-5">AC-5</a></td><td><span class="pill p-met">MET</span></td><td class="mono">volumeSeries · volume-series.test.js</td></tr>
+  <tr><td class="mono"><a href="#ac-6">AC-6</a></td><td><span class="pill p-met">MET</span></td><td class="mono">rawCategory "several" · volume-series.test.js</td></tr>
+  <tr><td class="mono"><a href="#ac-7">AC-7</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">slot-grid.test.js · under the Tokens split the histogram legend reads "active time", the chart's reads cached / fresh</td></tr>
+  <tr><td class="mono"><a href="#ac-8">AC-8</a></td><td><span class="pill p-met">MET</span></td><td class="mono">wire.go · store.go · dims_wire_test.go · v3liveattrib_test.go · contracts.md</td></tr>
+  <tr><td class="mono"><a href="#ac-9">AC-9</a></td><td><span class="pill p-partial">PARTIAL</span></td><td class="mono">empty + offline-with-no-cache asserted · the cached-range branch was unasserted</td></tr>
+  <tr><td class="mono"><a href="#ac-10">AC-10</a></td><td><span class="pill p-met">MET</span></td><td class="mono">app.css additive only · no hunk in other panes · baseline drift predates the branch</td></tr>
+  <tr><td class="mono"><a href="#ac-11">AC-11</a></td><td><span class="pill p-unver">NOT VERIFIABLE</span></td><td class="mono">reviewer ran node 274/274, vocab, ledger + daemon Go · not Playwright or go test ./...</td></tr>
+</tbody>
+</table>
+</div>
+<h3>After the review — commit <span class="mono">8b316b3f</span></h3>
+<ul>
+  <li><strong>AC-3 gap fixed.</strong> A capped answer with nothing in the range now says "This range could not be loaded". e2e: <span class="mono">overview.spec.ts</span> "a past range the row cap never reached…".</li>
+  <li><strong>AC-9 gap fixed.</strong> The cached-range branch is now asserted: <span class="mono">overview.spec.ts</span> "when Signal stops answering…".</li>
+  <li><strong>AC-7 left as built — decided 2026-09-29 (Gabriel): keep AC-7 as written.</strong> Under Tokens the histogram now shades each cell Less → More by its block's tokens (GitHub-style, as asked), which cannot match the chart's cached / fresh legend. The wording was not amended and nothing was changed, so AC-7 stays <span class="pill p-partial">PARTIAL</span> under the Tokens split and is met under the three categorical splits.</li>
+  <li><strong>AC-11:</strong> author-run after the fixes — node 274/274, <span class="mono">go test ./...</span> green, Playwright full suite 191/191 before the fixes, then 26/26 for the Overview + visual specs after.</li>
+  <li><strong>Deviation, declared:</strong> the Overview fetches for Today too; it is not skipped. The design text above is amended in place and marked so. No criterion depended on it.</li>
+  <li><strong>Notes kept, not changed:</strong> the Overview refreshes on the page's existing 30 s poll while open; a "not attributed yet" bucket exists beside "no project" (absent is never failed); up to 2,000 blocks are cached in <span class="mono">localStorage</span>, and a quota failure simply drops the cache.</li>
+  <li><strong>Found on real data, fixed:</strong> a month read "6707.2M" tokens; the Overview now says "6.7B" (<span class="mono">57b88375</span>).</li>
+</ul>
+
+<section class="qa">
+<h2 id="objections">Objections</h2>
+<dl>
+  <dt>Why touch Go at all for one page?</dt>
+  <dd>Fair — nearly all of this is page work. By repo has no other source, though. The column is already stored; the change is one SELECT and one optional field.</dd>
+  <dt>Why two ledger fetches instead of one?</dt>
+  <dd>One would be simpler code. Two means Focus blocks cannot change by accident, which is the scope. It costs ~90 ms per load (amended after review: it is not skipped for Today).</dd>
+  <dt>Won't "By project" look mostly empty?</dt>
+  <dd>Yes, on this Mac: 59% of blocks have no project. Hiding that bucket would overstate attribution. The honest bar shrinks as projects get defined.</dd>
+  <dt>Is 1m safe against the 2000-row cap?</dt>
+  <dd>Here it is 905 rows in 91 ms. A heavier machine could hit the cap. When it does, the page says so and marks the missing days, rather than drawing zeros.</dd>
+  <dt>Won't people miss Today as the first screen?</dt>
+  <dd>Possibly — it is a habit change. Focus blocks is the next nav item, bookmarks still work, and every pane still shows a failure.</dd>
+  <dt>Why no charting library?</dt>
+  <dd>The page loads nothing but Google Fonts, by contract. 2C draws bars and one line. CSS and one SVG polyline cover that.</dd>
+</dl>
+</section>
+
+</main>

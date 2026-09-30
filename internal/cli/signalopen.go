@@ -125,7 +125,7 @@ func appInstallPath() (string, bool) {
 		home, _ := os.UserHomeDir()
 		return firstExisting(darwinAppCandidates(home), true)
 	case "windows":
-		if p, ok := firstExisting(windowsAppCandidates(os.Getenv), false); ok {
+		if p, ok := firstExisting(windowsAppCandidates(os.Getenv, ownDir()), false); ok {
 			return p, true
 		}
 		if p, err := exec.LookPath("Keld Signal.exe"); err == nil {
@@ -158,8 +158,29 @@ func darwinAppCandidates(home string) []string {
 // windowsAppCandidates mirrors the two install locations a Tauri NSIS/WiX
 // bundle typically offers: per-user (%LOCALAPPDATA%, no admin needed) and
 // machine-wide (%ProgramFiles%).
-func windowsAppCandidates(getenv func(string) string) []string {
+// windowsAppCandidates lists where a Keld Signal desktop app may be installed,
+// most specific first.
+//
+// ⚠️ **THE FIRST CANDIDATE IS BESIDE THIS BINARY, AND IT IS THE ONE THAT
+// ACTUALLY MATCHES HOW WE SHIP.** The Windows installer puts everything in ONE
+// directory — `%LOCALAPPDATA%\Programs\keld\` — so the two fixed paths below
+// (`…\Keld Signal\`) never existed on a machine installed by keld-setup.exe, and
+// `signal open` always fell through to the browser even once the app was
+// shipped. Looking next to the running `keld.exe` finds it wherever the
+// installer put it, which is the same reason the wizard resolves its helper
+// relative to itself rather than by a hardcoded path.
+//
+// `exeDir` is the directory of the running binary (os.Executable), passed in so
+// this stays testable. An empty string simply contributes no candidate.
+//
+// The fixed paths are KEPT rather than replaced: a future MSI, a winget package
+// or someone unpacking the app on its own would land there, and dropping them
+// would silently break a layout we do not control.
+func windowsAppCandidates(getenv func(string) string, exeDir string) []string {
 	var c []string
+	if exeDir != "" {
+		c = append(c, filepath.Join(exeDir, "Keld Signal.exe"))
+	}
 	if lad := getenv("LOCALAPPDATA"); lad != "" {
 		c = append(c, filepath.Join(lad, "Keld Signal", "Keld Signal.exe"))
 	}
@@ -167,6 +188,19 @@ func windowsAppCandidates(getenv func(string) string) []string {
 		c = append(c, filepath.Join(pf, "Keld Signal", "Keld Signal.exe"))
 	}
 	return c
+}
+
+// ownDir is the directory holding the running executable, or "" if it cannot be
+// resolved — in which case the caller simply has one fewer place to look.
+func ownDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe)
 }
 
 // linuxAppCandidates checks the conventional system binary dirs plus the

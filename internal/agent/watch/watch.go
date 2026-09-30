@@ -581,6 +581,14 @@ func transcriptFiles(dir, source string) []string {
 	return out
 }
 
+// TranscriptFiles lists root's transcripts exactly as the watcher does, for a
+// reader that must see the same files (the per-request backfill,
+// internal/agent/usage).
+func TranscriptFiles(root Root) []string { return transcriptFiles(root.Dir, root.SourceID) }
+
+// IsDocumentSource is isDocumentSource, exported for the same reader.
+func IsDocumentSource(source string) bool { return isDocumentSource(source) }
+
 // isDocumentSource reports whether a source keeps a session as ONE JSON
 // DOCUMENT rather than as appended lines.
 //

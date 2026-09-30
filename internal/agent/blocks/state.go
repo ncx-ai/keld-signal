@@ -114,6 +114,20 @@ func (s *state) note(source, session, path string, now time.Time) {
 	e.Seen = now.Unix()
 }
 
+// pathOf is the transcript a session id belongs to, and its source. A session
+// is one transcript (SessionIDFor is the file stem), so the first match is the
+// only one.
+func (s *state) pathOf(session string) (path, source string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p, e := range s.entries {
+		if e.Session == session {
+			return p, e.Source, true
+		}
+	}
+	return "", "", false
+}
+
 // target is one transcript's state as the sweep sees it.
 //
 // It deliberately does NOT carry the last-advance instant. The settling rule is

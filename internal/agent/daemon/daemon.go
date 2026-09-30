@@ -40,6 +40,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/agent/singleton"
+	"github.com/ncx-ai/keld-signal/internal/agent/usage"
 	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -1293,6 +1294,15 @@ func Run(ctx context.Context) error {
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, pr.ingest, tok.Get, actor, emitter, set.Blocks,
 			set.AtlasEnabled(), onBlockPublished, onCut, sig.recordPublishFailed, sig.recordCutPending,
 			sig.recordCutResolved))
+		// Blocks recorded before 2026-09-29 under the evidence floor have no
+		// model; name them once from the analysis service, which still holds
+		// those sessions. See model_repair.go.
+		go repairUnnamedModels(ctx, sig.ledger, func() modelLookup {
+			if fn := blockModelLookup.Load(); fn != nil {
+				return *fn
+			}
+			return nil
+		}, priceStored, time.Minute, 30)
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is
@@ -1397,16 +1407,45 @@ func Run(ctx context.Context) error {
 		// hour is one fact, not three hundred, and the count rides `fields`.
 		tel.OnDrop(mirrorDropReporter(emitter, tel.Dropped))
 		offer := watchOffer(q)
-		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
+		// The local per-request count rides the same two hooks and ALWAYS
+		// runs — unpaired, Atlas off, either `tool_otlp` setting — because it
+		// is what the page's tokens and spend are summed from
+		// (docs/v3/contracts.md → `requests`). It reads the same parse as the
+		// mirror with its own bookkeeping, so it cannot move what Atlas gets.
+		var rec *usage.Recorder
+		if usage.EnabledFromEnv() {
+			rec = usage.New(sig.ledger, priceStored)
+			go rec.Run(ctx, watch.PollFromEnv())
+		} else {
+			log.Printf("keld-agent: per-request usage count OFF (KELD_USAGE=0) — the Overview's tokens and spend stop at the rows already recorded")
+		}
+		observe, observeDoc := transcriptObservers(tel, rec)
 		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its
 		// usage mirror cannot ride the per-line observe hook — same telemetry,
 		// other seam. (WS3 owns which sources are mirrored, via tel.SetSources.)
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv()).
-			WithDocumentObserver(tel.ObserveFile).
+			WithDocumentObserver(observeDoc).
 			// The lane record's real seam: a first sighting offers no pointer,
 			// so without this a session that lived entirely between two polls
 			// read `broken · watcher` while capturing perfectly.
 			WithPromptObserver(watchPrompt())
+		// The one-time backfill of transcripts already on disk, into the
+		// requests table only. Started after watch.New on purpose: the watcher
+		// replays every line written after its start, the backfill reads every
+		// file whole, and together they leave no gap (see usage.Backfill).
+		go func() {
+			if rec == nil {
+				return
+			}
+			usage.NewBackfill(sig.ledger, priceStored, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
+			// The backfill is what fills the requests an unnamed block's model
+			// can be read from, so name them again once it is done.
+			if ctx.Err() == nil {
+				if n := sig.ledger.NameBlockModelsFromRequests(priceStored); n > 0 {
+					log.Printf("keld-agent: named the model of %d earlier block(s) from their own requests", n)
+				}
+			}
+		}()
 		// Third use of the same detection: the watcher already knows when a
 		// transcript grew, so it tells the sidecar, which brings its
 		// reference-series store up to date from its own byte offset. That is

@@ -1,6 +1,7 @@
 ﻿; Inno Setup script — build in CI: iscc installers\windows\keld-agent.iss
 ; Per-user install (no admin). Files staged next to this script by CI:
-;   keld.exe, keld-agent.exe, keld-wizard-host.exe, keld-agent-sidecar\  (frozen one-dir)
+;   keld.exe, keld-agent.exe, keld-wizard-host.exe, keld-agent-sidecar\  (frozen one-dir),
+;   and Keld Signal.exe (the desktop app; optional — see [Files])
 ; This installer only installs: it asks nothing about Keld (no sign-in, no setup
 ; code, no tool picker) and opens Signal at the end of an interactive install.
 ; See docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html, AC-10.
@@ -99,6 +100,15 @@ InfoBeforeFile=..\resources\SECURITY-OVERVIEW.txt
 Source: "keld.exe";             DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-agent.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-wizard-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The Keld Signal desktop app. `keld signal open` prefers it over a browser tab
+; and finds it by looking BESIDE keld.exe — which is why it installs here rather
+; than into its own directory: one install dir, and nothing to keep in step.
+;
+; ⚠️ `skipifsourcedoesntexist` IS LOAD-BEARING. The app is a convenience: without
+; it `signal open` opens a browser, which is what every release before this did.
+; A Rust build that fails on the runner must not take the whole Windows installer
+; down with it, and a missing `Source:` is otherwise a COMPILE ERROR.
+Source: "Keld Signal.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "keld-agent-sidecar\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Registry]
@@ -119,8 +129,46 @@ Source: "keld-agent-sidecar\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   ValueData: "{olddata};{app}"; Check: NeedsAddPath('{app}')
 
+[Icons]
+; THE ONLY WAY TO REACH THE APP ONCE THE INSTALLER IS GONE. Before this entry the
+; product shipped a desktop app with no entry point: `DisableProgramGroupPage=yes`
+; and no [Icons] section at all, so after the Finished page closed the app could
+; only be started by `keld signal open` from a terminal — on a product whose whole
+; Windows story is that no terminal ever appears — or by finding the exe under
+; {localappdata}. The postinstall launch entry in [Run] opens it exactly once,
+; which hides the gap rather than closing it.
+;
+; ⚠️ `{userprograms}`, NOT `{group}`, AND NOT BECAUSE THEY DIFFER IN PERMISSION.
+; This is a per-user install (PrivilegesRequired=lowest,
+; DefaultDirName={localappdata}\Programs\keld) so both land in the same Start
+; Menu. The difference is shape: `{group}` is a FOLDER, named by
+; DefaultGroupName, and with DisableProgramGroupPage=yes nobody ever sees or
+; chooses it — so a single shortcut would sit alone inside a folder called
+; "Keld", which Windows 11's All apps list renders as a collapsed group a person
+; has to expand to find the one thing in it. One app, one entry, no folder.
+;
+; ⚠️ THE `Check` IS THE SAME OPTIONALITY [Files] AND [Run] ALREADY CARRY, AND
+; WITHOUT IT A BUILD WITHOUT THE APP SHIPS A DEAD SHORTCUT. The Rust step is
+; `continue-on-error` on the runner, so `Keld Signal.exe` may legitimately be
+; absent (see skipifsourcedoesntexist in [Files] and skipifdoesntexist in [Run]).
+; [Icons] has no `skipifdoesntexist` — an entry whose target is missing is
+; created anyway, pointing at nothing — so the guard has to be a Check, and it
+; runs after [Files], which is what makes FileExists the right question.
+;
+; Inno logs every shortcut it creates and removes it on uninstall, so this needs
+; no [UninstallDelete] companion.
+Name: "{userprograms}\Keld Signal"; Filename: "{app}\Keld Signal.exe"; \
+  Comment: "Your focus blocks, your projects, and whether they reached Atlas"; \
+  Check: AppPresent
+
 [Run]
-; ONE ENTRY: open Signal when an interactive install finishes.
+; OPEN SIGNAL WHEN AN INTERACTIVE INSTALL FINISHES — EXACTLY ONE OF TWO ENTRIES.
+;
+; The desktop app when it is on disk, and `keld signal open` (a browser tab) when
+; it is not. The two Checks are MUTUALLY EXCLUSIVE (`AppPresent` / `not
+; AppPresent`) so the Finished page shows one "Open Keld Signal" checkbox and
+; opens one window. Postinstall Checks are evaluated when the Finished page is
+; built, after [Files], so FileExists is the right question (see AppPresent).
 ;
 ; ⚠️ REGISTERING THE AGENT DOES NOT LIVE HERE AND MUST NOT COME BACK. It runs in
 ;    CurStepChanged(ssPostInstall), through RunQuiet, unconditionally — see there.
@@ -129,29 +177,46 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 ;    a terminal window open twice"). A [Run] entry cannot pass CREATE_NO_WINDOW;
 ;    keld-wizard-host --run can. Re-adding it here would also register twice.
 ;
-; ⚠️ THIS REPLACED onboard.cmd (2026-09-29, web sign-in spec AC-10 / D10). That
+; ⚠️ THESE REPLACED onboard.cmd (2026-09-29, web sign-in spec AC-10 / D10). That
 ;    console asked for a setup code; no installer asks anything about Keld now.
 ;    Signal asks the one real question on first open — sign in with Atlas, or use
 ;    locally only — and the daemon's auto-setup configures the AI tools it finds.
 ;
-; `postinstall`: a checkbox on the Finished page, TICKED by default — opening
-;    Signal is how an interactive install ends, not a surprise.
-; `skipifsilent`: an MDM /SILENT or /VERYSILENT push opens nothing on a screen
-;    nobody is at. Such a machine is paired with `keld-agent install --code
-;    <CODE>` from the management tool, exactly as before.
-; `shellexec`, `nowait`: the installer must not wait on a browser.
+; Both are `postinstall` (a checkbox on the Finished page) and TICKED by default:
+;    opening Signal is how an interactive install ends, not a surprise. Both are
+;    `skipifsilent`: an MDM /SILENT or /VERYSILENT push opens nothing on a screen
+;    nobody is at, and is paired with `keld-agent install --code <CODE>` from the
+;    management tool, exactly as before.
 ;
-; ⚠️ DO NOT ADD runhidden. onboard.cmd once ran as `runhidden nowait` — an
+; ⚠️ NEITHER IS runhidden. onboard.cmd once ran as `runhidden nowait` — an
 ;    interactive login in a window nobody could see — and every Windows machine
-;    registered its task and then idled forever, collecting nothing and saying
-;    nothing. `keld signal open` prompts for nothing, but the flag on this line
-;    is how that defect arrived; keep it off.
+;    registered its task and then idled forever. On the app entry it would also
+;    hide the very window the entry exists to open.
 ;
-; `keld signal open` needs the NEW daemon's agent.json (port + per-start
-; secret), which is why ssPostInstall waits for it (WaitForAgent) before the
-; Finished page appears.
+; Both need the NEW daemon's agent.json (port + per-start secret): ssPostInstall
+; waits for it (WaitForAgent) before the Finished page appears. If that wait
+; runs out, the app still recovers on its own — `follow_agent` in
+; app/src-tauri/src/main.rs polls every 2s and navigates once the file appears.
+
+; 1. THE DESKTOP APP, when this build shipped it.
+;
+;    `Keld Signal.exe` is a GUI-subsystem binary (verified: PE subsystem 2), so
+;    CreateProcess allocates it no console at all — none of this file's console
+;    defences apply, and none are needed.
+;
+;    ⚠️ `skipifdoesntexist` IS LOAD-BEARING even beside the Check: the app's Rust
+;    build is `continue-on-error` on the runner, and Inno reports a HARD ERROR
+;    when it cannot start a [Run] command. A missing app must be a no-op.
+Filename: "{app}\Keld Signal.exe"; Description: "Open Keld Signal"; \
+  Check: AppPresent; Flags: postinstall nowait skipifsilent skipifdoesntexist
+
+; 2. THE FALLBACK: `keld signal open`, when there is no app on disk. It opens the
+;    page in the default browser. `shellexec` + `nowait`: the installer must not
+;    wait on a browser. `keld.exe` is a console binary, so this likely flashes a
+;    console for the moment it runs — unmeasured; only builds without the app
+;    reach it.
 Filename: "{app}\keld.exe"; Parameters: "signal open"; Description: "Open Keld Signal"; \
-  Flags: postinstall shellexec skipifsilent nowait
+  Check: not AppPresent; Flags: postinstall shellexec skipifsilent nowait
 
 [UninstallRun]
 ; UNINSTALL USED TO REMOVE THE FILES AND NOTHING ELSE, which left three things
@@ -190,8 +255,15 @@ Filename: "{app}\keld-agent.exe"; Parameters: "uninstall"; \
 ; teardown), and not a keld-agent someone launched by hand. taskkill exits non-zero
 ; when nothing matches, which Inno ignores for this section, so "already gone" is a
 ; normal outcome rather than an error.
+;
+; ⚠️ "Keld Signal.exe" IS HERE FOR THE SAME REASON IT IS IN PrepareToInstall:
+; Windows will not delete a running exe, and the app outlives its own window
+; (closing it hides it behind a tray icon), so an uninstall started from a
+; machine where anyone ever opened it would fail to remove the app. `/F` rather
+; than a graceful close for the same reason too — the app's CloseRequested
+; handler calls prevent_close, so WM_CLOSE hides it and changes nothing.
 Filename: "{sys}\taskkill.exe"; \
-  Parameters: "/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe"; \
+  Parameters: "/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe /IM ""Keld Signal.exe"""; \
   Flags: runhidden; RunOnceId: "killstragglers"
 
 [Code]
@@ -246,6 +318,22 @@ begin
 
   TraceFile := ExpandConstant('{%TEMP}\keld-wizard-trace.log');
   DeleteFile(TraceFile);
+end;
+
+// The [Icons] entry's Check. The desktop app is optional — its Rust build is
+// continue-on-error on the runner — and [Icons] has no `skipifdoesntexist`, so
+// without this a build that shipped no app would still create a Start Menu
+// shortcut pointing at a file that does not exist.
+//
+// ⚠️ THIS IS ONLY CORRECT BECAUSE [Icons] RUNS AFTER [Files]. Asked any earlier
+// — from PrepareToInstall, say — it would answer False on every FRESH install,
+// because {app}\Keld Signal.exe is not there yet, and the shortcut would be
+// created only on upgrades. Inno processes [Icons] once the payload is on disk,
+// which is what makes FileExists the question rather than a guess about what CI
+// built.
+function AppPresent: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\Keld Signal.exe'));
 end;
 
 // PrepareToInstall stops the running agent BEFORE any file is replaced.
@@ -304,10 +392,27 @@ begin
   Trace('PrepareToInstall: stopping the agent');
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN KeldAgent',
        '', SW_HIDE, ewWaitUntilTerminated, RC);
-  // /T so the sidecar's own children go with it; naming both images in one call
+  // /T so the sidecar's own children go with it; naming every image in one call
   // matches the idiom already in [UninstallRun].
+  //
+  // ⚠️ "Keld Signal.exe" IS IN THIS LIST BECAUSE THE INSTALLER NOW LAUNCHES IT,
+  // AND WITHOUT IT THE *NEXT* INSTALL FAILS. Windows refuses to delete a running
+  // exe, so the copy step stops on a modal: "An error occurred while trying to
+  // replace the existing file: DeleteFile failed; code 5. Access is denied."
+  // Measured on a real machine, first install after the postinstall launch entry
+  // was added. Nothing else here covers it — `CloseApplications=no` is set
+  // deliberately (the Restart Manager modal it renders reads as an error and
+  // failed to stop the agent anyway), so Inno will not offer to close it.
+  //
+  // ⚠️ AND `/F` IS LOAD-BEARING FOR THIS IMAGE SPECIFICALLY. A polite taskkill
+  // posts WM_CLOSE, which the app INTERCEPTS: its CloseRequested handler calls
+  // prevent_close and hides the window (see app/src-tauri/src/main.rs — closing
+  // the window is not quitting, so re-showing it is instant). So a graceful kill
+  // is a no-op that leaves the process alive and the file locked, and it is the
+  // same design that makes this necessary at all: a person who "closed" the app
+  // still has it running behind a tray icon with no idea it is there.
   Exec(ExpandConstant('{sys}\taskkill.exe'),
-       '/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe',
+       '/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe /IM "Keld Signal.exe"',
        '', SW_HIDE, ewWaitUntilTerminated, RC);
   // A moment for the OS to release the file handles the copy is about to take.
   Sleep(600);

@@ -74,12 +74,20 @@ test.describe("Signal not running", () => {
     await expect(page.getByText("then reload this page")).toBeVisible();
     // The shell itself is intact: navigation and the sidebar's own verdict.
     await expect(page.getByText("Keld Signal", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Today" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Focus blocks" })).toBeVisible();
     await expect(page.getByText("not running", { exact: true })).toBeVisible();
     // No spinner left behind, and no block card pretending to be data.
     await expect(page.getByText("Loading…")).toBeHidden();
     await expect(page.getByRole("row").filter({ hasText: /\d{2}:\d{2} → \d{2}:\d{2}/ })).toHaveCount(0);
     expect((await page.locator("body").innerText()).trim().length).toBeGreaterThan(0);
+  });
+
+  test("the Overview, where Signal opens, says so and draws nothing", async ({ page, shell }) => {
+    await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
+    await page.goto(`${shell.url}/?secret=irrelevant`);
+    await expect(page.getByText("Signal is not running on this machine")).toBeVisible();
+    await expect(page.getByText("Signal did not answer, so this range cannot be drawn yet.")).toBeVisible();
+    await expect(page.locator(".ov-tile")).toHaveCount(0);
   });
 
   test("the other panes say so too", async ({ page, shell }) => {

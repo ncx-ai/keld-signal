@@ -308,32 +308,89 @@ var stageColumns = map[Stage]string{
 
 // Store is the SQLite-backed Recorder + Reader.
 type Store struct {
-	mu       sync.Mutex
-	db       *sql.DB
-	path     string
-	failOnce sync.Once
+	mu   sync.Mutex
+	db   *sql.DB
+	path string
+	// Failure reporting, per operation: when each last reported, and how many
+	// it has held back since. See logFailure.
+	failMu   sync.Mutex
+	failLast map[string]time.Time
+	failHeld map[string]int
+	now      func() time.Time // nil means time.Now; a test sets it
 }
 
 // New returns a Store bound to ~/.keld/state/ledger.db (KELD_HOME-relative,
 // via internal/paths so tests can isolate it). It never opens the file
 // eagerly and never fails: the first write (or Read) opens/creates it on
 // demand, and a failure there is logged once and swallowed.
+//
+// ⚠️ **ONE STORE PER FILE PER PROCESS, and New enforces it.** It returns the
+// same Store for the same path every time. Two independent connections to one
+// WAL database inside one process lost data on a real machine (2026-09-29):
+// the daemon builds its v3 wiring twice — once for the onboarding handler, once
+// for Run — and each opened its own Store. When the discarded one's connection
+// closed, SQLite took it for the last connection, checkpointed and UNLINKED the
+// -wal and -shm files while the live Store still held them open. Every write
+// after that went into an unlinked file, reached ledger.db only when a
+// checkpoint happened to run, and was lost at the next restart — observed as a
+// backfill marker written at 14:28 and gone by 14:33, and a WAL that vanished 13
+// seconds after every start. Sharing the Store makes the second connection
+// impossible rather than merely avoided.
 func New() *Store {
-	return &Store{path: dbPath()}
+	path := dbPath()
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	if s, ok := stores[path]; ok {
+		return s
+	}
+	s := &Store{path: path}
+	stores[path] = s
+	return s
 }
+
+var (
+	storesMu sync.Mutex
+	stores   = map[string]*Store{}
+)
 
 var (
 	_ Recorder = (*Store)(nil)
 	_ Reader   = (*Store)(nil)
 )
 
-// logFailure reports a ledger write/open failure exactly once per process
-// (per Store instance) — see the package doc: the ledger must never become a
-// second thing that can go silently wrong forever.
+// failLogEvery bounds how often one operation's failures are reported.
+const failLogEvery = 10 * time.Minute
+
+// logFailure reports a ledger write/open failure — see the package doc: the
+// ledger must never become a second thing that can go silently wrong forever.
+//
+// ⚠️ **It used to report once per process, and then never again.** A store that
+// began refusing writes an hour into a run — a full disk, a locked file —
+// logged its first error and went quiet, while the per-request recorder kept
+// holding rows it could not write. Now each operation reports at most once per
+// failLogEvery, naming how many failures it held back: a flood is still
+// impossible (the reason for the old latch), and silence is too.
 func (s *Store) logFailure(op string, err error) {
-	s.failOnce.Do(func() {
-		debuglog.Append("ledger: %s failed and will not be retried noisily: %v", op, err)
-	})
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	if s.failLast == nil {
+		s.failLast, s.failHeld = map[string]time.Time{}, map[string]int{}
+	}
+	if last, ok := s.failLast[op]; ok && now.Sub(last) < failLogEvery {
+		s.failHeld[op]++
+		return
+	}
+	held := s.failHeld[op]
+	s.failLast[op], s.failHeld[op] = now, 0
+	if held > 0 {
+		debuglog.Append("ledger: %s failed: %v (%d more since the last report)", op, err, held)
+		return
+	}
+	debuglog.Append("ledger: %s failed: %v", op, err)
 }
 
 // handle returns the open database, (re)creating the file if it went missing
@@ -393,6 +450,12 @@ func (s *Store) open() (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1) // one writer; serializes contention into queueing rather than SQLITE_BUSY
 	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// The per-request table (requests.go) is ensured here rather than per call
+	// so a ledger recreated after deletion gets it back on the same reopen.
+	if _, err := db.Exec(requestsSchema); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -987,7 +1050,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 	prows.Close()
 
 	brows, err := db.Query(`
-		SELECT session, start, end, source, start_reason, end_reason,
+		SELECT session, start, end, source, start_reason, end_reason, dim_repo, dim_branch,
 		       cut_status, cut_at, cut_reason, cut_http_status, cut_ok_at,
 		       measured_status, measured_at, measured_reason, measured_http_status, measured_ok_at,
 		       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, request_tokens, requests, model, estimate_usd,
@@ -1008,6 +1071,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 	for brows.Next() {
 		var (
 			session, source, startReason, endReason string
+			dimRepo, dimBranch                      string
 			start                                   int64
 			end                                     sql.NullInt64
 
@@ -1036,7 +1100,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 			recvHTTP                                 sql.NullInt64
 		)
 		if err := brows.Scan(
-			&session, &start, &end, &source, &startReason, &endReason,
+			&session, &start, &end, &source, &startReason, &endReason, &dimRepo, &dimBranch,
 			&cutStatus, &cutAt, &cutReason, &cutHTTP, &cutOkAt,
 			&measStatus, &measAt, &measReason, &measHTTP, &measOkAt,
 			&inputT, &outputT, &cacheReadT, &cacheCreateT, &requestT, &requests, &model, &estimateUSD,
@@ -1058,6 +1122,9 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		}
 		if end.Valid {
 			be.End = end.Int64
+		}
+		if dimRepo != "" || dimBranch != "" {
+			be.Dims = &DimsEntry{Repo: dimRepo, Branch: dimBranch}
 		}
 
 		if cell := buildCell(cutStatus, cutAt, cutReason, cutHTTP, cutOkAt); cell != nil {

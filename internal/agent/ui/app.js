@@ -311,18 +311,11 @@ export function rhythmTitleFor(block, catalog) {
 export function focusStats(blocks) {
   let totalMinutes = 0;
   let longestMinutes = 0;
-  let tokens = 0;
-  let usd = 0;
   const days = new Set();
   for (const b of blocks) {
     const minutes = (b.end - b.key.start) / 60;
     totalMinutes += minutes;
     if (minutes > longestMinutes) longestMinutes = minutes;
-    const m = measuredOf(b);
-    if (m) {
-      tokens += totalTokens(m.tokens);
-      usd += m.estimate_usd || 0;
-    }
     days.add(new Date(b.key.start * 1000).toISOString().slice(0, 10));
   }
   const breaks = deriveBreaks(blocks);
@@ -331,8 +324,6 @@ export function focusStats(blocks) {
     count: blocks.length,
     totalMinutes,
     longestMinutes,
-    tokens,
-    usd,
     breakCount: breaks.length,
     breakMinutes,
     dayCount: days.size, // a same-window proxy for "streak"; see the report
@@ -752,6 +743,572 @@ export function todayLedgerURL(now) {
   return `/v1/ledger?since=${startOfLocalDay(now)}`;
 }
 
+// ---- Overview: pure ----
+//
+// The Overview (docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html)
+// reads the same GET /v1/ledger Focus blocks does, over a range the person
+// picks, plus GET /v1/usage: tokens and spend counted PER REQUEST
+// (docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html). Tokens,
+// spend and models come from the requests; running time, sessions and the
+// histogram come from the blocks; repository and project come from the block
+// that holds each request. Everything is computed here, with the helpers the
+// Focus blocks table already uses — totalTokens, projectsOf — so a number on
+// the Overview can always be checked against its source.
+
+export const RANGE_KEYS = ["today", "7d", "1m", "custom"];
+/** Only when nothing is remembered: the page otherwise reopens on the last
+ *  range the viewer picked (decided 2026-09-28). */
+export const DEFAULT_RANGE = "7d";
+/** The daemon's own clamp on `limit` (daemon/servicehealth_route.go). The
+ *  ledger answers newest-first, so a range holding more blocks than this
+ *  loses its OLDEST ones — see ledgerTruncated. */
+export const LEDGER_LIMIT = 2000;
+
+const RANGE_DAYS = { today: 1, "7d": 7, "1m": 30 };
+const RANGE_TITLES = { today: "Today", "7d": "Last 7 days", "1m": "Last 30 days", custom: "Custom range" };
+
+/** A remembered range, or the default when what was stored is not one the
+ *  control knows. Custom's dates are kept as given; rangeWindow judges them. */
+export function resolveRange(stored) {
+  if (!stored || typeof stored !== "object" || !RANGE_KEYS.includes(stored.key)) return { key: DEFAULT_RANGE };
+  if (stored.key === "custom") return { key: "custom", from: String(stored.from || ""), to: String(stored.to || "") };
+  return { key: stored.key };
+}
+
+function parseLocalDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ""));
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+  const date = new Date(y, mo, d);
+  return date.getFullYear() === y && date.getMonth() === mo && date.getDate() === d ? date : null;
+}
+
+const unixOf = (date) => Math.floor(date.getTime() / 1000);
+const dayAfter = (date, n) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+
+function shortDay(unix) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(unix * 1000));
+}
+
+/** The range as local days: `start` (inclusive) and `end` (exclusive) are
+ *  local midnights, and `days` holds each day's midnight. Local for the same
+ *  reason startOfLocalDay is: a day is the one the person is having. Days are
+ *  built by calendar arithmetic, never by adding 86400, so a DST day is still
+ *  one day. */
+export function rangeWindow(range, now) {
+  const r = resolveRange(range);
+  let first;
+  let count;
+  if (r.key === "custom") {
+    let a = parseLocalDate(r.from);
+    let b = parseLocalDate(r.to);
+    if (!a || !b) return rangeWindow({ key: DEFAULT_RANGE }, now);
+    if (a > b) [a, b] = [b, a];
+    first = a;
+    count = Math.round((b - a) / 86_400_000) + 1;
+  } else {
+    const t = new Date(now);
+    count = RANGE_DAYS[r.key];
+    first = new Date(t.getFullYear(), t.getMonth(), t.getDate() - (count - 1));
+  }
+  const days = Array.from({ length: count }, (_, i) => unixOf(dayAfter(first, i)));
+  const dates =
+    count === 1
+      ? new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(first)
+      : `${shortDay(days[0])} – ${shortDay(days[count - 1])}`;
+  return { key: r.key, range: r, start: days[0], end: unixOf(dayAfter(first, count)), days, title: RANGE_TITLES[r.key], dates };
+}
+
+/** How far before the range the ledger is asked from. A block that starts
+ *  before the range and runs into it (23:50 → 00:10) holds requests made
+ *  INSIDE the range, and their repository and project come from it; blocks
+ *  are cut at 20 minutes, so an hour is ample. Such a block is joined, never
+ *  drawn: blocksInWindow still filters by the range. */
+export const LEDGER_LOOKBACK = 3600;
+
+export function rangeLedgerURL(win) {
+  return `/v1/ledger?since=${win.start - LEDGER_LOOKBACK}&limit=${LEDGER_LIMIT}`;
+}
+
+/** `since` bounds only the start of a range; Custom's end is applied here. */
+export function blocksInWindow(blocks, win) {
+  return (blocks || []).filter((b) => b.key.start >= win.start && b.key.start < win.end);
+}
+
+/** A response holding exactly the row cap may have lost blocks — always the
+ *  OLDEST, since the ledger answers newest-first. `loadedFrom` is the oldest
+ *  block that did arrive; anything drawn before it must read "not loaded",
+ *  never zero. */
+export function ledgerTruncated(blocks, limit = LEDGER_LIMIT) {
+  const list = blocks || [];
+  if (list.length < limit) return { truncated: false, loadedFrom: null };
+  return { truncated: true, loadedFrom: Math.min(...list.map((b) => b.key.start)) };
+}
+
+/** GET /v1/usage for a range (docs/v3/contracts.md): the per-request table
+ *  summed per 5 minutes, bounded at BOTH ends, unlike the ledger's `since`. */
+export function usageURL(win) {
+  return `/v1/usage?since=${win.start}&until=${win.end}`;
+}
+
+/** The tools whose work is cut into focus blocks. Codex is one (its blocks
+ *  are named after the rollout file, as its requests' transcript is); only
+ *  Gemini's work never is. */
+const BLOCK_SOURCES = new Set(["claude_code", "cowork", "codex"]);
+
+export const SOURCE_LABELS = { claude_code: "Claude Code", cowork: "Cowork", codex: "Codex", gemini_cli: "Gemini CLI" };
+
+/** Every usage bucket, joined to the block that holds it: the block of the
+ *  same transcript whose [start, end) contains the bucket's instant — exact,
+ *  because block edges and buckets both sit on 5-minute boundaries. With no
+ *  such block, `place` says why: "none" for a tool whose work is never cut into
+ *  blocks (Gemini), "unknown" for one whose work is — still in an open
+ *  block, or in one this page did not load. */
+export function usageItems(usage, blocks) {
+  const bySession = new Map();
+  for (const b of blocks || []) {
+    const list = bySession.get(b.key.session);
+    if (list) list.push(b);
+    else bySession.set(b.key.session, [b]);
+  }
+  return ((usage && usage.buckets) || []).map((u) => {
+    const list = bySession.get(u.transcript) || [];
+    const block = list.find((b) => u.at >= b.key.start && u.at < b.end) || null;
+    return {
+      at: u.at,
+      source: u.source,
+      model: u.model || "",
+      tokens: u.tokens || {},
+      usd: u.estimate_usd || 0,
+      requests: u.requests || 0,
+      block,
+      place: block ? "block" : BLOCK_SOURCES.has(u.source) ? "unknown" : "none",
+    };
+  });
+}
+
+export function itemsInWindow(items, win) {
+  return (items || []).filter((i) => i.at >= win.start && i.at < win.end);
+}
+
+/** Tokens, cache reads and spend summed over requests. The Overview's and
+ *  Focus blocks' Tokens and Est. spend tiles both come from here, so one day
+ *  reads the same on both. */
+export function usageTotals(items) {
+  let tokens = 0;
+  let cache = 0;
+  let usd = 0;
+  let requests = 0;
+  for (const i of items || []) {
+    tokens += totalTokens(i.tokens);
+    cache += i.tokens.cache_read || 0;
+    usd += i.usd || 0;
+    requests += i.requests || 0;
+  }
+  return { tokens, cache, usd, requests };
+}
+
+/** Where usage data starts: the earliest request held for any tool, or null
+ *  when none is. The page shows no usage before it (decided 2026-09-29, D2). */
+export function usageStartsAt(usage) {
+  const firsts = Object.values((usage && usage.sources) || {})
+    .map((s) => s.first_at)
+    .filter(Number.isFinite);
+  return firsts.length ? Math.min(...firsts) : null;
+}
+
+/** The tools whose data starts after the range does, earliest first — the
+ *  ones the page must name, because their earlier days read as no usage. */
+export function lateSources(usage, win) {
+  return Object.entries((usage && usage.sources) || {})
+    .filter(([, s]) => Number.isFinite(s.first_at) && s.first_at > win.start)
+    .sort((a, b) => a[1].first_at - b[1].first_at)
+    .map(([source, s]) => ({ source, label: SOURCE_LABELS[source] || source, firstAt: s.first_at }));
+}
+
+export const NO_REPO_LABEL = "no repository";
+export const NO_MODEL_LABEL = "no model";
+/** A block that made no model requests at all, under By model. */
+export const NO_REQUESTS_LABEL = "no requests";
+export const NO_PROJECT_LABEL = "no project";
+export const NOT_ATTRIBUTED_LABEL = "not attributed yet";
+export const SEVERAL_PROJECTS_LABEL = "several projects";
+export const OTHER_LABEL = "other";
+
+/** Token counts at the Overview's scale. A month is billions of tokens, and
+ *  formatTokens (shared with Focus blocks, which never sees a range) stops at
+ *  M — "6707.2M" is a number a person has to count digits in. */
+export function formatVolume(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  return formatTokens(v);
+}
+
+/** A repository remote as the page names it: its last path segment. */
+export function repoLabel(remote) {
+  const s = String(remote || "");
+  if (!s) return NO_REPO_LABEL;
+  const parts = s.split("/");
+  return parts[parts.length - 1] || s;
+}
+
+const byValueThenLabel = (a, b) => b.value - a.value || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+
+/** The `n` largest entries, the rest summed as `other`, and the `noneKey`
+ *  bucket kept apart — "no repository" is not a repository, so it never
+ *  competes for a top-three place. Ties break by label so a re-render cannot
+ *  reorder them. */
+export function topN(map, { n = 3, noneKey } = {}) {
+  const entries = [...map]
+    .filter(([label, value]) => label !== noneKey && value > 0)
+    .map(([label, value]) => ({ label, value }))
+    .sort(byValueThenLabel);
+  return {
+    top: entries.slice(0, n),
+    other: entries.slice(n).reduce((s, e) => s + e.value, 0),
+    none: noneKey === undefined ? 0 : map.get(noneKey) || 0,
+  };
+}
+
+function addTo(map, key, v) {
+  map.set(key, (map.get(key) || 0) + v);
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** The four Overview tiles and their hover breakdowns. Tokens, spend and the
+ *  model breakdowns are summed over REQUESTS (`items`, see usageItems); active
+ *  time, sessions and the repository breakdowns over `blocks`. A session's
+ *  span runs from its first block's start to its last block's end within the
+ *  blocks given. */
+export function overviewStats(blocks, items) {
+  const totals = usageTotals(items);
+  let activeMinutes = 0;
+  const tokByModel = new Map();
+  const usdByModel = new Map();
+  const minByRepo = new Map();
+  const sessions = new Map();
+  for (const i of items || []) {
+    const model = i.model || NO_MODEL_LABEL;
+    addTo(tokByModel, model, totalTokens(i.tokens));
+    addTo(usdByModel, model, i.usd || 0);
+  }
+  for (const b of blocks || []) {
+    const minutes = (b.end - b.key.start) / 60;
+    activeMinutes += minutes;
+    const repo = repoLabel(b.dims && b.dims.repo);
+    addTo(minByRepo, repo, minutes);
+    const s = sessions.get(b.key.session) || { start: b.key.start, end: b.end, repos: new Map() };
+    s.start = Math.min(s.start, b.key.start);
+    s.end = Math.max(s.end, b.end);
+    addTo(s.repos, repo, minutes);
+    sessions.set(b.key.session, s);
+  }
+  // One repository per session — the one it spent longest in — so the
+  // breakdown sums to the headline count instead of past it.
+  const sessByRepo = new Map();
+  for (const s of sessions.values()) {
+    const [main] = [...s.repos].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
+    addTo(sessByRepo, main.label, 1);
+  }
+  const { tokens, cache, usd } = totals;
+  return {
+    tokens,
+    cacheShare: tokens ? cache / tokens : null,
+    usd,
+    usdPerMillion: tokens ? usd / (tokens / 1e6) : null,
+    activeMinutes,
+    blockCount: (blocks || []).length,
+    sessions: sessions.size,
+    medianSessionMinutes: median([...sessions.values()].map((s) => (s.end - s.start) / 60)),
+    byModel: {
+      tokens: topN(tokByModel, { noneKey: NO_MODEL_LABEL }),
+      usd: topN(usdByModel, { noneKey: NO_MODEL_LABEL }),
+    },
+    byRepo: {
+      minutes: topN(minByRepo, { noneKey: NO_REPO_LABEL }),
+      sessions: topN(sessByRepo, { noneKey: NO_REPO_LABEL }),
+    },
+  };
+}
+
+export const SPLITS = [
+  { key: "tokens", label: "Tokens" },
+  { key: "model", label: "By model" },
+  { key: "repo", label: "By repo" },
+  { key: "project", label: "By project" },
+];
+
+const TOP_COLORS = ["var(--ov-c1)", "var(--ov-c2)", "var(--ov-c3)"];
+const TOKEN_CATEGORIES = [
+  { key: "cache", label: "cached tokens", color: "var(--ov-cache)", kind: "cache" },
+  { key: "fresh", label: "fresh tokens", color: "var(--ov-fresh)", kind: "fresh" },
+];
+const NONE_LABELS = { model: NO_MODEL_LABEL, repo: NO_REPO_LABEL, project: NO_PROJECT_LABEL };
+
+/** Where one block falls under a categorical split, before ranking. A block
+ *  in several projects is ONE category, "several projects" — stacking it
+ *  under each would count its tokens once per project in a single column. A
+ *  block whose attribution never ran is "not attributed yet", kept apart from
+ *  "no project", the same distinction the Focus blocks table draws. */
+function rawCategory(b, split, catalog) {
+  if (split === "model") {
+    const m = measuredOf(b);
+    if (m && m.model) return { kind: "named", label: m.model };
+    // Measured and found no tokens: nothing ran, so there is no model to name.
+    if (m && m.status === "n/a" && m.reason === "no_tokens") return { kind: "idle" };
+    return { kind: "none" };
+  }
+  if (split === "repo") {
+    const repo = b.dims && b.dims.repo;
+    return repo ? { kind: "named", label: repoLabel(repo) } : { kind: "none" };
+  }
+  const list = projectsOf(b);
+  if (list === null) return { kind: "unknown" };
+  if (!list.length) return { kind: "none" };
+  if (list.length > 1) return { kind: "several" };
+  return { kind: "named", label: projectTitle(list[0].id, catalog) || list[0].id };
+}
+
+/** Where one usage item falls under a split. Its model is its own; its
+ *  repository and project are its block's. With no block it is "not
+ *  attributed yet" where a block will hold it, and "none" where none ever
+ *  will (a tool whose work is not cut into blocks). */
+function itemCategory(item, split, catalog) {
+  if (split === "model") return item.model ? { kind: "named", label: item.model } : { kind: "none" };
+  if (item.block) return rawCategory(item.block, split, catalog);
+  return { kind: item.place === "unknown" ? "unknown" : "none" };
+}
+
+/** The categories a split draws, and which one each usage item or block
+ *  belongs to. ONE model for the chart, its legend and the histogram, so a
+ *  colour means the same thing in all three. The three largest named values
+ *  by requested tokens keep their own colour; the rest fold into "other". A
+ *  value only a block names (its requests fell outside the range) still takes
+ *  part, with no tokens, so the histogram can colour it. */
+export function splitModel(items, split, catalog, blocks = []) {
+  if (split === "tokens") return { categories: TOKEN_CATEGORIES, keyOf: () => "active" };
+  const raw = new Map();
+  const tokensOf = new Map();
+  const present = new Set();
+  for (const i of items || []) {
+    const c = itemCategory(i, split, catalog);
+    raw.set(i, c);
+    // A request that carried no tokens draws nothing, so it names no category:
+    // otherwise the legend reads "no model · 0" for lines Claude Code writes
+    // with no model and no usage.
+    const t = totalTokens(i.tokens);
+    if (!t) continue;
+    present.add(c.kind);
+    if (c.kind === "named") addTo(tokensOf, c.label, t);
+  }
+  for (const b of blocks || []) {
+    const c = rawCategory(b, split, catalog);
+    raw.set(b, c);
+    present.add(c.kind);
+    if (c.kind === "named" && !tokensOf.has(c.label)) tokensOf.set(c.label, 0);
+  }
+  const ranked = [...tokensOf].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
+  const top = ranked.slice(0, 3);
+  const topKey = new Map(top.map((e) => [e.label, `n:${e.label}`]));
+  const categories = top.map((e, i) => ({ key: `n:${e.label}`, label: e.label, color: TOP_COLORS[i], kind: "named" }));
+  if (ranked.length > 3) categories.push({ key: "other", label: OTHER_LABEL, color: "var(--ov-other)", kind: "other" });
+  if (present.has("several")) categories.push({ key: "several", label: SEVERAL_PROJECTS_LABEL, color: "var(--ov-several)", kind: "several" });
+  if (present.has("none")) categories.push({ key: "none", label: NONE_LABELS[split], color: "var(--ov-none)", kind: "none" });
+  if (present.has("idle")) categories.push({ key: "idle", label: NO_REQUESTS_LABEL, color: "var(--ov-none)", kind: "idle" });
+  if (present.has("unknown")) categories.push({ key: "unknown", label: NOT_ATTRIBUTED_LABEL, color: "var(--ov-unknown)", kind: "unknown" });
+  const keyOf = (x) => {
+    const c = raw.get(x) || (x.key ? rawCategory(x, split, catalog) : itemCategory(x, split, catalog));
+    if (c.kind === "named") return topKey.get(c.label) || "other";
+    return c.kind;
+  };
+  return { categories, keyOf };
+}
+
+/** The top of a chart axis: the smallest round number at least 10% above `v`
+ *  that splits into three even ticks — so the tallest bar sits below the top
+ *  line rather than touching it (decided 2026-09-30), and every tick label is a
+ *  round figure. A tick step is 1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 × 10^k. */
+export function axisTop(v) {
+  if (!(v > 0)) return 0;
+  const step = (v * 1.1) / 3;
+  const exp = Math.pow(10, Math.floor(Math.log10(step)));
+  const nice = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((m) => m * exp >= step - 1e-9 * exp);
+  return Number((nice * exp * 3).toPrecision(12));
+}
+
+/** Axis tick labels: axisTop makes every tick round, so "600.0M" and
+ *  "$180.00" carry zeros that say nothing. Tiles and summaries keep the full
+ *  formatVolume / formatUSD. */
+export function axisLabelTokens(v) {
+  return formatVolume(v).replace(/\.0(?=[KMB]?$)/, "");
+}
+export function axisLabelUSD(v) {
+  return formatUSD(v).replace(/\.00$/, "");
+}
+
+const MIN_HOUR_COLUMNS = 4;
+
+function hourBuckets(win, items, blocks) {
+  const day = new Date(win.start * 1000);
+  const hours = Array.from({ length: 24 }, (_, h) => {
+    const start = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h));
+    const end = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h + 1));
+    return { start, end, label: `${String(h).padStart(2, "0")}:00` };
+  });
+  const busy = hours.map(
+    (hr) =>
+      items.some((i) => i.at >= hr.start && i.at < hr.end) || blocks.some((b) => b.key.start >= hr.start && b.key.start < hr.end)
+  );
+  let first = busy.indexOf(true);
+  if (first < 0) return [];
+  // Never fewer than MIN_HOUR_COLUMNS (decided 2026-09-29): one hour of work
+  // drawn as a single full-width bar reads as a block of colour, not a chart.
+  // The hours after the first one of work are shown empty; late in the day the
+  // extra hours come before it instead, because the day ends at midnight.
+  const last = Math.min(23, Math.max(busy.lastIndexOf(true), first + MIN_HOUR_COLUMNS - 1));
+  first = Math.max(0, Math.min(first, last - MIN_HOUR_COLUMNS + 1));
+  return hours.slice(first, last + 1);
+}
+
+function dayBuckets(win) {
+  const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
+  return win.days.map((start, i) => {
+    const d = new Date(start * 1000);
+    return {
+      start,
+      end: win.days[i + 1] || win.end,
+      label: win.days.length <= 7 ? weekday.format(d) : String(d.getDate()),
+    };
+  });
+}
+
+/** The cost & volume chart: one column per hour (a one-day range, trimmed to
+ *  the hours that had work) or per local day, each stacked by `split`. Tokens
+ *  and spend are the REQUESTS made in the column (usage items, by their own
+ *  instant), so a block running across midnight splits its tokens between the
+ *  two days it actually spent them in. A column's `tokens` is exactly the sum
+ *  of its segments.
+ *
+ *  A column is `loaded: false` in two cases, said apart by `noData`: it ends
+ *  before `dataFrom`, where usage records start (no usage is shown there, D2);
+ *  or, for the splits read off blocks (repo, project), it starts at or before
+ *  `loadedFrom`, where the ledger's row cap cut some blocks. */
+export function volumeSeries(items, blocks, win, split, catalog, { loadedFrom = null, dataFrom = null } = {}) {
+  const list = items || [];
+  const model = splitModel(list, split, catalog, blocks);
+  const fromBlocks = split === "repo" || split === "project";
+  const buckets = win.days.length === 1 ? hourBuckets(win, list, blocks || []) : dayBuckets(win);
+  const columns = buckets.map((bk) => {
+    const seg = new Map(model.categories.map((c) => [c.key, 0]));
+    let tokens = 0;
+    let usd = 0;
+    for (const i of list) {
+      if (i.at < bk.start || i.at >= bk.end) continue;
+      const t = totalTokens(i.tokens);
+      tokens += t;
+      usd += i.usd || 0;
+      if (split === "tokens") {
+        const cached = i.tokens.cache_read || 0;
+        addTo(seg, "cache", cached);
+        addTo(seg, "fresh", t - cached);
+      } else {
+        addTo(seg, model.keyOf(i), t);
+      }
+    }
+    const noData = dataFrom !== null && bk.end <= dataFrom;
+    const cut = fromBlocks && loadedFrom !== null && bk.start <= loadedFrom;
+    return {
+      ...bk,
+      tokens,
+      usd,
+      segments: model.categories.map((c) => ({ key: c.key, value: seg.get(c.key) || 0 })),
+      loaded: !noData && !cut,
+      noData,
+    };
+  });
+  return {
+    columns,
+    categories: model.categories,
+    maxTokens: Math.max(0, ...columns.map((c) => c.tokens)),
+    maxUsd: Math.max(0, ...columns.map((c) => c.usd)),
+    // The axes' tops, with headroom (axisTop): what heights are drawn against.
+    topTokens: axisTop(Math.max(0, ...columns.map((c) => c.tokens))),
+    topUsd: axisTop(Math.max(0, ...columns.map((c) => c.usd))),
+  };
+}
+
+export const SLOTS_PER_DAY = 72;
+const SLOT_SECONDS = 1200;
+
+/** Linear-interpolated quantile of an ascending list. */
+function quantile(sorted, p) {
+  const at = (sorted.length - 1) * p;
+  const lo = Math.floor(at);
+  return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (at - lo);
+}
+
+/** The Tokens split's four shades, as GitHub's contribution graph draws them:
+ *  darker green, more tokens. The bands are cut at the range's own QUARTILES
+ *  of block tokens, not at fractions of the largest block — one outsized block
+ *  would otherwise wash every ordinary one out to the palest shade. A band is
+ *  half-open: a block sitting exactly on a cut is in the band above it. A block
+ *  that was never measured has its own key, never a pale green that would
+ *  claim it used few tokens. */
+function tokenLevels(blocks) {
+  const values = [];
+  for (const b of blocks) {
+    const m = measuredOf(b);
+    if (m) values.push(totalTokens(m.tokens));
+  }
+  values.sort((a, b) => a - b);
+  const cuts = values.length ? [0.25, 0.5, 0.75].map((p) => quantile(values, p)) : [0, 0, 0];
+  const [q1, q2, q3] = cuts.map(formatVolume);
+  const categories = [
+    { key: "t1", label: `under ${q1}`, color: "var(--ov-t1)", kind: "level" },
+    { key: "t2", label: `${q1} – ${q2}`, color: "var(--ov-t2)", kind: "level" },
+    { key: "t3", label: `${q2} – ${q3}`, color: "var(--ov-t3)", kind: "level" },
+    { key: "t4", label: `${q3} or more`, color: "var(--ov-t4)", kind: "level" },
+  ];
+  if (values.length < blocks.length) {
+    categories.push({ key: "unmeasured", label: "not measured yet", color: "var(--ov-unknown)", kind: "unmeasured" });
+  }
+  const keyOf = (b) => {
+    const m = measuredOf(b);
+    if (!m) return "unmeasured";
+    const v = totalTokens(m.tokens);
+    return `t${1 + cuts.filter((c) => v >= c).length}`;
+  };
+  return { categories, keyOf };
+}
+
+/** The histogram: one row per local day of 72 twenty-minute cells. A cell
+ *  holds the category key of the block covering its MIDPOINT, or null — so a
+ *  five-minute block that misses every midpoint colours nothing, rather than
+ *  a whole cell claiming twenty minutes of work. Under Tokens a cell is one
+ *  of four shades by its block's tokens (tokenLevels); otherwise it uses the
+ *  chart's own categories. */
+export function slotGrid(items, blocks, win, split, catalog, { loadedFrom = null } = {}) {
+  const list = blocks || [];
+  const model = split === "tokens" ? tokenLevels(list) : splitModel(items, split, catalog, list);
+  const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric" });
+  const rows = win.days.map((day) => {
+    const cells = new Array(SLOTS_PER_DAY).fill(null);
+    for (const b of list) {
+      const i0 = Math.max(0, Math.ceil((b.key.start - day) / SLOT_SECONDS - 0.5));
+      const i1 = Math.min(SLOTS_PER_DAY - 1, Math.ceil((b.end - day) / SLOT_SECONDS - 0.5) - 1);
+      for (let i = i0; i <= i1; i++) if (cells[i] === null) cells[i] = model.keyOf(b);
+    }
+    return { day, label: label.format(new Date(day * 1000)), cells, loaded: loadedFrom === null || day > loadedFrom };
+  });
+  return { rows, categories: model.categories };
+}
+
 /** How many taps on the version turns developer mode on or off. Seven, because
  *  that is the number people already know from Android's build-number gesture —
  *  a hidden control is only useful if someone can be TOLD how to reach it, and
@@ -775,6 +1332,40 @@ export const DEV_ONLY_PANES = ["integrations"];
  *  be tested without a DOM, and so the nav and the router cannot drift. */
 export function paneVisible(pane, devMode) {
   return devMode || !DEV_ONLY_PANES.includes(pane);
+}
+
+/** Where Signal opens, and where an address it does not know lands. */
+export const DEFAULT_PANE = "overview";
+
+/** Each pane's topbar title. The Focus blocks pane keeps its old internal
+ *  name, `today` — its render function, its body class and its tests all say
+ *  so — while the person sees "Focus blocks". */
+export const PANE_TITLE = {
+  overview: "Overview",
+  today: "Focus blocks",
+  projects: "Projects",
+  integrations: "Integrations",
+  settings: "Settings",
+};
+
+/** Address word → pane. `focus` is Focus blocks' address; `today` still
+ *  reaches it so a bookmark made before the rename keeps working. */
+const PANE_BY_HASH = {
+  overview: "overview",
+  focus: "today",
+  today: "today",
+  projects: "projects",
+  integrations: "integrations",
+  settings: "settings",
+};
+
+/** The pane a location hash opens. Pure so the router's rule can be tested
+ *  without a DOM. A hidden pane is not reachable by hash either — see
+ *  DEV_ONLY_PANES. */
+export function paneForHash(hash, devMode) {
+  const pane = PANE_BY_HASH[String(hash || "").replace(/^#\/?/, "")];
+  if (!pane) return DEFAULT_PANE;
+  return paneVisible(pane, devMode) ? pane : DEFAULT_PANE;
 }
 
 export const DEV_TAPS = 7;
@@ -1614,6 +2205,7 @@ export { CELL_STAGES };
 
 if (typeof document !== "undefined") {
   const LEDGER_CACHE_KEY = "keld_signal_cached_ledger";
+  const TODAY_USAGE_CACHE_KEY = "keld_signal_cached_today_usage";
   const LOCAL_PREFS_KEY = "keld_signal_local_prefs";
 
   function readJSONStorage(key, fallback) {
@@ -1654,7 +2246,7 @@ if (typeof document !== "undefined") {
   }
 
   const state = {
-    pane: "today",
+    pane: DEFAULT_PANE,
     ledger: null,
     settings: null,
     catalog: null,
@@ -1663,6 +2255,9 @@ if (typeof document !== "undefined") {
     engine: null,
     offline: false,
     local: loadLocalPrefs(),
+    // overview: the Overview's own ledger, for the range named by `sig`.
+    overview: { sig: "", ledger: null, usage: null, loading: false, error: false, cachedAt: null },
+    todayUsage: null,
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
     // resending with ?restart=1 — empty for a restart /v1/config asked for,
@@ -1770,6 +2365,19 @@ if (typeof document !== "undefined") {
       // is nothing to show, and the empty state below says so honestly.
       state.ledger = state.ledger || readJSONStorage(LEDGER_CACHE_KEY, null);
     }
+    // Today's per-request usage, for Focus blocks' Tokens and Est. spend tiles.
+    // Outside the Promise.all for the reason given for the engine below: it is
+    // supplementary, and a harness serving the page without the route must
+    // not read as "Signal is not running".
+    // Cached like the ledger, so an offline page keeps showing its last figures.
+    const win = rangeWindow({ key: "today" }, Date.now());
+    try {
+      state.todayUsage = await fetchJSON(usageURL(win));
+      writeJSONStorage(TODAY_USAGE_CACHE_KEY, state.todayUsage);
+    } catch {
+      const cached = readJSONStorage(TODAY_USAGE_CACHE_KEY, null);
+      state.todayUsage = cached && cached.since === win.start ? cached : null;
+    }
     // ⚠️ DELIBERATELY NOT IN THE Promise.all ABOVE. That set decides whether the
     // page says "Signal is not running on this machine", and the engine is
     // supplementary to every one of them — so a daemon without the route (an
@@ -1792,10 +2400,7 @@ if (typeof document !== "undefined") {
   }
 
   function paneFromHash() {
-    const h = (location.hash || "#/today").replace(/^#\//, "");
-    if (!["today", "projects", "integrations", "settings"].includes(h)) return "today";
-    // A hidden pane is not reachable by hash either — see DEV_ONLY_PANES.
-    return paneVisible(h, devModeOn()) ? h : "today";
+    return paneForHash(location.hash, devModeOn());
   }
 
   /** Show or hide the nav links for dev-only panes. Called from route(), so
@@ -1810,18 +2415,11 @@ if (typeof document !== "undefined") {
     });
   }
 
-  const PANE_TITLE = {
-    today: "Today",
-    projects: "Projects",
-    integrations: "Integrations",
-    settings: "Settings",
-  };
-
   function setActiveNav(pane) {
     document.querySelectorAll("nav[aria-label='Panes'] a").forEach((a) => {
       a.classList.toggle("on", a.dataset.pane === pane);
     });
-    document.getElementById("topbarTitle").textContent = PANE_TITLE[pane] || "Today";
+    document.getElementById("topbarTitle").textContent = PANE_TITLE[pane] || PANE_TITLE[DEFAULT_PANE];
   }
 
   function el(tag, attrs, ...children) {
@@ -1857,6 +2455,405 @@ if (typeof document !== "undefined") {
     return el("span", { class: `pill ${cls}` }, el("span", { class: "dot" }), glyph);
   }
 
+  // ---- Overview ----
+  //
+  // Its OWN ledger fetch, never loadAll's: Focus blocks keeps exactly the
+  // request it has always made (todayLedgerURL), so nothing it shows can move
+  // because the Overview exists. The range and the split are per-viewer
+  // preferences (page convention 3) and the page reopens on the last range
+  // picked.
+
+  const OVERVIEW_CACHE_KEY = "keld_signal_cached_overview";
+
+  function overviewRange() {
+    return resolveRange(state.local.overviewRange);
+  }
+  function overviewSplit() {
+    const s = state.local.overviewSplit;
+    return SPLITS.some((x) => x.key === s) ? s : "tokens";
+  }
+  function overviewSignature(win) {
+    return JSON.stringify([win.range, win.start, win.end]);
+  }
+
+  async function loadOverview() {
+    const win = rangeWindow(overviewRange(), Date.now());
+    const sig = overviewSignature(win);
+    state.overview.loading = true;
+    try {
+      const [ledger, usage] = await Promise.all([fetchJSON(rangeLedgerURL(win)), fetchJSON(usageURL(win))]);
+      state.overview = { sig, ledger, usage, loading: false, error: false, cachedAt: null };
+      writeJSONStorage(OVERVIEW_CACHE_KEY, { sig, ledger, usage, at: Date.now() });
+    } catch {
+      // A cached copy is shown only for the SAME range; another range's
+      // blocks drawn under this range's title would be a false statement.
+      const cached = readJSONStorage(OVERVIEW_CACHE_KEY, null);
+      const usable = cached && cached.sig === sig;
+      state.overview = {
+        sig,
+        ledger: usable ? cached.ledger : null,
+        usage: usable ? cached.usage || null : null,
+        loading: false,
+        error: true,
+        cachedAt: usable ? cached.at : null,
+      };
+    }
+  }
+
+  function setOverviewRange(range) {
+    state.local.overviewRange = range;
+    saveLocalPrefs(state.local);
+    route();
+  }
+
+  function setOverviewSplit(key) {
+    state.local.overviewSplit = key;
+    saveLocalPrefs(state.local);
+    route();
+  }
+
+  const isoDay = (unix) => {
+    const d = new Date(unix * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  function renderRangeControl(win) {
+    const current = win.range.key;
+    const labels = { today: "Today", "7d": "7d", "1m": "1m", custom: "Custom" };
+    const pick = (key) => {
+      if (key === "custom") {
+        // Start a Custom range from what is on screen, so switching to it
+        // changes nothing until a date is edited.
+        setOverviewRange({ key: "custom", from: isoDay(win.days[0]), to: isoDay(win.days[win.days.length - 1]) });
+      } else setOverviewRange({ key });
+    };
+    const seg = el(
+      "div",
+      { class: "ov-range", role: "toolbar", "aria-label": "Range" },
+      ...RANGE_KEYS.map((k) =>
+        el("button", { type: "button", class: k === current ? "on" : "", "aria-pressed": k === current ? "true" : "false", onclick: () => pick(k) }, labels[k])
+      )
+    );
+    if (current !== "custom") return seg;
+    const onDate = () => {
+      const from = document.getElementById("ovFrom").value;
+      const to = document.getElementById("ovTo").value;
+      if (from && to) setOverviewRange({ key: "custom", from, to });
+    };
+    return el(
+      "div",
+      { class: "ov-range-wrap" },
+      seg,
+      el(
+        "div",
+        { class: "ov-dates-pick" },
+        el("input", { type: "date", id: "ovFrom", "aria-label": "From", value: isoDay(win.days[0]), onchange: onDate }),
+        el("span", {}, "to"),
+        el("input", { type: "date", id: "ovTo", "aria-label": "To", value: isoDay(win.days[win.days.length - 1]), onchange: onDate })
+      )
+    );
+  }
+
+  /** One tile: the headline, and on hover or keyboard focus the breakdown
+   *  behind it — the top three only (decided 2026-09-29), drawn inside the
+   *  tile's own box so the row never changes height. The rest of the range is
+   *  in the chart below, split the same way. */
+  function overviewTile(label, value, sub, breakdown, fmt) {
+    const rows = breakdown.top.slice(0, 3).map((e) => ({ label: e.label, value: e.value }));
+    const max = Math.max(0, ...rows.map((r) => r.value));
+    const detail = rows.length
+      ? el(
+          "div",
+          { class: "ov-breakdown" },
+          ...rows.map((r) =>
+            el(
+              "div",
+              { class: "ov-brow" },
+              el("span", { class: "ov-blabel", title: r.label }, r.label),
+              el("span", { class: "ov-track" }, el("span", { class: "ov-fill", style: `width:${max ? (r.value / max) * 100 : 0}%` })),
+              el("span", { class: "ov-bval" }, fmt(r.value))
+            )
+          )
+        )
+      : null;
+    return el(
+      "div",
+      { class: "tile ov-tile", tabindex: detail ? "0" : null },
+      el("div", { class: "l" }, label),
+      el("div", { class: "ov-headline" }, el("div", { class: "v" }, value, sub ? el("small", {}, sub) : null)),
+      detail
+    );
+  }
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+    return node;
+  }
+
+  /** Categories the chart and histogram compute but do not DRAW for now.
+   *  "not attributed yet" is hidden (decided 2026-09-30) until the block-cutting
+   *  fix ships: on past days most of it is work that was never cut into a block
+   *  and never will be, so the "yet" is a promise the page cannot keep. The maths
+   *  and its tests are untouched; showing it again is removing it from here.
+   *  See "Why work never becomes a block" (artifact, 2026-09-30). */
+  const HIDDEN_KINDS = new Set(["unknown"]);
+  const hiddenKeys = (categories) => new Set(categories.filter((c) => HIDDEN_KINDS.has(c.kind)).map((c) => c.key));
+  const shownCategories = (categories) => categories.filter((c) => !HIDDEN_KINDS.has(c.kind));
+
+  function renderVolumeChart(series, split, stats, win) {
+    const loaded = series.columns.filter((c) => c.loaded);
+    const colors = new Map(series.categories.map((c) => [c.key, c.color]));
+    const hidden = hiddenKeys(series.categories);
+    const splitLabel = SPLITS.find((s) => s.key === split).label;
+
+    const links = el(
+      "div",
+      { class: "ov-splits", role: "toolbar", "aria-label": "Split" },
+      ...SPLITS.map((s) =>
+        el("button", { type: "button", class: s.key === split ? "on" : "", "aria-pressed": s.key === split ? "true" : "false", onclick: () => setOverviewSplit(s.key) }, s.label)
+      )
+    );
+    const head = el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Cost & volume"), links);
+    const perM = stats.usdPerMillion === null ? "" : ` · ${formatEstUSD(stats.usdPerMillion)} per million tokens`;
+    const summary = el(
+      "div",
+      { class: "ov-summary mono" },
+      `${formatVolume(stats.tokens)} tokens · ${formatEstUSD(stats.usd)}${perM}${split === "tokens" ? "" : ` · ${splitLabel.toLowerCase()}`} · ${win.dates}`
+    );
+
+    // ⚠️ A range with blocks but no measured tokens has no scale to draw
+    // against; an axis reading "0" top to bottom would be a chart of nothing.
+    if (!series.maxTokens) {
+      return el("section", { class: "ov-chart ov-chart-empty" }, head, summary, el("p", { class: "ov-note" }, "No requests recorded in this range yet."));
+    }
+
+    const ticks = [1, 2 / 3, 1 / 3];
+    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, axisLabelTokens(series.topTokens * t))), el("span", {}, "0"));
+    const rightAxis = el(
+      "div",
+      { class: "ov-axis right mono" },
+      ...ticks.map((t) => el("span", {}, series.topUsd ? axisLabelUSD(series.topUsd * t) : "")),
+      el("span", {}, "$0")
+    );
+
+    const n = series.columns.length;
+    const bars = el("div", { class: "ov-bars", style: `grid-template-columns:repeat(${n}, minmax(0, 1fr))` });
+    for (const c of series.columns) {
+      if (!c.loaded) {
+        bars.appendChild(el("div", { class: "ov-col not-loaded", title: `${c.label} · ${c.noData ? "no usage recorded yet" : "not loaded"}` }));
+        continue;
+      }
+      const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatVolume(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
+      for (const s of c.segments) {
+        if (!s.value || hidden.has(s.key)) continue;
+        stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.topTokens) * 100}%;background:${colors.get(s.key)}` }));
+      }
+      bars.appendChild(stack);
+    }
+    const plot = el("div", { class: "ov-plot" }, el("div", { class: "ov-grid" }), bars);
+    if (series.maxUsd && loaded.length) {
+      const pts = series.columns
+        .map((c, i) => (c.loaded ? [((i + 0.5) / n) * 100, 100 - (c.usd / series.topUsd) * 100] : null))
+        .filter(Boolean);
+      const svg = svgEl("svg", { class: "ov-line", viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
+      svg.appendChild(svgEl("polyline", { points: pts.map((p) => p.map((v) => v.toFixed(2)).join(",")).join(" "), fill: "none", "vector-effect": "non-scaling-stroke" }));
+      plot.appendChild(svg);
+      for (const [x, y] of pts) plot.appendChild(el("span", { class: "ov-dot", style: `left:${x}%;top:${y}%` }));
+    }
+    const xLabels = el(
+      "div",
+      { class: "ov-x mono", style: `grid-template-columns:repeat(${n}, minmax(0, 1fr))` },
+      ...series.columns.map((c, i) => el("span", {}, n > 12 && i % 2 ? "" : c.label))
+    );
+
+    const totals = new Map(series.categories.map((c) => [c.key, 0]));
+    for (const c of loaded) for (const s of c.segments) totals.set(s.key, (totals.get(s.key) || 0) + s.value);
+    const legend = el(
+      "div",
+      { class: "ov-legend mono" },
+      el("span", {}, el("i", { class: "ov-key line" }), "spend (est.)"),
+      ...shownCategories(series.categories).map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatVolume(totals.get(c.key))}`))
+    );
+
+    return el(
+      "section",
+      { class: "ov-chart" },
+      head,
+      summary,
+      el("div", { class: "ov-frame" }, leftAxis, el("div", { class: "ov-main" }, plot, xLabels), rightAxis),
+      legend
+    );
+  }
+
+  /** GitHub's "Less ■■■■ More": the four shades in order, each naming its
+   *  token range on hover, and "not measured yet" beside them when present. */
+  function levelLegend(categories) {
+    const levels = categories.filter((c) => c.kind === "level");
+    const rest = categories.filter((c) => c.kind !== "level");
+    return el(
+      "div",
+      { class: "ov-legend ov-levels mono" },
+      el(
+        "span",
+        {},
+        "Less",
+        ...levels.map((c) => el("i", { class: "ov-key", style: `background:${c.color}`, title: `${c.label} tokens` })),
+        "More"
+      ),
+      ...rest.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label))
+    );
+  }
+
+  function renderHistogram(grid, split) {
+    const colors = new Map(grid.categories.map((c) => [c.key, c.color]));
+    const labels = new Map(grid.categories.map((c) => [c.key, c.label]));
+    const hidden = hiddenKeys(grid.categories);
+    const clock = (i) => {
+      const m = i * 20;
+      return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    };
+    const rows = grid.rows.map((r) =>
+      el(
+        "div",
+        { class: "ov-hrow" + (r.loaded ? "" : " not-loaded") },
+        el("span", { class: "ov-hlabel mono" }, r.label),
+        el(
+          "div",
+          { class: "ov-hcells" },
+          ...r.cells.map((cell, i) => (hidden.has(cell) ? null : cell)).map((k, i) =>
+            el("span", {
+              class: "ov-cell",
+              style: k ? `background:${colors.get(k)}` : null,
+              title: r.loaded ? `${r.label} ${clock(i)}${k ? ` · ${labels.get(k)}` : ""}` : `${r.label} · not loaded`,
+            })
+          )
+        )
+      )
+    );
+    const hours = el("div", { class: "ov-hhours mono" }, el("span", {}), el("div", {}, ...["00:00", "06:00", "12:00", "18:00"].map((h) => el("span", {}, h))));
+    const meta = split === "tokens" ? "20-minute cells · one row per day · shaded by the block's tokens" : `20-minute cells · one row per day · ${SPLITS.find((s) => s.key === split).label.toLowerCase()}`;
+    return el(
+      "section",
+      { class: "ov-hist", style: `--rows:${rows.length}` },
+      el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Histogram"), el("span", { class: "ov-meta mono" }, meta)),
+      el("div", { class: "ov-hbody" }, el("div", { class: "ov-hgrid" }, ...rows), hours),
+      split === "tokens" ? levelLegend(grid.categories) : el("div", { class: "ov-legend mono" }, ...shownCategories(grid.categories).map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
+    );
+  }
+
+  function renderOverview(root) {
+    root.innerHTML = "";
+    const wrap = el("div", { class: "ov" });
+    root.appendChild(wrap);
+    const win = rangeWindow(overviewRange(), Date.now());
+    const ov = state.overview;
+    const fresh = ov.sig === overviewSignature(win);
+    // First sight of this range: fetch once, then draw. route() is re-entered
+    // when it lands, the same pattern the Integrations pane uses.
+    if (!fresh && !ov.loading) {
+      loadOverview().then(route);
+    }
+
+    wrap.appendChild(
+      el(
+        "div",
+        { class: "ov-head" },
+        el("div", {}, el("span", { class: "ov-title" }, win.title), el("span", { class: "ov-dates" }, win.dates)),
+        renderRangeControl(win)
+      )
+    );
+
+    const ledger = fresh ? ov.ledger : null;
+    const usage = fresh ? ov.usage : null;
+    if (!ledger || !usage) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "loading" },
+          fresh && ov.error ? "Signal did not answer, so this range cannot be drawn yet." : "Loading this range…"
+        )
+      );
+      return;
+    }
+    if (ov.error && ov.cachedAt) {
+      wrap.appendChild(el("p", { class: "ov-note" }, `Signal did not answer — showing this range as it was last loaded, at ${formatClock(Math.floor(ov.cachedAt / 1000))}.`));
+    }
+
+    const blocks = blocksInWindow(ledger.blocks, win);
+    const items = itemsInWindow(usageItems(usage, ledger.blocks), win);
+    const { truncated, loadedFrom } = ledgerTruncated(ledger.blocks);
+    // ⚠️ A capped answer with nothing in this range is NOT an empty range.
+    // `since` has no upper bound, so for a Custom range in the past the newest
+    // 2,000 blocks can all fall after it — drawing "Nothing captured" there
+    // would state a zero nobody measured.
+    if (truncated && !blocks.length) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `This range could not be loaded. Signal returns at most ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, newest first, and all of them fall after it. Pick a range closer to today.`
+        )
+      );
+      return;
+    }
+    if (truncated) {
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Tokens and spend are complete; repositories, projects and the histogram before ${formatDateHeading(loadedFrom)} are shaded "not loaded", not zero.`
+        )
+      );
+    }
+    if (!usage.backfill_done) {
+      wrap.appendChild(
+        el("p", { class: "ov-note" }, "Signal is still reading the transcripts already on this machine, so older days are still filling in.")
+      );
+    }
+    const late = lateSources(usage, win);
+    if (late.length) {
+      const named = late.map((s) => `${s.label} from ${formatDateHeading(s.firstAt)}`).join(", ");
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `Usage is counted from the transcripts on this machine, and they start partway through this range: ${named}. Earlier days show no usage for them.`
+        )
+      );
+    }
+    if (!blocks.length && !items.length) {
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "ov-empty" },
+          el("div", { class: "ov-empty-title" }, "Nothing captured in this range."),
+          el("p", {}, "Signal picks up sessions from Claude Code, Codex and Gemini CLI on this machine. Try a longer range, or open Focus blocks for today's detail.")
+        )
+      );
+      return;
+    }
+
+    const { catalog } = state;
+    const split = overviewSplit();
+    const stats = overviewStats(blocks, items);
+    const opts = { loadedFrom: truncated ? loadedFrom : null, dataFrom: usageStartsAt(usage) };
+    const count = (v) => `${Math.round(v)}`;
+    wrap.appendChild(
+      el(
+        "div",
+        { class: "tiles ov-tiles" },
+        overviewTile("Tokens", formatVolume(stats.tokens), stats.cacheShare === null ? "" : `${Math.round(stats.cacheShare * 100)}% cache`, stats.byModel.tokens, formatVolume),
+        overviewTile("Est. spend", formatUSD(stats.usd), stats.usdPerMillion === null ? "" : `${formatUSD(stats.usdPerMillion)} / M`, stats.byModel.usd, formatUSD),
+        overviewTile("Running time", formatMinutes(stats.activeMinutes), `${stats.blockCount} block${stats.blockCount === 1 ? "" : "s"}`, stats.byRepo.minutes, formatMinutes),
+        overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count)
+      )
+    );
+    wrap.appendChild(renderVolumeChart(volumeSeries(items, blocks, win, split, catalog, opts), split, stats, win));
+    wrap.appendChild(renderHistogram(slotGrid(items, blocks, win, split, catalog, opts), split));
+  }
+
   // ---- Today ----
 
   function renderToday(root) {
@@ -1868,6 +2865,12 @@ if (typeof document !== "undefined") {
     }
     const blocks = ledger.blocks || [];
     const stats = focusStats(blocks);
+    // Tokens and spend are counted per request, from the same function and the
+    // same day as the Overview's Today (T14). The rows below keep their own
+    // block figures, which need not add up to these (decided 2026-09-29, D1).
+    const usage = state.todayUsage
+      ? usageTotals(itemsInWindow(usageItems(state.todayUsage, blocks), rangeWindow({ key: "today" }, Date.now())))
+      : null;
     const showAtlas = atlasEnabled(settings);
     const showBreaks = !!(settings && settings.show_breaks);
 
@@ -1888,12 +2891,12 @@ if (typeof document !== "undefined") {
           el("div", { class: "l" }, "Focus time"),
           el("div", { class: "v" }, formatMinutes(stats.totalMinutes), el("small", {}, `longest ${formatMinutes(stats.longestMinutes)}`))
         ),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Tokens"), el("div", { class: "v" }, formatTokens(stats.tokens))),
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Tokens"), el("div", { class: "v" }, usage ? formatTokens(usage.tokens) : "—")),
         el(
           "div",
           { class: "tile" },
           el("div", { class: "l" }, "Est. spend"),
-          el("div", { class: "v" }, formatUSD(stats.usd))
+          el("div", { class: "v" }, usage ? formatUSD(usage.usd) : "—")
         )
       )
     );
@@ -3637,16 +4640,21 @@ if (typeof document !== "undefined") {
     // content in a box. A class here is what keeps that impossible rather than
     // careful.
     document.body.classList.toggle("pane-today", pane === "today");
+    // The Overview fills the window the same way: the chart takes what is
+    // left, the histogram sits at the bottom (see app.css, body.pane-overview).
+    document.body.classList.toggle("pane-overview", pane === "overview");
     const root = document.getElementById("paneRoot");
     // The first-open choice stands in for every pane until it is answered.
     // Not while offline: the cached page is showing what it last knew, and
     // neither button could do anything.
     if (showFirstRun(state.auth) && !state.offline) {
       document.body.classList.remove("pane-today");
+      document.body.classList.remove("pane-overview");
       renderFirstRun(root);
       return;
     }
-    if (pane === "today") renderToday(root);
+    if (pane === "overview") renderOverview(root);
+    else if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
     else if (pane === "integrations") {
       // The route is not part of loadAll(): it is this pane's own, polled at
@@ -3672,6 +4680,7 @@ if (typeof document !== "undefined") {
     // server answers the same file every time, so this is inert there.
     setInterval(async () => {
       await loadAll();
+      if (state.pane === "overview") await loadOverview();
       route();
     }, 30000);
     // The Integrations pane polls faster, and only while it is the pane being

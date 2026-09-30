@@ -27,7 +27,19 @@ tauri-build = { version = "2", features = [] }
 # (`Image::from_path`), not baked in at compile time — see the tray-icon
 # comment in src/main.rs for why it is a separate monochrome asset from the
 # app's own coloured icon.
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# ⚠️ `webview-data-url` IS REQUIRED BY THE NOT-RUNNING FRAME, AND WITHOUT IT THAT
+# FRAME PANICS INSTEAD OF EXPLAINING ITSELF. NOT_RUNNING in main.rs is an inline
+# `data:text/html,…` page, and Tauri refuses data: URLs unless this feature is
+# on — "invalid window url: data URLs are not supported without the
+# `webview-data-url` feature" — which happens inside the setup hook, so the
+# process dies before any window exists. Measured on Windows 2026-09-29: the app
+# launched and vanished, printing nothing, because it is a GUI-subsystem binary.
+#
+# ⚠️ THIS IS NOT A WINDOWS BUG. The check is platform-independent; macOS would
+# panic identically on a machine with no daemon. It went unnoticed because the
+# fallback only runs when the daemon is absent, which is not the state anyone
+# develops in — and the app had only ever shipped on macOS.
+tauri = { version = "2", features = ["tray-icon", "image-png", "webview-data-url"] }
 tauri-plugin-autostart = "2"
 # tauri-plugin-single-instance: a second launch must bring the FIRST window
 # forward, never open a window of its own. Two windows are not merely untidy

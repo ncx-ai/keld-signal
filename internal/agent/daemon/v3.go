@@ -7,6 +7,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
+	"github.com/ncx-ai/keld-signal/internal/agent/pricing"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
@@ -49,6 +50,21 @@ type v3 struct {
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	l := ledger.New()
+	// A block is priced once, when measured; one whose model the price table
+	// learned later (a model released after the snapshot) would stay $0 for
+	// good. Re-price those from their own stored tokens. Synchronous on
+	// purpose: it is one query over a few hundred rows, and a goroutine here
+	// would outlive its caller — in tests it opened the ledger after KELD_HOME
+	// had moved on to the next test's home.
+	if n := l.RepriceUnpriced(priceStored); n > 0 {
+		log.Printf("keld-agent: priced %d earlier block(s) whose model has a rate now", n)
+	}
+	if n := l.RepriceUnpricedRequests(priceStored); n > 0 {
+		log.Printf("keld-agent: priced %d earlier request(s) whose model has a rate now", n)
+	}
+	if n := l.NameBlockModelsFromRequests(priceStored); n > 0 {
+		log.Printf("keld-agent: named the model of %d earlier block(s) from their own requests", n)
+	}
 	p := projects.NewStore(projects.DefaultPath())
 
 	// The projects document needs two things this package owns: the blocks
@@ -191,6 +207,8 @@ func (v *v3) routes() []ingress.Route {
 		// Projects pane cannot answer differently about the same block (see
 		// liveAttribution in v3blocks.go). Nothing stored is rewritten.
 		ledgerRoute(v.ledgerReader(), func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
+		// Per-request tokens and spend, summed per 5 minutes (usageroute.go).
+		usageRoute(v.ledger),
 		// The restart control the page offers. It reads the health owner live,
 		// so an unconfigured machine (the onboarding handler mounts these too)
 		// answers 409 not_applicable rather than pretending to restart nothing.
@@ -271,4 +289,9 @@ func (v *v3) noteHealth(key ledger.HealthKey, status ledger.Status, detail strin
 		return
 	}
 	v.ledger.SetHealth(ledger.Health{Key: key, Status: status, Detail: detail, At: time.Now().UTC()})
+}
+
+// priceStored prices a stored block with the same table measuredOf uses.
+func priceStored(model string, in, out, cacheRead, cacheCreation int64) (float64, bool) {
+	return pricing.Estimate(model, pricing.Tokens{Input: in, Output: out, CacheRead: cacheRead, CacheCreation: cacheCreation})
 }

@@ -31,6 +31,19 @@ UPSTREAM = ("https://raw.githubusercontent.com/BerriAI/litellm/main/"
 KEEP = re.compile(r"^(claude-|gpt-|o1|o3|o4|gemini-|codex-|grok-)")
 SKIP = re.compile(r"(ft:|/|:free|-latest-|azure|vertex_ai|bedrock)")
 
+# Rates for models a Keld-supported tool already emits but LiteLLM does not list
+# yet. Applied ONLY where upstream has no row for the id, so the published rate
+# takes over the day it lands. Each entry names where its numbers came from;
+# nothing goes here from memory.
+PENDING_UPSTREAM = {
+    # Anthropic's published Claude Opus 5.5 rates: $4 / $20 per MTok, cache
+    # reads $0.20. Cache write is DERIVED — 1.25x input, the ratio every Opus
+    # row upstream carries ($6.25 on $5). Added 2026-09-29: this model carried
+    # 805M tokens in 30 days at $0 on one machine.
+    "claude-opus-5-5": {"in": 4e-06, "out": 2e-05, "cache_write": 5e-06, "cache_read": 2e-07},
+    "claude-opus-5-5@default": {"in": 4e-06, "out": 2e-05, "cache_write": 5e-06, "cache_read": 2e-07},
+}
+
 DST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "internal", "agent", "pricing", "prices.json")
 
@@ -68,6 +81,9 @@ def main():
         if cr is not None:
             e["cache_read"] = cr
         out[mid] = e
+
+    for mid, e in PENDING_UPSTREAM.items():
+        out.setdefault(mid, e)
 
     if len(out) < 100:
         sys.exit(f"refusing to write a table of {len(out)} models — upstream shape changed?")

@@ -7,7 +7,35 @@
 # hidden where no human can complete it. Both of those reached main.
 #
 # Run: bash installers/windows/keld_agent_iss_test.sh
-set -euo pipefail
+#
+# ⚠️ `pipefail` IS DELIBERATELY ABSENT, AND PUTTING IT BACK MAKES THIS SUITE
+# FAIL AT RANDOM ON CORRECT INPUT. Every assertion here pipes a variable into
+# `grep -q`, which exits on its FIRST match and closes the pipe; the writer then
+# takes EPIPE and returns non-zero, and pipefail hands that status to the whole
+# pipeline — so `<writer> | grep -q X || fail` FAILS ON A MATCH. It bites only
+# when the match is early and the payload outlasts the 64 KB pipe buffer, which
+# is what made it intermittent rather than obvious.
+#
+# Measured 2026-09-29: it took down `installer-guards` in CI on a branch whose
+# .iss was correct (run 36610376548) — "printf: write error: Broken pipe"
+# followed by a FAIL for a condition the workflow plainly satisfied. Reproduced
+# 200/200 with a 400 KB payload matching at byte 0, 0/200 with pipefail off, and
+# 0/300 with the same payload matching at the END. `| head -1` and `| tail -1`,
+# used throughout this file, have exactly the same shape.
+#
+# ⚠️ THE FALSE-FAILURE DIRECTION IS NOT THE DANGEROUS ONE. The negative
+# assertions read `if <writer> | grep -q X; then fail; fi` — there a match plus
+# EPIPE makes the pipeline non-zero, the `if` reads FALSE, and the guard
+# silently does NOT fire. A false pass, on exactly the condition it exists to
+# catch.
+#
+# Nothing is lost by dropping it: every assertion's verdict comes from the LAST
+# command in its pipeline, and a writer that produced nothing still reaches grep
+# as empty input, which fails the assertion the same way.
+#
+# ⚠️ `set -e` IS STILL ON, so the `|| true` on the command substitutions below
+# remains load-bearing — that was never a pipefail matter.
+set -eu
 d="$(cd "$(dirname "$0")" && pwd)"
 iss="$d/keld-agent.iss"
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -108,7 +136,7 @@ printf '%s\n' "$open_line" | grep -q 'unchecked' && \
 # step or nothing.
 # ($entries spans to [Code], so it includes [UninstallRun]; scope this one to [Run].)
 run_only="$(sed -n '/^\[Run\]/,/^\[UninstallRun\]/p' "$iss" | unfold | grep '^Filename:' || true)"
-others="$(printf '%s\n' "$run_only" | grep -vF 'signal open' || true)"
+others="$(printf '%s\n' "$run_only" | grep -vF 'signal open' | grep -vF 'Filename: "{app}\Keld Signal.exe"' || true)"
 [ -z "$others" ] || fail "[Run] has entries besides opening Signal: $others"
 
 # 2a. The daemon writes agent.json when it starts, and `keld signal open` reads
@@ -320,6 +348,172 @@ grep -q '{uninstallexe}' "$iss" || \
 # Both helpers are console programs launched from a GUI installer.
 [ "$(printf '%s\n' "$prep" | grep -c 'SW_HIDE')" -ge 2 ] || \
   fail "PrepareToInstall runs schtasks/taskkill without SW_HIDE - each pops a console window"
+
+# 9b/9c/10a/10b. ⚠️ INVERTED 2026-09-30 (merge of main into the web sign-in
+#     branch). Main's versions pinned onboard.cmd's `unchecked` flag and the
+#     wizard page's approval panel (ShowApproval, AfterLogin/EvApprovalURL,
+#     DrainPanel's browser fallback, WebPanel visibility). That page and
+#     onboard.cmd are deleted on this branch (web sign-in spec AC-10, D10), so
+#     the guards become "none of it may come back".
+for ident in ShowApproval DrainPanel AfterLogin EvApprovalURL WebPanel StartPanel NeedsConsoleOnboarding; do
+  if printf '%s\n' "$code" | grep -q "$ident"; then
+    fail "the removed wizard page is back in [Code] ($ident) - no installer asks anything about Keld"
+  fi
+done
+
+# 10c. ⚠️ THE DESKTOP APP SHIPS BESIDE keld.exe, AND ITS ABSENCE MUST NOT BREAK
+#      THE BUILD. `keld signal open` prefers the app over a browser tab and finds
+#      it by looking next to the running keld.exe — so it installs into {app}
+#      rather than its own directory, giving one install dir and nothing to keep
+#      in step. But it is a CONVENIENCE: without it `signal open` opens a
+#      browser, which is what every release before this did. A Rust build failing
+#      on the runner must not take the whole Windows installer down, and a
+#      missing `Source:` is otherwise a compile error.
+app_line="$(printf '%s\n' "$unfolded" | grep -F 'Source: "Keld Signal.exe"' || true)"
+[ -n "$app_line" ] || \
+  fail "the desktop app is not shipped; keld signal open would always fall back to a browser"
+printf '%s\n' "$app_line" | grep -q 'DestDir: "{app}"' || \
+  fail "the desktop app is not installed beside keld.exe - signal open looks there first and would not find it"
+printf '%s\n' "$app_line" | grep -q 'skipifsourcedoesntexist' || \
+  fail "the desktop app is a required Source - a failed Rust build would fail the whole installer compile"
+grep -q 'name: Build the desktop app (Windows)' "$wf" || \
+  fail "nothing builds the desktop app on the Windows leg; the Source above would never exist"
+# ⚠️ --bundles app is a macOS FORMAT; on Windows it would emit nsis/msi, i.e. a
+#    second installer beside keld-setup.exe. We want the bare executable.
+# ⚠️ BOUND THIS AT THE NEXT STEP HEADER, NOT AT A NAMED LATER STEP. This read
+#    `,/name: Restore HuggingFace/`, and the nearest such step AFTER the app
+#    build is 567 lines further down — so $app_step was 34 KB of unrelated
+#    workflow and the assertion below passed if ANY step in that span said
+#    --no-bundle. It also fed the pipefail race described at the top of this
+#    file: 34 KB to write with the match at byte 269. Measured 2026-09-29.
+app_step="$(awk '/^      - name: Build the desktop app \(Windows\)/{f=1; print; next}
+                 f && /^      - name:/{exit} f' "$wf")"
+[ -n "$app_step" ] || fail "cannot isolate the Windows app build step - this guard would pass vacuously"
+# ⚠️ STRIP THE # COMMENTS, OR THIS READS THE PROSE THAT EXPLAINS THE FLAG. The
+#    step carries two comment lines naming `--no-bundle` while justifying it, so
+#    the assertion passed with the flag deleted from the actual npx command.
+#    Verified by mutation 2026-09-29 — it was vacuous from the day it was
+#    written. Fifth occurrence of this exact defect in this file; see the note
+#    on it in 10e.
+app_cmd="$(printf '%s\n' "$app_step" | grep -v '^[[:space:]]*#' || true)"
+printf '%s\n' "$app_cmd" | grep -q -- '--no-bundle' || \
+  fail "the Windows app build does not use --no-bundle - it would produce a second installer"
+
+# 10d. ⚠️ THE APP MUST OPEN WHEN THE INSTALLER FINISHES, AND THAT ENTRY'S FLAGS
+#      PULL IN OPPOSITE DIRECTIONS FROM EVERY OTHER [Run] LINE IN THIS FILE.
+#      The deleted onboard.cmd entry had to be `unchecked`, because a ticked
+#      postinstall entry opened a blank console. The reasoning inverts here: this
+#      one opens the application window, which is the thing the person was
+#      waiting for. Copying `unchecked` across as a house style is the specific
+#      mistake this guard catches.
+# ⚠️ SCOPED TO [Run]. The [Icons] shortcut (10f) shares this Filename and
+#    carries `Check: AppPresent`, so an unscoped match let the Check assertion
+#    below pass off the shortcut's line. Found by it passing against a merged
+#    .iss whose launch entry had no Check at all.
+open_line="$(printf '%s\n' "$run_only" | grep -F 'Filename: "{app}\Keld Signal.exe"' || true)"
+[ -n "$open_line" ] || \
+  fail "nothing opens the desktop app when the installer finishes"
+printf '%s\n' "$open_line" | grep -q 'postinstall' || \
+  fail "the app launch is not a postinstall action - it would run mid-install instead of on the Finished page"
+# ⚠️ NEGATIVE ASSERTIONS GO IN AN `if`, NOT `grep -q X && fail`. Under the
+#    `set -e` at the top of this file, the `&&` form EXITS 1 WHEN THE GREP DOES
+#    NOT MATCH — i.e. the script dies silently on exactly the passing case, and
+#    every guard after it never runs.
+if printf '%s\n' "$open_line" | grep -q 'unchecked'; then
+  fail "the app launch is unchecked - it is meant to be ticked by default"
+fi
+# ⚠️ runhidden would hide the window the entry exists to open. It is the reflex
+#    fix everywhere else in this file, because those children are
+#    CONSOLE-subsystem; this one is GUI-subsystem and gets no console at all.
+if printf '%s\n' "$open_line" | grep -q 'runhidden'; then
+  fail "the app launch says runhidden - it would hide the window it exists to open"
+fi
+# ⚠️ The app is optional (see 10c), and Inno reports a HARD ERROR when it cannot
+#    start a [Run] command. A build without the app must install cleanly.
+printf '%s\n' "$open_line" | grep -q 'skipifdoesntexist' || \
+  fail "the app launch would fail the install on a build where the Rust step did not produce the app"
+printf '%s\n' "$open_line" | grep -q 'skipifsilent' || \
+  fail "the app launch is not skipifsilent - an MDM push would throw a window at whoever is at the console"
+# ⚠️ EXACTLY ONE THING OPENS SIGNAL ON THE FINISHED PAGE (merge 2026-09-30). The
+#    app launch and the `keld signal open` fallback must carry MUTUALLY EXCLUSIVE
+#    Checks — the app when it is on disk, the browser page when it is not — or a
+#    person gets two "Open Keld Signal" checkboxes and two windows.
+printf '%s\n' "$open_line" | grep -qE 'Check:[[:space:]]*AppPresent([^A-Za-z0-9_]|$)' || \
+  fail "the app launch has no Check: AppPresent - with the fallback also ticked, two things would open"
+fallback_line="$(printf '%s\n' "$run_only" | grep -F 'signal open' || true)"
+printf '%s\n' "$fallback_line" | grep -qE 'Check:[[:space:]]*not[[:space:]]+AppPresent([^A-Za-z0-9_]|$)' || \
+  fail "the keld signal open fallback is not gated on 'not AppPresent' - it would open a browser beside the app"
+
+# 10e. ⚠️ LAUNCHING THE APP AT THE END OF AN INSTALL BREAKS THE *NEXT* ONE UNLESS
+#      SOMETHING STOPS IT FIRST. Windows will not delete a running exe, so the
+#      copy step stops on a modal — "DeleteFile failed; code 5. Access is
+#      denied." — measured on the first install after 10d's entry was added.
+#      Nothing else covers it: `CloseApplications=no` is set deliberately (guard
+#      9a), so Inno never offers to close anything.
+#
+#      Same on the way out: the app outlives its own window (closing hides it
+#      behind a tray icon), so an uninstall on a machine where anyone ever
+#      opened it could not remove the app's own exe.
+#
+#      ⚠️ AND IT MUST BE `/F`. The app's CloseRequested handler calls
+#      prevent_close, so the WM_CLOSE a graceful taskkill posts HIDES the window
+#      and leaves the process alive holding the file — the guard would pass and
+#      the install would still fail.
+prep="$(sed -n '/^function PrepareToInstall/,/^end;/p' "$iss" || true)"
+[ -n "$prep" ] || fail "cannot find PrepareToInstall - this guard would pass vacuously"
+# ⚠️ STRIP THE // COMMENTS BEFORE MATCHING, OR THIS GUARD READS ITS OWN PROSE.
+#    The comment above the Exec explains why `/F` is load-bearing, so it contains
+#    both "taskkill" and "/F" — and an unfiltered `grep taskkill` returns it
+#    alongside the code. Verified: with the comment left in, deleting `/F` from
+#    the actual Exec still passed. That is four times this suite has matched a
+#    comment restating the code instead of the code.
+prep_kill="$(printf '%s\n' "$prep" | grep -v '^[[:space:]]*//' \
+  | awk '/,[[:space:]]*$/ { buf = buf $0; next } { print buf $0; buf = "" }' \
+  | grep 'taskkill' || true)"
+[ -n "$prep_kill" ] || fail "PrepareToInstall does not run taskkill - a running agent locks its own files"
+printf '%s\n' "$prep_kill" | grep -qF 'Keld Signal.exe' || \
+  fail "PrepareToInstall does not stop the desktop app - the install it launches would block the next install's file copy"
+printf '%s\n' "$prep_kill" | grep -q '/F' || \
+  fail "PrepareToInstall's taskkill is not /F - the app intercepts WM_CLOSE and would stay alive holding its exe"
+unkill="$(printf '%s\n' "$unfolded" | grep -F 'RunOnceId: "killstragglers"' || true)"
+[ -n "$unkill" ] || fail "the uninstall straggler kill is gone - a live process would block file removal"
+printf '%s\n' "$unkill" | grep -qF 'Keld Signal.exe' || \
+  fail "uninstall does not stop the desktop app - it could not delete the app's own exe"
+printf '%s\n' "$unkill" | grep -q '/F' || \
+  fail "the uninstall taskkill is not /F - the app intercepts WM_CLOSE and would stay alive holding its exe"
+
+# 10f. ⚠️ THE APP NEEDS A START MENU ENTRY, OR IT HAS NO ENTRY POINT AT ALL ONCE
+#      THE INSTALLER CLOSES. DisableProgramGroupPage=yes and, until this guard,
+#      no [Icons] section: after the Finished page the app could only be started
+#      from a terminal (`keld signal open`) or by finding the exe under
+#      {localappdata}. 10d's launch entry opens it exactly once, which HIDES that
+#      gap rather than closing it — which is why this guard is separate from 10d
+#      and must not be folded into it.
+# Anchored on a leading `Name:`, which is what distinguishes an [Icons] entry
+# from 10d's [Run] entry — they share a Filename and nothing else.
+icon_line="$(printf '%s\n' "$unfolded" | grep -F 'Filename: "{app}\Keld Signal.exe"' | grep '^Name:' || true)"
+[ -n "$icon_line" ] || \
+  fail "no Start Menu shortcut for the desktop app - it is unreachable once the installer closes"
+# ⚠️ [Icons] HAS NO `skipifdoesntexist`. The app is optional (see 10c/10d), and an
+#    icon whose target is missing is created anyway, pointing at nothing — so the
+#    optionality has to be a Check, and the Check has to be one that runs AFTER
+#    [Files] or it answers False on every fresh install.
+printf '%s\n' "$icon_line" | grep -q 'Check:' || \
+  fail "the Start Menu shortcut has no Check - a build without the app would ship a shortcut to a missing file"
+chk="$(printf '%s\n' "$icon_line" | sed -n 's/.*Check:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')"
+[ -n "$chk" ] || fail "cannot read the Start Menu shortcut's Check function name"
+# $code is already comment-stripped at the top of this file, which matters here
+# for the reason spelled out in 10e: the prose above AppPresent names FileExists
+# while explaining it, so an unstripped search would find the comment and pass
+# with the function gutted.
+# ⚠️ THE NAME NEEDS A BOUNDARY. `grep "^function $chk"` matches any function
+#    whose name merely STARTS with it, so renaming AppPresent to AppPresentGone
+#    — exactly what a careless refactor does, leaving the [Icons] Check dangling
+#    and iscc failing — passed this assertion. Caught by the mutation test.
+printf '%s\n' "$code" | grep -qE "^function ${chk}[^A-Za-z0-9_]" || \
+  fail "the Start Menu shortcut's Check ($chk) is not defined in [Code] - iscc would fail"
+printf '%s\n' "$code" | sed -n "/^function $chk/,/^end;/p" | grep -q 'FileExists' || \
+  fail "$chk does not test for the app on disk - the shortcut's optionality is not actually guarded"
 
 # 11. ⚠️ THE PAYLOAD IS SIGNED BEFORE iscc AND THE INSTALLER AFTER, AND THAT
 #     ORDER IS THE WHOLE POINT. Smart App Control evaluates a binary as it
