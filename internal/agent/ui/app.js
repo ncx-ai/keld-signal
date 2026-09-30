@@ -791,6 +791,8 @@ export function lateSources(usage, win) {
 
 export const NO_REPO_LABEL = "no repository";
 export const NO_MODEL_LABEL = "no model";
+/** A block that made no model requests at all, under By model. */
+export const NO_REQUESTS_LABEL = "no requests";
 export const NO_PROJECT_LABEL = "no project";
 export const NOT_ATTRIBUTED_LABEL = "not attributed yet";
 export const SEVERAL_PROJECTS_LABEL = "several projects";
@@ -920,7 +922,10 @@ const NONE_LABELS = { model: NO_MODEL_LABEL, repo: NO_REPO_LABEL, project: NO_PR
 function rawCategory(b, split, catalog) {
   if (split === "model") {
     const m = measuredOf(b);
-    return m && m.model ? { kind: "named", label: m.model } : { kind: "none" };
+    if (m && m.model) return { kind: "named", label: m.model };
+    // Measured and found no tokens: nothing ran, so there is no model to name.
+    if (m && m.status === "n/a" && m.reason === "no_tokens") return { kind: "idle" };
+    return { kind: "none" };
   }
   if (split === "repo") {
     const repo = b.dims && b.dims.repo;
@@ -957,8 +962,13 @@ export function splitModel(items, split, catalog, blocks = []) {
   for (const i of items || []) {
     const c = itemCategory(i, split, catalog);
     raw.set(i, c);
+    // A request that carried no tokens draws nothing, so it names no category:
+    // otherwise the legend reads "no model · 0" for lines Claude Code writes
+    // with no model and no usage.
+    const t = totalTokens(i.tokens);
+    if (!t) continue;
     present.add(c.kind);
-    if (c.kind === "named") addTo(tokensOf, c.label, totalTokens(i.tokens));
+    if (c.kind === "named") addTo(tokensOf, c.label, t);
   }
   for (const b of blocks || []) {
     const c = rawCategory(b, split, catalog);
@@ -973,6 +983,7 @@ export function splitModel(items, split, catalog, blocks = []) {
   if (ranked.length > 3) categories.push({ key: "other", label: OTHER_LABEL, color: "var(--ov-other)", kind: "other" });
   if (present.has("several")) categories.push({ key: "several", label: SEVERAL_PROJECTS_LABEL, color: "var(--ov-several)", kind: "several" });
   if (present.has("none")) categories.push({ key: "none", label: NONE_LABELS[split], color: "var(--ov-none)", kind: "none" });
+  if (present.has("idle")) categories.push({ key: "idle", label: NO_REQUESTS_LABEL, color: "var(--ov-none)", kind: "idle" });
   if (present.has("unknown")) categories.push({ key: "unknown", label: NOT_ATTRIBUTED_LABEL, color: "var(--ov-unknown)", kind: "unknown" });
   const keyOf = (x) => {
     const c = raw.get(x) || (x.key ? rawCategory(x, split, catalog) : itemCategory(x, split, catalog));

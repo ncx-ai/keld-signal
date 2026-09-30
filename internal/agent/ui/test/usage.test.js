@@ -15,6 +15,7 @@ import {
   NOT_ATTRIBUTED_LABEL,
   NO_REPO_LABEL,
   NO_PROJECT_LABEL,
+  NO_REQUESTS_LABEL,
 } from "../app.js";
 import { at, block, bucket, catalog } from "./overview-fixture.js";
 
@@ -171,4 +172,31 @@ test("no usage held at all has no start, and no tool is named late", () => {
   const u = usage([], {});
   assert.equal(usageStartsAt(u), null);
   assert.deepEqual(lateSources(u, week), []);
+});
+
+// "no model · 0" in the legend was a category nothing was drawn in: requests
+// that name no model and carry no tokens (Claude Code writes such lines). A
+// request with no tokens adds no category; a no-model BLOCK still does, because
+// the histogram colours its squares.
+test("a request with no tokens adds no category to the legend", () => {
+  const zero = { input: 0, output: 0, cache_read: 0, cache_creation: 0 };
+  const items = usageItems(usage([bucket({ h: 10, model: "claude-opus-5" }), bucket({ h: 11, model: "", tokens: zero })]), []);
+  const v = volumeSeries(items, [], week, "model", catalog);
+  assert.deepEqual(v.categories.map((c) => c.label), ["claude-opus-5"]);
+
+  const unnamed = block({ h: 12, model: "" });
+  const withBlock = volumeSeries(items, [unnamed], week, "model", catalog);
+  assert.ok(withBlock.categories.some((c) => c.kind === "none"), "a no-model block still needs its legend entry");
+});
+
+// A block that made no model requests at all (measured n/a · no_tokens) has no
+// model because nothing ran, not because one went unrecorded. Under By model it
+// reads "no requests", never "no model".
+test("a block that made no requests is 'no requests' under By model, not 'no model'", () => {
+  const idle = block({ h: 12, measured: false });
+  idle.cells.measured = { status: "n/a", reason: "no_tokens" };
+  const v = volumeSeries([], [idle], week, "model", catalog);
+  assert.deepEqual(v.categories.map((c) => c.label), [NO_REQUESTS_LABEL]);
+  const unmeasured = block({ h: 13, measured: false });
+  assert.deepEqual(volumeSeries([], [unmeasured], week, "model", catalog).categories.map((c) => c.label), ["no model"]);
 });
