@@ -128,6 +128,37 @@ test.describe("Overview", () => {
     await expect(page.locator(".ov-tile")).toHaveCount(4);
   });
 
+  // The Overview fills the window: the chart takes what the histogram leaves,
+  // and the histogram sits at the bottom — one row for a day, taller for a week
+  // and a month, its rows shortening rather than the page running past the
+  // window. Decided with Gabriel, 2026-09-30.
+  test("at 1440x900 every range fits the window, with the histogram at the bottom", async ({ signal, page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signal.open("overview");
+    const measure = () =>
+      page.evaluate(() => {
+        const pane = document.getElementById("paneRoot")!;
+        const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+        return { scroll: pane.scrollHeight - pane.clientHeight, histBottom: r(".ov-hist").bottom, plot: r(".ov-plot").height, hist: r(".ov-hist").height };
+      });
+    const range = page.getByRole("toolbar", { name: "Range" });
+    const seen: Record<string, { plot: number; hist: number }> = {};
+    for (const [button, rows] of [["Today", 1], ["7d", 7], ["1m", 30]] as const) {
+      await range.getByRole("button", { name: button }).click();
+      await expect(page.locator(".ov-hrow")).toHaveCount(rows);
+      const m = await measure();
+      expect(m.scroll, `${button}: the pane scrolls`).toBeLessThanOrEqual(0);
+      expect(900 - m.histBottom, `${button}: the histogram does not reach the bottom`).toBeLessThanOrEqual(24);
+      seen[button] = m;
+    }
+    // The chart gets what the histogram does not need, and the histogram grows
+    // with the range.
+    expect(seen.Today.plot).toBeGreaterThan(seen["7d"].plot);
+    expect(seen["7d"].plot).toBeGreaterThan(seen["1m"].plot);
+    expect(seen.Today.hist).toBeLessThan(seen["7d"].hist);
+    expect(seen["7d"].hist).toBeLessThan(seen["1m"].hist);
+  });
+
   for (const width of [1280, 400]) {
     test(`no sideways scroll at ${width}px`, async ({ signal, page }) => {
       await page.setViewportSize({ width, height: 900 });
