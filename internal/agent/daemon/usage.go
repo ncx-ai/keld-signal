@@ -1,10 +1,8 @@
 package daemon
 
 import (
-	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/usage"
-	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 )
 
 // transcriptObservers fans each watcher observation out to its two readers:
@@ -24,11 +22,4 @@ func transcriptObservers(tel *promptlog.Telemetry, rec *usage.Recorder) (
 		rec.ObserveFile(source, path)
 	}
 	return line, doc
-}
-
-// newUsageBackfill is the one-time read of every transcript on disk into the
-// requests table. It is handed the ledger and the transcript roots and nothing
-// that can send: history never goes to Atlas from here (A2).
-func newUsageBackfill(store *ledger.Store, roots func() []watch.Root) *usage.Backfill {
-	return usage.NewBackfill(store, priceStored, roots)
 }

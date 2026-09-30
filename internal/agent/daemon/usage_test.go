@@ -151,7 +151,7 @@ func TestBackfillSendsNothingToAtlas(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rollout-a.jsonl"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bf := newUsageBackfill(store, func() []watch.Root { return []watch.Root{{SourceID: "codex", Dir: dir}} })
+	bf := usage.NewBackfill(store, priceStored, func() []watch.Root { return []watch.Root{{SourceID: "codex", Dir: dir}} })
 	for !bf.Step() {
 	}
 	if n := posts.Load(); n != 0 {

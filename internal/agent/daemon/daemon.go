@@ -1415,7 +1415,7 @@ func Run(ctx context.Context) error {
 		// replays every line written after its start, the backfill reads every
 		// file whole, and together they leave no gap (see usage.Backfill).
 		go func() {
-			newUsageBackfill(sig.ledger, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
+			usage.NewBackfill(sig.ledger, priceStored, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
 			// The backfill is what fills the requests an unnamed block's model
 			// can be read from, so name them again once it is done.
 			if ctx.Err() == nil {

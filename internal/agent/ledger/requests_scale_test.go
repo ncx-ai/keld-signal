@@ -57,8 +57,8 @@ func TestRequestsTableAtScale(t *testing.T) {
 	s.InsertRequests(batch)
 	wrote := time.Since(began)
 
-	st, err := s.RequestStats()
-	if err != nil {
+	var rows int64
+	if err := s.handle().QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(dbPath())
@@ -87,15 +87,14 @@ func TestRequestsTableAtScale(t *testing.T) {
 	reprice := timed(func() {
 		s.RepriceUnpricedRequests(func(string, int64, int64, int64, int64) (float64, bool) { return 0, false })
 	})
-	stats := timed(func() { _, _ = s.RequestStats() })
 
-	t.Logf("%d rows (%d/day × %d days) written in %s", st.Rows, perDay, days, wrote.Round(time.Second))
-	t.Logf("ledger.db %.1f MB on disk, %.1f MB live (%.0f bytes/row)", mb(fi.Size()), mb(st.Bytes), float64(st.Bytes)/float64(st.Rows))
-	t.Logf("30-day UsageBuckets: %s for %d buckets · FirstRequestAt %s · startup reprice scan %s · RequestStats %s",
-		month.Round(time.Millisecond), len(buckets), first.Round(time.Millisecond), reprice.Round(time.Millisecond), stats.Round(time.Millisecond))
+	t.Logf("%d rows (%d/day × %d days) written in %s", rows, perDay, days, wrote.Round(time.Second))
+	t.Logf("ledger.db %.1f MB on disk (%.0f bytes/row)", mb(fi.Size()), float64(fi.Size())/float64(rows))
+	t.Logf("30-day UsageBuckets: %s for %d buckets · FirstRequestAt %s · startup reprice scan %s",
+		month.Round(time.Millisecond), len(buckets), first.Round(time.Millisecond), reprice.Round(time.Millisecond))
 
-	if int(st.Rows) != n {
-		t.Fatalf("table holds %d rows, wrote %d", st.Rows, n)
+	if int(rows) != n {
+		t.Fatalf("table holds %d rows, wrote %d", rows, n)
 	}
 	// The bars the page depends on. A 30-day read is what the Overview makes on
 	// every load, and FirstRequestAt rides the same request.

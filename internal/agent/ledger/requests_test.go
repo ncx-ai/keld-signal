@@ -182,20 +182,6 @@ func TestBackfillMarkerLivesInTheLedger(t *testing.T) {
 	}
 }
 
-func TestRequestStats(t *testing.T) {
-	setHome(t)
-	s := New()
-	now := time.Now()
-	s.InsertRequests([]RequestRow{req("a", now, "m"), req("b", now, "m")})
-	st, err := s.RequestStats()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Rows != 2 || st.Bytes <= 0 {
-		t.Fatalf("stats %+v, want 2 rows and a positive size", st)
-	}
-}
-
 // FirstRequestAt is where each source's data starts (D2: nothing is shown
 // before it).
 func TestFirstRequestAtPerSource(t *testing.T) {

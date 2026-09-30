@@ -152,9 +152,6 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
-			console.Print("Usage:")
-			console.Print(localagent.ReadUsage().Line())
-
 			// Auto-update, read from DISK like the model states above: a CLI
 			// that cannot reach the daemon does not thereby know an update
 			// failed, and this command never contacts a release host.

@@ -311,18 +311,11 @@ export function rhythmTitleFor(block, catalog) {
 export function focusStats(blocks) {
   let totalMinutes = 0;
   let longestMinutes = 0;
-  let tokens = 0;
-  let usd = 0;
   const days = new Set();
   for (const b of blocks) {
     const minutes = (b.end - b.key.start) / 60;
     totalMinutes += minutes;
     if (minutes > longestMinutes) longestMinutes = minutes;
-    const m = measuredOf(b);
-    if (m) {
-      tokens += totalTokens(m.tokens);
-      usd += m.estimate_usd || 0;
-    }
     days.add(new Date(b.key.start * 1000).toISOString().slice(0, 10));
   }
   const breaks = deriveBreaks(blocks);
@@ -331,8 +324,6 @@ export function focusStats(blocks) {
     count: blocks.length,
     totalMinutes,
     longestMinutes,
-    tokens,
-    usd,
     breakCount: breaks.length,
     breakMinutes,
     dayCount: days.size, // a same-window proxy for "streak"; see the report

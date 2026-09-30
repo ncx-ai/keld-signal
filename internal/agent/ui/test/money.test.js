@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatEstUSD, formatUSD, focusStats } from "../app.js";
+import { formatEstUSD, formatUSD } from "../app.js";
 
 test("every PER-ROW dollar figure carries the literal word 'est.'", () => {
   for (const v of [0, 1.84, 41, -3, 1234.5, undefined, null]) {
@@ -38,33 +38,4 @@ test("formatUSD keeps two decimal places rather than rounding to a whole dollar"
 
 test("formatUSD(0) is a real dollar figure, not blank", () => {
   assert.equal(formatUSD(0), "$0.00");
-});
-
-// --- the spend tile must equal the sum of its own rows, to the cent ---
-
-function block(session, start, end, estimateUsd) {
-  return {
-    key: { session, start },
-    end,
-    cells: {
-      measured: { status: "ok", tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 }, estimate_usd: estimateUsd },
-    },
-  };
-}
-
-test("the Est. spend tile total equals the sum of the rows' estimates, to the cent", () => {
-  const rows = [1.84, 1.21, 2.6, 0.77];
-  const blocks = rows.map((usd, i) => block("s1", i * 10000, i * 10000 + 60, usd));
-  const stats = focusStats(blocks);
-  // floating-point summation can drift by a fraction of a cent; the DISPLAYED
-  // total must still land on the exact cent the rows add up to.
-  assert.ok(Math.abs(stats.usd - 6.42) < 0.005, `expected ~6.42, got ${stats.usd}`);
-  assert.equal(formatUSD(stats.usd), "$6.42");
-});
-
-test("a block whose measured stage never ran contributes nothing to the spend total (not NaN)", () => {
-  const withMeasured = block("s1", 0, 60, 1.5);
-  const withoutMeasured = { key: { session: "s1", start: 100 }, end: 160, cells: {} };
-  const stats = focusStats([withMeasured, withoutMeasured]);
-  assert.equal(formatUSD(stats.usd), "$1.50");
 });

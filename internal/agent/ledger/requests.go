@@ -258,33 +258,6 @@ func (s *Store) RepriceUnpricedRequests(price func(model string, input, output, 
 	return n
 }
 
-// RequestStats is what doctor reports about the table.
-type RequestStats struct {
-	Rows int64
-	// Bytes is the live size of ledger.db (pages in use, not the file size:
-	// SQLite does not shrink a file on DELETE), which the requests table
-	// dominates once it has grown.
-	Bytes int64
-}
-
-func (s *Store) RequestStats() (RequestStats, error) {
-	db := s.handle()
-	if db == nil {
-		return RequestStats{}, errUnavailable
-	}
-	var st RequestStats
-	if err := db.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&st.Rows); err != nil {
-		return st, err
-	}
-	var pages, free, size int64
-	if err := db.QueryRow(`SELECT page_count, freelist_count, page_size FROM pragma_page_count, pragma_freelist_count, pragma_page_size`).
-		Scan(&pages, &free, &size); err != nil {
-		return st, err
-	}
-	st.Bytes = (pages - free) * size
-	return st, nil
-}
-
 // RequestsBackfillDone reports whether the one-time backfill of transcripts
 // still on disk has finished for THIS ledger file.
 func (s *Store) RequestsBackfillDone() bool {
