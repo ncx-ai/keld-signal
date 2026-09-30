@@ -61,6 +61,12 @@ Existing keys this build reads: `attribution` (vector attribution toggle, alread
 ```
 
 Rules: a cell that never happened is **absent from `cells`**, never `{"status":"failed"}`.
+`measured.model` is the model that served most of the block's requests — the sidecar's
+leading value **whatever its evidence status** (since 2026-09-29; until then a block under the
+5-observation floor recorded `""` and so no price). A model is read off each request, not
+inferred, so the floor that governs a *published* dimension does not apply to pricing. The
+block published to Atlas still carries its `model` dimension with its own status. `""` now
+means no request named a model, and rows written before the change keep their `""`.
 `estimate_usd` is 0 when no price applies; the page prints "est." on every dollar figure
 regardless. `pending` holds sessions for which blocks could not be asked for at all.
 
@@ -114,6 +120,20 @@ Three rules, and each was paid for:
   Representing the disagreement is the point — choosing between them needs data from a
   machine running both passes, which will not exist until this ships. A consumer that
   renders one of them as "the" project is making that decision on evidence nobody has.
+
+### `dims` — the block's repository and branch, added 2026-09-28
+
+```json
+"dims": {"repo": "github.com/ncx-ai/keld-signal", "branch": "main"}
+```
+
+The values `Observe` already stores for the Projects pane (`dim_repo`, `dim_branch`),
+now read back so the Overview can split work by repository. Each key is present only
+when a value is stored, and `dims` itself is **absent** when neither is — a Codex
+block, or a row cut before its dims arrived. Absent means "no repository recorded",
+never an empty string to be shown. The workspace dim is not served: nothing on the
+page reads it. Loopback only; the same identifiers already published to Atlas as
+dimension values. Spec: `docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html`.
 
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).

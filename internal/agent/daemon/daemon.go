@@ -1289,6 +1289,15 @@ func Run(ctx context.Context) error {
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, pr.ingest, tok.Get, actor, emitter, set.Blocks,
 			set.AtlasEnabled(), onBlockPublished, onCut, sig.recordPublishFailed, sig.recordCutPending,
 			sig.recordCutResolved))
+		// Blocks recorded before 2026-09-29 under the evidence floor have no
+		// model; name them once from the analysis service, which still holds
+		// those sessions. See model_repair.go.
+		go repairUnnamedModels(ctx, sig.ledger, func() modelLookup {
+			if fn := blockModelLookup.Load(); fn != nil {
+				return *fn
+			}
+			return nil
+		}, priceStored, time.Minute, 30)
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is
