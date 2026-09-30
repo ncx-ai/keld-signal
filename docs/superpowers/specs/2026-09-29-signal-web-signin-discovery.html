@@ -1207,6 +1207,18 @@ each branch was brought up to main and every suite re-run: <a href="https://gith
 </table>
 </div>
 
+<h3>CI on the opened PRs — 2026-09-30</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>PR</th><th>CI</th><th>Not green, and why</th></tr></thead>
+<tbody>
+  <tr><td class="mono"><a href="https://github.com/ncx-ai/keld-atlas-canary/pull/8">canary #8</a></td><td>all pass</td><td>—</td></tr>
+  <tr><td class="mono"><a href="https://github.com/ncx-ai/keld-atlas/pull/310">keld-atlas #310</a></td><td>all pass but API tests</td><td>The 2 failures are the known date-dependent tests (last day of a quarter). They fail on a clean main today too, and open PR #309 fixes them. Not caused by this PR.</td></tr>
+  <tr><td class="mono"><a href="https://github.com/ncx-ai/keld-signal/pull/58">keld-signal #58</a></td><td>all pass but conformance · windows-latest (chains A and B)</td><td>That step silently installs the <strong>released v3.2.0</strong> Windows installer, whose "Set up Keld" page aborts under <span class="mono">/VERYSILENT</span> ("Failed to proceed to next wizard page"). It fails the same way on PR #57's run. Not caused by this PR, which removes that page. ⚠️ It means silent/MDM Windows installs of v3.2.0 are broken in production today.</td></tr>
+</tbody>
+</table>
+</div>
+
 <h3>Before opening: bring each branch up to main — done 2026-09-30</h3>
 <p>A trial merge against today's <span class="mono">main</span> conflicts in every repo. Each branch
 is merged with <span class="mono">main</span>, conflicts resolved, and every suite re-run before its PR opens.</p>
