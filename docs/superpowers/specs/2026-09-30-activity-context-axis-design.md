@@ -234,34 +234,64 @@ exists, tier C is not built.
   `keld-agent install` writes. A GLiNER2-only pass reaches dev machines and
   essentially no real users — the inert-by-construction failure again.
 
-## 7. Follow-on: the vendor importer (separate piece)
+## 7. Follow-on: vendor coverage — the importer premise was WRONG
 
-Hand-curation rots; the repo owner asked for an expansive, current, externally
-sourced inventory. Approved as a SEPARATE piece to land after tiers A+B.
+⚠️ **THIS SECTION ORIGINALLY SPECIFIED AN IMPORTER OVER WIKIDATA AND THE MCP REGISTRY.
+BOTH SOURCES WERE MEASURED ON 2026-09-30 AND NEITHER CAN SUPPLY THIS TABLE.** The
+original text is replaced rather than amended, because a plan that says "build this"
+gets built.
 
-**Sources, both verified reachable 2026-09-30:**
+**What went wrong in the original reasoning:** I verified both sources were REACHABLE
+— 4,071 Wikidata rows, a live registry — and never checked whether they were USABLE.
+Confirming a thing exists is not confirming it answers the question.
 
-- **Wikidata SPARQL** — 4,071 items that are software with BOTH an official
-  website (`P856`) and an industry (`P452`). The website is the host-lane key.
-- **The official MCP registry** (`registry.modelcontextprotocol.io/v0/servers`) —
-  live, cursor-paginated; the authoritative population of connector brand tokens.
+**Wikidata `P452` is the wrong axis.** It records what industry a COMPANY OPERATES
+IN, not what kind of tool a product IS. Measured on the 4,071 software items that
+have both a website and an industry:
 
-**It is a mapping and a gate, not a merge.** Wikidata has no product-vs-technology
-distinction, will contribute ambiguous English words, and its industries
-("software as a service", "artificial intelligence") are not our categories. The
-importer maps through a hand-written crosswalk into OUR vocabulary and runs every
-candidate through the four gates in §4.
+- The flagship B2B products mostly have **no industry property at all** — Jira,
+  Figma, Snowflake and Asana are each blank.
+- Where it exists it is multi-valued and mostly noise: Salesforce carries eight
+  values, of which `customer relationship management` is usable and `automation`,
+  `cloud computing`, `analytics`, `software industry`, `intelligent agent` and
+  `software as a service` are not.
+- The population is consumer/media heavy, not B2B SaaS: e-commerce 593, software
+  industry 321, retail 199, journalism 156, **pornography 151**, tourism 69,
+  Internet dating 48.
 
-**Shape:** a generator script plus a generated, committed table with a provenance
-header and a refresh command — the way `creddetect` vendors gitleaks rules.
+`issue_tracking` is not derivable from `software industry`. No crosswalk fixes that,
+because the mismatch is in the axis rather than in the labels.
 
-**Acceptance test, decided in advance:** the importer must reproduce the ~60
-hand-built entries from §4. If it cannot, it is not ready. That is what building
-B first buys.
+**The MCP registry is the wrong namespace.** Its `name` field is a reverse-DNS
+PUBLISHING identifier — `ac.inference.sh/mcp`, `ae.brainy/grocery-prices`,
+`agency.goji/goji` — not the brand token a transcript yields. Our resolver sees
+`mcp__<uuid>__notion-fetch` and takes `notion`; the registry namespace never appears
+there. The listing is also long-tail unknown publishers rather than the vendors an
+enterprise runs on.
 
-⚠️ **Rejected: runtime lookup against a hosted directory.** It would send vendor
-names off-device per block and put a network call in the enrichment path. Both
-are against standing invariants.
+⚠️ **AND RUNTIME LOOKUP REMAINS REFUSED** for the reason it always was: it would send
+vendor names off-device per block and put a network call in the enrichment path.
+
+### What replaces it: the `unrecognized` bucket IS the gap report
+
+The mechanism already ships and needs no new source. `system_categories` publishes
+`unrecognized` whenever a registrable host or connector brand is seen and the table
+cannot name it, and `integrations` / `mcp_servers` publish the raw names beside it.
+So the fleet itself reports precisely which vendors are missing, ranked by how often
+real people hit them.
+
+That is strictly better than any importer for this problem: it is drawn from observed
+usage rather than from someone's idea of what a company uses, it prioritises itself by
+frequency, and it costs nothing to run because the evidence already crosses.
+
+**The owed work is an Atlas-side view** — "top `unrecognized` vendors this month" —
+and a habit of adding what it names. Hand curation is not a stopgap here; with a
+frequency-ranked worklist it is the correct method, and the 659 entries audited on
+2026-09-30 are its starting point rather than its ceiling.
+
+⚠️ Coverage of this table is therefore ASSERTED, never measured, until such a view
+exists and a real fleet feeds it — the same honest limit `system_categories` already
+carries, and the same one §1 states for the whole axis.
 
 ## 8. Testing
 
