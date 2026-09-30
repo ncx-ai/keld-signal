@@ -2303,9 +2303,20 @@ if (typeof document !== "undefined") {
     return node;
   }
 
+  /** Categories the chart and histogram compute but do not DRAW for now.
+   *  "not attributed yet" is hidden (decided 2026-09-30) until the block-cutting
+   *  fix ships: on past days most of it is work that was never cut into a block
+   *  and never will be, so the "yet" is a promise the page cannot keep. The maths
+   *  and its tests are untouched; showing it again is removing it from here.
+   *  See "Why work never becomes a block" (artifact, 2026-09-30). */
+  const HIDDEN_KINDS = new Set(["unknown"]);
+  const hiddenKeys = (categories) => new Set(categories.filter((c) => HIDDEN_KINDS.has(c.kind)).map((c) => c.key));
+  const shownCategories = (categories) => categories.filter((c) => !HIDDEN_KINDS.has(c.kind));
+
   function renderVolumeChart(series, split, stats, win) {
     const loaded = series.columns.filter((c) => c.loaded);
     const colors = new Map(series.categories.map((c) => [c.key, c.color]));
+    const hidden = hiddenKeys(series.categories);
     const splitLabel = SPLITS.find((s) => s.key === split).label;
 
     const links = el(
@@ -2347,7 +2358,7 @@ if (typeof document !== "undefined") {
       }
       const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatVolume(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
       for (const s of c.segments) {
-        if (!s.value) continue;
+        if (!s.value || hidden.has(s.key)) continue;
         stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.topTokens) * 100}%;background:${colors.get(s.key)}` }));
       }
       bars.appendChild(stack);
@@ -2374,7 +2385,7 @@ if (typeof document !== "undefined") {
       "div",
       { class: "ov-legend mono" },
       el("span", {}, el("i", { class: "ov-key line" }), "spend (est.)"),
-      ...series.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatVolume(totals.get(c.key))}`))
+      ...shownCategories(series.categories).map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), `${c.label} · ${formatVolume(totals.get(c.key))}`))
     );
 
     return el(
@@ -2409,6 +2420,7 @@ if (typeof document !== "undefined") {
   function renderHistogram(grid, split) {
     const colors = new Map(grid.categories.map((c) => [c.key, c.color]));
     const labels = new Map(grid.categories.map((c) => [c.key, c.label]));
+    const hidden = hiddenKeys(grid.categories);
     const clock = (i) => {
       const m = i * 20;
       return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -2421,7 +2433,7 @@ if (typeof document !== "undefined") {
         el(
           "div",
           { class: "ov-hcells" },
-          ...r.cells.map((k, i) =>
+          ...r.cells.map((cell, i) => (hidden.has(cell) ? null : cell)).map((k, i) =>
             el("span", {
               class: "ov-cell",
               style: k ? `background:${colors.get(k)}` : null,
@@ -2438,7 +2450,7 @@ if (typeof document !== "undefined") {
       { class: "ov-hist", style: `--rows:${rows.length}` },
       el("div", { class: "ov-section-head" }, el("span", { class: "ov-section-title" }, "Histogram"), el("span", { class: "ov-meta mono" }, meta)),
       el("div", { class: "ov-hbody" }, el("div", { class: "ov-hgrid" }, ...rows), hours),
-      split === "tokens" ? levelLegend(grid.categories) : el("div", { class: "ov-legend mono" }, ...grid.categories.map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
+      split === "tokens" ? levelLegend(grid.categories) : el("div", { class: "ov-legend mono" }, ...shownCategories(grid.categories).map((c) => el("span", {}, el("i", { class: "ov-key", style: `background:${c.color}` }), c.label)))
     );
   }
 
