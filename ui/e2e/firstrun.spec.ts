@@ -24,14 +24,14 @@ test.describe("First open", () => {
     await page.getByRole("button", { name: "Use locally only" }).click();
 
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
-    await expect(page.locator("#topbarTitle")).toHaveText("Today");
+    await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
     // Local only is a choice, not a fault: no not-signed-in bar.
     await expect(page.locator("#signinBanner")).toBeHidden();
 
     await page.reload();
     await expect(page.getByText("Loading…")).toBeHidden();
-    await expect(page.locator("#topbarTitle")).toHaveText("Today");
+    await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
 
     // A restart moves the page to a new port with a new secret; the choice
@@ -40,7 +40,7 @@ test.describe("First open", () => {
     await harness.startDaemon();
     await page.goto(harness.pageURL("today"));
     await expect(page.getByText("Loading…")).toBeHidden();
-    await expect(page.locator("#topbarTitle")).toHaveText("Today");
+    await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator("#signinBanner")).toBeHidden();
 
