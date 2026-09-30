@@ -128,8 +128,10 @@ HOW THE SOFTWARE PROTECTS YOUR DATA
   Signed releases        macOS packages are Developer ID-signed and
                          notarized when released; binaries are built and
                          published from CI.
-  Open source            The complete client source code is available for
-                         inspection at https://github.com/ncx-ai/keld-signal.
+  Source review          The client source code is available for review as
+                         part of a security assessment, under a
+                         confidentiality agreement. Contact
+                         security@keld.co.
 
 
 GOVERNANCE & COMPLIANCE POSTURE
