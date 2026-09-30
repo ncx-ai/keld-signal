@@ -315,6 +315,43 @@ def test_a_conglomerate_product_host_resolves_even_though_the_company_does_not()
     assert "google" not in BRAND and "microsoft" not in BRAND
 
 
+def test_no_token_appears_in_two_categories():
+    """⚠️ `BRAND` is a dict comprehension over `_TABLE`, so a token listed under two categories
+    is not an error -- it SILENTLY takes whichever category the iteration reaches last, and the
+    other category quietly loses it.
+
+    At 254 tokens that risk was theoretical; at 659 across 21 categories it is a real one, and
+    the failure is invisible from every direction: the table looks right, the tests pass, and
+    one category is simply wrong about one vendor. Pinned by construction rather than by care."""
+    from app.analysis.systems import _TABLE
+    import collections
+    seen = collections.defaultdict(list)
+    for cat, blob in _TABLE.items():
+        for t in blob.split():
+            seen[t].append(cat)
+    dupes = {t: c for t, c in seen.items() if len(c) > 1}
+    assert not dupes, (
+        f"these tokens are claimed by two categories and one claim is silently lost: {dupes}")
+
+
+def test_the_expanded_table_reaches_the_systems_a_real_company_runs_on():
+    """The audit's point: the table was hand-written against generic enterprise and had holes
+    a mid-size company would fall straight through. These are the ones that were missing."""
+    for brand, cat in (("azuredevops", "issue_tracking"), ("smartsheet", "issue_tracking"),
+                       ("dynamics", "crm_sales"), ("gainsight", "crm_sales"),
+                       ("adyen", "finance_billing"), ("concur", "finance_billing"),
+                       ("zuora", "finance_billing"), ("ukg", "hr_people"),
+                       ("workable", "hr_people"), ("googleanalytics", "analytics_bi"),
+                       ("pardot", "marketing"), ("semrush", "marketing"),
+                       ("wiz", "security_iam"), ("sailpoint", "security_iam"),
+                       ("mongodbatlas", "data_platform"), ("pinecone", "data_platform"),
+                       ("appdynamics", "observability"), ("incidentio", "observability"),
+                       ("clio", "legal_contracts"), ("dropboxsign", "legal_contracts"),
+                       ("bedrock", "ai_ml"), ("vertexai", "ai_ml"),
+                       ("talkdesk", "support"), ("lucidchart", "design")):
+        assert category_for_brand(brand) == cat, (brand, category_for_brand(brand))
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

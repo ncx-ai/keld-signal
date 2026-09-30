@@ -72,56 +72,132 @@ CATEGORIES = (
 # for the same reason: `google` alone says nothing, `drive`/`bigquery`/`meet` say something.
 _TABLE = {
     "issue_tracking": """jira linear asana monday shortcut trello clickup basecamp wrike
-        teamwork redmine youtrack pivotaltracker height""",
+        teamwork redmine youtrack pivotaltracker height
+        azuredevops smartsheet airtable aha productboard zenhub favro targetprocess rally
+        polarion zohoprojects teamgantt
+    """,
     "knowledge_base": """notion confluence coda guru slab almanac nuclino tettra
-        bookstack outline mediawiki sharepoint""",
+        bookstack outline mediawiki sharepoint
+        gitbook readme quip slite document360 helpjuice glean stackoverflowteams
+        dropboxpaper
+    """,
     "communication": """slack teams discord zoom webex gmail outlook mailgun twilio
-        sendbird chime""",
+        sendbird chime
+        mattermost rocketchat zulip googlechat ringcentral dialpad aircall sendgrid
+        postmark vonage bandwidth telnyx missive superhuman
+    """,
     "crm_sales": """salesforce hubspot pipedrive gong outreach salesloft apollo clari
-        zoominfo close copper insightly freshsales attio""",
+        zoominfo close copper insightly freshsales attio
+        dynamics zohocrm sugarcrm gainsight chorus avoma lusha 6sense demandbase drift
+        qualified highspot seismic showpad mindtickle nutshell keap
+    """,
     "support": """zendesk intercom freshdesk helpscout front kustomer gladly gorgias
-        servicenow""",
-    "design": """figma sketch canva miro framer invision zeplin abstract penpot excalidraw""",
+        servicenow
+        zohodesk talkdesk genesys five9 dixa crisp tidio hiver helpshift liveagent
+        reamaze forethought ada
+    """,
+    "design": """figma sketch canva miro framer invision zeplin abstract penpot excalidraw
+        lucidchart lucid whimsical mural balsamiq axure adobexd creativecloud photoshop
+        illustrator indesign marvel milanote protopie rive spline
+    """,
     "hr_people": """workday bamboohr gusto rippling justworks greenhouse lever ashby
-        deel remote namely paylocity paycom adp trinet lattice cultureamp""",
+        deel remote namely paylocity paycom adp trinet lattice cultureamp
+        ukg ceridian dayforce hibob personio factorial humaans zenefits workable
+        smartrecruiters jobvite icims jazzhr recruitee teamtailor pinpoint 15five
+        leapsome betterworks peakon officevibe bonusly docebo cornerstone learnupon
+    """,
     "finance_billing": """netsuite quickbooks xero stripe bill ramp brex expensify coupa
-        chargebee recurly avalara sage freshbooks mercury plaid""",
+        chargebee recurly avalara sage freshbooks mercury plaid
+        adyen paypal braintree paddle lemonsqueezy zuora tipalti concur intacct blackline
+        floqast gocardless wise revolut mollie razorpay checkout worldpay maxio orb
+        metronome stigg anrok sovos vertex airbase divvy navan tripactions
+    """,
     "analytics_bi": """looker tableau powerbi amplitude mixpanel metabase hex sigma
-        heap pendo posthog redash superset quicksight fullstory""",
+        heap pendo posthog redash superset quicksight fullstory
+        googleanalytics matomo plausible fathom hotjar contentsquare quantummetric
+        logrocket smartlook thoughtspot domo qlik sisense holistics lightdash omni preset
+        deepnote
+    """,
     "marketing": """marketo mailchimp braze klaviyo iterable customerio hootsuite
-        sprout buffer contentful sanity webflow wordpress optimizely""",
+        sprout buffer contentful sanity webflow wordpress optimizely
+        pardot eloqua activecampaign constantcontact convertkit beehiiv substack
+        mailerlite brevo sendinblue omnisend attentive postscript onesignal airship
+        leanplum clevertap moengage appsflyer adjust semrush ahrefs moz screamingfrog
+        googleads unbounce instapage typeform jotform sprinklr khoros emplifi storyblok
+        prismic strapi directus wix
+    """,
     "code_hosting": """github gitlab bitbucket gerrit sourcehut codeberg gitea
-        githubusercontent""",
+        githubusercontent
+        azurerepos perforce phabricator forgejo sourceforge launchpad gitee
+    """,
     "ci_cd": """circleci jenkins buildkite travis appveyor teamcity bamboo argo
-        spinnaker harness drone semaphore actions""",
+        spinnaker harness drone semaphore actions
+        gitlabci azurepipelines codebuild codepipeline cloudbuild octopus bitrise
+        codemagic expo jfrog artifactory nexus sonarqube sonarcloud codecov coveralls
+        chromatic percy browserstack saucelabs lambdatest
+    """,
     # ⚠️ PROVIDERS, NOT THE TOOLS THAT TALK TO THEM. `kubernetes`, `docker`, `terraform`,
     # `pulumi`, `ansible`, `nomad` and `consul` were here and are REMOVED -- see the rule at the
     # top. `docker` alone accounted for 740 of 741 references in one corpus.
     "cloud_infra": """aws gcp azure cloudflare vercel netlify heroku fly render
-        digitalocean linode hetzner railway supabase firebase fastly akamai""",
+        digitalocean linode hetzner railway supabase firebase fastly akamai
+        oci ibmcloud alibabacloud ovh scaleway vultr upcloud equinix civo koyeb
+        northflank platformsh aptible porter qovery cloudways kinsta wpengine pantheon
+        bunny keycdn stackpath imperva
+    """,
     # ⚠️ SERVICES, NOT DATASTORES. `postgres`, `mysql`, `mongodb`, `redis`, `kafka`,
     # `elasticsearch`, `clickhouse` and `duckdb` were here and are REMOVED: they are
     # technologies an engineer runs, not products an org buys, and as hostnames they are
     # overwhelmingly local containers. Likewise `airflow`/`dagster`/`prefect` (OSS schedulers)
     # against `fivetran`/`airbyte`/`segment` (subscriptions).
     "data_platform": """snowflake databricks bigquery redshift fivetran airbyte
-        segment confluent astronomer starburst planetscale neon cockroachlabs""",
+        segment confluent astronomer starburst planetscale neon cockroachlabs
+        mongodbatlas elasticcloud pinecone weaviate qdrant rudderstack hightouch census
+        mparticle tealium matillion talend informatica dbtlabs montecarlo atlan collibra
+        alation timescale singlestore yugabyte tidb upstash firebolt motherduck teradata
+        vertica synapse
+    """,
     # `prometheus` REMOVED (OSS you run). `grafana` kept: it resolves as a host
     # (`grafana.net`) where it is the hosted product, per the boundary rule at the top.
     "observability": """datadog sentry newrelic grafana splunk pagerduty honeycomb
-        lightstep dynatrace opsgenie rollbar bugsnag statuspage betterstack""",
+        lightstep dynatrace opsgenie rollbar bugsnag statuspage betterstack
+        appdynamics instana logzio loggly papertrail coralogix chronosphere pingdom
+        uptimerobot incidentio firehydrant rootly blameless squadcast xmatters victorops
+        cronitor
+    """,
     # `vault` REMOVED as a bare token (HashiCorp Vault is run, not bought, and `vault` is a
     # common internal hostname). `hashicorp` covers the vendor where it is actually named.
     "security_iam": """okta auth0 onepassword snyk crowdstrike vanta drata hashicorp
-        sumologic duo jumpcloud cyberark lastpass bitwarden dependabot""",
+        sumologic duo jumpcloud cyberark lastpass bitwarden dependabot
+        pingidentity forgerock workos clerk stytch frontegg descope entra azuread
+        sailpoint saviynt beyondtrust delinea sentinelone sophos trendmicro paloalto
+        fortinet zscaler netskope wiz orca lacework aqua sysdig tenable qualys rapid7
+        veracode checkmarx semgrep secureframe hyperproof auditboard onetrust trustarc
+    """,
     "legal_contracts": """docusign ironclad pandadoc adobesign hellosign 
-        contractbook juro""",
-    "scheduling": """calendly cal doodle savvycal calendar chilipiper""",
-    "storage_files": """drive dropbox box onedrive s3 gcs backblaze egnyte""",
+        contractbook juro
+        dropboxsign signnow signeasy zohosign oneflow scrive yousign conga icertis
+        agiloft linksquares evisort lexion spotdraft concord contractworks clio mycase
+        smokeball practicepanther filevine everlaw relativity logikcull casetext
+        lexisnexis westlaw bloomberglaw
+    """,
+    "scheduling": """calendly cal doodle savvycal calendar chilipiper
+        acuity setmore youcanbookme zcal reclaim clockwise vimcal undock
+    """,
+    "storage_files": """drive dropbox box onedrive s3 gcs backblaze egnyte
+        pcloud mega wasabi sharefile tresorit icloud filebase
+    """,
     "ecommerce": """shopify woocommerce bigcommerce magento squarespace etsy
-        faire""",
+        faire
+        commercetools swell vtex shopware ecwid bigcartel gumroad sendowl podia teachable
+        thinkific kajabi ebay walmart mercadolibre
+    """,
     "ai_ml": """openai anthropic claude huggingface replicate openrouter together cohere
-        mistral perplexity langsmith wandb modal runpod""",
+        mistral perplexity langsmith wandb modal runpod
+        gemini googleai vertexai bedrock sagemaker azureopenai groq fireworks deepinfra
+        anyscale baseten lambdalabs coreweave paperspace comet neptune roboflow labelbox
+        snorkel langfuse helicone portkey braintrust humanloop promptlayer
+    """,
 }
 
 # brand token -> category, built once.
@@ -143,9 +219,12 @@ BRAND = {b: cat for cat, blob in _TABLE.items() for b in blob.split()}
 # `_VERB_HEADS` already covers the subset that are also API verbs (`close`, `send`, `update`).
 # This is the complement: nouns and adjectives, which no verb list would catch.
 AMBIGUOUS = frozenset("""
-    abstract actions apollo argo bamboo bill box buffer cal calendar chime drive drone duo
-    faire front guru harness heap height hex lattice lever mercury modal monday namely outline
-    remote sage sigma sketch sprout teams together
+    abstract actions ada apollo aqua argo bamboo bill box buffer bunny cal calendar chime
+    chorus clockwise comet concord crisp drift drive drone duo expo factorial faire fireworks
+    front guru harness heap height hex lattice lever lucid marvel mercury modal monday mural
+    namely neptune nexus omni orb outline pinpoint porter preset qualified rally reclaim
+    remote rive sage seismic sigma sketch spline sprout swell teams together vertex whimsical
+    wise
 """.split())
 
 # ⚠️ HOSTS DO NOT EQUAL BRANDS and the difference is where this would silently under-report.
