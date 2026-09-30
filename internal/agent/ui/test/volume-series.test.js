@@ -137,7 +137,7 @@ test("the axis top leaves headroom and lands on a round number", async () => {
     assert.ok(top >= v * 1.1, `${v}: top ${top} leaves under 10%`);
     assert.ok(top <= v * 1.6, `${v}: top ${top} wastes the chart`);
   }
-  const s = volumeSeries([block({ usd: 2 })], week, "tokens", catalog);
+  const s = series([block({ usd: 2 })], week, "tokens");
   assert.equal(s.topTokens, axisTop(s.maxTokens));
   assert.equal(s.topUsd, axisTop(s.maxUsd));
 });
