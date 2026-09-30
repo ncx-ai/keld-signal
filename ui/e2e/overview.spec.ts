@@ -204,6 +204,29 @@ test.describe("Overview", () => {
     await expect(tokensTile.locator(".ov-blabel", { hasText: "no model" })).toHaveCount(0);
   });
 
+  // "not attributed yet" is hidden for now (2026-09-30), not removed: the
+  // category is still computed, and the page does not draw it. Showing it again
+  // is the next PR, with the block-cutting fix.
+  test("'not attributed yet' is not drawn in either legend", async ({ signal, page }) => {
+    const now = Math.floor(Date.now() / 1000);
+    const start = now - (now % 300) - 3600;
+    const tokens = { input: 1, output: 1, cache_read: 0, cache_creation: 0, request: 0 };
+    const blocks = [
+      { key: { session: "a", start }, end: start + 1200, source: "claude_code", start_reason: "idle", end_reason: "budget",
+        cells: { measured: { status: "ok", tokens, requests: 1, model: "m", estimate_usd: 0.01 } } }, // attribution never ran
+      { key: { session: "b", start }, end: start + 1200, source: "claude_code", start_reason: "idle", end_reason: "budget",
+        cells: { measured: { status: "ok", tokens, requests: 1, model: "m", estimate_usd: 0.01 }, attributed: { status: "failed", reason: "no_rule_matched" } } },
+    ];
+    await page.route(/\/v1\/ledger\?since=\d+&limit=2000$/, (route) =>
+      route.fulfill({ json: { generated_at: new Date().toISOString(), health: [], blocks, pending: [] } })
+    );
+    await signal.open("overview");
+    await page.getByRole("toolbar", { name: "Split" }).getByRole("button", { name: "By project" }).click();
+    const legends = page.locator(".ov-legend");
+    await expect(legends.first()).toContainText("no project");
+    await expect(page.locator(".ov-legend", { hasText: "not attributed yet" })).toHaveCount(0);
+  });
+
   // The Overview fills the window: the chart takes what the histogram leaves,
   // and the histogram sits at the bottom — one row for a day, taller for a week
   // and a month, its rows shortening rather than the page running past the
