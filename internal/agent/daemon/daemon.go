@@ -1398,8 +1398,13 @@ func Run(ctx context.Context) error {
 		// is what the page's tokens and spend are summed from
 		// (docs/v3/contracts.md → `requests`). It reads the same parse as the
 		// mirror with its own bookkeeping, so it cannot move what Atlas gets.
-		rec := usage.New(sig.ledger, priceStored)
-		go rec.Run(ctx, watch.PollFromEnv())
+		var rec *usage.Recorder
+		if usage.EnabledFromEnv() {
+			rec = usage.New(sig.ledger, priceStored)
+			go rec.Run(ctx, watch.PollFromEnv())
+		} else {
+			log.Printf("keld-agent: per-request usage count OFF (KELD_USAGE=0) — the Overview's tokens and spend stop at the rows already recorded")
+		}
 		observe, observeDoc := transcriptObservers(tel, rec)
 		// ⚠️ Gemini keeps its session as ONE rewritten JSON document, so its
 		// usage mirror cannot ride the per-line observe hook — same telemetry,
@@ -1415,6 +1420,9 @@ func Run(ctx context.Context) error {
 		// replays every line written after its start, the backfill reads every
 		// file whole, and together they leave no gap (see usage.Backfill).
 		go func() {
+			if rec == nil {
+				return
+			}
 			usage.NewBackfill(sig.ledger, priceStored, watch.DiscoverRoots).Run(ctx, watch.PollFromEnv())
 			// The backfill is what fills the requests an unnamed block's model
 			// can be read from, so name them again once it is done.

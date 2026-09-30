@@ -264,3 +264,21 @@ func TestTableAndMirrorSumTheSame(t *testing.T) {
 		}
 	}
 }
+
+// With the local count switched off (KELD_USAGE=0) the observers still feed
+// the Atlas mirror, and nothing is written locally.
+func TestObserversWithTheCountOffStillFeedTheMirror(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv, posts := countingAtlas(t)
+	tel := promptlog.New(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", func() string { return "tok" },
+		map[string]bool{"codex": true})
+	line, doc := transcriptObservers(tel, nil)
+	feedTranscript(t, line, "codex", "codex_rollout.jsonl")
+	doc("gemini_cli", filepath.Join("..", "promptlog", "testdata", "gemini_session.json"))
+	if n := posts.Load(); n != 4 {
+		t.Fatalf("mirror posted %d, want 4", n)
+	}
+	if got := len(requestRows(t, ledger.New())); got != 0 {
+		t.Fatalf("counted %d requests with the count off, want 0", got)
+	}
+}

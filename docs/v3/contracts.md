@@ -172,7 +172,8 @@ Rules:
   size in use, read-only off disk.
 - Fed by the transcript watcher (`internal/agent/usage`), whatever the pairing, Send to
   Atlas or `tool_otlp` say. It stops only where the watcher does: `ml_backend: "off"`
-  or `KELD_WATCH=0`.
+  or `KELD_WATCH=0`. `KELD_USAGE=0` switches the recorder and the backfill off on
+  their own; the Atlas mirror is unaffected and rows already written stay.
 
 Spec: `docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html`.
 

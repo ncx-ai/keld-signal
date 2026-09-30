@@ -210,3 +210,14 @@ func TestRecorderHoldIsBounded(t *testing.T) {
 		t.Fatalf("holding %d, bound is %d", r.Held(), maxHeld)
 	}
 }
+
+// KELD_USAGE=0 turns the local count off — the one switch an operator has
+// short of reinstalling an older build. On by default, like KELD_WATCH.
+func TestEnabledFromEnv(t *testing.T) {
+	for v, want := range map[string]bool{"": true, "1": true, "on": true, "0": false, "off": false, "FALSE": false} {
+		t.Setenv("KELD_USAGE", v)
+		if got := EnabledFromEnv(); got != want {
+			t.Fatalf("KELD_USAGE=%q: enabled=%v, want %v", v, got, want)
+		}
+	}
+}
