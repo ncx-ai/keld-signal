@@ -17,7 +17,16 @@ import { defineConfig, devices } from "@playwright/test";
  * nothing else is written to it.
  *
  * One worker: one daemon at a time on telemetry port 14421.
+ *
+ * Watching it run (for a person, not CI):
+ *   --ui                     Playwright's UI: press play per test, scrub the timeline after
+ *   --headed                 a visible browser window
+ *   KELD_E2E_SLOWMO=600      milliseconds between browser actions, so a headed run can be followed
+ *   KELD_E2E_RECORD=1        keep a video and a trace of every test, passed or not
+ *                            (open with `npx playwright show-report ../playwright-report-local-atlas`)
  */
+const slowMo = Number(process.env.KELD_E2E_SLOWMO || 0);
+const record = process.env.KELD_E2E_RECORD === "1";
 export default defineConfig({
   testDir: ".",
   testMatch: /\.spec\.ts$/,
@@ -26,10 +35,16 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   forbidOnly: !!process.env.CI,
-  timeout: 90_000,
+  // A slowed-down run takes longer than any real one; don't let the budget cut it off.
+  timeout: slowMo > 0 ? 300_000 : 90_000,
   expect: { timeout: 10_000 },
   reporter: [["list"], ["html", { open: "never", outputFolder: "../playwright-report-local-atlas" }]],
   outputDir: "../test-results/local-atlas",
-  use: { trace: "retain-on-failure", screenshot: "only-on-failure" },
+  use: {
+    trace: record ? "on" : "retain-on-failure",
+    video: record ? "on" : "off",
+    screenshot: record ? "on" : "only-on-failure",
+    launchOptions: { slowMo },
+  },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } }],
 });
