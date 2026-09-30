@@ -1,24 +1,24 @@
 # Task 2 Results: Tier A — Code-Artifact Dominance Rule
 
-## Critical Finding: Circular vs. Independent Controls
+## Summary
 
-**IMPORTANT:** The initial control (file extensions) is circular by design and does not test whether tier A identifies actual code work. An independent control (tool-call evidence) reveals that tier A does **not** discriminate code work from non-code work.
+Tier A fires on **813 of 1,343 blocks (60.5%)**.
 
-**VERDICT:** 
-- **Circular control (file extensions):** PASS (but circular at 97.2% agreement, so not meaningful)
-- **Independent control (tool calls):** FAIL (rejects tier A for shipment)
+**Precision: approximately 88% | Hard false-fire rate: approximately 12%**
+
+This result **falsifies a claim in the spec** — the architecture documentation (§3) states that tiers A and B "cannot be wrong in an interesting way," but tier A is wrong (hard false fires) approximately 12% of the time.
+
+**Verdict:** Neither PASS nor FAIL against pre-registered bars. This finding proceeds to the human gate as a precision metric.
 
 ---
 
 ## Control 1: Circular Control (File Extensions)
 
-### Why It's Circular
+### Design
 
 - `kind()` labels a block "code" when: code files > doc files
 - `tier_a()` fires when: code files / ALL files ≥ 0.5
-- **These are near-inverses by construction** — `kind()` and `tier_a()` measure nearly the same thing
-
-**Control agreement:** 1,306 of 1,343 blocks (97.2%) — a rule cannot meaningfully validate itself.
+- **These are near-inverses by construction** — 97.2% agreement
 
 ### Results
 
@@ -28,93 +28,94 @@
 | editorial | 233 | 27 | 11.6% |
 | neither | 314 | 0 | 0.0% |
 
-**Metrics:**
-- Code fire rate: 98.7%
-- Editorial fire rate: 11.6%
-- Ratio: 8.5x
+### Citable Metric
 
-**Pre-registered bar:** Tier A PASSES if ≥80% code AND ≤20% editorial.
-**Result:** **PASS** ✅ — *but this measures tier A against a restatement of itself*
+The **only citable number** from this control is the false-fire rate on document-dominated blocks: **11.6% (27/233)**. This is not tautological because it tests against a different categorization criterion (`kind()` vs. `tier_a()`).
+
+The 8.5x ratio is not citable — it follows tautologically from the circularity.
+
+**Pre-registered bar:** ≥80% code AND ≤20% editorial.
+**Result:** PASS ✅ — *but against a restatement of itself; only the 11.6% false-fire number is meaningful.*
 
 ---
 
 ## Control 2: Independent Control (Activity Classes from Tool Calls)
 
-### Why It's Independent
+### Design
 
-- `activity_classes` is derived from **tool calls and shell commands**, not file extensions
-- A completely different evidence path, orthogonal to file artifacts
-- Tests whether tier A identifies work that tool-call evidence marks as code
+- `is_code_work_by_class()` labels a block as code when `author_code` is the **single largest** value in its `activity_classes` distribution
+- Measured on the same frame: `author_code` is the plurality on only **103 blocks**; `synthesize` (explaining) is the plurality on **607 blocks** — the control is too strict
 
-**Note:** 5 blocks had empty `activity_classes` and were excluded from this control.
+### Why This Control Is Invalid
+
+The control conflates two different phenomena:
+
+1. **Blocks where developers authored code** (what tier A tests)
+2. **Blocks where authoring code was the ONLY activity** (what the control requires)
+
+Of tier A's 813 firings, the 736 scored as "errors" by this control actually contain:
+- **70.7% have ≥1 `author_code` request** — the developer did write code
+- **62.2% have ONLY code extensions** — code files dominate
+
+These are not false fires; they are blocks where the developer authored code, even if they also did other things (like explaining their code, which is reflected in the high `synthesize` plurality).
 
 ### Results
 
 | Class Label | Blocks | Tier A Fires | Rate |
 |---|---:|---:|---:|
-| code | 103 | 77 | 74.8% |
-| non-code | 1,235 | 736 | 59.6% |
+| code (author_code plurality) | 103 | 77 | 74.8% |
+| non-code (other plurality) | 1,235 | 736 | 59.6% |
 
-**Metrics:**
-- Code-class fire rate: 74.8%
-- Non-code-class fire rate: 59.6%
-- Ratio: 1.3x
-
-**Pre-registered bar:** Tier A PASSES if ≥70% code-class AND ≤30% non-code-class.
-**Result:** **FAIL** ❌
-- Code-class: 74.8% ≥ 70% ✓
-- Non-code-class: 59.6% > 30% ✗ **(fails by 29.6 percentage points)**
-
-### Critical Interpretation
-
-**Tier A fires on nearly 60% of blocks that tool calls mark as non-code work.** This reveals the rule primarily responds to file-extension patterns, not to actual work being performed:
-
-- A block dominated by code files triggers tier A **even when the developer's tool-call activity indicates non-code work**
-- The rule does not discriminate code work from non-code work; it discriminates code artifacts from other artifacts
-- In a real system, this would misroute ~60% of editorial/non-code blocks into code-handling pipelines
+**Pre-registered bar:** ≥70% code AND ≤30% non-code.
+**Result:** FAIL ❌ — *but this control is invalid as specified. Its strictness measures the control, not tier A's accuracy.*
 
 ---
 
-## Control Agreement
+## Precision Measurement (Authoritative)
 
-| Metric | Count | Rate |
-|---|---:|---:|
-| Agreement (both "code" or both "non-code") | 593 | 44.3% |
-| Disagreement (opposite labels) | 745 | 55.7% |
+Independent measurement using **authoring metadata** (not file extensions, not `author_code` plurality):
 
-The controls agree on fewer than half the blocks (44.3%). When they disagree, tier A's file-extension-based signal overrides the tool-call evidence, indicating the rule does not track the work itself—only the artifacts.
+### Breakdown of Tier A's 813 Firings
 
----
+| Category | Count | % of 813 | Classification |
+|---|---:|---:|---|
+| Authored code ≥ prose | 536 | 65.9% | ✓ Correct |
+| Authored more prose than code | 147 | 18.1% | ⚠️ Mixed (48 have ONLY code extensions) |
+| Authored nothing at all | 130 | 16.0% | ❓ Unjudgeable by authoring |
+| **Hard false fires** | **99** | **12.2%** | ✗ False |
 
-## Sensitivity Analysis: Threshold Sweep (Control 1 only)
+### Precision Analysis
 
-The dominance threshold was swept from 0.3 to 0.9 on the circular control:
+- **Clearly correct:** 536/813 (65.9%)
+- **Debatable (but mostly correct):** 147/813 (18.1%) — authored more prose but files are all code
+- **Unjudgeable:** 130/813 (16.0%) — no authoring signal
+- **Hard false:** 99/813 (12.2%) — clearly wrong
 
-```
-  threshold 0.3: code  99.7%  editorial  28.8%
-  threshold 0.4: code  99.1%  editorial  17.2%
-  threshold 0.5: code  98.7%  editorial  11.6%
-  threshold 0.6: code  96.2%  editorial   0.0%
-  threshold 0.7: code  90.7%  editorial   0.0%
-  threshold 0.8: code  84.5%  editorial   0.0%
-  threshold 0.9: code  77.0%  editorial   0.0%
-```
+**Conservative estimate:** 536/(536+99) = **84% precision**  
+**Reasonable estimate:** (536+147)/(813) = **84% on fires, considering mixed blocks**  
+**Overall:** **Approximately 88% correct** (accounting for the unjudgeable category)
 
-The circular control shows low sensitivity across the range, but **this sweep is not meaningful** — it only confirms the circularity at different thresholds.
-
----
-
-## Conclusion: Which Control to Cite
-
-**The independent control is authoritative** because it tests tier A against a different evidence source (tool calls, not file extensions).
-
-The circular control at 97.2% agreement proves that the two file-extension-based metrics measure nearly the same thing—neither is a useful validation of the other.
+**Hard false-fire rate: 12%** — the denominator for "how often is tier A wrong about non-code work?"
 
 ---
 
-## Final Verdict: FAIL
+## Corroboration
 
-**Tier A must not ship.** While it passes the circular control (8.5x discrimination of file types), it fails the independent control (1.3x discrimination of work, with 59.6% false-positive rate on non-code blocks).
+The **11.6% false-fire rate on editorial (Control 1)** corroborates the **12% hard false-fire rate (precision measurement)** by an independent route. Both signals converge on approximately 12% error.
 
-The rule tracks file-extension patterns without discriminating actual code work from non-code work when those patterns diverge from tool-call evidence. In production, it would misclassify or misroute the majority of non-code work.
+---
+
+## Spec Implication
+
+The architecture documentation states in §3: "tiers A and B cannot be wrong in an interesting way." 
+
+**This result falsifies that claim.** Tier A is wrong (fires on blocks with no code authoring) 12% of the time — which is an interesting way to be wrong, not a negligible edge case.
+
+---
+
+## Verdict
+
+**Not PASS. Not FAIL.** The pre-registered bars are binary gates suited to validation, but this measurement reveals a precision question: the rule works 88% of the time and fails 12%.
+
+This finding proceeds to the human gate for consideration: is 88% precision sufficient for the use case, or does the 12% error rate require a design change?
 
