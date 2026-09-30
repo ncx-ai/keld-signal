@@ -382,7 +382,7 @@ func (e *Emitter) advanceAt(source, path string, now time.Time) {
 	if path == "" {
 		return
 	}
-	e.st.note(source, sessionIDFor(path), path, now)
+	e.st.note(source, SessionIDFor(path), path, now)
 	e.mu.Lock()
 	e.active[path] = true
 	e.mu.Unlock()
@@ -665,14 +665,18 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 	return sent
 }
 
-// sessionIDFor is the session identifier a block row publishes: the
-// transcript's file stem.
+// SessionIDFor is the session identifier a block row publishes: the
+// transcript's file stem. Exported because the per-request table
+// (internal/agent/usage) stores it beside each request, so a request joins to
+// the block that holds it under ONE definition of that name — a subagent's
+// requests carry the PARENT'S sessionId but live in, and are cut into blocks
+// under, their own `agent-…` transcript.
 //
 // NOT the reference series' own key, which is a digest of the absolute path
 // (sidecar app/analysis/ingest.py's session_of) and is machine-local by
 // construction — it joins to nothing downstream. For Claude Code the stem IS
 // the session uuid, which is what Atlas can key a session on.
-func sessionIDFor(path string) string {
+func SessionIDFor(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 

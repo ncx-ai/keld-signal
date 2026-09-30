@@ -364,6 +364,10 @@ func newDoctorCmd() *cobra.Command {
 					"nothing is published yet. Finish with `keld login` then `keld signal setup`.")
 			}
 
+			// Informational, never a finding: how much per-request usage this
+			// machine holds, read-only off ledger.db.
+			console.Print(localagent.ReadUsage().Line())
+
 			if len(problems) > 0 {
 				for _, p := range problems {
 					console.Print(fmt.Sprintf("  ✗ %s", p))

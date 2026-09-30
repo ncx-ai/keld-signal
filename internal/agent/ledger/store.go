@@ -308,10 +308,15 @@ var stageColumns = map[Stage]string{
 
 // Store is the SQLite-backed Recorder + Reader.
 type Store struct {
-	mu       sync.Mutex
-	db       *sql.DB
-	path     string
-	failOnce sync.Once
+	mu   sync.Mutex
+	db   *sql.DB
+	path string
+	// Failure reporting, per operation: when each last reported, and how many
+	// it has held back since. See logFailure.
+	failMu   sync.Mutex
+	failLast map[string]time.Time
+	failHeld map[string]int
+	now      func() time.Time // nil means time.Now; a test sets it
 }
 
 // New returns a Store bound to ~/.keld/state/ledger.db (KELD_HOME-relative,
@@ -353,13 +358,39 @@ var (
 	_ Reader   = (*Store)(nil)
 )
 
-// logFailure reports a ledger write/open failure exactly once per process
-// (per Store instance) — see the package doc: the ledger must never become a
-// second thing that can go silently wrong forever.
+// failLogEvery bounds how often one operation's failures are reported.
+const failLogEvery = 10 * time.Minute
+
+// logFailure reports a ledger write/open failure — see the package doc: the
+// ledger must never become a second thing that can go silently wrong forever.
+//
+// ⚠️ **It used to report once per process, and then never again.** A store that
+// began refusing writes an hour into a run — a full disk, a locked file —
+// logged its first error and went quiet, while the per-request recorder kept
+// holding rows it could not write. Now each operation reports at most once per
+// failLogEvery, naming how many failures it held back: a flood is still
+// impossible (the reason for the old latch), and silence is too.
 func (s *Store) logFailure(op string, err error) {
-	s.failOnce.Do(func() {
-		debuglog.Append("ledger: %s failed and will not be retried noisily: %v", op, err)
-	})
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	if s.failLast == nil {
+		s.failLast, s.failHeld = map[string]time.Time{}, map[string]int{}
+	}
+	if last, ok := s.failLast[op]; ok && now.Sub(last) < failLogEvery {
+		s.failHeld[op]++
+		return
+	}
+	held := s.failHeld[op]
+	s.failLast[op], s.failHeld[op] = now, 0
+	if held > 0 {
+		debuglog.Append("ledger: %s failed: %v (%d more since the last report)", op, err, held)
+		return
+	}
+	debuglog.Append("ledger: %s failed: %v", op, err)
 }
 
 // handle returns the open database, (re)creating the file if it went missing
@@ -419,6 +450,12 @@ func (s *Store) open() (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1) // one writer; serializes contention into queueing rather than SQLITE_BUSY
 	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// The per-request table (requests.go) is ensured here rather than per call
+	// so a ledger recreated after deletion gets it back on the same reopen.
+	if _, err := db.Exec(requestsSchema); err != nil {
 		db.Close()
 		return nil, err
 	}

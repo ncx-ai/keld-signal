@@ -97,9 +97,11 @@ type Telemetry struct {
 	// a closed reason. See OnDrop.
 	onDrop  func(reason string)
 	dropped map[string]int64
-	lastReq map[string]string // per-transcript last assistant requestId (Claude Code)
-	codex   map[string]*codexState
-	gemini  map[string]int // per-chat count of model turns already mirrored
+	// The mirror's own parse bookkeeping (see requests.go): never shared with
+	// the local Parser, so counting locally cannot move what Atlas receives.
+	lastReq claudeBook
+	codex   codexBook
+	gemini  geminiBook
 }
 
 // New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
@@ -132,9 +134,9 @@ func NewPending(logsURL, metricsURL func() string, token func() string, sources 
 		lastPrompt: map[string]string{},
 		promptSeen: map[string]struct{}{},
 		dropped:    map[string]int64{},
-		lastReq:    map[string]string{},
-		codex:      map[string]*codexState{},
-		gemini:     map[string]int{},
+		lastReq:    claudeBook{},
+		codex:      codexBook{},
+		gemini:     geminiBook{},
 	}
 }
 

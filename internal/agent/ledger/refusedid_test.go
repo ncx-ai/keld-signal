@@ -18,9 +18,10 @@ import (
 // nothing anywhere disagreed. A line on disk is the difference between a defect
 // someone can find and one that has to be reasoned out from a ledger dump.
 //
-// Once, not per block: this ledger's `failOnce` exists because a per-row line
-// on a machine with 105 blocks is a flood, which is the shape operators filter
-// out — the same reasoning the block emitter's `routeGone` latch uses.
+// Not per block: logFailure reports each operation at most once per
+// failLogEvery, because a per-row line on a machine with 105 blocks is a flood,
+// which is the shape operators filter out — the same reasoning the block
+// emitter's `routeGone` latch uses.
 func TestARefusedProjectIDIsReportedRatherThanSilentlyDropped(t *testing.T) {
 	setHome(t)
 	s := New()

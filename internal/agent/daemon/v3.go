@@ -59,6 +59,12 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	if n := l.RepriceUnpriced(priceStored); n > 0 {
 		log.Printf("keld-agent: priced %d earlier block(s) whose model has a rate now", n)
 	}
+	if n := l.RepriceUnpricedRequests(priceStored); n > 0 {
+		log.Printf("keld-agent: priced %d earlier request(s) whose model has a rate now", n)
+	}
+	if n := l.NameBlockModelsFromRequests(priceStored); n > 0 {
+		log.Printf("keld-agent: named the model of %d earlier block(s) from their own requests", n)
+	}
 	p := projects.NewStore(projects.DefaultPath())
 
 	// The projects document needs two things this package owns: the blocks
@@ -201,6 +207,8 @@ func (v *v3) routes() []ingress.Route {
 		// Projects pane cannot answer differently about the same block (see
 		// liveAttribution in v3blocks.go). Nothing stored is rewritten.
 		ledgerRoute(v.ledgerReader(), func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
+		// Per-request tokens and spend, summed per 5 minutes (usageroute.go).
+		usageRoute(v.ledger),
 		// The restart control the page offers. It reads the health owner live,
 		// so an unconfigured machine (the onboarding handler mounts these too)
 		// answers 409 not_applicable rather than pretending to restart nothing.

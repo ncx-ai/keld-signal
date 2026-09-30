@@ -733,7 +733,7 @@ func TestOnCutPendingReportsWhyBlocksCouldNotBeAsked(t *testing.T) {
 		if len(got) != 1 || got[0].reason != "sidecar_outdated" {
 			t.Fatalf("OnCutPending = %+v, want one call with reason sidecar_outdated", got)
 		}
-		if want := sessionIDFor(txPath); got[0].session != want {
+		if want := SessionIDFor(txPath); got[0].session != want {
 			t.Fatalf("session = %q, want %q", got[0].session, want)
 		}
 	})

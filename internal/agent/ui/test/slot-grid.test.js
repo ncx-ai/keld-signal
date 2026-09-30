@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { rangeWindow, slotGrid, volumeSeries, SLOTS_PER_DAY } from "../app.js";
-import { block, catalog } from "./overview-fixture.js";
+import { rangeWindow, slotGrid as slotGridOf, volumeSeries, usageItems, SLOTS_PER_DAY } from "../app.js";
+import { block, catalog, usageFor } from "./overview-fixture.js";
+
+const itemsOf = (blocks) => usageItems(usageFor(blocks), blocks);
+const slotGrid = (blocks, win, split, cat, opts) => slotGridOf(itemsOf(blocks), blocks, win, split, cat, opts);
 
 // THE STORY: the histogram is one row per local day, 72 cells of 20 minutes.
 // A cell is coloured by the block that covers its midpoint, in the same
@@ -39,7 +42,7 @@ test("a block that misses a cell's midpoint leaves that cell empty", () => {
 test("cells take the block's split category, and the legend is the chart's", () => {
   const blocks = [block({ h: 10, repo: "github.com/x/one" }), block({ h: 11 })];
   const g = slotGrid(blocks, week, "repo", catalog);
-  const v = volumeSeries(blocks, week, "repo", catalog);
+  const v = volumeSeries(itemsOf(blocks), blocks, week, "repo", catalog);
   assert.deepEqual(g.categories, v.categories);
   const keys = g.categories.map((c) => c.key);
   assert.equal(g.rows[6].cells[30], keys[0]);

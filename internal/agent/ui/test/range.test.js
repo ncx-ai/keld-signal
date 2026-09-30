@@ -7,6 +7,7 @@ import {
   LEDGER_LIMIT,
   rangeWindow,
   rangeLedgerURL,
+  LEDGER_LOOKBACK,
   blocksInWindow,
   ledgerTruncated,
   resolveRange,
@@ -64,7 +65,7 @@ test("a Custom range with an unreadable date falls back to the default range", (
 
 test("the ledger request carries the window's start and the row cap", () => {
   const w = rangeWindow({ key: "7d" }, now);
-  assert.equal(rangeLedgerURL(w), `/v1/ledger?since=${w.start}&limit=${LEDGER_LIMIT}`);
+  assert.equal(rangeLedgerURL(w), `/v1/ledger?since=${w.start - LEDGER_LOOKBACK}&limit=${LEDGER_LIMIT}`);
   assert.equal(LEDGER_LIMIT, 2000, "the daemon's own maxLedgerLimit");
 });
 

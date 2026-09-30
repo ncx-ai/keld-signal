@@ -311,18 +311,11 @@ export function rhythmTitleFor(block, catalog) {
 export function focusStats(blocks) {
   let totalMinutes = 0;
   let longestMinutes = 0;
-  let tokens = 0;
-  let usd = 0;
   const days = new Set();
   for (const b of blocks) {
     const minutes = (b.end - b.key.start) / 60;
     totalMinutes += minutes;
     if (minutes > longestMinutes) longestMinutes = minutes;
-    const m = measuredOf(b);
-    if (m) {
-      tokens += totalTokens(m.tokens);
-      usd += m.estimate_usd || 0;
-    }
     days.add(new Date(b.key.start * 1000).toISOString().slice(0, 10));
   }
   const breaks = deriveBreaks(blocks);
@@ -331,8 +324,6 @@ export function focusStats(blocks) {
     count: blocks.length,
     totalMinutes,
     longestMinutes,
-    tokens,
-    usd,
     breakCount: breaks.length,
     breakMinutes,
     dayCount: days.size, // a same-window proxy for "streak"; see the report
@@ -619,10 +610,13 @@ export function todayLedgerURL(now) {
 //
 // The Overview (docs/superpowers/specs/2026-09-28-signal-2c-overview-discovery.html)
 // reads the same GET /v1/ledger Focus blocks does, over a range the person
-// picks. Everything it draws is computed here from the blocks alone, with the
-// helpers the Focus blocks table already uses — totalTokens for a headline
-// token count, measuredOf for money, projectsOf for projects — so a number on
-// the Overview can always be checked against the list.
+// picks, plus GET /v1/usage: tokens and spend counted PER REQUEST
+// (docs/superpowers/specs/2026-09-29-per-request-usage-proposal.html). Tokens,
+// spend and models come from the requests; running time, sessions and the
+// histogram come from the blocks; repository and project come from the block
+// that holds each request. Everything is computed here, with the helpers the
+// Focus blocks table already uses — totalTokens, projectsOf — so a number on
+// the Overview can always be checked against its source.
 
 export const RANGE_KEYS = ["today", "7d", "1m", "custom"];
 /** Only when nothing is remembered: the page otherwise reopens on the last
@@ -688,8 +682,15 @@ export function rangeWindow(range, now) {
   return { key: r.key, range: r, start: days[0], end: unixOf(dayAfter(first, count)), days, title: RANGE_TITLES[r.key], dates };
 }
 
+/** How far before the range the ledger is asked from. A block that starts
+ *  before the range and runs into it (23:50 → 00:10) holds requests made
+ *  INSIDE the range, and their repository and project come from it; blocks
+ *  are cut at 20 minutes, so an hour is ample. Such a block is joined, never
+ *  drawn: blocksInWindow still filters by the range. */
+export const LEDGER_LOOKBACK = 3600;
+
 export function rangeLedgerURL(win) {
-  return `/v1/ledger?since=${win.start}&limit=${LEDGER_LIMIT}`;
+  return `/v1/ledger?since=${win.start - LEDGER_LOOKBACK}&limit=${LEDGER_LIMIT}`;
 }
 
 /** `since` bounds only the start of a range; Custom's end is applied here. */
@@ -707,8 +708,91 @@ export function ledgerTruncated(blocks, limit = LEDGER_LIMIT) {
   return { truncated: true, loadedFrom: Math.min(...list.map((b) => b.key.start)) };
 }
 
+/** GET /v1/usage for a range (docs/v3/contracts.md): the per-request table
+ *  summed per 5 minutes, bounded at BOTH ends, unlike the ledger's `since`. */
+export function usageURL(win) {
+  return `/v1/usage?since=${win.start}&until=${win.end}`;
+}
+
+/** The tools whose work is cut into focus blocks. Codex is one (its blocks
+ *  are named after the rollout file, as its requests' transcript is); only
+ *  Gemini's work never is. */
+const BLOCK_SOURCES = new Set(["claude_code", "cowork", "codex"]);
+
+export const SOURCE_LABELS = { claude_code: "Claude Code", cowork: "Cowork", codex: "Codex", gemini_cli: "Gemini CLI" };
+
+/** Every usage bucket, joined to the block that holds it: the block of the
+ *  same transcript whose [start, end) contains the bucket's instant — exact,
+ *  because block edges and buckets both sit on 5-minute boundaries. With no
+ *  such block, `place` says why: "none" for a tool whose work is never cut into
+ *  blocks (Gemini), "unknown" for one whose work is — still in an open
+ *  block, or in one this page did not load. */
+export function usageItems(usage, blocks) {
+  const bySession = new Map();
+  for (const b of blocks || []) {
+    const list = bySession.get(b.key.session);
+    if (list) list.push(b);
+    else bySession.set(b.key.session, [b]);
+  }
+  return ((usage && usage.buckets) || []).map((u) => {
+    const list = bySession.get(u.transcript) || [];
+    const block = list.find((b) => u.at >= b.key.start && u.at < b.end) || null;
+    return {
+      at: u.at,
+      source: u.source,
+      model: u.model || "",
+      tokens: u.tokens || {},
+      usd: u.estimate_usd || 0,
+      requests: u.requests || 0,
+      block,
+      place: block ? "block" : BLOCK_SOURCES.has(u.source) ? "unknown" : "none",
+    };
+  });
+}
+
+export function itemsInWindow(items, win) {
+  return (items || []).filter((i) => i.at >= win.start && i.at < win.end);
+}
+
+/** Tokens, cache reads and spend summed over requests. The Overview's and
+ *  Focus blocks' Tokens and Est. spend tiles both come from here, so one day
+ *  reads the same on both. */
+export function usageTotals(items) {
+  let tokens = 0;
+  let cache = 0;
+  let usd = 0;
+  let requests = 0;
+  for (const i of items || []) {
+    tokens += totalTokens(i.tokens);
+    cache += i.tokens.cache_read || 0;
+    usd += i.usd || 0;
+    requests += i.requests || 0;
+  }
+  return { tokens, cache, usd, requests };
+}
+
+/** Where usage data starts: the earliest request held for any tool, or null
+ *  when none is. The page shows no usage before it (decided 2026-09-29, D2). */
+export function usageStartsAt(usage) {
+  const firsts = Object.values((usage && usage.sources) || {})
+    .map((s) => s.first_at)
+    .filter(Number.isFinite);
+  return firsts.length ? Math.min(...firsts) : null;
+}
+
+/** The tools whose data starts after the range does, earliest first — the
+ *  ones the page must name, because their earlier days read as no usage. */
+export function lateSources(usage, win) {
+  return Object.entries((usage && usage.sources) || {})
+    .filter(([, s]) => Number.isFinite(s.first_at) && s.first_at > win.start)
+    .sort((a, b) => a[1].first_at - b[1].first_at)
+    .map(([source, s]) => ({ source, label: SOURCE_LABELS[source] || source, firstAt: s.first_at }));
+}
+
 export const NO_REPO_LABEL = "no repository";
 export const NO_MODEL_LABEL = "no model";
+/** A block that made no model requests at all, under By model. */
+export const NO_REQUESTS_LABEL = "no requests";
 export const NO_PROJECT_LABEL = "no project";
 export const NOT_ATTRIBUTED_LABEL = "not attributed yet";
 export const SEVERAL_PROJECTS_LABEL = "several projects";
@@ -760,19 +844,23 @@ function median(values) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-/** The four Overview tiles and their hover breakdowns, from `blocks` alone.
- *  Active time counts every block, measured or not; tokens and money count
- *  only what was measured. A session's span runs from its first block's start
- *  to its last block's end within the blocks given. */
-export function overviewStats(blocks) {
-  let tokens = 0;
-  let cache = 0;
-  let usd = 0;
+/** The four Overview tiles and their hover breakdowns. Tokens, spend and the
+ *  model breakdowns are summed over REQUESTS (`items`, see usageItems); active
+ *  time, sessions and the repository breakdowns over `blocks`. A session's
+ *  span runs from its first block's start to its last block's end within the
+ *  blocks given. */
+export function overviewStats(blocks, items) {
+  const totals = usageTotals(items);
   let activeMinutes = 0;
   const tokByModel = new Map();
   const usdByModel = new Map();
   const minByRepo = new Map();
   const sessions = new Map();
+  for (const i of items || []) {
+    const model = i.model || NO_MODEL_LABEL;
+    addTo(tokByModel, model, totalTokens(i.tokens));
+    addTo(usdByModel, model, i.usd || 0);
+  }
   for (const b of blocks || []) {
     const minutes = (b.end - b.key.start) / 60;
     activeMinutes += minutes;
@@ -783,15 +871,6 @@ export function overviewStats(blocks) {
     s.end = Math.max(s.end, b.end);
     addTo(s.repos, repo, minutes);
     sessions.set(b.key.session, s);
-    const m = measuredOf(b);
-    if (!m) continue;
-    const t = totalTokens(m.tokens);
-    tokens += t;
-    cache += (m.tokens && m.tokens.cache_read) || 0;
-    usd += m.estimate_usd || 0;
-    const model = m.model || NO_MODEL_LABEL;
-    addTo(tokByModel, model, t);
-    addTo(usdByModel, model, m.estimate_usd || 0);
   }
   // One repository per session — the one it spent longest in — so the
   // breakdown sums to the headline count instead of past it.
@@ -800,6 +879,7 @@ export function overviewStats(blocks) {
     const [main] = [...s.repos].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
     addTo(sessByRepo, main.label, 1);
   }
+  const { tokens, cache, usd } = totals;
   return {
     tokens,
     cacheShare: tokens ? cache / tokens : null,
@@ -842,7 +922,10 @@ const NONE_LABELS = { model: NO_MODEL_LABEL, repo: NO_REPO_LABEL, project: NO_PR
 function rawCategory(b, split, catalog) {
   if (split === "model") {
     const m = measuredOf(b);
-    return m && m.model ? { kind: "named", label: m.model } : { kind: "none" };
+    if (m && m.model) return { kind: "named", label: m.model };
+    // Measured and found no tokens: nothing ran, so there is no model to name.
+    if (m && m.status === "n/a" && m.reason === "no_tokens") return { kind: "idle" };
+    return { kind: "none" };
   }
   if (split === "repo") {
     const repo = b.dims && b.dims.repo;
@@ -855,23 +938,43 @@ function rawCategory(b, split, catalog) {
   return { kind: "named", label: projectTitle(list[0].id, catalog) || list[0].id };
 }
 
-/** The categories a split draws, and which one each block belongs to. ONE
- *  model for the chart, its legend and the histogram, so a colour means the
- *  same thing in all three. The three largest named values by tokens keep
- *  their own colour; the rest fold into "other". */
-export function splitModel(blocks, split, catalog) {
+/** Where one usage item falls under a split. Its model is its own; its
+ *  repository and project are its block's. With no block it is "not
+ *  attributed yet" where a block will hold it, and "none" where none ever
+ *  will (a tool whose work is not cut into blocks). */
+function itemCategory(item, split, catalog) {
+  if (split === "model") return item.model ? { kind: "named", label: item.model } : { kind: "none" };
+  if (item.block) return rawCategory(item.block, split, catalog);
+  return { kind: item.place === "unknown" ? "unknown" : "none" };
+}
+
+/** The categories a split draws, and which one each usage item or block
+ *  belongs to. ONE model for the chart, its legend and the histogram, so a
+ *  colour means the same thing in all three. The three largest named values
+ *  by requested tokens keep their own colour; the rest fold into "other". A
+ *  value only a block names (its requests fell outside the range) still takes
+ *  part, with no tokens, so the histogram can colour it. */
+export function splitModel(items, split, catalog, blocks = []) {
   if (split === "tokens") return { categories: TOKEN_CATEGORIES, keyOf: () => "active" };
   const raw = new Map();
   const tokensOf = new Map();
   const present = new Set();
+  for (const i of items || []) {
+    const c = itemCategory(i, split, catalog);
+    raw.set(i, c);
+    // A request that carried no tokens draws nothing, so it names no category:
+    // otherwise the legend reads "no model · 0" for lines Claude Code writes
+    // with no model and no usage.
+    const t = totalTokens(i.tokens);
+    if (!t) continue;
+    present.add(c.kind);
+    if (c.kind === "named") addTo(tokensOf, c.label, t);
+  }
   for (const b of blocks || []) {
     const c = rawCategory(b, split, catalog);
     raw.set(b, c);
     present.add(c.kind);
-    if (c.kind === "named") {
-      const m = measuredOf(b);
-      addTo(tokensOf, c.label, m ? totalTokens(m.tokens) : 0);
-    }
+    if (c.kind === "named" && !tokensOf.has(c.label)) tokensOf.set(c.label, 0);
   }
   const ranked = [...tokensOf].map(([label, value]) => ({ label, value })).sort(byValueThenLabel);
   const top = ranked.slice(0, 3);
@@ -880,9 +983,10 @@ export function splitModel(blocks, split, catalog) {
   if (ranked.length > 3) categories.push({ key: "other", label: OTHER_LABEL, color: "var(--ov-other)", kind: "other" });
   if (present.has("several")) categories.push({ key: "several", label: SEVERAL_PROJECTS_LABEL, color: "var(--ov-several)", kind: "several" });
   if (present.has("none")) categories.push({ key: "none", label: NONE_LABELS[split], color: "var(--ov-none)", kind: "none" });
+  if (present.has("idle")) categories.push({ key: "idle", label: NO_REQUESTS_LABEL, color: "var(--ov-none)", kind: "idle" });
   if (present.has("unknown")) categories.push({ key: "unknown", label: NOT_ATTRIBUTED_LABEL, color: "var(--ov-unknown)", kind: "unknown" });
-  const keyOf = (b) => {
-    const c = raw.get(b) || rawCategory(b, split, catalog);
+  const keyOf = (x) => {
+    const c = raw.get(x) || (x.key ? rawCategory(x, split, catalog) : itemCategory(x, split, catalog));
     if (c.kind === "named") return topKey.get(c.label) || "other";
     return c.kind;
   };
@@ -913,14 +1017,17 @@ export function axisLabelUSD(v) {
 
 const MIN_HOUR_COLUMNS = 4;
 
-function hourBuckets(win, blocks) {
+function hourBuckets(win, items, blocks) {
   const day = new Date(win.start * 1000);
   const hours = Array.from({ length: 24 }, (_, h) => {
     const start = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h));
     const end = unixOf(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h + 1));
     return { start, end, label: `${String(h).padStart(2, "0")}:00` };
   });
-  const busy = hours.map((hr) => blocks.some((b) => b.key.start >= hr.start && b.key.start < hr.end));
+  const busy = hours.map(
+    (hr) =>
+      items.some((i) => i.at >= hr.start && i.at < hr.end) || blocks.some((b) => b.key.start >= hr.start && b.key.start < hr.end)
+  );
   let first = busy.indexOf(true);
   if (first < 0) return [];
   // Never fewer than MIN_HOUR_COLUMNS (decided 2026-09-29): one hour of work
@@ -945,40 +1052,47 @@ function dayBuckets(win) {
 }
 
 /** The cost & volume chart: one column per hour (a one-day range, trimmed to
- *  the hours that had work) or per local day, each stacked by `split`. A
- *  block lands in the column its START falls in — the rule the Focus blocks
- *  table uses for a block that runs across midnight. A column's `tokens` is
- *  exactly the sum of its segments. Columns starting at or before
- *  `loadedFrom` are `loaded: false`: the row cap cut some of their blocks. */
-export function volumeSeries(blocks, win, split, catalog, { loadedFrom = null } = {}) {
-  const list = blocks || [];
-  const model = splitModel(list, split, catalog);
-  const buckets = win.days.length === 1 ? hourBuckets(win, list) : dayBuckets(win);
+ *  the hours that had work) or per local day, each stacked by `split`. Tokens
+ *  and spend are the REQUESTS made in the column (usage items, by their own
+ *  instant), so a block running across midnight splits its tokens between the
+ *  two days it actually spent them in. A column's `tokens` is exactly the sum
+ *  of its segments.
+ *
+ *  A column is `loaded: false` in two cases, said apart by `noData`: it ends
+ *  before `dataFrom`, where usage records start (no usage is shown there, D2);
+ *  or, for the splits read off blocks (repo, project), it starts at or before
+ *  `loadedFrom`, where the ledger's row cap cut some blocks. */
+export function volumeSeries(items, blocks, win, split, catalog, { loadedFrom = null, dataFrom = null } = {}) {
+  const list = items || [];
+  const model = splitModel(list, split, catalog, blocks);
+  const fromBlocks = split === "repo" || split === "project";
+  const buckets = win.days.length === 1 ? hourBuckets(win, list, blocks || []) : dayBuckets(win);
   const columns = buckets.map((bk) => {
     const seg = new Map(model.categories.map((c) => [c.key, 0]));
     let tokens = 0;
     let usd = 0;
-    for (const b of list) {
-      if (b.key.start < bk.start || b.key.start >= bk.end) continue;
-      const m = measuredOf(b);
-      if (!m) continue;
-      const t = totalTokens(m.tokens);
+    for (const i of list) {
+      if (i.at < bk.start || i.at >= bk.end) continue;
+      const t = totalTokens(i.tokens);
       tokens += t;
-      usd += m.estimate_usd || 0;
+      usd += i.usd || 0;
       if (split === "tokens") {
-        const cached = (m.tokens && m.tokens.cache_read) || 0;
+        const cached = i.tokens.cache_read || 0;
         addTo(seg, "cache", cached);
         addTo(seg, "fresh", t - cached);
       } else {
-        addTo(seg, model.keyOf(b), t);
+        addTo(seg, model.keyOf(i), t);
       }
     }
+    const noData = dataFrom !== null && bk.end <= dataFrom;
+    const cut = fromBlocks && loadedFrom !== null && bk.start <= loadedFrom;
     return {
       ...bk,
       tokens,
       usd,
       segments: model.categories.map((c) => ({ key: c.key, value: seg.get(c.key) || 0 })),
-      loaded: loadedFrom === null || bk.start > loadedFrom,
+      loaded: !noData && !cut,
+      noData,
     };
   });
   return {
@@ -1042,9 +1156,9 @@ function tokenLevels(blocks) {
  *  a whole cell claiming twenty minutes of work. Under Tokens a cell is one
  *  of four shades by its block's tokens (tokenLevels); otherwise it uses the
  *  chart's own categories. */
-export function slotGrid(blocks, win, split, catalog, { loadedFrom = null } = {}) {
+export function slotGrid(items, blocks, win, split, catalog, { loadedFrom = null } = {}) {
   const list = blocks || [];
-  const model = split === "tokens" ? tokenLevels(list) : splitModel(list, split, catalog);
+  const model = split === "tokens" ? tokenLevels(list) : splitModel(items, split, catalog, list);
   const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric" });
   const rows = win.days.map((day) => {
     const cells = new Array(SLOTS_PER_DAY).fill(null);
@@ -1954,6 +2068,7 @@ export { CELL_STAGES };
 
 if (typeof document !== "undefined") {
   const LEDGER_CACHE_KEY = "keld_signal_cached_ledger";
+  const TODAY_USAGE_CACHE_KEY = "keld_signal_cached_today_usage";
   const LOCAL_PREFS_KEY = "keld_signal_local_prefs";
 
   function readJSONStorage(key, fallback) {
@@ -2004,7 +2119,8 @@ if (typeof document !== "undefined") {
     offline: false,
     local: loadLocalPrefs(),
     // overview: the Overview's own ledger, for the range named by `sig`.
-    overview: { sig: "", ledger: null, loading: false, error: false, cachedAt: null },
+    overview: { sig: "", ledger: null, usage: null, loading: false, error: false, cachedAt: null },
+    todayUsage: null,
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
     // resending with ?restart=1 — empty for a restart /v1/config asked for,
@@ -2102,6 +2218,19 @@ if (typeof document !== "undefined") {
       // is nothing to show, and the empty state below says so honestly.
       state.ledger = state.ledger || readJSONStorage(LEDGER_CACHE_KEY, null);
     }
+    // Today's per-request usage, for Focus blocks' Tokens and Est. spend tiles.
+    // Outside the Promise.all for the reason given for the engine below: it is
+    // supplementary, and a harness serving the page without the route must
+    // not read as "Signal is not running".
+    // Cached like the ledger, so an offline page keeps showing its last figures.
+    const win = rangeWindow({ key: "today" }, Date.now());
+    try {
+      state.todayUsage = await fetchJSON(usageURL(win));
+      writeJSONStorage(TODAY_USAGE_CACHE_KEY, state.todayUsage);
+    } catch {
+      const cached = readJSONStorage(TODAY_USAGE_CACHE_KEY, null);
+      state.todayUsage = cached && cached.since === win.start ? cached : null;
+    }
     // ⚠️ DELIBERATELY NOT IN THE Promise.all ABOVE. That set decides whether the
     // page says "Signal is not running on this machine", and the engine is
     // supplementary to every one of them — so a daemon without the route (an
@@ -2193,9 +2322,9 @@ if (typeof document !== "undefined") {
     const sig = overviewSignature(win);
     state.overview.loading = true;
     try {
-      const ledger = await fetchJSON(rangeLedgerURL(win));
-      state.overview = { sig, ledger, loading: false, error: false, cachedAt: null };
-      writeJSONStorage(OVERVIEW_CACHE_KEY, { sig, ledger, at: Date.now() });
+      const [ledger, usage] = await Promise.all([fetchJSON(rangeLedgerURL(win)), fetchJSON(usageURL(win))]);
+      state.overview = { sig, ledger, usage, loading: false, error: false, cachedAt: null };
+      writeJSONStorage(OVERVIEW_CACHE_KEY, { sig, ledger, usage, at: Date.now() });
     } catch {
       // A cached copy is shown only for the SAME range; another range's
       // blocks drawn under this range's title would be a false statement.
@@ -2204,6 +2333,7 @@ if (typeof document !== "undefined") {
       state.overview = {
         sig,
         ledger: usable ? cached.ledger : null,
+        usage: usable ? cached.usage || null : null,
         loading: false,
         error: true,
         cachedAt: usable ? cached.at : null,
@@ -2337,7 +2467,7 @@ if (typeof document !== "undefined") {
     // ⚠️ A range with blocks but no measured tokens has no scale to draw
     // against; an axis reading "0" top to bottom would be a chart of nothing.
     if (!series.maxTokens) {
-      return el("section", { class: "ov-chart ov-chart-empty" }, head, summary, el("p", { class: "ov-note" }, "No measured tokens in this range yet — blocks are waiting to be measured."));
+      return el("section", { class: "ov-chart ov-chart-empty" }, head, summary, el("p", { class: "ov-note" }, "No requests recorded in this range yet."));
     }
 
     const ticks = [1, 2 / 3, 1 / 3];
@@ -2353,7 +2483,7 @@ if (typeof document !== "undefined") {
     const bars = el("div", { class: "ov-bars", style: `grid-template-columns:repeat(${n}, minmax(0, 1fr))` });
     for (const c of series.columns) {
       if (!c.loaded) {
-        bars.appendChild(el("div", { class: "ov-col not-loaded", title: `${c.label} · not loaded` }));
+        bars.appendChild(el("div", { class: "ov-col not-loaded", title: `${c.label} · ${c.noData ? "no usage recorded yet" : "not loaded"}` }));
         continue;
       }
       const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatVolume(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
@@ -2477,7 +2607,8 @@ if (typeof document !== "undefined") {
     );
 
     const ledger = fresh ? ov.ledger : null;
-    if (!ledger) {
+    const usage = fresh ? ov.usage : null;
+    if (!ledger || !usage) {
       wrap.appendChild(
         el(
           "p",
@@ -2492,6 +2623,7 @@ if (typeof document !== "undefined") {
     }
 
     const blocks = blocksInWindow(ledger.blocks, win);
+    const items = itemsInWindow(usageItems(usage, ledger.blocks), win);
     const { truncated, loadedFrom } = ledgerTruncated(ledger.blocks);
     // ⚠️ A capped answer with nothing in this range is NOT an empty range.
     // `since` has no upper bound, so for a Custom range in the past the newest
@@ -2512,11 +2644,27 @@ if (typeof document !== "undefined") {
         el(
           "p",
           { class: "ov-note" },
-          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Work before ${formatDateHeading(loadedFrom)} is shaded "not loaded", not zero.`
+          `This range holds more than ${LEDGER_LIMIT.toLocaleString("en-GB")} focus blocks, so the oldest were not loaded. Tokens and spend are complete; repositories, projects and the histogram before ${formatDateHeading(loadedFrom)} are shaded "not loaded", not zero.`
         )
       );
     }
-    if (!blocks.length) {
+    if (!usage.backfill_done) {
+      wrap.appendChild(
+        el("p", { class: "ov-note" }, "Signal is still reading the transcripts already on this machine, so older days are still filling in.")
+      );
+    }
+    const late = lateSources(usage, win);
+    if (late.length) {
+      const named = late.map((s) => `${s.label} from ${formatDateHeading(s.firstAt)}`).join(", ");
+      wrap.appendChild(
+        el(
+          "p",
+          { class: "ov-note" },
+          `Usage is counted from the transcripts on this machine, and they start partway through this range: ${named}. Earlier days show no usage for them.`
+        )
+      );
+    }
+    if (!blocks.length && !items.length) {
       wrap.appendChild(
         el(
           "div",
@@ -2530,8 +2678,8 @@ if (typeof document !== "undefined") {
 
     const { catalog } = state;
     const split = overviewSplit();
-    const stats = overviewStats(blocks);
-    const opts = { loadedFrom: truncated ? loadedFrom : null };
+    const stats = overviewStats(blocks, items);
+    const opts = { loadedFrom: truncated ? loadedFrom : null, dataFrom: usageStartsAt(usage) };
     const count = (v) => `${Math.round(v)}`;
     wrap.appendChild(
       el(
@@ -2543,8 +2691,8 @@ if (typeof document !== "undefined") {
         overviewTile("Sessions", `${stats.sessions}`, stats.medianSessionMinutes === null ? "" : `median ${formatMinutes(stats.medianSessionMinutes)}`, stats.byRepo.sessions, count)
       )
     );
-    wrap.appendChild(renderVolumeChart(volumeSeries(blocks, win, split, catalog, opts), split, stats, win));
-    wrap.appendChild(renderHistogram(slotGrid(blocks, win, split, catalog, opts), split));
+    wrap.appendChild(renderVolumeChart(volumeSeries(items, blocks, win, split, catalog, opts), split, stats, win));
+    wrap.appendChild(renderHistogram(slotGrid(items, blocks, win, split, catalog, opts), split));
   }
 
   // ---- Today ----
@@ -2558,6 +2706,12 @@ if (typeof document !== "undefined") {
     }
     const blocks = ledger.blocks || [];
     const stats = focusStats(blocks);
+    // Tokens and spend are counted per request, from the same function and the
+    // same day as the Overview's Today (T14). The rows below keep their own
+    // block figures, which need not add up to these (decided 2026-09-29, D1).
+    const usage = state.todayUsage
+      ? usageTotals(itemsInWindow(usageItems(state.todayUsage, blocks), rangeWindow({ key: "today" }, Date.now())))
+      : null;
     const showAtlas = atlasEnabled(settings);
     const showBreaks = !!(settings && settings.show_breaks);
 
@@ -2578,12 +2732,12 @@ if (typeof document !== "undefined") {
           el("div", { class: "l" }, "Focus time"),
           el("div", { class: "v" }, formatMinutes(stats.totalMinutes), el("small", {}, `longest ${formatMinutes(stats.longestMinutes)}`))
         ),
-        el("div", { class: "tile" }, el("div", { class: "l" }, "Tokens"), el("div", { class: "v" }, formatTokens(stats.tokens))),
+        el("div", { class: "tile" }, el("div", { class: "l" }, "Tokens"), el("div", { class: "v" }, usage ? formatTokens(usage.tokens) : "—")),
         el(
           "div",
           { class: "tile" },
           el("div", { class: "l" }, "Est. spend"),
-          el("div", { class: "v" }, formatUSD(stats.usd))
+          el("div", { class: "v" }, usage ? formatUSD(usage.usd) : "—")
         )
       )
     );

@@ -62,7 +62,7 @@ func TestAnAnsweredSweepResolvesThePendingNoteEvenWithNothingToCut(t *testing.T)
 	if len(h.resolved) != 1 {
 		t.Fatalf("resolved fired %d times after a healthy sweep with nothing to cut, want 1", len(h.resolved))
 	}
-	if want := sessionIDFor(txPath); h.resolved[0] != want {
+	if want := SessionIDFor(txPath); h.resolved[0] != want {
 		t.Fatalf("resolved session = %q, want %q", h.resolved[0], want)
 	}
 }
@@ -148,7 +148,7 @@ func TestResolvingOneSessionDoesNotClearAnothers(t *testing.T) {
 	e.advanceAt("claude_code", otherPath, now)
 	e.Sweep(context.Background(), now)
 
-	wantOK, wantBad := sessionIDFor(txPath), sessionIDFor(otherPath)
+	wantOK, wantBad := SessionIDFor(txPath), SessionIDFor(otherPath)
 	if len(h.resolved) != 1 || h.resolved[0] != wantOK {
 		t.Fatalf("resolved = %v, want exactly [%q]", h.resolved, wantOK)
 	}

@@ -1,0 +1,389 @@
+<title>Counting Tokens Per Request</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:44px 0 8px;text-wrap:balance}
+p{max-width:66ch;margin:0 0 12px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+figure{margin:18px 0 0;padding:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+/* SVG palette via classes so both themes resolve from tokens */
+.lane{stroke:var(--rule);stroke-width:1}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.small{fill:var(--muted);font-size:11px}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-enc-solid{fill:var(--enc);stroke:var(--enc)}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.tick{stroke:var(--rule);stroke-width:1}
+.cut{stroke:var(--bad);stroke-width:1.6}
+.qa{border-top:1px solid var(--rule);margin-top:44px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:14px 0 0;max-width:640px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+h3.grp{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3.grp .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+table.tests{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+table.tests th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase}
+table.tests td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.tests td:first-child{width:44px;color:var(--muted)}
+table.tests td:nth-child(2){width:38%}
+.wrap{overflow-x:auto}
+</style>
+
+
+<main>
+
+<h1>Counting tokens per request</h1>
+<p class="lede">Signal's page counts tokens and spend from 20-minute blocks, with one model per block. This proposes counting them request by request, from the reader Signal already runs, and keeping blocks for what they are good at: what the work was about.</p>
+
+<dl class="kv">
+  <dt>Requests on this Mac</dt><dd class="mono">~387 a day · analysis store, 1 Jul – 29 Sep 2026</dd>
+  <dt>Claude Code transcripts</dt><dd class="mono">kept 30 days by default · oldest on disk: 28 Aug</dd>
+  <dt>Signal data older than that</dt><dd class="mono">291 Claude Code blocks, still in the ledger</dd>
+  <dt>Lines per request</dt><dd class="mono">1.79 · Claude Code writes a request's usage on every content line (measured, 40 transcripts)</dd>
+  <dt>Codex repeated totals</dt><dd class="mono">9.3% of token records repeat the last total (measured, 10,061 records)</dd>
+  <dt>Retention</dt><dd class="mono">every request kept for good · no rollup, no pruning (revised after review)</dd>
+  <dt>New table size</dt><dd class="mono">MEASURED 2026-09-29: ~310 bytes a row · ~1,200 requests a day here · ~130 MB a year (the first guess, 20–25 MB, was ~5× low)</dd>
+  <dt>Scale check</dt><dd class="mono">MEASURED: 3 years at 10× your rate = 9.25M rows, 2.7 GB · 30-day read 731 ms · startup under 1 ms · a rollup is revisited on read time, not size</dd>
+</dl>
+
+<h2>1 · Today — exact per-request data passes through, and only block totals are kept</h2>
+<p>Two readers look at the same transcript. The transcript reader sees every request with its model and tokens, deduplicated, and sends them to Atlas. The analysis engine sums a block's tokens and names one model for it. Only the second reaches the page.</p>
+<figure>
+<svg viewBox="0 0 880 300" role="img" aria-label="Two lanes. In the daemon lane, the transcript reader reads each request from the transcript with its exact model and token counts, removes duplicate lines, and sends the result to Atlas as usage records. Nothing it reads is kept on the machine. In the analysis engine lane, the block cutter groups the same work into 20-minute blocks and reports each block's summed tokens with a single model, the one most of its requests used. That block total is written to the ledger, and the ledger is the only thing the page reads for tokens and spend.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="txt"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+  </defs>
+  <line x1="20" y1="150" x2="860" y2="150" class="lane"/>
+  <text x="20" y="22" class="lanelbl">DAEMON (GO)</text>
+  <text x="20" y="172" class="lanelbl">ANALYSIS ENGINE (PYTHON)</text>
+
+  <rect x="20" y="40" width="130" height="56" rx="4" class="b-plain"/>
+  <text x="85" y="63" text-anchor="middle" class="txt">Transcript</text>
+  <text x="85" y="81" text-anchor="middle" class="small">on disk</text>
+  <path d="M150 68H196" class="arr" marker-end="url(#ah)"/>
+  <rect x="196" y="40" width="200" height="56" rx="4" class="b-daemon"/>
+  <text x="296" y="62" text-anchor="middle" class="txt">Transcript reader</text>
+  <text x="296" y="80" text-anchor="middle" class="small">each request · model + tokens</text>
+  <path d="M396 68H452" class="arr" marker-end="url(#ah)"/>
+  <rect x="452" y="40" width="150" height="56" rx="4" class="b-daemon"/>
+  <text x="527" y="62" text-anchor="middle" class="txt">Atlas usage feed</text>
+  <text x="527" y="80" text-anchor="middle" class="small">sent, exact</text>
+  <path d="M296 96V128H640" class="arr-bad" marker-end="url(#ah-bad)"/>
+  <text x="470" y="122" text-anchor="middle" class="small t-bad">kept on this machine: nothing</text>
+
+  <path d="M85 96V218H196" class="arr" marker-end="url(#ah)"/>
+  <rect x="196" y="190" width="200" height="56" rx="4" class="b-enc"/>
+  <text x="296" y="212" text-anchor="middle" class="txt">Block cutter</text>
+  <text x="296" y="230" text-anchor="middle" class="small">20-minute blocks</text>
+  <path d="M396 218H452" class="arr" marker-end="url(#ah)"/>
+  <rect x="452" y="190" width="170" height="56" rx="4" class="b-enc"/>
+  <text x="537" y="212" text-anchor="middle" class="txt">Block total</text>
+  <text x="537" y="230" text-anchor="middle" class="small">summed tokens · ONE model</text>
+  <path d="M622 218H672" class="arr" marker-end="url(#ah)"/>
+  <rect x="672" y="190" width="188" height="56" rx="4" class="b-daemon"/>
+  <text x="766" y="212" text-anchor="middle" class="txt">Ledger → the page</text>
+  <text x="766" y="230" text-anchor="middle" class="small">tokens, spend, model</text>
+</svg>
+<figcaption>The accurate numbers already exist on the machine. The page just reads the rougher of the two readers.</figcaption>
+</figure>
+
+<h2>2 · Why it breaks — one model per block, and nothing until the block closes</h2>
+<p>A block is priced as if every request in it used the block's main model. It also reaches the page only when it closes, up to 20 minutes after the work, or 15 minutes of silence. The timeline shows an illustrative block: ten requests, two models.</p>
+<figure>
+<svg viewBox="0 0 880 250" role="img" aria-label="A timeline of one 20-minute block, drawn to scale, with minute ticks along the top. Ten requests fall inside it: six on Claude Opus 5 in the first twelve minutes, then four on Claude Haiku from minute fourteen. Today the whole block is recorded under one model, Opus, so the four Haiku requests are priced at Opus rates. A third row shows what the page sees: nothing at all until minute twenty, when the block closes, and then the whole block at once. Counted per request, each request carries its own model and price and appears on the page as soon as it is read.">
+  <text x="20" y="22" class="lanelbl">MINUTES INTO THE BLOCK</text>
+  <line x1="120" y1="36" x2="840" y2="36" class="tick"/>
+  <g class="small">
+    <text x="120" y="30" text-anchor="middle">0</text><text x="300" y="30" text-anchor="middle">5</text>
+    <text x="480" y="30" text-anchor="middle">10</text><text x="660" y="30" text-anchor="middle">15</text>
+    <text x="840" y="30" text-anchor="middle">20</text>
+  </g>
+  <text x="20" y="74" class="small">requests</text>
+  <rect x="156" y="58" width="10" height="24" class="b-daemon"/><rect x="228" y="58" width="10" height="24" class="b-daemon"/>
+  <rect x="300" y="58" width="10" height="24" class="b-daemon"/><rect x="408" y="58" width="10" height="24" class="b-daemon"/>
+  <rect x="480" y="58" width="10" height="24" class="b-daemon"/><rect x="552" y="58" width="10" height="24" class="b-daemon"/>
+  <rect x="624" y="58" width="10" height="24" class="b-enc"/><rect x="660" y="58" width="10" height="24" class="b-enc"/>
+  <rect x="696" y="58" width="10" height="24" class="b-enc"/><rect x="732" y="58" width="10" height="24" class="b-enc"/>
+  <text x="340" y="100" text-anchor="middle" class="small t-daemon">6 on claude-opus-5</text>
+  <text x="684" y="100" text-anchor="middle" class="small t-enc">4 on claude-haiku</text>
+
+  <text x="20" y="140" class="small">block today</text>
+  <rect x="120" y="124" width="720" height="26" rx="3" class="b-bad"/>
+  <text x="480" y="141" text-anchor="middle" class="txt">all 10 priced as claude-opus-5</text>
+
+  <text x="20" y="196" class="small">on the page</text>
+  <rect x="120" y="180" width="720" height="26" rx="3" class="b-wait"/>
+  <text x="480" y="197" text-anchor="middle" class="txt">nothing yet — the block has not closed</text>
+  <path d="M840 172V214" class="cut"/>
+  <text x="836" y="232" text-anchor="end" class="small t-bad">closes → appears all at once</text>
+</svg>
+<figcaption>A block is the right unit for "what was this work about". It is the wrong unit for "how much did it cost", which is a sum over requests.</figcaption>
+</figure>
+<p>The same shape produced the "no model" rows: in three Codex blocks this week the engine saw no model at all, because it counts a model only on an assistant message and those blocks had none it could use. The request records name <span class="mono">gpt-6-astra</span> the whole time.</p>
+
+<h2>3 · The fix — three things change</h2>
+<ol>
+  <li><strong>The reader keeps what it reads.</strong> Each request goes into a new ledger table, keyed on its request id, as it is read. It is the same deduplicated record Atlas already gets.</li>
+  <li><strong>Every request row is kept for good.</strong> No rollup table and no pruning. The page sums the rows it needs, and a duplicate is caught however old it is.</li>
+  <li><strong>The page reads usage from that table.</strong> Tokens, spend and "By model" come from requests. "By repo", "By project" and the activity grid still come from blocks, joined by session and time.</li>
+</ol>
+<figure>
+<svg viewBox="0 0 880 300" role="img" aria-label="Two lanes after the change. In the daemon lane the transcript reader still feeds the Atlas usage feed, and now also writes each request to a new requests table, keyed on the request id and kept for good. A new usage route sums those rows for the range asked, joined to blocks by session and time, to the Overview tiles and chart. In the analysis engine lane the block cutter is unchanged and still feeds the ledger's blocks, which supply the repository, project and activity grid.">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="txt"/></marker>
+  </defs>
+  <line x1="20" y1="170" x2="860" y2="170" class="lane"/>
+  <text x="20" y="22" class="lanelbl">DAEMON (GO) · ~/.keld/state/ledger.db</text>
+  <text x="20" y="192" class="lanelbl">ANALYSIS ENGINE (PYTHON) — UNCHANGED</text>
+
+  <rect x="20" y="36" width="150" height="52" rx="4" class="b-daemon"/>
+  <text x="95" y="58" text-anchor="middle" class="txt">Transcript reader</text>
+  <text x="95" y="76" text-anchor="middle" class="small">unchanged</text>
+  <path d="M95 36V20H250" class="arr" marker-end="url(#ah2)"/>
+  <text x="262" y="24" class="small">Atlas usage feed, as today</text>
+  <path d="M170 62H208" class="arr" marker-end="url(#ah2)"/>
+  <rect x="208" y="36" width="230" height="52" rx="4" class="b-good" stroke-dasharray="5 3"/>
+  <text x="323" y="58" text-anchor="middle" class="txt">requests</text>
+  <text x="323" y="76" text-anchor="middle" class="small">NEW · one row per request · kept for good</text>
+  <path d="M438 62H478" class="arr" marker-end="url(#ah2)"/>
+  <rect x="478" y="36" width="150" height="52" rx="4" class="b-good" stroke-dasharray="5 3"/>
+  <text x="553" y="58" text-anchor="middle" class="txt">GET /v1/usage</text>
+  <text x="553" y="76" text-anchor="middle" class="small">NEW route · sums rows</text>
+  <path d="M628 62H668" class="arr" marker-end="url(#ah2)"/>
+  <rect x="668" y="36" width="192" height="52" rx="4" class="b-enc"/>
+  <text x="764" y="58" text-anchor="middle" class="txt">Overview</text>
+  <text x="764" y="76" text-anchor="middle" class="small">changed</text>
+
+  <rect x="208" y="206" width="160" height="52" rx="4" class="b-enc"/>
+  <text x="288" y="228" text-anchor="middle" class="txt">Block cutter</text>
+  <text x="288" y="246" text-anchor="middle" class="small">as today</text>
+  <path d="M368 232H406" class="arr" marker-end="url(#ah2)"/>
+  <rect x="406" y="206" width="170" height="52" rx="4" class="b-daemon"/>
+  <text x="491" y="228" text-anchor="middle" class="txt">ledger blocks</text>
+  <text x="491" y="246" text-anchor="middle" class="small">repo · project · span</text>
+  <path d="M576 232H553V88" class="arr" marker-end="url(#ah2)"/>
+  <text x="561" y="150" class="small">joined by session + time</text>
+</svg>
+<figcaption>No new reader and no engine change. The daemon stops throwing away what it already reads, and the page reads it.</figcaption>
+</figure>
+
+<h3 class="grp">Schema — one additive table in <span class="mono">ledger.db</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>Table</th><th>Columns</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td class="mono">requests</td><td class="mono">source, session, request_id (PK) · ts · model · input, output, cache_read, cache_creation · estimate_usd</td><td>One row per request. Insert-or-ignore on the key, so a re-read cannot add twice. Never pruned. Indexed on <span class="mono">ts</span> for range reads.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Additive only.</strong> An older Signal on the same machine ignores the table. Nothing existing is altered or migrated.</p>
+
+<h3 class="grp">Over months and years — what is kept, and for how long</h3>
+<figure>
+<svg viewBox="0 0 880 200" role="img" aria-label="A time scale running from 540 days ago on the left to today on the right, drawn to scale. Claude Code keeps its transcripts for the last 30 days only. Codex keeps its rollout files until you delete them. Signal's request rows and its blocks cover the whole history and are never pruned. So once a request has been read, deleting its transcript removes nothing from Signal.">
+  <text x="20" y="22" class="lanelbl">DAYS AGO</text>
+  <line x1="200" y1="36" x2="860" y2="36" class="tick"/>
+  <g class="small">
+    <text x="200" y="30" text-anchor="middle">540</text><text x="371" y="30" text-anchor="middle">400</text>
+    <text x="530" y="30" text-anchor="middle">270</text><text x="750" y="30" text-anchor="middle">90</text>
+    <text x="823" y="30" text-anchor="middle">30</text><text x="860" y="30" text-anchor="end">now</text>
+  </g>
+  <text x="20" y="66" class="small">Claude Code transcripts</text>
+  <rect x="823" y="52" width="37" height="22" rx="3" class="b-wait"/>
+  <text x="815" y="67" text-anchor="end" class="small">deleted by Claude Code after 30 days</text>
+  <text x="20" y="104" class="small">Codex rollouts</text>
+  <rect x="200" y="90" width="660" height="22" rx="3" class="b-wait"/>
+  <text x="530" y="105" text-anchor="middle" class="small">kept until you delete them</text>
+  <text x="20" y="142" class="small">Signal · requests</text>
+  <rect x="200" y="128" width="660" height="22" rx="3" class="b-good"/>
+  <text x="530" y="143" text-anchor="middle" class="txt">one row per request · kept for good</text>
+  <text x="20" y="180" class="small">Signal · blocks</text>
+  <rect x="200" y="166" width="660" height="22" rx="3" class="b-daemon"/>
+  <text x="530" y="181" text-anchor="middle" class="txt">kept for good (as today)</text>
+</svg>
+<figcaption>Signal does not need the transcript once it has read it. Deleting transcripts loses only what Signal never got to read.</figcaption>
+</figure>
+<ul>
+  <li><strong>Transcripts deleted later:</strong> nothing is lost. Today your ledger already holds 291 Claude Code blocks whose transcripts Claude Code has deleted.</li>
+  <li><strong>What is lost:</strong> a transcript deleted before Signal read it. The daemon resumes from its saved position after a restart, so this only happens if it is off for longer than Claude Code keeps transcripts — 30 days.</li>
+  <li><strong>History before this ships:</strong> the first time the new version starts, it reads every transcript still on disk once and counts it. That is the last 30 days of Claude Code and all your Codex rollouts, back to Sep 2025. Days older than that show no usage on the Overview (D2), with a note saying where each tool's data starts.</li>
+  <li><strong>No overload:</strong> the page only asks for its range, read through an index on time: 30 days is about 36,000 requests here, sent as ~4,400 five-minute sums. The table grows by ~130 MB a year at your rate (measured), and <span class="mono">keld signal doctor</span> reports its size. At ten times your rate for three years a month still reads in 731 ms, so a rollup waits until reads slow, not until a size.</li>
+</ul>
+
+<h2>4 · What we test</h2>
+<h3 class="grp">Counting each request once <span class="mono">internal/agent/usage/*_test.go</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Given / When</th><th>Then</th></tr></thead>
+<tbody>
+<tr><td class="mono">T1</td><td>A real captured Claude Code request written on 6 content lines</td><td>One row. Counting lines would inflate tokens 1.79×.</td></tr>
+<tr><td class="mono">T2</td><td>A Codex rollout where a token record repeats the last running total</td><td>The repeat adds nothing. 9.3% of real records are repeats.</td></tr>
+<tr><td class="mono">T3</td><td>A Gemini session file rewritten whole with the same responses</td><td>No new rows.</td></tr>
+<tr><td class="mono">T4</td><td>The same transcript read again from the start (restart, backfill)</td><td>Row count and every total unchanged.</td></tr>
+<tr><td class="mono">T5</td><td>A request whose record names no model</td><td>Stored and counted under "no model". This is the only way that bucket fills.</td></tr>
+<tr><td class="mono">T6b</td><td>The ledger is removed but the read positions survive</td><td>The next start sees an empty table and backfills from every transcript on disk, instead of starting with no history.</td></tr>
+<tr><td class="mono">T6</td><td>A year-old Codex rollout read again</td><td>Adds nothing. Nothing is ever pruned, so every stored request stays in the key and a duplicate is caught however old.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 class="grp">Two independent readers must agree <span class="mono">internal/agent/usage/crosscheck_test.go</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Given / When</th><th>Then</th></tr></thead>
+<tbody>
+<tr><td class="mono">T7</td><td>Real transcripts, read by both: the daemon's transcript reader (Go, feeding the new table) and the analysis engine's own per-request token store (Python, written separately)</td><td>Token totals match per session. If either counted a request twice, its totals would come out higher. Strong evidence, not proof: both could share a mistake, which is why T1–T4 check each trap directly. Tokens only: the engine keeps no model per request.</td></tr>
+<tr><td class="mono">T8</td><td>One read feeding both the table and the Atlas usage feed</td><td>Identical sums: Signal's page and Atlas count the same requests.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 class="grp">Atlas is untouched <span class="mono">internal/agent/promptlog/*_test.go</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Given / When</th><th>Then</th></tr></thead>
+<tbody>
+<tr><td class="mono">A1</td><td>The same transcripts, read before and after the change</td><td>What is sent to Atlas is byte-identical, and the set of tools mirrored to Atlas is unchanged. The local write never widens the Atlas lane, which would double count a tool that also sends its own telemetry.</td></tr>
+<tr><td class="mono">A2</td><td>The first-start backfill reads a year of transcripts</td><td>Nothing from it is sent to Atlas. The backfill writes to the local table only; the Atlas feed stays forward-only, as today.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 class="grp">Lifecycle <span class="mono">internal/agent/ledger/requests_test.go</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Given / When</th><th>Then</th></tr></thead>
+<tbody>
+<tr><td class="mono">T9</td><td>A transcript deleted after its requests were stored</td><td>Every row and every total for it unchanged. Signal never needs the file again.</td></tr>
+<tr><td class="mono">T10</td><td><span class="mono">keld signal doctor</span> on any machine</td><td>Reports the table's row count and size, so growth is visible before it matters.</td></tr>
+<tr><td class="mono">T11</td><td>Three synthetic years at ten times your rate</td><td>File size recorded against the estimate above. A 30-day <span class="mono">/v1/usage</span> read stays fast (bar set after the first measurement).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 class="grp">Pricing and the page <span class="mono">pricing, ui/test, ui/e2e</span></h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Given / When</th><th>Then</th></tr></thead>
+<tbody>
+<tr><td class="mono">T12</td><td>A model gains a price after its requests were stored</td><td>Its request rows are re-priced from their own tokens.</td></tr>
+<tr><td class="mono">T13</td><td>A block with 6 Opus and 4 Haiku requests</td><td>Spend is the sum of per-request prices, not all 10 at Opus rates.</td></tr>
+<tr><td class="mono">T14</td><td>Today on the Overview and Focus blocks' tiles</td><td>The same token and spend totals: one source, no contradiction on the page.</td></tr>
+<tr><td class="mono">T15</td><td>A block still open</td><td>Its requests already count on the Overview.</td></tr>
+<tr><td class="mono">T16</td><td>A range reaching back before the table's first row for a tool</td><td>Those days show no usage for that tool, and the page says where its data starts. No block total stands in.</td></tr>
+<tr><td class="mono">T17</td><td>End to end: the isolated daemon over the generated corpus</td><td>Overview totals equal the sum of the corpus's requests; no "no model" where every request named one.</td></tr>
+</tbody>
+</table>
+</div>
+
+<section class="qa">
+<h2>Objections</h2>
+<dl>
+  <dt>Why not fix the analysis engine to count models per request instead?</dt>
+  <dd>It would work, and the engine already stores tokens per request. But it does not store the model per request, so it needs an engine release and a re-read of every transcript. The daemon's reader already produces the exact record, and Atlas already trusts it.</dd>
+  <dt>Won't this disagree with Atlas?</dt>
+  <dd>Less than today. Atlas prices from the same request records this reader sends. The page and Atlas count the same requests; only the rates can differ, which the page already says with "est.".</dd>
+  <dt>Another table is another thing to break.</dt>
+  <dd>True, so it is one table, additive and ignored by older builds. The tests that guard it are the same dedupe rules the Atlas feed already depends on.</dd>
+  <dt>What if the laptop is off for a month?</dt>
+  <dd>Signal resumes from where it stopped. It loses only transcripts Claude Code deleted in the meantime — its 30-day cleanup. That is true today for blocks too.</dd>
+  <dt>Why not roll old rows up to save space?</dt>
+  <dd>A rollup would save space, but it adds a second table to keep in sync and a pruning job. That only earns its place if space or speed is a real problem. Measured, the table is ~130 MB a year at your rate and a month reads in under a second even at ten times that, so the rollup waits until reads slow.</dd>
+  <dt>Why keep blocks at all?</dt>
+  <dd>Tokens do not need them. "What was this work about" does: repo, project, and the activity grid are properties of a stretch of work, not of a single request. The join gives both.</dd>
+</dl>
+
+<h2>Open points for discussion</h2>
+<p>Each point below is its own entry, so it can be discussed on its own. The first two are decisions; the rest are risks to settle before building.</p>
+<dl>
+  <dt id="d1">D1 · Decided — Focus blocks rows will not add up exactly to its Tokens and Est. spend tiles</dt>
+  <dd>The Focus blocks pane has four tiles at the top. Two of them, <strong>Tokens</strong> and <strong>Est. spend</strong>, switch to request totals, the same numbers the Overview shows (T14). The other two, Focus blocks and Focus time, are about blocks and stay as they are. Each block row in the list below keeps its own block total. The same holds for the Overview's histogram: its squares are blocks, and under Tokens their shade comes from each block's total, so it stays block-based too. The Focus blocks pane's Rhythm strip carries no token counts and is unaffected. Work still in progress, and requests at a block's edge, land differently, so the rows and the tiles can differ slightly. <strong>Decided 2026-09-29 (Gabriel): accept it for now.</strong> The Focus blocks pane will likely be redesigned or removed, so moving its rows to request totals would be work thrown away. Settled 29 Sep (Q3): the Overview histogram stays on block totals. A side effect of D2: the 291 Claude Code blocks from before 28 Aug still appear on block-based views (the Focus blocks list, the Overview histogram) while the Overview's usage shows nothing for those days.</dd>
+
+  <dt id="d2">D2 · Decided — the Overview shows only what the new table holds; days with no transcript left show nothing</dt>
+  <dd>Every transcript still on disk <strong>is</strong> counted: the first time the new version starts, it reads each one once and fills the table. No reinstall is needed. On this Mac that is the last 30 days of Claude Code (oldest on disk: 28 Aug) and all your Codex rollouts, back to Sep 2025. D2 is only about days whose transcripts are already gone — mainly the 291 Claude Code blocks from before 28 Aug. With no file left there is nothing to rebuild requests from. <strong>Decided 2026-09-29 (Gabriel):</strong> the Overview's tokens, spend and "By model" come only from the new requests table. Days with no transcript on disk show no usage — no block fallback, no partial backfill. Simpler, and fine for an alpha. Because tools keep their files for different lengths, the Overview says where each tool's data starts, so a drop at 28 Aug does not read as a real change in usage.</dd>
+
+  <dt id="r1">R1 · Note (downgraded after review) — keys are stable and re-reads are rare</dt>
+  <dd>Claude Code writes a request id; Codex and Gemini have stable keys in Signal's reader too — Codex: <span class="mono">session @ record timestamp # position in the file</span>; Gemini: each response's own <span class="mono">message id</span>. The content fingerprint is Atlas's, over the fields Signal sends; Signal hashes nothing, and duplicates at Atlas are Atlas's to handle. For the page, a key only matters when a file is read again, and in normal running none is: the daemon resumes each file from its saved position, including across a new version. Gemini re-parses a rewritten session file, but its own message ids make the old responses add nothing.
+  <br><br><strong>The one real case, found in review:</strong> read positions live in <span class="mono">~/.keld/watch</span> and the ledger in <span class="mono">~/.keld/state</span>, so either can be lost without the other (uninstall removes <span class="mono">state</span> wholesale). Positions lost, ledger kept: files are re-read, and stable keys make that add nothing — T4 and T6 guard it. Ledger lost, positions kept: nothing is re-read and history would silently go missing. <strong>Design:</strong> tie the first-start backfill to the table itself (a marker in <span class="mono">ledger.db</span>), not to the read positions, so an empty table always refills from what is on disk.</dd>
+
+  <dt id="r2">R2 · Accepted — the reader runs only for tools whose own telemetry is off</dt>
+  <dd>That is deliberate for Atlas: counting both would double count there. The local count must run for every tool regardless of that setting, or a machine with a tool's own telemetry on shows nothing for it. <strong>Mitigation:</strong> separate the local write from the Atlas switch, with its own test. <strong>Accepted 2026-09-29 (Gabriel).</strong></dd>
+
+  <dt id="r3">R3 · Accepted — the first start reads every transcript still on disk</dt>
+  <dd>On this Mac that includes Codex history back to Sep 2025. Read all at once, it keeps the laptop busy on first start. <strong>Mitigation:</strong> pace it the way the existing first-read backfill is paced, a few files per poll. <strong>Accepted 2026-09-29 (Gabriel).</strong></dd>
+
+  <dt id="r4">R4 · Accepted — "By repo" and "By project" stay slightly less complete than the total</dt>
+  <dd>Those splits come from blocks, joined by session and time. A request outside any block lands in "no repository" or "no project". <strong>Proposed:</strong> accept it, since the total and "By model" stay exact. <strong>Accepted 2026-09-29 (Gabriel).</strong></dd>
+
+  <dt id="n1">N1 · Note — the planned engine fix for Codex models is no longer needed</dt>
+  <dd>With the model split taken from requests, the analysis engine no longer has to see a model in every block. <strong>Proposed:</strong> drop that change rather than do it next.</dd>
+</dl>
+</section>
+
+<section class="qa" id="your-call">
+<h2>Your call — settled, nothing is waiting</h2>
+<p><strong>Status, 29 Sep 2026:</strong> everything above is built and tested. Your Mac runs it now, and the page's numbers match the table exactly for the last 7 days: 3,504 requests, $393.46. Nothing has been pushed, so nothing has left your Mac. <strong>All four are settled (Gabriel, 29 Sep, 13:52): "go with my replies and your recommendations".</strong> The outcomes are marked on each question below. For each one I picked a default and built on it, so nothing is blocked. Answer only where you disagree.</p>
+<dl>
+  <dt id="q1">Q1 · Settled — hold: nothing is pushed</dt>
+  <dd><strong>The question:</strong> the work sits on two branches that exist only on your Mac. <span class="mono">feat/signal-2c</span> holds the Overview page plus a ledger fix (below). <span class="mono">feat/per-request-usage</span> holds this proposal and sits on top of it. Pushing sends the code to GitHub, where the team can review it. <strong>My default:</strong> nothing pushed, because sending code out is yours to decide. <strong>If you say yes:</strong> I push both and open two pull requests, the Overview one first. <strong>Outcome:</strong> hold. Both branches stay on your Mac until you ask for a push.</dd>
+
+  <dt id="q2">Q2 · Settled — no answer needed: the old "no model" blocks</dt>
+  <dd><strong>What happened:</strong> you were right that this had been fixed. Since 29 Sep, a new block always takes the model most of its requests used, even under the five-observation evidence floor. A repair job also named 51 older blocks by asking the analysis engine again. The engine cannot name Codex blocks, because Codex writes its model somewhere the engine does not read. So on 29 Sep the remaining blocks were also named from their own requests, from the new table. That named 16 of 24 Codex blocks. <strong>Still unnamed, and staying that way:</strong> 8 Codex blocks from Sep 2025, whose requests name no model at all, and 55 Claude Code blocks from 26–28 Aug, whose transcripts are gone. No reader, the engine included, has anything to name them from. Their tokens and spend are unaffected. They only show as "no model" squares in the histogram under By model on those days.</dd>
+
+  <dt id="q3">Q3 · Settled — the histogram stays on blocks</dt>
+  <dd><strong>The question:</strong> under the <strong>Tokens</strong> split, each 20-minute square of the histogram is shaded by how many tokens its block used (darker is more). That number is the block's own total, so it can differ slightly from the request totals everywhere else on the Overview. That happens at a block's edge, or while a block is still open. D1 left this open. <strong>My default:</strong> blocks, because each square <em>is</em> a block. <strong>The alternative:</strong> shade each square from the requests made during it, so every number on the Overview comes from one source. It is a small change to one function. <strong>Outcome:</strong> blocks, as built. This also closes the point D1 left open.</dd>
+
+  <dt id="q4">Q4 · Settled — AC-7 keeps its wording and the legend stays</dt>
+  <dd><strong>The question:</strong> the Overview's plan (<span class="mono">2026-09-28-signal-2c-overview-discovery</span>) has a check, AC-7, saying the histogram's legend matches the chart's. Under By model, By repo and By project it does. Under <strong>Tokens</strong> it cannot. The chart splits tokens into cached and fresh, while the histogram's squares are shaded Less → More, because you asked for GitHub-style greens. So the check reads "partly met" for a reason that is not a defect. <strong>My proposal:</strong> reword AC-7 to "matches the chart's legend under By model, By repo and By project". Nothing gets built; it only lets the review mark the check as met. <strong>Your answer:</strong> "keep it as it is". Read as: AC-7 stays as written, the Less → More greens stay, and nothing is built, so AC-7 stays "partly met" under Tokens.</dd>
+</dl>
+<p><strong>Not waiting on you:</strong></p>
+<ul>
+  <li><strong>The ledger bug is already fixed,</strong> on both branches. The daemon kept two connections to its database. When one closed, it deleted the database's working file (the WAL) under the other, and writes made after that were lost at the next restart. Your Mac has run the fix since 14:47 today.</li>
+  <li><strong>Your Mac runs the dev build.</strong> Going back to the 3.0.7 pkg is a one-step switch whenever you want it.</li>
+</ul>
+</section>
+
+</main>

@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { overviewStats, topN, repoLabel, formatVolume, NO_REPO_LABEL } from "../app.js";
-import { block } from "./overview-fixture.js";
+import { overviewStats, usageItems, topN, repoLabel, formatVolume, NO_REPO_LABEL } from "../app.js";
+import { block, usageFor } from "./overview-fixture.js";
+
+const stats = (blocks) => overviewStats(blocks, usageItems(usageFor(blocks), blocks));
 
 // THE STORY: the four Overview tiles are sums of the ledger's own blocks —
 // the same four-class token total and the same estimate the Focus blocks
@@ -17,32 +19,32 @@ const five = [
 ];
 
 test("tokens are the four-class sum over every measured block", () => {
-  const s = overviewStats(five);
+  const s = stats(five);
   assert.equal(s.tokens, 4 * 1000, "each measured fixture block is 1000 tokens; the unmeasured one adds none");
   assert.equal(s.cacheShare, 0.8, "cache_read 800 of 1000");
 });
 
 test("spend is the sum of estimates, and the per-million rate comes from the same numbers", () => {
-  const s = overviewStats(five);
+  const s = stats(five);
   assert.equal(s.usd, 5.5);
   assert.equal(s.usdPerMillion, 5.5 / (4000 / 1e6));
 });
 
 test("active time is the sum of block spans, and counts the unmeasured block", () => {
-  const s = overviewStats(five);
+  const s = stats(five);
   assert.equal(s.activeMinutes, 20 + 20 + 10 + 5 + 5);
   assert.equal(s.blockCount, 5);
 });
 
 test("sessions are distinct session ids, with the median of their spans", () => {
-  const s = overviewStats(five);
+  const s = stats(five);
   assert.equal(s.sessions, 3);
   // a: 09:00 → 09:40 = 40, b: 10, c: 14:00 → 14:10 = 10
   assert.equal(s.medianSessionMinutes, 10);
 });
 
 test("no blocks is zeroes and nulls, never NaN", () => {
-  const s = overviewStats([]);
+  const s = stats([]);
   assert.equal(s.tokens, 0);
   assert.equal(s.cacheShare, null);
   assert.equal(s.usdPerMillion, null);
@@ -50,7 +52,7 @@ test("no blocks is zeroes and nulls, never NaN", () => {
 });
 
 test("tokens and spend break down by model; time and sessions by repository", () => {
-  const s = overviewStats(five);
+  const s = stats(five);
   assert.deepEqual(s.byModel.tokens.top.map((e) => e.label), ["claude-opus-5", "gpt-6-astra"]);
   assert.deepEqual(s.byModel.usd.top.map((e) => [e.label, e.value]), [["claude-opus-5", 4], ["gpt-6-astra", 1.5]]);
   assert.deepEqual(s.byRepo.minutes.top.map((e) => [e.label, e.value]), [["keld-signal", 40], ["keld-atlas", 10]]);
