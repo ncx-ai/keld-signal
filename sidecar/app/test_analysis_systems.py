@@ -352,6 +352,28 @@ def test_the_expanded_table_reaches_the_systems_a_real_company_runs_on():
         assert category_for_brand(brand) == cat, (brand, category_for_brand(brand))
 
 
+def test_a_conglomerate_product_resolves_in_BOTH_lanes():
+    """⚠️ THE FIRST PASS GAVE THESE ONLY THE HOST LANE, and the host lane is the RARER path for
+    exactly these products. `mcp__<uuid>__googlesheets-read` answered `unrecognized` while
+    `sheets.google.com` resolved fine -- so the gap fell on the common case and the test that
+    existed (`test_a_conglomerate_product_host_resolves...`) passed throughout, because it only
+    ever asked about hosts.
+
+    Measured against a public MCP registry's usage counts: Google Sheets is the second
+    most-used server listed (56,138 uses), Google Calendar 15,718, Google Drive 8,102.
+
+    `drive` and `teams` are deliberately NOT here: they are ordinary English words, belong to
+    AMBIGUOUS, and stay host-only."""
+    for tok, cat in (("googlesheets", "analytics_bi"), ("googledocs", "knowledge_base"),
+                     ("googlecalendar", "scheduling"), ("googlemeet", "communication"),
+                     ("gmail", "communication")):
+        assert category_for_brand(tok) == cat, (tok, category_for_brand(tok))
+    assert category_for_host("sheets.google.com") == "analytics_bi"
+    for word in ("drive", "teams"):
+        from app.analysis.systems import AMBIGUOUS
+        assert word in AMBIGUOUS and category_for_brand(word) == "unrecognized", word
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

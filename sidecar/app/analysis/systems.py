@@ -80,12 +80,14 @@ _TABLE = {
         bookstack outline mediawiki sharepoint
         gitbook readme quip slite document360 helpjuice glean stackoverflowteams
         dropboxpaper
-    """,
+    
+        googledocs""",
     "communication": """slack teams discord zoom webex gmail outlook mailgun twilio
         sendbird chime
         mattermost rocketchat zulip googlechat ringcentral dialpad aircall sendgrid
         postmark vonage bandwidth telnyx missive superhuman
-    """,
+    
+        googlemeet""",
     "crm_sales": """salesforce hubspot pipedrive gong outreach salesloft apollo clari
         zoominfo close copper insightly freshsales attio
         dynamics zohocrm sugarcrm gainsight chorus avoma lusha 6sense demandbase drift
@@ -111,13 +113,15 @@ _TABLE = {
         adyen paypal braintree paddle lemonsqueezy zuora tipalti concur intacct blackline
         floqast gocardless wise revolut mollie razorpay checkout worldpay maxio orb
         metronome stigg anrok sovos vertex airbase divvy navan tripactions
-    """,
+    
+        sap""",
     "analytics_bi": """looker tableau powerbi amplitude mixpanel metabase hex sigma
         heap pendo posthog redash superset quicksight fullstory
         googleanalytics matomo plausible fathom hotjar contentsquare quantummetric
         logrocket smartlook thoughtspot domo qlik sisense holistics lightdash omni preset
         deepnote
-    """,
+    
+        googlesheets""",
     "marketing": """marketo mailchimp braze klaviyo iterable customerio hootsuite
         sprout buffer contentful sanity webflow wordpress optimizely
         pardot eloqua activecampaign constantcontact convertkit beehiiv substack
@@ -183,7 +187,8 @@ _TABLE = {
     """,
     "scheduling": """calendly cal doodle savvycal calendar chilipiper
         acuity setmore youcanbookme zcal reclaim clockwise vimcal undock
-    """,
+    
+        googlecalendar""",
     "storage_files": """drive dropbox box onedrive s3 gcs backblaze egnyte
         pcloud mega wasabi sharefile tresorit icloud filebase
     """,
@@ -199,6 +204,16 @@ _TABLE = {
         snorkel langfuse helicone portkey braintrust humanloop promptlayer
     """,
 }
+
+# ⚠️ A CONGLOMERATE'S PRODUCT NEEDS AN ENTRY IN BOTH LANES, AND THE FIRST PASS GAVE IT ONLY ONE.
+# `drive.google.com` and `sheets.google.com` were added to _HOST_SUFFIX and nowhere else, so a
+# URL resolved and an MCP CONNECTOR did not -- `mcp__<uuid>__googlesheets-read` answered
+# `unrecognized`. Measured against a public MCP registry's usage counts, Google Sheets is the
+# second most-used server there (56,138 uses), Google Calendar 15,718, Google Drive 8,102. The
+# host lane is the rarer path for exactly these products, so the gap fell on the common case.
+# `drive` and `teams` stay host-only deliberately -- they are ordinary English words and belong
+# to AMBIGUOUS -- but `googlesheets`, `googledocs`, `googlecalendar` and `googlemeet` are not
+# words and belong in the brand table.
 
 # brand token -> category, built once.
 BRAND = {b: cat for cat, blob in _TABLE.items() for b in blob.split()}
