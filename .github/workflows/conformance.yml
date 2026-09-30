@@ -202,18 +202,25 @@ jobs:
               # collapses INTO the chain via the seeded before/after split, so
               # adding a tool costs no extra cells.
               #
-              # ⚠️ Windows is now green on BOTH chains, so the reason it stayed
-              # pinned to claude_code is gone. Every cell drives `all`, which
-              # today is claude_code + codex + gemini_cli — three tools across
-              # six cells rather than eighteen, because the split rotates per
-              # run instead of multiplying the matrix.
+              # ⚠️ **AND THE PARAGRAPH ABOVE WAS FALSE TOO, UNTIL 2026-09-30.**
+              # It said "every cell drives `all`" over a matrix that pinned
+              # every cell to claude_code, so no release was ever checked
+              # against Codex while the comment said it was. Every cell now
+              # drives `claude_code,codex` (run-chain.sh takes a comma list):
+              # two tools across six cells, the seeded split rotating which one
+              # is installed before Signal and which after.
+              #
+              # Gemini is left OUT of the release matrix on purpose, not by
+              # omission: Google deprecated the CLI and no customer runs it
+              # (decided 2026-09-30). The pull_request matrix still drives
+              # `all`, so a change to capture code still exercises it.
               matrix='{"include":[
-                {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
-                {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
-                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""},
-                {"os":"windows-latest","chain":"B","tool":"claude_code","version":""}]}'
+                {"os":"ubuntu-latest","chain":"A","tool":"claude_code,codex","version":""},
+                {"os":"ubuntu-latest","chain":"B","tool":"claude_code,codex","version":""},
+                {"os":"macos-14","chain":"A","tool":"claude_code,codex","version":""},
+                {"os":"macos-14","chain":"B","tool":"claude_code,codex","version":""},
+                {"os":"windows-latest","chain":"A","tool":"claude_code,codex","version":""},
+                {"os":"windows-latest","chain":"B","tool":"claude_code,codex","version":""}]}'
               ;;
             *)
               matrix=$(python3 - <<'PY'
