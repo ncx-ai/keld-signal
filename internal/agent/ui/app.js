@@ -889,6 +889,18 @@ export function splitModel(blocks, split, catalog) {
   return { categories, keyOf };
 }
 
+/** The top of a chart axis: the smallest round number at least 10% above `v`
+ *  that splits into three even ticks — so the tallest bar sits below the top
+ *  line rather than touching it (decided 2026-09-30), and every tick label is a
+ *  round figure. A tick step is 1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 × 10^k. */
+export function axisTop(v) {
+  if (!(v > 0)) return 0;
+  const step = (v * 1.1) / 3;
+  const exp = Math.pow(10, Math.floor(Math.log10(step)));
+  const nice = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((m) => m * exp >= step - 1e-9 * exp);
+  return Number((nice * exp * 3).toPrecision(12));
+}
+
 const MIN_HOUR_COLUMNS = 4;
 
 function hourBuckets(win, blocks) {
@@ -964,6 +976,9 @@ export function volumeSeries(blocks, win, split, catalog, { loadedFrom = null } 
     categories: model.categories,
     maxTokens: Math.max(0, ...columns.map((c) => c.tokens)),
     maxUsd: Math.max(0, ...columns.map((c) => c.usd)),
+    // The axes' tops, with headroom (axisTop): what heights are drawn against.
+    topTokens: axisTop(Math.max(0, ...columns.map((c) => c.tokens))),
+    topUsd: axisTop(Math.max(0, ...columns.map((c) => c.usd))),
   };
 }
 
@@ -2305,11 +2320,11 @@ if (typeof document !== "undefined") {
     }
 
     const ticks = [1, 2 / 3, 1 / 3];
-    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatVolume(series.maxTokens * t))), el("span", {}, "0"));
+    const leftAxis = el("div", { class: "ov-axis left mono" }, ...ticks.map((t) => el("span", {}, formatVolume(series.topTokens * t))), el("span", {}, "0"));
     const rightAxis = el(
       "div",
       { class: "ov-axis right mono" },
-      ...ticks.map((t) => el("span", {}, series.maxUsd ? formatUSD(series.maxUsd * t) : "")),
+      ...ticks.map((t) => el("span", {}, series.topUsd ? formatUSD(series.topUsd * t) : "")),
       el("span", {}, "$0")
     );
 
@@ -2323,14 +2338,14 @@ if (typeof document !== "undefined") {
       const stack = el("div", { class: "ov-col", title: `${c.label} · ${formatVolume(c.tokens)} tokens · ${formatEstUSD(c.usd)}` });
       for (const s of c.segments) {
         if (!s.value) continue;
-        stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.maxTokens) * 100}%;background:${colors.get(s.key)}` }));
+        stack.appendChild(el("span", { class: "ov-seg", style: `height:${(s.value / series.topTokens) * 100}%;background:${colors.get(s.key)}` }));
       }
       bars.appendChild(stack);
     }
     const plot = el("div", { class: "ov-plot" }, el("div", { class: "ov-grid" }), bars);
     if (series.maxUsd && loaded.length) {
       const pts = series.columns
-        .map((c, i) => (c.loaded ? [((i + 0.5) / n) * 100, 100 - (c.usd / series.maxUsd) * 100] : null))
+        .map((c, i) => (c.loaded ? [((i + 0.5) / n) * 100, 100 - (c.usd / series.topUsd) * 100] : null))
         .filter(Boolean);
       const svg = svgEl("svg", { class: "ov-line", viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
       svg.appendChild(svgEl("polyline", { points: pts.map((p) => p.map((v) => v.toFixed(2)).join(",")).join(" "), fill: "none", "vector-effect": "non-scaling-stroke" }));
