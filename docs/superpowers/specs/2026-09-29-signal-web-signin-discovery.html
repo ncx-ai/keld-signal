@@ -1319,7 +1319,7 @@ for sign-in and the new flow needs Atlas already live.</figcaption>
   <tr id="a-3"><td class="mono">A3</td><td>Add <span class="mono">CANARY_READ_TOKEN</span> (Actions: read) and <span class="mono">CANARY_DISPATCH_TOKEN</span> (Contents: write) to keld-atlas, both scoped to keld-atlas-canary.</td><td>The gate reads the canary's result; the dev deploy asks the canary to run.</td><td>Someone with org admin to mint a fine-grained token or GitHub App. Documented in keld-atlas <span class="mono">docs/cicd.md</span>.</td><td>Both secrets listed in keld-atlas.</td></tr>
   <tr id="a-4"><td class="mono">A4</td><td>Merge the canary PR.</td><td><span class="mono">signal-signin.yml</span> only runs from the default branch. Its prod leg fails until A2 reaches prod — expected.</td><td>A2 on dev at least.</td><td>A green dev run of <span class="mono">signal-signin</span>, and <span class="mono">canary_check_success{check="signal_signin"}</span> in the Pushgateway.</td></tr>
   <tr id="a-5"><td class="mono">A5</td><td>Set the keld-atlas variable <span class="mono">SIGNIN_CANARY_GATE=enforce</span>.</td><td>This is D4 made real: prod promotion waits for a green dev sign-in.</td><td>A3 and A4 done.</td><td>A promote-prod run shows the gate enforced and passing.</td></tr>
-  <tr id="a-6"><td class="mono">A6</td><td>Manual installs: the pkg on a spare Mac or VM, the exe on a Windows VM. Each twice — by double-click, and silently with <span class="mono">--code</span>. Plus one sign-in in Safari and in Firefox.</td><td>Finishes AC-10. Checks what no test here can: the installer shows no Keld screen, opens Signal, tells a GUI install from a silent one, and the browser allows the return to 127.0.0.1 (§8 #6).</td><td>A spare Mac/VM and a Windows VM — not this Mac, whose Signal the pkg would replace. A dev build of the pkg/exe from the Signal PR.</td><td>A written pass/fail per check, added here.</td></tr>
+  <tr id="a-6"><td class="mono">A6</td><td>Manual installs: the pkg on a spare Mac or VM, the exe on a Windows VM. Each twice — by double-click, and silently with <span class="mono">--code</span>. Plus one sign-in in Safari and in Firefox.</td><td>Finishes AC-10. Checks what no test here can: the installer shows no Keld screen, opens Signal, tells a GUI install from a silent one, and the browser allows the return to 127.0.0.1 (§8 #6).</td><td>A spare Mac/VM and a Windows VM — not this Mac, whose Signal the pkg would replace. A dev build of the pkg/exe from the Signal PR.</td><td>A written pass/fail per check, added here. Steps: <a href="#runbook">install test runbook</a>.</td></tr>
   <tr id="a-7"><td class="mono">A7</td><td>Cut a Signal release candidate from the merged branch, then set <span class="mono">SIGNAL_SIGNIN_REAL_BINARY=true</span> in keld-atlas-canary.</td><td>Ships the button, the first-open screen and the installer changes together (D7). The canary then signs in the shipped binary, closing AC-11.</td><td>A1, A2 and A6 done.</td><td>The canary's <span class="mono">signin-real-binary</span> step green on dev.</td></tr>
   <tr id="a-8"><td class="mono">A8</td><td>Turn on required status checks for <span class="mono">main</span> in keld-signal and keld-atlas.</td><td>Finishes AC-9. Neither repo requires any check today, so a red test cannot block a merge.</td><td>Your choice of which checks: at least Signal's <span class="mono">test</span> + <span class="mono">ui-e2e-signin</span>, Atlas's <span class="mono">api-tests</span> + <span class="mono">web-tests</span>.</td><td>A PR with a failing check cannot be merged.</td></tr>
   <tr id="a-9"><td class="mono">A9</td><td>Send the canary's <span class="mono">atlas-dev-deployed</span> event from ncx-ai/infrastructure's <span class="mono">deploy-atlas-dev.yml</span> on success, and drop the early one in keld-atlas <span class="mono">ci.yml</span>.</td><td>Today it fires when the deploy starts, so that run tests the previous build.</td><td>A change in the infrastructure repo.</td><td>The canary's post-deploy run tests the build just deployed.</td></tr>
@@ -1329,5 +1329,76 @@ for sign-in and the new flow needs Atlas already live.</figcaption>
 </table>
 </div>
 <p class="small" style="color:var(--muted);font-size:13px">Already filed: <a href="https://app.notion.com/p/3ea0f0c5fd608169b96bed8b3f6e3cf8">setup-code guessing limit</a> (D5) and <a href="https://app.notion.com/p/3ea0f0c5fd6081a4b449cf1a8153f4a5">server-side token revoke</a> (D6).</p>
+
+<h2 id="runbook">Install test runbook — for action A6</h2>
+<p class="lede">Added 2026-09-30, for later. Hand this chapter (or its file,
+<span class="mono">docs/superpowers/plans/2026-09-30-signal-web-signin-vm-test-runbook.md</span>) to a Claude
+session running <strong>on the test machine</strong>: Claude Desktop → Code tab, with <strong>Computer use</strong>
+turned on in Settings → General. It covers what no automated test can: the real double-click installer, what
+opens when it finishes, the first-open choice, and a real browser returning to Signal.</p>
+<div class="note"><strong>Only on a disposable machine</strong> — an Azure VM restored from a clean snapshot, or a macOS VM. Never on a machine whose Signal someone uses: the installer replaces it.</div>
+
+<h3>Before you start</h3>
+<ul>
+  <li><strong>Atlas #310 is on dev</strong>: <span class="mono">https://atlas-dev.keld.co/cli/signal/authorize</span> loads a page, not a 404. Prod does not have it yet, so the test points Signal at dev.</li>
+  <li>The tester can sign in to atlas-dev (behind Cloudflare Access; use a team account).</li>
+  <li>Installers from the dry-run build of Signal #58 (run 36719519251): Windows <span class="mono">gh run download 36719519251 -R ncx-ai/keld-signal -n installers-windows-latest-amd64</span> → signed <span class="mono">keld-setup.exe</span>; macOS <span class="mono">-n installers-macos-14-arm64</span> → the <span class="mono">.pkg</span>. If the build has aged out, dispatch <span class="mono">installers.yml</span> on the branch again with <span class="mono">publish_release=false</span>.</li>
+  <li>Point Signal at dev <strong>before</strong> installing. Windows: <span class="mono">setx KELD_API_URL https://atlas-dev.keld.co</span> and <span class="mono">setx KELD_ATLAS_WEB_URL https://atlas-dev.keld.co</span>, then sign out and in. macOS: <span class="mono">launchctl setenv</span> for the same two. ⚠️ Unverified that the installed service picks these up; the first run confirms it.</li>
+  <li>Take a screenshot at every 📸.</li>
+</ul>
+
+<h3>Run 1 — double-click install</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Do</th><th>Pass when</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1.1</td><td>Double-click the installer; click through with the defaults. 📸 each page.</td><td>No page asks for a setup code, a sign-in or which tools to use.</td></tr>
+  <tr><td class="mono">1.2</td><td>Finish. 📸 the last page.</td><td>Exactly <strong>one</strong> ticked "open Signal" option. Windows: it opens the Keld Signal desktop app. No console window stays open.</td></tr>
+  <tr><td class="mono">1.3</td><td>Let it open Signal. 📸</td><td>The first-open screen: <strong>Sign in with Atlas</strong> / <strong>Use locally only</strong>.</td></tr>
+  <tr><td class="mono">1.4</td><td>Click <strong>Sign in with Atlas</strong>. 📸 the browser.</td><td>The default browser opens <span class="mono">…/cli/signal/authorize?…</span> on atlas-dev; Signal says to finish in the browser and shows the link.</td></tr>
+  <tr><td class="mono">1.5</td><td>Sign in if asked. 📸 the Continue screen.</td><td>It shows the tester's email and org and one <strong>Continue</strong> button.</td></tr>
+  <tr><td class="mono">1.6</td><td>Click <strong>Continue</strong>. 📸 the tab, then Signal.</td><td>The tab says "Signed in. Close this tab."; within ~5 s Signal shows "Signed in as &lt;email&gt; · &lt;org&gt;".</td></tr>
+  <tr><td class="mono">1.7</td><td>Check <span class="mono">~/.keld/hook.json</span> (Windows: <span class="mono">%USERPROFILE%\.keld\hook.json</span>); run <span class="mono">keld signal doctor</span>.</td><td>An atlas-dev <span class="mono">endpoint</span> and a non-empty <span class="mono">ingest_token</span>; doctor reports no pairing problems.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Run 2 — local only (restore the clean snapshot first)</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Do</th><th>Pass when</th></tr></thead>
+<tbody>
+  <tr><td class="mono">2.1</td><td>Install, open Signal, click <strong>Use locally only</strong>. 📸</td><td>The normal page appears. A "restart to apply" bar may show — a known polish item; note it.</td></tr>
+  <tr><td class="mono">2.2</td><td>Close and reopen Signal; reboot once and reopen.</td><td>The first-open screen does not return; <span class="mono">agent-config.json</span> has <span class="mono">"send_to_atlas": false</span>.</td></tr>
+  <tr><td class="mono">2.3</td><td>Settings → <strong>Sign in with Atlas</strong>; finish in the browser.</td><td>Pairs as in 1.4–1.7.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Run 3 — silent install, as IT would (restore the clean snapshot first)</h3>
+<p>Get a setup code from atlas-dev: Integrations → Signal (<span class="mono">atlas-dev.keld.co/XXXX-XXXX</span>).</p>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Do</th><th>Pass when</th></tr></thead>
+<tbody>
+  <tr><td class="mono">3.1</td><td>Windows: <span class="mono">Start-Process .\keld-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait</span>. macOS: <span class="mono">sudo installer -pkg &lt;pkg&gt; -target /</span>.</td><td>Exit code 0 and <strong>no window of any kind</strong>. macOS: the engine download starts in the background.</td></tr>
+  <tr><td class="mono">3.2</td><td>As the signed-in user, not admin: <span class="mono">keld-agent install --code &lt;CODE&gt;</span>.</td><td><span class="mono">hook.json</span> has an ingest token; nothing opened.</td></tr>
+  <tr><td class="mono">3.3</td><td>Open Signal.</td><td>Signed in; the first-open screen never appears.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Run 4 — browsers · Run 5 — Linux</h3>
+<ul>
+  <li><strong>Run 4:</strong> change the default browser and repeat 1.4–1.6 each time — Windows: Edge, Chrome, Firefox; macOS: Safari, Chrome, Firefox. Pass when each lands on "Signed in. Close this tab." with no block or warning about <span class="mono">http://127.0.0.1</span>. 📸 any warning.</li>
+  <li><strong>Run 5</strong> (only with a Linux desktop VM): install with <span class="mono">install.sh</span>, no <span class="mono">--code</span>; open Signal; click Sign in. Pass when a browser opens — or, if none does, the link on the page still completes sign-in (§8 #5).</li>
+</ul>
+
+<h3>Report</h3>
+<p>For every numbered step: <strong>pass / fail / blocked</strong>, one line of what happened, the screenshot name.
+Add the installer file names and SHA-256 hashes, the OS version and browser versions. The result is recorded
+against <a href="#a-6">A6</a> with the date.</p>
+
+
 
 </main>
