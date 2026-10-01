@@ -18,8 +18,9 @@ expressible by any arm and is scored wrong for every arm equally. PRECISION excl
 abstentions (over conversations where the arm named a domain; `n/a` when there are none).
 The scorer reports accuracy over all 120 AND over truth != "other", always both.
 
-⚠️ THE ARMS NEVER READ `stratum` OR `hit_domains` from the frame. Both are the selector's
-fields; an arm that read them would be scoring the selector. Only `id` and `text` are used.
+⚠️ THE ARMS READ ONLY `text` FROM THE FRAME -- not `stratum`, not `hit_domains` (the output of the
+keyword selector that chose the candidates: reading it scores ~100% on candidates by
+construction), not `id`. Predictions are emitted in frame order and joined by position.
 
 Run (sidecar venv, NOT the host python):
     ~/.keld/sidecar-venv/bin/python scripts/convdomain_study.py            # self-test
@@ -70,7 +71,7 @@ def keyword_arm(text):
     None is an ABSTENTION: the scorer reads it as the prediction "none". It is excluded from
     precision, and counted as a prediction (right when truth is "none") in accuracy.
     """
-    low = " " + re.sub(r"[^a-z0-9 ]+", " ", strip_code(text).lower()) + " "
+    low = " " + re.sub(r"[^a-z0-9 ]+", " ", strip_code(window(text)).lower()) + " "
     score = {d: sum(1 for w in ws if f" {w} " in low) for d, ws in KWSET.items()}
     best = max(score.values())
     if best == 0:
@@ -79,40 +80,23 @@ def keyword_arm(text):
     return top[0] if len(top) == 1 else None
 
 
-# --- bounding a conversation for the model: at a TURN boundary, never mid-sentence ---------
-TURN_SPLIT = re.compile(r"\n\n(?=(?:USER|ASSISTANT): )")
+# ⚠️ EVERY ARM SCORES EXACTLY text[:LABELLER_WINDOW] -- the string the labeller read.
+# This mirrors convdomain_render.py's default LIMIT (4000); keep the two in step. The truth
+# labels describe the HEAD of a conversation (79 of 120 exceed 4000 chars; the labeller saw a
+# median 36% of those), so an arm reading more would be scored wrong for finding signal the
+# labeller never saw, and the penalty would land hardest on candidates. The cut is deliberately
+# a raw character cut with no turn-boundary adjustment: here the fragment IS what the truth
+# describes, which outranks the usual never-cut-mid-sentence rule. The study therefore measures
+# HEAD-OF-CONVERSATION recognition, a narrower claim than whole-conversation recognition.
+LABELLER_WINDOW = 4000
 
 
-def bound_text(text, max_chars=4000):
-    """Return (bounded_text, dropped_turns, dropped_chars).
-
-    Keeps whole leading turns while they fit. If even the FIRST turn does not fit, it is cut
-    at the last paragraph/line boundary inside the budget (a logical delimiter; if there is
-    none, the first paragraph is kept whole -- an over-long unit is never cut mid-sentence).
-    Dropped turns and chars are reported so nothing is silently shorter.
-    """
-    turns = TURN_SPLIT.split(text)
-    if len(turns[0]) > max_chars:
-        acc = ""
-        for p in re.split(r"(?<=\n)|\n\n", turns[0]):
-            if acc and len(acc) + len(p) > max_chars:
-                break
-            acc += p
-        out = acc.rstrip()
-        return out, len(turns) - 1, len(text) - len(out)
-    kept, used = [], 0
-    for t in turns:
-        add = len(t) + (2 if kept else 0)
-        if kept and used + add > max_chars:
-            break
-        kept.append(t)
-        used += add
-    out = "\n\n".join(kept)
-    return out, len(turns) - len(kept), len(text) - len(out)
+def window(text):
+    return text[:LABELLER_WINDOW]
 
 
-def gliner_raw(texts, max_chars=4000):
-    """Raw GLiNER2 output per text: {label, confidence, dropped_turns, dropped_chars}.
+def gliner_raw(texts):
+    """Raw GLiNER2 output per text: {label, confidence}.
 
     ⚠️ Runs in the SIDECAR venv -- gliner2 and torch live there.
     """
@@ -127,24 +111,22 @@ def gliner_raw(texts, max_chars=4000):
     descs = [JOB_LABELS[n] for n in DOMAINS]
     out = []
     for t in texts:
-        b, dt, dc = bound_text(t, max_chars)
-        o = model.classify_text(b, {"domain": descs}, include_confidence=True)
+        o = model.classify_text(window(t), {"domain": descs}, include_confidence=True)
         g = o.get("domain") if isinstance(o, dict) else o
         label = conf = None
         if isinstance(g, dict):
             label, conf = g.get("label"), g.get("confidence")
         elif isinstance(g, str):
             label = g
-        out.append({"label": label, "confidence": conf,
-                    "dropped_turns": dt, "dropped_chars": dc})
+        out.append({"label": label, "confidence": conf})
     return out
 
 
-def gliner_arm(texts, max_chars=4000):
+def gliner_arm(texts):
     """One domain (or None if the output is not one of the 7 labels) per text."""
     descs = [JOB_LABELS[n] for n in DOMAINS]
     return [DOMAINS[descs.index(r["label"])] if r["label"] in descs else None
-            for r in gliner_raw(texts, max_chars)]
+            for r in gliner_raw(texts)]
 
 
 def union_arm(kw, gl):
@@ -178,34 +160,32 @@ CACHE = "/tmp/claude-1000/convdomain/gliner_raw.json"
 PREDS = "/tmp/claude-1000/convdomain/arm_predictions.json"
 
 
-def load_frame(path=FRAME):
-    """(id, text) only -- stratum and hit_domains are deliberately not read."""
-    rows = []
-    for line in open(path):
-        r = json.loads(line)
-        rows.append((r["id"], r["text"]))
-    return rows
+def load_texts(path=FRAME):
+    """The `text` field ONLY, in frame order. ⚠️ `hit_domains` is the selector's output and
+    `stratum` is the scorer's business; neither is read here, and neither is `id`. Rows are
+    therefore identified by POSITION (line index in the frame)."""
+    return [json.loads(line)["text"] for line in open(path)]
 
 
 def predict():
-    rows = load_frame()
-    ids = [i for i, _ in rows]
-    texts = [t for _, t in rows]
+    import hashlib
+    texts = load_texts()
+    digest = [hashlib.sha1(t.encode()).hexdigest()[:12] for t in texts]
     if os.path.exists(CACHE):
-        raw = json.load(open(CACHE))
-        assert [r["id"] for r in raw] == ids, "cache does not match frame"
-        raw = [r["raw"] for r in raw]
+        cached = json.load(open(CACHE))
+        assert [r["sha"] for r in cached] == digest, "cache does not match frame"
+        raw = [r["raw"] for r in cached]
     else:
         raw = gliner_raw(texts)
-        json.dump([{"id": i, "raw": r} for i, r in zip(ids, raw)], open(CACHE, "w"))
+        json.dump([{"sha": d, "raw": r} for d, r in zip(digest, raw)], open(CACHE, "w"))
     descs = [JOB_LABELS[n] for n in DOMAINS]
     gl = [DOMAINS[descs.index(r["label"])] if r["label"] in descs else None for r in raw]
     kw = [keyword_arm(t) for t in texts]
     un = union_arm(kw, gl)
     sh = shuffled_arm(un)
-    json.dump({"ids": ids, "keyword": kw, "gliner": gl, "union": un, "shuffled": sh,
-               "shuffle_seed": SHUFFLE_SEED}, open(PREDS, "w"))
-    print(f"wrote {PREDS} ({len(ids)} conversations); gliner cache {CACHE}")
+    json.dump({"order": "frame line index", "keyword": kw, "gliner": gl, "union": un,
+               "shuffled": sh, "shuffle_seed": SHUFFLE_SEED}, open(PREDS, "w"))
+    print(f"wrote {PREDS} ({len(texts)} conversations); gliner cache {CACHE}")
 
 
 def _selftest():
@@ -222,21 +202,13 @@ def _selftest():
     # union prefers the keyword answer and falls back.
     assert union_arm(["legal", None], ["medical", "sales"]) == ["legal", "sales"]
 
-    # bounding cuts at a turn boundary and reports what it dropped.
-    conv = "USER: " + "a. " * 20 + "\n\nASSISTANT: " + "b. " * 20 + "\n\nUSER: " + "c. " * 20
-    b, dt, dc = bound_text(conv, max_chars=len(conv) - 5)
-    assert b.endswith("b. ") and "c." not in b, repr(b[-20:])
-    assert dt == 1 and dc == len(conv) - len(b), (dt, dc)
-    assert bound_text(conv, 10**6) == (conv, 0, 0)
-    # an over-long first turn is cut at a line boundary, never mid-line.
-    big = "USER: " + "\n".join("line %d here." % i for i in range(500))
-    b, dt, dc = bound_text(big, 200)
-    assert len(b) <= 200 and big.startswith(b) and big[len(b):].startswith("\n") , repr(b[-20:])
+    # the window is exactly the labeller's: text past it must not influence the keyword arm.
+    assert keyword_arm("USER: hi " + "x " * LABELLER_WINDOW + " indemnification clause nda") is None
 
     # the shuffle reproduces and permutes.
     x = ["a", None, "b", "c", "d", None]
     assert shuffled_arm(x) == shuffled_arm(x) and sorted(map(str, shuffled_arm(x))) == sorted(map(str, x))
-    print("selftest: RF5 code-strip, RF4 abstain, clear case, union, turn-bound, shuffle — all pass")
+    print("selftest: RF5 code-strip, RF4 abstain, clear case, union, window, shuffle — all pass")
 
 
 if __name__ == "__main__":
