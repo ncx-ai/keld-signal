@@ -158,9 +158,24 @@ export function verifyLinkFor(email: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Wait until React owns the element. Typed into before hydration, Atlas's form is rebuilt and
+ *  submits empty ("Email is required.") — on a dev server compiling pages on demand, that race
+ *  failed a case about once a run. React attaches its fiber to the node when it hydrates it. */
+export async function waitForHydration(tab: Page, selector: string): Promise<void> {
+  await tab.waitForFunction(
+    (sel) => {
+      const el = document.querySelector(sel);
+      return !!el && Object.keys(el).some((k) => k.startsWith("__reactFiber"));
+    },
+    selector,
+    { timeout: 15_000 },
+  );
+}
+
 /** Atlas's own email login form, as a person fills it. */
 export async function fillAtlasLogin(tab: Page, who: { email: string; password: string }): Promise<void> {
   await expect(tab.locator("#email"), `expected Atlas's login form, got ${tab.url()}`).toBeVisible();
+  await waitForHydration(tab, "#email");
   await tab.locator("#email").fill(who.email);
   await tab.locator("#password").fill(who.password);
   await tab.getByRole("button", { name: "Sign in", exact: true }).click();
