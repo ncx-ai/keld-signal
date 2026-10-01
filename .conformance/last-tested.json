@@ -20,14 +20,14 @@
   "tools": {
     "claude_code": {
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.285",
-      "tested_on": "2026-09-30",
+      "version": "2.1.286",
+      "tested_on": "2026-10-01",
       "proven_by": "conformance.yml, chain A on ubuntu-latest"
     },
     "codex": {
       "package": "@openai/codex",
-      "version": "0.159.2",
-      "tested_on": "2026-09-30",
+      "version": "0.159.3",
+      "tested_on": "2026-10-01",
       "proven_by": "conformance.yml, chain A on ubuntu-latest"
     },
     "pi": {
