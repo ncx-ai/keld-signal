@@ -518,7 +518,15 @@ def _score():
     rows = {json.loads(l)["id"]: json.loads(l)
             for l in open("/tmp/claude-1000/convdomain/frame.ndjson")}
     ids = sorted(lab)
-    texts = [rows[i]["text"] for i in ids]
+    # RULING (controller, 2026-10-01): score the EXACT string the labeller read.
+    # convdomain_render.py printed text[:4000]; 79 of 120 conversations (65.8%)
+    # exceed that, and for those the labeller saw a median 36% of the conversation.
+    # The truth labels therefore describe the HEAD, not the whole conversation.
+    # Feeding an arm the full text would score it wrong wherever it correctly found
+    # signal the labeller never saw -- and 51 of the 79 truncated rows are candidates
+    # against 28 randoms, so that penalty lands hardest on the stratum this study
+    # uses to detect selector-learning. Idempotent if the arms also slice.
+    texts = [rows[i]["text"][:LABELLER_WINDOW] for i in ids]
 
     kw = [keyword_arm(t) for t in texts]
     gl = gliner_arm(texts)
