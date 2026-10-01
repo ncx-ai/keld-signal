@@ -1,6 +1,6 @@
 {
- "rows": 239,
- "sha256": "ba254ed6bd15ce0bfd873ef5c7388415e3ddfde878394cc6f1076082e0300aa2",
+ "rows": 251,
+ "sha256": "75df26a3852fa8141c8f67b2deba6d028061df60fc581bf2c2fbcc80400aefad",
  "levels": {
   "mag/cache_creation_tokens": {
    "rows": 1,
@@ -55,6 +55,18 @@
    "total": 22.0,
    "distinct": 13,
    "sha256": "27814f9cee6fbb447e4ec925997892355ecd481869d0b77751577f17ebfdd6df"
+  },
+  "ref/activity_class": {
+   "rows": 4,
+   "total": 4.0,
+   "distinct": 3,
+   "sha256": "0d2739fde7e8e548f0abfde337a941df6712da5f18f537ad6fa5098d54efc21d"
+  },
+  "ref/activity_class_tokens": {
+   "rows": 4,
+   "total": 922.0,
+   "distinct": 3,
+   "sha256": "a35475f642270107ac6e17e6c839f55f68e02ccf448cd70e69dcbe3525311723"
   },
   "ref/agent": {
    "rows": 1,
@@ -151,6 +163,18 @@
    "total": 1.0,
    "distinct": 1,
    "sha256": "f05eb54c3452e1d329006ed12209316b2a9482fc4c955e1801b02f771be6e560"
+  },
+  "ref/system_action": {
+   "rows": 1,
+   "total": 1.0,
+   "distinct": 1,
+   "sha256": "e157b826dc87f23005bd85211bd52bb7d8b7aab2d1ed89e9c7ea0796963c279c"
+  },
+  "ref/system_category": {
+   "rows": 3,
+   "total": 3.0,
+   "distinct": 1,
+   "sha256": "6d379ef133727a06b3badb3fe78c9d02f55b30475c69b887baf8ec4532feadcd"
   },
   "ref/term": {
    "rows": 13,
