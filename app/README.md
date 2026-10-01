@@ -38,6 +38,16 @@ bounding box (27×44, not padded to a square — the mark is naturally tall and
 narrow) instead of shrinking the full square canvas. It's built with
 `icon_as_template(true)` set in `main.rs`.
 
+## Links that open a new window
+
+The page's `target="_blank"` links (the sign-in fallback "Open the Atlas
+sign-in page", for one) open in the **system browser**: the window's
+`on_new_window` handler hands any http(s) URL to `open` / `xdg-open` /
+`url.dll,FileProtocolHandler` — the same commands the daemon uses to open a
+browser — and denies the new window. Without a handler WKWebView drops the
+request and the click does nothing. Other schemes are refused. The page also
+offers "Copy link" beside that link.
+
 ## Autostart ("Start at login")
 
 Wired via the official `tauri-plugin-autostart` (a macOS LaunchAgent /

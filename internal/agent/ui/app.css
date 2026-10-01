@@ -270,6 +270,7 @@ body.pane-today .health-strip { margin-top: 12px; }
 .signin-flow.failed { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--error-strong); }
 .signin-link { color: var(--ink-2); overflow-wrap: anywhere; }
 .signin-link a { color: var(--forest); font-weight: 600; }
+.signin-link .btn-small { padding: 2px 10px; font-size: 12px; margin-left: 4px; vertical-align: baseline; }
 .signin-who { margin-top: 8px; font-weight: 600; overflow-wrap: anywhere; }
 
 .firstrun {

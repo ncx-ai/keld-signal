@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  copyText,
   envPillText,
   showFirstRun,
   signinBarMode,
@@ -225,4 +226,30 @@ test("envPillText: no settings yet, no pill", () => {
 test("a sign-in that could not be saved here is this computer's failure, not Atlas's", () => {
   assert.equal(signinErrorText("save_failed"), "Signal couldn't save the sign-in on this computer.");
   assert.notEqual(signinErrorText("save_failed"), signinErrorText("atlas_error"));
+});
+
+// --- "Copy link": the fallback when a click on the link cannot open anything ---
+// (the desktop app's web view, a locked-down browser). It must report what
+// happened, never claim a copy that did not happen.
+
+test("copyText uses the async clipboard when there is one", async () => {
+  let got = null;
+  const ok = await copyText("https://atlas.test/a?b=1", { clipboard: { writeText: async (t) => { got = t; } } });
+  assert.equal(ok, true);
+  assert.equal(got, "https://atlas.test/a?b=1");
+});
+
+test("copyText falls back to the selection copy when the clipboard refuses", async () => {
+  let fallbackGot = null;
+  const ok = await copyText("u", {
+    clipboard: { writeText: async () => { throw new Error("NotAllowedError"); } },
+    fallback: (t) => { fallbackGot = t; return true; },
+  });
+  assert.equal(ok, true);
+  assert.equal(fallbackGot, "u");
+});
+
+test("copyText says false when nothing could copy", async () => {
+  assert.equal(await copyText("u", { clipboard: null, fallback: () => false }), false);
+  assert.equal(await copyText("", { clipboard: { writeText: async () => {} } }), false);
 });

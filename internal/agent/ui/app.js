@@ -527,6 +527,11 @@ export const SIGNIN_TEXT = {
   linkOpened: "Browser didn't open? Use this link:",
   linkNotOpened: "Your browser didn't open. Open this link to finish:",
   linkLabel: "Open the Atlas sign-in page",
+  // Beside the link, for wherever a click on it opens nothing: the desktop
+  // app's web view before its new-window handler, a locked-down browser.
+  copyLink: "Copy link",
+  copied: "Copied",
+  copyFailed: "Couldn't copy — select the link instead",
   tryAgain: "Try again",
   notSignedIn: "Not signed in to Atlas.",
   notSignedInBody: "Signal is collecting on this machine and sends it once you sign in.",
@@ -630,6 +635,29 @@ export function signinStartErrorText(status, body) {
   if (!status) return "Couldn't reach Signal to start signing in — try again.";
   if (status === 404) return "This version of Signal can't sign in from the page. Paste a setup code in Settings instead.";
   return "Signal couldn't start signing in just now — try again.";
+}
+
+/** Copy `text` to the clipboard: the async Clipboard API first, then
+ *  `fallback` (the page passes a select-and-execCommand copy) when that is
+ *  missing or refuses. True only when one of them reports the copy happened. */
+export async function copyText(text, { clipboard, fallback } = {}) {
+  if (!text) return false;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch {
+      // refused (no permission, not focused): try the fallback
+    }
+  }
+  if (typeof fallback === "function") {
+    try {
+      return fallback(text) === true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function signedInText(auth) {
@@ -4058,6 +4086,41 @@ if (typeof document !== "undefined") {
     route();
   }
 
+  /** "Copy link" beside the sign-in link. Its feedback changes only its own
+   *  label: route() would rebuild the pane and wipe whatever is being typed
+   *  into the setup-code box, the same reason pollSignin avoids it. */
+  function copyLinkButton(url) {
+    const btn = el("button", { class: "btn secondary btn-small", type: "button" }, SIGNIN_TEXT.copyLink);
+    let reset = null;
+    btn.onclick = async () => {
+      const ok = await copyText(url, { clipboard: navigator.clipboard, fallback: selectionCopy });
+      btn.textContent = ok ? SIGNIN_TEXT.copied : SIGNIN_TEXT.copyFailed;
+      clearTimeout(reset);
+      reset = setTimeout(() => {
+        btn.textContent = SIGNIN_TEXT.copyLink;
+      }, 2000);
+    };
+    return btn;
+  }
+
+  // The pre-Clipboard-API copy, for a web view that has no navigator.clipboard
+  // or refuses it: select a throwaway textarea and ask the document to copy.
+  function selectionCopy(text) {
+    const ta = el("textarea", { readonly: "", "aria-hidden": "true" });
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } finally {
+      ta.remove();
+    }
+    return ok === true;
+  }
+
   /** The progress of a sign-in, wherever it is drawn (the bar, the
    *  first-open screen). Null while idle. */
   function signinFlowNode() {
@@ -4073,7 +4136,9 @@ if (typeof document !== "undefined") {
               "span",
               { class: "signin-link" },
               `${flow.opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened} `,
-              el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel)
+              el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel),
+              " ",
+              copyLinkButton(flow.url)
             )
           : null
       );

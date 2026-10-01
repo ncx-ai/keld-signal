@@ -32,7 +32,7 @@ function assertPaired(h: SigninHarness): void {
 }
 
 test.describe("Web sign-in", () => {
-  test("first open → Sign in with Atlas → the browser comes back → the page says signed in within 5 s", async ({ page, harness }) => {
+  test("first open → Sign in with Atlas → the browser comes back → the page says signed in within 5 s", async ({ page, harness, browserName }) => {
     await page.goto(harness.pageURL("today"));
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toBeVisible();
     await page.getByRole("button", { name: "Sign in with Atlas" }).click();
@@ -46,6 +46,16 @@ test.describe("Web sign-in", () => {
     expect(url.searchParams.get("redirect_uri")).toBe(`${harness.daemon!.baseURL}/auth/callback`);
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43,}$/);
+
+    // "Copy link" beside it, for wherever a click on the link opens nothing.
+    const copy = page.getByRole("button", { name: "Copy link" });
+    await expect(copy).toBeVisible();
+    if (browserName === "chromium") {
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+      await copy.click();
+      await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(href);
+    }
 
     const tab = await finishInBrowser(page);
     await expect(tab.getByText("Signed in. Close this tab.")).toBeVisible();
