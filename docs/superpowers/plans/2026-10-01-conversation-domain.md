@@ -536,12 +536,25 @@ def _score():
                 continue
             truth = [lab[ids[j]][0] for j in idx]
             pred = [preds[j] for j in idx]
+            # RULING (controller, 2026-10-01): an arm declining to name a domain
+            # IS predicting "no professional domain". The arms can emit 7 values;
+            # the truth has 9. Scoring abstention wrong caps every arm at 40%
+            # accuracy against a 41.7% baseline -- every arm fails by construction.
+            said = [p if p is not None else "none" for p in pred]
+            # PRECISION still excludes abstentions: it is over domains actually NAMED.
             answered = [(p, t) for p, t in zip(pred, truth) if p is not None]
-            prec = sum(1 for p, t in answered if p == t) / len(answered) if answered else 0.0
-            acc = sum(1 for p, t in zip(pred, truth) if p == t) / len(truth)
+            prec = (sum(1 for p, t in answered if p == t) / len(answered)
+                    if answered else None)
+            acc = sum(1 for p, t in zip(said, truth) if p == t) / len(truth)
+            # `other` stays inexpressible by any arm and is scored WRONG for all of
+            # them equally. The second accuracy says what the vocabulary cost.
+            expr = [(p, t) for p, t in zip(said, truth) if t != "other"]
+            acc_e = (sum(1 for p, t in expr if p == t) / len(expr)) if expr else None
             base = collections.Counter(truth).most_common(1)[0][1] / len(truth)
             print(f"   {stratum:10} n={len(idx):3}  answered {len(answered):3}  "
-                  f"precision {100*prec:5.1f}%  accuracy {100*acc:5.1f}%  "
+                  f"precision {('  n/a' if prec is None else f'{100*prec:5.1f}%')}  "
+                  f"accuracy {100*acc:5.1f}%  "
+                  f"acc(expressible) {('  n/a' if acc_e is None else f'{100*acc_e:5.1f}%')}  "
                   f"baseline {100*base:5.1f}%  margin {100*(acc-base):+6.1f}")
         return None
 
@@ -555,6 +568,10 @@ def _score():
 
     print(f"\nBAR: precision >= {100*BAR_PRECISION:.0f}% AND accuracy >= baseline + "
           f"{100*BAR_ACCURACY_MARGIN:.0f} points, ON THE RANDOM STRATUM.")
+    print("   Abstention counts as a prediction of `none` (see RULING in report()).")
+    print("   `other` is inexpressible by every arm and is scored wrong for all of them;")
+    print("   acc(expressible) is the same number with those conversations removed.")
+    print("   precision `n/a` means the arm named a domain zero times -- NOT 100%.")
     json.dump({"ids": ids, "keyword": kw, "gliner": gl, "union": un},
               open("/tmp/claude-1000/convdomain/preds.json", "w"))
 ```
