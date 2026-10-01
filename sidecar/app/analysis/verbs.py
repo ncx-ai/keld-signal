@@ -59,6 +59,10 @@ _DIRECT = {"verify": "review", "delegate": "plan"}
 _AUTHOR = {"author_code": ("code.write", "code.edit"),
            "author_prose": ("text.create", "text.transform")}
 
+# All classes that are explicitly handled (excluded, pending, direct, or author).
+# Used to ensure no new class added to reqclass silently abstains.
+HANDLED = EXCLUDED | PENDING_SPLIT | frozenset(_DIRECT) | frozenset(_AUTHOR)
+
 
 def verb_for(cls, tools):
     """Map one request's activity class + tool evidence to an atv1 verb, or None.
@@ -68,22 +72,38 @@ def verb_for(cls, tools):
     an excluded class, a pending split, an unknown class, and an authoring class
     whose evidence does not say which side it is.
     """
+    # Explicitly excluded classes: not work, scope decision not a gap in atv1.
+    if cls in EXCLUDED:
+        return None
+    # Pending splits: awaiting a study to resolve the choice.
+    if cls in PENDING_SPLIT:
+        return None
+    # Direct mappings: definitional, F1 0.920.
     if cls in _DIRECT:
         return _DIRECT[cls]
+    # Authoring: splits on tool evidence (create vs edit).
     if cls in _AUTHOR:
         create, edit = _AUTHOR[cls]
-        # ⚠️ DO NOT GUESS A SIDE. `classify_bash` and CODE_TOOLS both reach
-        # `author_code` with no authoring tool in evidence at all (`python3 -c`,
-        # `javascript_tool`), and PROSE_TOOLS reaches `author_prose` the same way.
-        # Picking create-or-edit there would publish a false claim about someone's
-        # work from evidence that does not contain the answer.
+        # DO NOT GUESS. `classify_bash` and CODE_TOOLS reach `author_code`
+        # with no authoring tool in evidence (`python3 -c`, `javascript_tool`).
+        # A guess would publish a false claim about the work from evidence
+        # that does not contain the answer. Likewise for `author_prose`.
+        saw_create = False
+        saw_edit = False
         for name, _ in tools:
             bare = name.split("__")[-1]
             if bare in _CREATE_TOOLS:
-                return create
+                saw_create = True
             if bare in _EDIT_TOOLS:
-                return edit
+                saw_edit = True
+        # If both create and edit are present, prefer create: it is the
+        # larger claim about the work (a new thing vs modifying existing).
+        if saw_create:
+            return create
+        if saw_edit:
+            return edit
         return None
+    # Unknown class: not a handled reqclass.
     return None
 
 
