@@ -51,19 +51,26 @@ JOB_LABELS = {
 NULL_LABEL = "a hobby, school or everyday personal conversation, not anyone's professional work"
 
 KW = {
-    "marketing":   "campaign brand ad ads advert advertising seo keyword newsletter subject line open rate landing page copy messaging persona audience channel content calendar utm retargeting positioning headline marketing social media promotion slogan tagline",
+    "marketing":   "campaign brand ad ads advert advertising seo keyword newsletter subject_line open_rate landing_page copy messaging persona audience channel content_calendar utm retargeting positioning headline marketing social_media promotion slogan tagline",
     "financial":   "ledger reconcile invoice budget forecast revenue opex burn runway audit accrual deferred variance balance statement depreciation payable receivable bookkeeping accounting profit expenses cashflow tax taxes investment",
-    "sales":       "prospect pipeline lead deal quota demo discovery objection outreach opportunity crm churn upsell renewal cold email pitch sales salesperson customers",
-    "legal":       "contract clause nda msa sow indemnification indemnity liability termination renewal gdpr compliance counsel redline agreement lease tenancy warranty confidential non disclosure terms conditions service privacy policy plaintiff defendant lawsuit litigation attorney solicitor lawyer statute trademark copyright infringement power affidavit settlement arbitration court legislation",
+    "sales":       "prospect pipeline lead deal quota demo discovery objection outreach opportunity crm churn upsell renewal cold_email pitch sales salesperson customers",
+    "legal":       "contract clause nda msa sow indemnification indemnity liability termination renewal gdpr compliance counsel redline agreement lease tenancy warranty confidential non_disclosure terms_conditions terms_service privacy_policy plaintiff defendant lawsuit litigation attorney solicitor lawyer statute trademark copyright_infringement power_attorney affidavit settlement arbitration court legislation",
     "medical":     "patient diagnosis clinical icd prescription dose contraindication therapy discharge chart physician nurse symptom treatment surgery doctor medication medical clinic hospital",
-    "hr":          "candidate interview hiring onboarding offer letter performance review headcount payroll benefits employee handbook resume cover letter recruiter job vacancy salary recruitment hr",
+    "hr":          "candidate interview hiring onboarding offer_letter performance_review headcount payroll benefits employee_handbook resume cover_letter recruiter job vacancy salary recruitment hr",
     "engineering": "code function bug refactor deploy commit merge branch test database migration api endpoint server script python javascript css html sql react bash software programming",
 }
+# A term written with "_" is a PHRASE: contiguous words, matched after the stopwords below are
+# removed from the text. (The lists were written as phrases and `.split()` had shredded them
+# into unigrams -- terms, service, power, open, rate, page ... -- a parser defect, fixed here
+# without changing any word. "terms_service" matches "terms of service"; "power_attorney"
+# matches "power of attorney"; standalone "attorney" stays a term of its own.)
 KWSET = {d: set(w.split()) for d, w in KW.items()}
+STOP = {"of", "and", "the", "a"}
 
 # ⚠️ Domain words inside code or quoted documents are not domain WORK. `invoice_id` in a SQL
 # schema is engineering. Fenced code and inline code are removed before the keyword scan.
-CODE = re.compile(r"```.*?```|`[^`]+`", re.S)
+# An unterminated fence (e.g. cut by the window) runs to the end of the text.
+CODE = re.compile(r"```.*?```|```.*$|`[^`]+`", re.S)
 
 
 def strip_code(text):
@@ -76,10 +83,11 @@ def keyword_arm(text):
     None is an ABSTENTION: the scorer reads it as the prediction "none". It is excluded from
     precision, and counted as a prediction (right when truth is "none") in accuracy.
     """
-    low = " " + re.sub(r"[^a-z0-9 ]+", " ", strip_code(window(text)).lower()) + " "
-    # plural-tolerant: "contracts"/"clauses" must hit "contract"/"clause" (added blind, with
-    # the legal-list fix; whole-word matching alone could not see any plural).
-    score = {d: sum(1 for w in ws if any(f" {w}{suf} " in low for suf in ("", "s", "es")))
+    toks = re.sub(r"[^a-z0-9 ]+", " ", strip_code(window(text)).lower()).split()
+    low = " " + " ".join(t for t in toks if t not in STOP) + " "
+    # plural-tolerant on the last word of a phrase too ("contracts", "landing pages").
+    score = {d: sum(1 for w in ws
+                    if any(f" {w.replace('_', ' ')}{suf} " in low for suf in ("", "s", "es")))
              for d, ws in KWSET.items()}
     best = max(score.values())
     if best == 0:
@@ -219,6 +227,13 @@ def _selftest():
     # plurals hit; legal vocabulary reaches a legal request.
     assert keyword_arm("USER: review these contracts and the termination clauses") == "legal"
     assert label_to_domain(NULL_LABEL) is None
+
+    # phrases are pinned from both sides: ordinary "terms" is not legal, "terms of service" is.
+    assert keyword_arm("USER: in terms of cost, which option is cheaper") != "legal"
+    assert keyword_arm("USER: summarise the terms of service") == "legal"
+    assert keyword_arm("USER: do I need power of attorney here") == "legal"
+    # an unterminated fence runs to the end: trailing code words are not scored.
+    assert keyword_arm("USER: fix\n```sql\nSELECT invoice ledger budget forecast revenue") is None
 
     # the shuffle reproduces and permutes.
     x = ["a", None, "b", "c", "d", None]

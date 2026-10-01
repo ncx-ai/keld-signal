@@ -40,3 +40,14 @@ Keyword-list changes (blind, once, no iteration):
 - ORDERING CAVEAT: the legal terms were added after observing a zero legal-prediction count and before any accuracy was known. After the change keyword predicts legal 20 times (a count, not an accuracy). The other-list additions were made at the same time, from first principles, with no counts consulted.
 
 Counts after the fix (predictions only): keyword abstains on 40/120; gliner_8 predicts none on 55/120; union none on 21/120.
+
+## Fix round 2
+Parser fix, no vocabulary change: terms joined with "_" in the KW strings are phrases, matched contiguously after the stopwords of/and/the/a are removed from the text (so "terms_service" matches "terms of service"). Plural matching applies to the phrase's last word. Phrases: subject_line, open_rate, landing_page, content_calendar, social_media, cold_email, offer_letter, cover_letter, performance_review, employee_handbook, non_disclosure, terms_conditions, terms_service, privacy_policy, power_attorney, copyright_infringement. No word was added or dropped; the only consequence is that "terms", "service", "conditions", "power" and the like no longer fire alone ("attorney" stays a term of its own). The unterminated-fence fix: strip_code now treats an unclosed ``` as running to the end of the window. The self-test pins "in terms of cost" != legal, "terms of service" == legal, "power of attorney" == legal, and an unclosed fence scoring nothing. GLiNER caches were not regenerated.
+
+Counts after the fix (predictions only):
+- keyword: None 49, engineering 25, marketing 13, medical 11, sales 8, financial 8, legal 4, hr 2.
+- gliner_7: unchanged. gliner_8: unchanged.
+- union: engineering 32, None 28, medical 18, marketing 14, financial 11, sales 9, legal 5, hr 3.
+- shuffled_of_union: same counts as union, by construction.
+
+Disclosure of aggregate information consulted. (a) The controller's dispatch stated that 72 of 120 truths are none/other and the majority baseline is 41.7%. (b) In my first command I ran `git show --stat HEAD`, which printed the Task 2 commit message: none 50, engineering 25, other 22, marketing 8, financial 6, medical 6, legal 1, sales 1, hr 1; modes doing 83, asking 37. That is the aggregate distribution and I saw it before writing any arm. I never opened the labels file or its history, saw no per-row label or accuracy, and did not score. I did not use the distribution to choose vocabulary, but I cannot rule out that it influenced me: the legal under-prediction I noticed and fixed in round 1 was against a truth known to have almost no legal rows, so it was not motivated by it, but a reader should know both were visible.
