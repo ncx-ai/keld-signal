@@ -241,8 +241,115 @@ def _selftest():
     print("selftest: RF5 code-strip, RF4 abstain, clear case, union, window, shuffle — all pass")
 
 
+LABELS = "scripts/convdomain-labels.txt"
+ARMS = ("keyword", "gliner_7", "gliner_8", "union", "shuffled_of_union")
+CAN_EXPRESS = {
+    "keyword": "7 domains or abstain",
+    "gliner_7": "7 domains; CANNOT abstain, so never predicts `none`",
+    "gliner_8": "7 domains plus a null label, so it CAN predict `none`",
+    "union": "keyword, else gliner_8",
+    "shuffled_of_union": "the union's own predictions permuted (seed 20261001): the noise floor",
+}
+
+
+def _score():
+    import collections
+    lab = {}
+    for line in open(LABELS):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        i, d, m = line.split()
+        lab[i] = (d, m)
+    rows = [json.loads(l) for l in open(FRAME)]
+    preds = json.load(open(PREDS))
+    assert all(len(preds[a]) == len(rows) for a in ARMS)
+    ids = [r["id"] for r in rows]          # predictions are joined by POSITION
+    assert set(ids) == set(lab) and len(rows) == len(lab)
+    strata = {"candidate": [], "random": [], "ALL": list(range(len(rows)))}
+    for j, r in enumerate(rows):
+        strata[r["stratum"]].append(j)
+
+    print("=" * 78)
+    print("RANDOM STRATUM DECIDES THE BAR (spec s7). Candidates were chosen BY A KEYWORD")
+    print("NET: a keyword arm scoring well there measures the selector, not the method.")
+    print("Strata are never pooled into a headline; ALL is shown for reference only.")
+    print("NO arm can express `other` (scored wrong for all). acc(expr) removes those rows.")
+    print("Abstention = prediction `none`. Precision is over NAMED domains only; n/a = zero named.")
+    print("=" * 78)
+    for a in ARMS:
+        print(f"  {a:18} {CAN_EXPRESS[a]}")
+
+    print("\nTRUTH DISTRIBUTION / BASELINE (majority class)")
+    for st, idx in strata.items():
+        c = collections.Counter(lab[ids[j]][0] for j in idx)
+        top, n = c.most_common(1)[0]
+        print(f"   {st:10} n={len(idx):3} baseline {100*n/len(idx):5.1f}% ({top})  "
+              + " ".join(f"{k}={v}" for k, v in c.most_common()))
+
+    results = {}
+    for a in ARMS:
+        print(f"\n{a}  [{CAN_EXPRESS[a]}]")
+        for st, idx in strata.items():
+            truth = [lab[ids[j]][0] for j in idx]
+            pred = [preds[a][j] for j in idx]
+            said = [p if p is not None else "none" for p in pred]
+            ans = [(p, t) for p, t in zip(pred, truth) if p is not None]
+            prec = sum(p == t for p, t in ans) / len(ans) if ans else None
+            acc = sum(p == t for p, t in zip(said, truth)) / len(truth)
+            ex = [(p, t) for p, t in zip(said, truth) if t != "other"]
+            acce = sum(p == t for p, t in ex) / len(ex) if ex else None
+            base = collections.Counter(truth).most_common(1)[0][1] / len(truth)
+            abst = sum(p is None for p in pred)
+            results[(a, st)] = (prec, acc, base)
+            f = lambda v: "  n/a" if v is None else f"{100*v:5.1f}%"
+            print(f"   {st:10} n={len(idx):3} named {len(ans):3} abstained {abst:3} "
+                  f"({100*abst/len(idx):4.1f}%)  precision {f(prec)}  accuracy {f(acc)}  "
+                  f"acc(expr) {f(acce)}  baseline {f(base)}  margin {100*(acc-base):+6.1f}")
+
+    print("\nCONFUSION vs TRUTH, per arm and stratum (rows=truth, cols=predicted; none=abstain/none)")
+    labels = DOMAINS + ["none", "other"]
+    for a in ARMS:
+        for st in ("random", "candidate"):
+            idx = strata[st]
+            m = collections.Counter((lab[ids[j]][0], preds[a][j] or "none") for j in idx)
+            print(f"\n  {a} / {st}")
+            print("   " + " " * 12 + "".join(f"{c[:6]:>7}" for c in labels))
+            for t in labels:
+                if not any(m[(t, c)] for c in labels):
+                    continue
+                print(f"   {t:12}" + "".join(f"{m[(t, c)]:7d}" for c in labels))
+            print("   per-domain recall: " + "  ".join(
+                f"{t}={m[(t, t)]}/{sum(m[(t, c)] for c in labels)}" for t in labels
+                if sum(m[(t, c)] for c in labels)))
+
+    print("\nMODE (doing/asking) -- scored separately from domain (spec s7).")
+    print("   No arm predicts mode, so there is no arm accuracy to report. The labelled")
+    print("   distribution is the baseline any future mode classifier must beat.")
+    for st, idx in strata.items():
+        c = collections.Counter(lab[ids[j]][1] for j in idx)
+        print(f"   {st:10} " + " ".join(f"{k}={v}" for k, v in c.most_common())
+              + f"  majority baseline {100*c.most_common(1)[0][1]/len(idx):.1f}%")
+        cd = collections.Counter((lab[ids[j]][0], lab[ids[j]][1]) for j in idx)
+        print("              by domain: " + " ".join(
+            f"{d}:{cd[(d,'doing')]}d/{cd[(d,'asking')]}a" for d in labels
+            if cd[(d, 'doing')] + cd[(d, 'asking')]))
+
+    print(f"\nBAR on RANDOM: precision >= {100*BAR_PRECISION:.0f}% AND accuracy >= baseline + "
+          f"{100*BAR_ACCURACY_MARGIN:.0f} points")
+    for a in ARMS:
+        prec, acc, base = results[(a, "random")]
+        ok_p = prec is not None and prec >= BAR_PRECISION
+        ok_a = acc >= base + BAR_ACCURACY_MARGIN
+        print(f"   {a:18} precision {'PASS' if ok_p else 'FAIL'}  accuracy {'PASS' if ok_a else 'FAIL'}"
+              f"  => {'PASS' if ok_p and ok_a else 'FAIL'}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "predict":
         predict()
+    elif "--score" in sys.argv:
+        _selftest()
+        _score()
     else:
         _selftest()
