@@ -41,6 +41,7 @@ type pkceAtlas struct {
 	onboardFail int
 	requests    atomic.Int32
 	verifier    string // what the last enroll carried
+	hold        func() // when set, enroll calls it first: a slow Atlas, held open by a test
 }
 
 func newPKCEAtlas(t *testing.T) *pkceAtlas {
@@ -53,6 +54,12 @@ func newPKCEAtlas(t *testing.T) *pkceAtlas {
 			CodeVerifier string `json:"code_verifier"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		a.mu.Lock()
+		hold := a.hold
+		a.mu.Unlock()
+		if hold != nil {
+			hold()
+		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		a.verifier = body.CodeVerifier
@@ -394,6 +401,42 @@ func TestSignInCallback(t *testing.T) {
 	}
 	if st.Principal == nil || *st.Principal != "ana@acme.test" || st.Org == nil || *st.Org != "Acme" {
 		t.Fatalf("principal/org = %v/%v", st.Principal, st.Org)
+	}
+}
+
+// The page polls once a second while a sign-in is in flight. A return takes its
+// pending entry at once and then spends Atlas round trips pairing; a poll in
+// that window used to see "not pending, not paired, no error" and the page
+// declared the sign-in abandoned while it was succeeding. Measured on the real
+// local-Atlas suite: about one run in eight.
+func TestStateStaysPendingWhileAReturnIsPairing(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		h := newSignInHarness(t)
+		_, v := h.start()
+		code := h.atlas.authorize(v.Get("code_challenge"))
+		entered, release := make(chan struct{}), make(chan struct{})
+		h.atlas.mu.Lock()
+		h.atlas.hold = func() { close(entered); <-release }
+		if fail {
+			h.atlas.enrollFail = http.StatusBadGateway
+		}
+		h.atlas.mu.Unlock()
+		done := make(chan struct{})
+		go func() { defer close(done); _, _ = h.callback(q(code, v.Get("state"))) }()
+		<-entered
+		mid := h.state()
+		close(release) // before any assertion, so a failing check cannot leave the server hung
+		<-done
+		if !mid.Pending || mid.Paired || mid.LastError != nil {
+			t.Fatalf("fail=%v: mid-pairing the page must still see a pending sign-in: %+v", fail, mid)
+		}
+		st := h.state()
+		switch {
+		case fail && (st.Pending || st.Paired || st.LastError == nil):
+			t.Fatalf("after a failed pairing the page must see the error: %+v", st)
+		case !fail && (st.Pending || !st.Paired):
+			t.Fatalf("after pairing the page must see signed in: %+v", st)
+		}
 	}
 }
 

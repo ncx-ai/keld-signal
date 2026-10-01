@@ -75,6 +75,10 @@ type signInStore struct {
 	mu      sync.Mutex
 	entries []pendingSignIn // oldest first
 	lastErr string
+	// completing counts returns that took their entry and are still pairing.
+	// They stay pending for the page: in that window the entry is gone and
+	// hook.json not yet written, and a poll there read the sign-in as abandoned.
+	completing int
 }
 
 func newSignInStore(now func() time.Time, open func(string) error) *signInStore {
@@ -150,11 +154,25 @@ func (s *signInStore) take(state string) (e pendingSignIn, found, expired bool) 
 	return e, true, !s.now().Before(e.expires)
 }
 
-// pending reports whether any sign-in is still inside its ten minutes.
+// pending reports whether any sign-in is still inside its ten minutes, or a
+// return is still pairing.
 func (s *signInStore) pending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.pendingLocked()
+	return s.completing > 0 || s.pendingLocked()
+}
+
+// completingFor marks a taken return as still in flight until done is called,
+// after its outcome (hook.json, or the refusal) is recorded.
+func (s *signInStore) completingFor() (done func()) {
+	s.mu.Lock()
+	s.completing++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.completing--
+		s.mu.Unlock()
+	}
 }
 
 func (s *signInStore) pendingLocked() bool {
@@ -303,6 +321,7 @@ func (s *signInStore) handleCallback(w http.ResponseWriter, r *http.Request) {
 		writeSignInPage(w, http.StatusGone, pageStateExpired)
 		return
 	}
+	defer s.completingFor()()
 
 	host, code, err := auth.ParsePairingCode(q.Get("pairing_code"))
 	if err != nil {
