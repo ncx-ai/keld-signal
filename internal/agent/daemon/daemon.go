@@ -1487,6 +1487,18 @@ func Run(ctx context.Context) error {
 	// One line when collection starts unpaired, one when the pairing lands.
 	// Never per poll — awaitConfig's own onWait announces the wait exactly once
 	// and that idiom is what keeps an idling daemon's log readable.
+	// A pairing written from the page (sign-in or setup code) wakes the wait at
+	// once: the page re-reads the health strip the moment it says "Signed in",
+	// and one config poll later is too late to be right. Buffered and
+	// non-blocking on both sides, so pair() — which runs inside a request —
+	// never waits on it, and a second pairing before the first is read is one.
+	pairWake := make(chan struct{}, 1)
+	ingress.SetOnPaired(func() {
+		select {
+		case pairWake <- struct{}{}:
+		default:
+		}
+	})
 	go func() {
 		// Send to Atlas OFF never waits: there is nothing an endpoint would be
 		// used for, and waiting would leave the client-event ring undrained on a
@@ -1501,7 +1513,7 @@ func Run(ctx context.Context) error {
 				"pointers are being captured and held locally; nothing is published until this machine is " +
 				"paired with Atlas (the app's Settings pane, or `keld login` + `keld signal setup`)")
 		}
-		cfg, cerr := awaitConfig(ctx, hook.LoadConfig, configPollInterval(),
+		cfg, cerr := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), pairWake,
 			awaitConfigNote(paths.HookConfigPath()))
 		if cerr != nil {
 			return // context cancelled while idling: a clean shutdown, not a failure

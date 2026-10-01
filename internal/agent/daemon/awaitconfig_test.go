@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func TestAwaitConfigReturnsImmediatelyWhenConfigured(t *testing.T) {
 	cfg, err := awaitConfig(context.Background(), func() (*hook.Config, error) {
 		calls++
 		return &hook.Config{Endpoint: "https://atlas.example", IngestToken: "tok"}, nil
-	}, time.Millisecond, func() { waits++ })
+	}, time.Millisecond, nil, func() { waits++ })
 	if err != nil {
 		t.Fatalf("awaitConfig: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestAwaitConfigWaitsThenAdoptsANewConfig(t *testing.T) {
 		default:
 			return &hook.Config{Endpoint: "https://atlas.example", IngestToken: "tok"}, nil
 		}
-	}, time.Millisecond, func() { waits++ })
+	}, time.Millisecond, nil, func() { waits++ })
 	if err != nil {
 		t.Fatalf("awaitConfig: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestAwaitConfigStopsOnContextCancel(t *testing.T) {
 	go func() { time.Sleep(5 * time.Millisecond); cancel() }()
 	cfg, err := awaitConfig(ctx, func() (*hook.Config, error) {
 		return &hook.Config{}, nil
-	}, time.Millisecond, func() {})
+	}, time.Millisecond, nil, func() {})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -99,5 +100,31 @@ func TestConfigPollInterval(t *testing.T) {
 		if got := configPollInterval(); got != tc.want {
 			t.Fatalf("KELD_CONFIG_POLL=%q → %v, want %v", tc.env, got, tc.want)
 		}
+	}
+}
+
+// A pairing written by THIS process (the page's sign-in or setup code) wakes
+// the wait at once instead of leaving it to the next poll. With a poll of an
+// hour, only the wake can explain a prompt return.
+func TestAwaitConfigWakesOnSignal(t *testing.T) {
+	wake := make(chan struct{}, 1)
+	var paired atomic.Bool
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		paired.Store(true)
+		wake <- struct{}{}
+	}()
+	start := time.Now()
+	cfg, err := awaitConfig(context.Background(), func() (*hook.Config, error) {
+		if paired.Load() {
+			return &hook.Config{Endpoint: "https://atlas.example", IngestToken: "tok"}, nil
+		}
+		return &hook.Config{}, nil
+	}, time.Hour, wake, func() {})
+	if err != nil || cfg == nil || cfg.IngestToken != "tok" {
+		t.Fatalf("awaitConfig = %+v, %v", cfg, err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %v: the wake did not cut the poll short", d)
 	}
 }

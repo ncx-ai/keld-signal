@@ -51,7 +51,12 @@ func configPollInterval() time.Duration {
 // wait is announced without one log line per poll forever. Both an empty config
 // and a read error count as "not configured yet": hook.json can be missing,
 // half-written, or unreadable, and all three resolve themselves once setup runs.
-func awaitConfig(ctx context.Context, load func() (*hook.Config, error), poll time.Duration, onWait func()) (*hook.Config, error) {
+//
+// wake cuts a poll short: a send on it re-reads the config at once. The page's
+// sign-in and setup code write hook.json from inside this process, and waiting
+// out the poll after that left the page saying "Signed in" over a health strip
+// still saying "Atlas not paired". A nil wake is never ready — the poll alone.
+func awaitConfig(ctx context.Context, load func() (*hook.Config, error), poll time.Duration, wake <-chan struct{}, onWait func()) (*hook.Config, error) {
 	announced := false
 	for {
 		cfg, err := load()
@@ -69,6 +74,7 @@ func awaitConfig(ctx context.Context, load func() (*hook.Config, error), poll ti
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(poll):
+		case <-wake:
 		}
 	}
 }

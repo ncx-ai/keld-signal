@@ -52,6 +52,10 @@ func startSenders(ctx context.Context, cfg *hook.Config, pr *pairing, tok *creds
 		tok.Set(cfg.IngestToken)
 		log.Printf("keld-agent: PAIRED with %s — the senders are starting. Everything collected while "+
 			"unpaired is delivered from the spool or cursor that held it; no restart is needed.", cfg.Endpoint)
+		// The strip's `atlas` row said not_paired until now; re-read it rather
+		// than leave that standing until the next 10 s tick under a page that
+		// has just said "Signed in".
+		refreshHealth()
 	}
 	ra.pairedEndpoint = pr.ingest
 	sendersStarted.Store(true)

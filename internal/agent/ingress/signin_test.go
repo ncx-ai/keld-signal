@@ -718,3 +718,37 @@ func TestSignInRoundTripThroughMockAtlas(t *testing.T) {
 		t.Fatalf("state after the round trip: %+v", st)
 	}
 }
+
+// A pairing this process wrote is ANNOUNCED, so the daemon's pairing watcher
+// adopts it at once rather than on its next poll — otherwise the page says
+// "Signed in" while the health strip still says "Atlas not paired". The hook
+// runs after hook.json is on disk (the watcher re-reads it) and never on a
+// refusal.
+func TestPairAnnouncesTheNewPairing(t *testing.T) {
+	h := newSignInHarness(t)
+	var calls atomic.Int32
+	var hookOnDisk atomic.Bool
+	SetOnPaired(func() {
+		calls.Add(1)
+		hookOnDisk.Store(fileExists(paths.HookConfigPath()))
+	})
+	t.Cleanup(func() { SetOnPaired(nil) })
+
+	// A refusal announces nothing.
+	h.callback(q("x.test/ABCD-EFGH", strings.Repeat("C", 43)))
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("a refused return announced a pairing (%d calls)", n)
+	}
+
+	_, v := h.start()
+	code := h.atlas.authorize(v.Get("code_challenge"))
+	if res, body := h.callback(q(code, v.Get("state"))); res.StatusCode != http.StatusOK {
+		t.Fatalf("callback: %d %s", res.StatusCode, body)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("a good return announced the pairing %d times, want 1", n)
+	}
+	if !hookOnDisk.Load() {
+		t.Fatal("the pairing was announced before hook.json was written")
+	}
+}

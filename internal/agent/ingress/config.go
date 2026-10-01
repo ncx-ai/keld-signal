@@ -3,6 +3,7 @@ package ingress
 import (
 	"errors"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/api"
@@ -123,5 +124,23 @@ func pair(base, code, verifier string) (*auth.AuthData, error) {
 	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
 		return nil, &pairError{stage: pairHookWrite, err: err}
 	}
+	if f := onPaired.Load(); f != nil {
+		(*f)()
+	}
 	return a, nil
+}
+
+// onPaired is told each time pair() has written hook.json, so the daemon's
+// pairing watcher adopts it now rather than on its next poll — the page reads
+// the health strip right after "Signed in", and a watcher still asleep left it
+// saying "Atlas not paired". It must not block: pair() runs inside a request.
+var onPaired atomic.Pointer[func()]
+
+// SetOnPaired installs the pairing announcement (nil removes it).
+func SetOnPaired(f func()) {
+	if f == nil {
+		onPaired.Store(nil)
+		return
+	}
+	onPaired.Store(&f)
 }
