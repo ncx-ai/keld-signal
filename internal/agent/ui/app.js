@@ -665,6 +665,21 @@ export function restartBarText(status) {
   }
 }
 
+/** What the restart bar shows: its sentence, whether it carries a Restart
+ *  button, and whether that button can be pressed. `signingIn` is a web
+ *  sign-in in flight — the daemon's page port is random on every start and
+ *  the pending sign-in lives in its memory, so a restart then sends the
+ *  browser's return to a dead port and throws the attempt away. The restart
+ *  is still owed, so the bar stays; it just waits. */
+export function restartBarView(status, signingIn) {
+  const needed = status === RESTART_NEEDED;
+  return {
+    text: needed && signingIn ? "Restart after signing in finishes." : restartBarText(status),
+    button: needed,
+    disabled: needed && !!signingIn,
+  };
+}
+
 export function nextRestartStatus(status, event) {
   switch (status) {
     case RESTART_NEEDED:
@@ -3246,6 +3261,7 @@ if (typeof document !== "undefined") {
   // hook.json/auth.json itself). Not specified by contracts.md which route a
   // config-triggered restart should use — this lane's choice; see the report.
   async function clickRestart() {
+    if (signinBusy()) return; // see restartBarView: a restart now kills the sign-in
     state.restart.status = nextRestartStatus(state.restart.status, "clicked");
     route();
     await sendJSON("/v1/settings?restart=1", "PUT", state.restart.patch);
@@ -3884,13 +3900,12 @@ if (typeof document !== "undefined") {
   function renderRestartBar() {
     const status = state.restart.status;
     if (status === RESTART_IDLE) return null;
-    const text = restartBarText(status);
-    const canClick = status === RESTART_NEEDED;
+    const view = restartBarView(status, signinBusy());
     return el(
       "div",
       { class: "restart-bar" },
-      el("span", {}, text),
-      canClick ? el("button", { class: "btn", onclick: clickRestart }, "Restart") : null
+      el("span", {}, view.text),
+      view.button ? el("button", { class: "btn", type: "button", disabled: view.disabled, onclick: clickRestart }, "Restart") : null
     );
   }
 

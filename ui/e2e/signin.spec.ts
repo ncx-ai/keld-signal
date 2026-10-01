@@ -77,9 +77,15 @@ test.describe("Web sign-in", () => {
 
     await expect(page.getByText("Finish signing in in your browser")).toBeVisible();
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(true);
+    // The restart choosing local only asked for is still owed, but pressing it
+    // now would move the daemon to a new port and strand the browser's return.
+    const restartBar = page.locator(".restart-bar");
+    await expect(restartBar.getByText("Restart after signing in finishes.")).toBeVisible();
+    await expect(restartBar.getByRole("button", { name: "Restart" })).toBeDisabled();
     await finishInBrowser(page);
     await expect(tile.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
     assertPaired(harness);
+    await expect(restartBar.getByRole("button", { name: "Restart" })).toBeEnabled();
   });
 
   test("Send to Atlas on but never signed in: the not-signed-in bar signs in", async ({ page, harness }) => {

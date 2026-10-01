@@ -8,6 +8,7 @@ import {
   startAtLoginProps,
   projectRulesSummary,
   restartBarText,
+  restartBarView,
   nextRestartStatus,
   RESTART_IDLE,
   RESTART_NEEDED,
@@ -165,4 +166,36 @@ test("nextRestartStatus ignores an event that doesn't apply to the current state
   assert.equal(nextRestartStatus(RESTART_IDLE, "clicked"), RESTART_IDLE);
   assert.equal(nextRestartStatus(RESTART_NEEDED, "ledger_ok"), RESTART_NEEDED);
   assert.equal(nextRestartStatus(RESTART_READY, "restart_required"), RESTART_READY);
+});
+
+// --- restart bar while a sign-in is in flight ---
+//
+// The daemon's page port is random on every start and the pending sign-in lives
+// in its memory, so a restart mid-flow sends the browser's return to a dead
+// port. The bar stays (the restart is still owed) but it cannot be pressed.
+
+test("restartBarView: a needed restart offers an enabled Restart when nothing is in flight", () => {
+  assert.deepEqual(restartBarView(RESTART_NEEDED, false), {
+    text: restartBarText(RESTART_NEEDED),
+    button: true,
+    disabled: false,
+  });
+});
+
+test("restartBarView: while signing in, Restart is disabled and the bar says to wait", () => {
+  assert.deepEqual(restartBarView(RESTART_NEEDED, true), {
+    text: "Restart after signing in finishes.",
+    button: true,
+    disabled: true,
+  });
+});
+
+test("restartBarView: past NEEDED there is no button, signing in or not", () => {
+  for (const s of [RESTART_RESTARTING, RESTART_WAITING, RESTART_READY]) {
+    for (const busy of [false, true]) {
+      const v = restartBarView(s, busy);
+      assert.equal(v.button, false, s);
+      assert.equal(v.text, restartBarText(s), s);
+    }
+  }
 });
