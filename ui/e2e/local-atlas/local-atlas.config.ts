@@ -14,7 +14,8 @@ import { defineConfig, devices } from "@playwright/test";
  * (support/signin-harness.ts, the same harness the mock suite uses) with
  * KELD_API_URL / KELD_ATLAS_WEB_URL pointed at that Atlas. Signing in against a
  * real Atlas mints real grants and CLI tokens there, through its own routes;
- * nothing else is written to it.
+ * case 15 also signs up a new org + user (unique per run). Nothing else is
+ * written to it.
  *
  * One worker: one daemon at a time on telemetry port 14421.
  *

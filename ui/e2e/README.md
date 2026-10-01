@@ -117,7 +117,8 @@ must be spelled exactly as Atlas's `otlp_public_url` (`localhost`, not
 `127.0.0.1`): the daemon compares the host inside the pairing code against it
 exactly, and case 09 relies on that to prove a different spelling is refused.
 The browser is sealed to loopback. Signing in mints real grants and CLI tokens
-in that Atlas through its own routes; nothing else is written to it.
+in that Atlas through its own routes; case 15 also signs up a brand-new org and
+user (unique per run). Nothing else is written to it.
 
 `local-atlas/real-atlas.spec.ts` covers, each asserting `auth.json`/`hook.json`
 and the page: the happy path through Atlas's email login (and that the written
@@ -127,7 +128,12 @@ signed out → `/login?next=` → the same authorize URL; Cancel; two hostile
 without its verifier (410, burned, then "That code expired"); a different
 Atlas; Send to Atlas off (409 and a refused return); local only across a
 restart then Settings' Sign in; `/login?next=` backslash/encoded-slash
-bypasses; the setup-code box (AC-8); and a viewer account.
+bypasses; the setup-code box (AC-8); a viewer account; and a brand-new email
+signup that verifies and lands back on Continue rather than onboarding. Case 15
+reads the signup code from the Atlas api container's environment and the
+verification link from its console email sender's output (`docker logs`), so
+it needs `docker` on PATH; `KELD_E2E_ATLAS_API_CONTAINER` (default
+`keld-atlas-api-1`) names the container, and it skips if neither is reachable.
 `KELD_E2E_SIGNIN_NOBUILD=1` and `KELD_E2E_KEEP=1` work here too; the report is
 `playwright-report-local-atlas/`.
 

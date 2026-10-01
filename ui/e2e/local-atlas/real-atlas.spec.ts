@@ -20,8 +20,10 @@ import {
   holdCallback,
   openAuthorizeTab,
   pairingFiles,
+  signupCode,
   startSignin,
   test,
+  verifyLinkFor,
   watchTab,
 } from "./atlas";
 import type { SigninHarness } from "../support/signin-harness";
@@ -405,5 +407,63 @@ test.describe("Web sign-in against the real local Atlas", () => {
     await expect(page.getByText(`Signed in as ${VIEWER.email} · ${VIEWER.org}`)).toBeVisible({ timeout: 5_000 });
     await expectPairedAs(harness, VIEWER);
     expect(await authState(harness)).toMatchObject({ paired: true, principal: VIEWER.email });
+  });
+
+  test("15 a brand-new email signup from Signal's sign-in: verify link → back on Continue (not /onboarding) → signed in as that email", async ({ page, harness }) => {
+    const code = signupCode();
+    test.skip(!code, "no KELD_SIGNUP_CODE in the Atlas api container (or docker cannot reach it); set KELD_E2E_ATLAS_API_CONTAINER");
+    // A real org and user are created in the local Atlas: unique per run, never reused.
+    const stamp = `${Date.now()}`;
+    const who = { email: `signal-e2e-${stamp}@signup.test`, password: "signalE2e2026", org: `Signal E2E ${stamp}` };
+    const seen = recordContext(page);
+
+    await page.goto(harness.pageURL("today"));
+    const href = await startSignin(page);
+    const tab = await openAuthorizeTab(page);
+    await expect(tab).toHaveURL(/\/login\?next=/);
+
+    // Login → Sign up keeps the way back, and so must the form it leads to.
+    // Typed into before hydration, the form is rebuilt and submits as empty. The signup page's
+    // own OAuth-buttons fetch runs in an effect, so its answer means hydrated. (Login makes the
+    // same fetch, hence the referer.)
+    const hydrated = tab.waitForResponse((r) =>
+      new URL(r.url()).pathname === "/api/auth/oauth/providers" && /\/signup\?/.test(r.request().headers()["referer"] || ""));
+    const signUp = tab.getByRole("link", { name: "Sign up" });
+    // Server-rendered it is a bare /signup; login adds ?next= once hydrated.
+    await expect(signUp, "login's Sign up link carries the way back").toHaveAttribute("href", /^\/signup\?next=/);
+    await signUp.click();
+    await expect(tab).toHaveURL(/\/signup\?next=/);
+    await hydrated;
+    const want = new URL(href);
+    expect(new URL(tab.url()).searchParams.get("next"), "signup's next is the authorize path + query, whole").toBe(want.pathname + want.search);
+    await tab.locator("#org").fill(who.org);
+    await tab.locator("#name").fill("Signal E2E");
+    await tab.locator("#email").fill(who.email);
+    await tab.locator("#password").fill(who.password);
+    await tab.locator("#code").fill(code!);
+    await tab.getByRole("button", { name: "Sign up", exact: true }).click();
+    await expect(tab.getByText("Check your email")).toBeVisible();
+    expectNotPaired(harness, "before the email is verified");
+
+    // The "email": Atlas's console sender prints the link instead of sending it.
+    let link: string | null = null;
+    await expect.poll(() => (link = verifyLinkFor(who.email)), { message: `no verify link printed for ${who.email}`, timeout: 15_000 }).not.toBeNull();
+    const verify = new URL(link!);
+    expect(`${verify.origin}${verify.pathname}`, "the emailed link is Atlas's verify page").toBe(`${ATLAS_WEB}/signup/verify`);
+    expect([...verify.searchParams.keys()], "the emailed link carries the token and nothing else").toEqual(["token"]);
+
+    await tab.goto(link!);
+    await expect(tab, "verifying lands back on the very same authorize URL").toHaveURL(href, { timeout: 15_000 });
+    await continueAs(tab, who);
+    await expect(tab.getByText(SIGNED_IN_TAB)).toBeVisible();
+    expect(
+      seen.navigations.filter((n) => new URL(n).pathname === "/onboarding"),
+      "verifying must return to Signal's sign-in, not start onboarding"
+    ).toEqual([]);
+    expect(seen.mints, "exactly one grant minted, by the Continue click").toHaveLength(1);
+
+    await expect(page.getByText(`Signed in as ${who.email} · ${who.org}`)).toBeVisible({ timeout: 5_000 });
+    await expectPairedAs(harness, who);
+    expect(await authState(harness)).toMatchObject({ paired: true, principal: who.email, org: who.org });
   });
 });

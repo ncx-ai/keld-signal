@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
@@ -125,6 +126,37 @@ export async function openAuthorizeTab(page: Page): Promise<Page> {
 }
 
 // ---- Atlas ----
+
+// ---- Atlas's email signup (case 15) ----
+
+/** The local Atlas api container: where the signup code lives and where its
+ *  console email sender prints the verification link (no mail is sent locally). */
+export const ATLAS_API_CONTAINER = process.env.KELD_E2E_ATLAS_API_CONTAINER || "keld-atlas-api-1";
+
+function docker(args: string[]): string | null {
+  try {
+    return execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
+  } catch {
+    return null;
+  }
+}
+
+/** The stack's signup code, read from the api container's environment. It is
+ *  typed into the form and nowhere else: never logged, never in a message. */
+export function signupCode(): string | null {
+  const v = docker(["exec", ATLAS_API_CONTAINER, "printenv", "KELD_SIGNUP_CODE"]);
+  return v && v.trim() ? v.trim() : null;
+}
+
+/** The verification link Atlas's ConsoleEmailSender printed for `email`
+ *  (`[verify] to=<email> … verify_url=<url>`), the newest one; null until it appears. */
+export function verifyLinkFor(email: string): string | null {
+  const out = docker(["logs", "--since", "10m", ATLAS_API_CONTAINER]);
+  if (!out) return null;
+  const lines = out.split("\n").filter((l) => l.startsWith(`[verify] to=${email} `));
+  const m = lines.length ? /verify_url=(\S+)/.exec(lines[lines.length - 1]) : null;
+  return m ? m[1] : null;
+}
 
 /** Atlas's own email login form, as a person fills it. */
 export async function fillAtlasLogin(tab: Page, who: { email: string; password: string }): Promise<void> {
