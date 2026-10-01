@@ -54,10 +54,6 @@ on:
         description: "Existing release tag to attach assets to (repair path). Empty = dry run."
         type: string
         default: ""
-      api_url:
-        description: "Inert since 2026-09-29: it aimed the macOS wizard pane, which was removed. Kept only until scripts/installers_api_url_test.sh drops it. NEVER set this for a release."
-        type: string
-        default: ""
 
 permissions:
   contents: write
@@ -432,14 +428,6 @@ jobs:
           # dry runs on a repo without the Apple secrets), which is meant to produce
           # unsigned, non-distributable output rather than fail.
           KELD_NOTARY_REQUIRED: ${{ secrets.APPLE_NOTARY_KEY != '' && '1' || '0' }}
-          # ⚠️ INERT SINCE 2026-09-29. This baked an Atlas target into the macOS
-          # wizard pane at build time (an env var could not reach the pane's XPC
-          # service at install time). The pane is gone — the pkg asks nothing
-          # and Signal chooses its Atlas when the person signs in — so nothing
-          # in build-pkg.sh reads this any more. It stays bound to the input,
-          # and to nothing else, only because scripts/installers_api_url_test.sh
-          # still requires it; remove both together.
-          KELD_API_URL: ${{ inputs.api_url }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
           VER="$TAG"
