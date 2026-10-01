@@ -226,7 +226,10 @@ def test_a_user_turn_emits_no_verb_row():
     turn produced none -- a verb row on a user turn would make its bin ACTIVE and shift
     every block boundary."""
     with tempfile.TemporaryDirectory() as tmp:
-        rows = _verb_rows(tmp, "user", [{"type": "text", "text": "do the thing"}])
+        rows = _verb_rows(tmp, "user", _tool("Write", {"file_path": "x.go"}), 120)
+        # Falsifiable: an assistant turn with these exact blocks DOES yield code.write
+        # (see test_activity_verb_is_emitted_beside_activity_class), so only the role
+        # guard can be what keeps this empty.
         assert not [r for r in rows if r[6].startswith("activity_verb")]
 
 

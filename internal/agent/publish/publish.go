@@ -144,7 +144,8 @@ type Enrichment struct {
 	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
 	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
 	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
-	// ⚠️ activity_classes / activity_class_tokens are DELIBERATELY ABSENT here and
+	// ⚠️ activity_classes / activity_class_tokens (and likewise activity_verbs /
+	// activity_verb_tokens) are DELIBERATELY ABSENT here and
 	// live on the BLOCK row only (publish.AnalysisFacets, via facetsOf).
 	//
 	// This is a per-PROMPT row and its window facets cover the 60 MINUTES ENDING AT
