@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  envPillText,
   showFirstRun,
   signinBarMode,
   signinPollStep,
@@ -199,4 +200,24 @@ test("the first-open copy is the wireframe's", () => {
   assert.equal(SIGNIN_TEXT.later, "You can sign in later from Settings.");
   assert.equal(SIGNIN_TEXT.localNote, "Local only: nothing leaves this computer.");
   assert.equal(SIGNIN_TEXT.waiting, "Finish signing in in your browser");
+});
+
+// --- the "Send to Atlas" pill in the top bar ---
+
+test("envPillText: no pill while the first-open choice is up — nobody has chosen yet", () => {
+  assert.equal(envPillText({ send_to_atlas: true }, auth({ first_run: true })), "");
+  assert.equal(envPillText({ send_to_atlas: false }, auth({ first_run: true })), "");
+});
+
+test("envPillText: once a choice exists the pill says what it is", () => {
+  assert.equal(envPillText({ send_to_atlas: true }, auth({ first_run: false })), "Send to Atlas: on");
+  assert.equal(envPillText({ send_to_atlas: false }, auth({ first_run: false })), "Local only");
+  // A paired machine never shows the choice, so its pill stays.
+  assert.equal(envPillText({ send_to_atlas: true }, auth({ paired: true, first_run: true })), "Send to Atlas: on");
+  // An older daemon with no /v1/auth/state is not a first run.
+  assert.equal(envPillText({ send_to_atlas: true }, null), "Send to Atlas: on");
+});
+
+test("envPillText: no settings yet, no pill", () => {
+  assert.equal(envPillText(null, auth()), "");
 });

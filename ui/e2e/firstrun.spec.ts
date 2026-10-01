@@ -16,6 +16,8 @@ test.describe("First open", () => {
       await expect(page.getByText("Local only: nothing leaves this computer.")).toBeVisible();
       // The bar stays out of the choice's way.
       await expect(page.locator("#signinBanner")).toBeHidden();
+      // Nor does the top bar state a choice nobody has made yet.
+      await expect(page.locator("#envPill")).toBeHidden();
     }
   });
 
@@ -28,6 +30,8 @@ test.describe("First open", () => {
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
     // Local only is a choice, not a fault: no not-signed-in bar.
     await expect(page.locator("#signinBanner")).toBeHidden();
+    // Once chosen, the top bar says what was chosen.
+    await expect(page.locator("#envPill")).toHaveText("Local only");
 
     await page.reload();
     await expect(page.getByText("Loading…")).toBeHidden();

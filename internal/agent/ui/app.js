@@ -571,6 +571,15 @@ export function showFirstRun(auth) {
   return !!auth && auth.first_run === true && auth.paired !== true;
 }
 
+/** The top bar's Send to Atlas pill, or "" to hide it. Hidden while the
+ *  first-open choice is up: the pill states a choice, and on that screen
+ *  nobody has made one yet — "Send to Atlas: on" there reads as a decision
+ *  already taken for them, right beside the button that takes it. */
+export function envPillText(settings, auth) {
+  if (!settings || showFirstRun(auth)) return "";
+  return atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
+}
+
 /** What the bar above every pane shows: "flow" (a sign-in in progress or just
  *  failed, from wherever it was started), "done" (a confirmation that lingers),
  *  "prompt" (not signed in while Send to Atlas is on) or null. Local only is a
@@ -4247,14 +4256,9 @@ if (typeof document !== "undefined") {
 
   function renderEnvPill() {
     const pill = document.getElementById("envPill");
-    const settings = state.settings;
-    if (!settings) {
-      pill.hidden = true;
-      renderGenerateButton();
-      return;
-    }
-    pill.hidden = false;
-    pill.textContent = atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
+    const text = state.offline ? envPillText(state.settings, null) : envPillText(state.settings, state.auth);
+    pill.hidden = text === "";
+    pill.textContent = text;
     renderGenerateButton();
   }
 
