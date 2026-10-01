@@ -45,14 +45,19 @@ JOB_LABELS = {
     "engineering": "a software developer's work",
 }
 
+# EIGHTH LABEL: "no professional domain", competing in the SAME ranking (the NULL_DOC idiom of
+# sidecar/app/analysis/attribution.py: a domain is named only by beating "nothing"). Worded in
+# the same job-framed register as the seven. gliner_7 omits it and cannot say "none".
+NULL_LABEL = "a hobby, school or everyday personal conversation, not anyone's professional work"
+
 KW = {
-    "marketing":   "campaign brand ad ads advert advertising seo keyword newsletter subject line open rate landing page copy messaging persona audience channel content calendar utm retargeting positioning headline",
-    "financial":   "ledger reconcile invoice budget forecast revenue opex burn runway audit accrual deferred variance balance statement depreciation payable receivable bookkeeping",
-    "sales":       "prospect pipeline lead deal quota demo discovery objection outreach opportunity crm churn upsell renewal cold email pitch",
-    "legal":       "contract clause nda msa sow indemnification liability termination renewal gdpr compliance counsel redline agreement lease warranty confidential",
-    "medical":     "patient diagnosis clinical icd prescription dose contraindication therapy discharge chart physician nurse symptom treatment surgery",
-    "hr":          "candidate interview hiring onboarding offer letter performance review headcount payroll benefits employee handbook resume cover letter recruiter",
-    "engineering": "code function bug refactor deploy commit merge branch test database migration api endpoint server script python javascript",
+    "marketing":   "campaign brand ad ads advert advertising seo keyword newsletter subject line open rate landing page copy messaging persona audience channel content calendar utm retargeting positioning headline marketing social media promotion slogan tagline",
+    "financial":   "ledger reconcile invoice budget forecast revenue opex burn runway audit accrual deferred variance balance statement depreciation payable receivable bookkeeping accounting profit expenses cashflow tax taxes investment",
+    "sales":       "prospect pipeline lead deal quota demo discovery objection outreach opportunity crm churn upsell renewal cold email pitch sales salesperson customers",
+    "legal":       "contract clause nda msa sow indemnification indemnity liability termination renewal gdpr compliance counsel redline agreement lease tenancy warranty confidential non disclosure terms conditions service privacy policy plaintiff defendant lawsuit litigation attorney solicitor lawyer statute trademark copyright infringement power affidavit settlement arbitration court legislation",
+    "medical":     "patient diagnosis clinical icd prescription dose contraindication therapy discharge chart physician nurse symptom treatment surgery doctor medication medical clinic hospital",
+    "hr":          "candidate interview hiring onboarding offer letter performance review headcount payroll benefits employee handbook resume cover letter recruiter job vacancy salary recruitment hr",
+    "engineering": "code function bug refactor deploy commit merge branch test database migration api endpoint server script python javascript css html sql react bash software programming",
 }
 KWSET = {d: set(w.split()) for d, w in KW.items()}
 
@@ -72,7 +77,10 @@ def keyword_arm(text):
     precision, and counted as a prediction (right when truth is "none") in accuracy.
     """
     low = " " + re.sub(r"[^a-z0-9 ]+", " ", strip_code(window(text)).lower()) + " "
-    score = {d: sum(1 for w in ws if f" {w} " in low) for d, ws in KWSET.items()}
+    # plural-tolerant: "contracts"/"clauses" must hit "contract"/"clause" (added blind, with
+    # the legal-list fix; whole-word matching alone could not see any plural).
+    score = {d: sum(1 for w in ws if any(f" {w}{suf} " in low for suf in ("", "s", "es")))
+             for d, ws in KWSET.items()}
     best = max(score.values())
     if best == 0:
         return None
@@ -95,7 +103,7 @@ def window(text):
     return text[:LABELLER_WINDOW]
 
 
-def gliner_raw(texts):
+def gliner_raw(texts, with_null=False):
     """Raw GLiNER2 output per text: {label, confidence}.
 
     ⚠️ Runs in the SIDECAR venv -- gliner2 and torch live there.
@@ -108,7 +116,7 @@ def gliner_raw(texts):
             model = model.cuda()
     except Exception:
         pass
-    descs = [JOB_LABELS[n] for n in DOMAINS]
+    descs = [JOB_LABELS[n] for n in DOMAINS] + ([NULL_LABEL] if with_null else [])
     out = []
     for t in texts:
         o = model.classify_text(window(t), {"domain": descs}, include_confidence=True)
@@ -122,11 +130,10 @@ def gliner_raw(texts):
     return out
 
 
-def gliner_arm(texts):
-    """One domain (or None if the output is not one of the 7 labels) per text."""
+def label_to_domain(label):
+    """Description -> domain; the null label -> None (an abstention, scored as "none")."""
     descs = [JOB_LABELS[n] for n in DOMAINS]
-    return [DOMAINS[descs.index(r["label"])] if r["label"] in descs else None
-            for r in gliner_raw(texts)]
+    return DOMAINS[descs.index(label)] if label in descs else None
 
 
 def union_arm(kw, gl):
@@ -157,6 +164,7 @@ BAR_ACCURACY_MARGIN = 0.20
 
 FRAME = "/tmp/claude-1000/convdomain/frame.ndjson"
 CACHE = "/tmp/claude-1000/convdomain/gliner_raw.json"
+CACHE8 = "/tmp/claude-1000/convdomain/gliner8_raw.json"
 PREDS = "/tmp/claude-1000/convdomain/arm_predictions.json"
 
 
@@ -171,21 +179,24 @@ def predict():
     import hashlib
     texts = load_texts()
     digest = [hashlib.sha1(t.encode()).hexdigest()[:12] for t in texts]
-    if os.path.exists(CACHE):
-        cached = json.load(open(CACHE))
-        assert [r["sha"] for r in cached] == digest, "cache does not match frame"
-        raw = [r["raw"] for r in cached]
-    else:
-        raw = gliner_raw(texts)
-        json.dump([{"sha": d, "raw": r} for d, r in zip(digest, raw)], open(CACHE, "w"))
-    descs = [JOB_LABELS[n] for n in DOMAINS]
-    gl = [DOMAINS[descs.index(r["label"])] if r["label"] in descs else None for r in raw]
+    def cached(path, with_null):
+        if os.path.exists(path):
+            c = json.load(open(path))
+            assert [r["sha"] for r in c] == digest, "cache does not match frame"
+            return [r["raw"] for r in c]
+        raw = gliner_raw(texts, with_null)
+        json.dump([{"sha": d, "raw": r} for d, r in zip(digest, raw)], open(path, "w"))
+        return raw
+
+    g7 = [label_to_domain(r["label"]) for r in cached(CACHE, False)]
+    g8 = [label_to_domain(r["label"]) for r in cached(CACHE8, True)]
     kw = [keyword_arm(t) for t in texts]
-    un = union_arm(kw, gl)
-    sh = shuffled_arm(un)
-    json.dump({"order": "frame line index", "keyword": kw, "gliner": gl, "union": un,
-               "shuffled": sh, "shuffle_seed": SHUFFLE_SEED}, open(PREDS, "w"))
-    print(f"wrote {PREDS} ({len(texts)} conversations); gliner cache {CACHE}")
+    un = union_arm(kw, g8)            # keyword, else gliner_8
+    sh = shuffled_arm(un)             # the control for the UNION arm
+    json.dump({"order": "frame line index", "keyword": kw, "gliner_7": g7, "gliner_8": g8,
+               "union": un, "shuffled_of_union": sh, "shuffle_seed": SHUFFLE_SEED},
+              open(PREDS, "w"))
+    print(f"wrote {PREDS} ({len(texts)} conversations)")
 
 
 def _selftest():
@@ -204,6 +215,10 @@ def _selftest():
 
     # the window is exactly the labeller's: text past it must not influence the keyword arm.
     assert keyword_arm("USER: hi " + "x " * LABELLER_WINDOW + " indemnification clause nda") is None
+
+    # plurals hit; legal vocabulary reaches a legal request.
+    assert keyword_arm("USER: review these contracts and the termination clauses") == "legal"
+    assert label_to_domain(NULL_LABEL) is None
 
     # the shuffle reproduces and permutes.
     x = ["a", None, "b", "c", "d", None]
