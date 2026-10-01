@@ -64,6 +64,11 @@ test.describe("Web sign-in", () => {
     await expect(page.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
     assertPaired(harness);
+    // And the health strip under it agrees while the confirmation is still up,
+    // rather than saying "Atlas not paired" until the page's 30 s refresh.
+    await expect(page.locator(".health-strip")).toBeVisible();
+    await expect(page.locator(".health-strip")).not.toContainText("Atlas not paired", { timeout: 3_000 });
+    await expect(page.getByText(SIGNED_IN)).toBeVisible();
 
     // A paired machine never sees the choice again, and Settings says who it is.
     await page.goto(harness.pageURL("settings"));
