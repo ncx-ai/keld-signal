@@ -31,8 +31,8 @@ func TestBlockWireCarriesProjects(t *testing.T) {
 			t.Fatalf("wire body missing %s in %s", want, s)
 		}
 	}
-	if enrich.SchemaVersion != 26 {
-		t.Fatalf("SchemaVersion = %d, want 26", enrich.SchemaVersion)
+	if enrich.SchemaVersion != 27 {
+		t.Fatalf("SchemaVersion = %d, want 27", enrich.SchemaVersion)
 	}
 }
 

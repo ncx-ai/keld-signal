@@ -18,6 +18,7 @@ from app.analysis.text import is_command_echo
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
 from . import reqclass
+from . import verbs as atv1_verbs  # not `verbs`: events_for_turns has a local of that name
 
 LEVELS = ["workspace", "workspace_evidence", "repo", "repo_from_text", "repo_mentioned", "vcs",
           "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
@@ -439,6 +440,38 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     "think": o.think_chars or 0,
                     "out":   _out,
                 }), _out)
+            # `activity_verb` -- the atv1 VERB this request's capability maps to.
+            #
+            # ⚠️ DERIVED FROM THE CLASS ABOVE, NOT INDEPENDENTLY CLASSIFIED. It is a
+            # lookup over `route_class`'s existing output (analysis/verbs.py), which is
+            # why it needs no validation of its own for the six verbs it produces and
+            # why it must never drift from the class rows beside it.
+            #
+            # ⚠️ ABSENT ON PURPOSE for three classes. `operate`, `acknowledge` and
+            # `unclassified` are not work -- running `git push` stresses no model
+            # capability that routing could act on -- and `synthesize`/`retrieve`
+            # abstain pending their split study. `verb_for` returns None for all five
+            # and NO ROW IS EMITTED: the verb distribution is deliberately over less
+            # than the whole block, and a consumer must not read its total as the
+            # block's request count. The `activity_class` rows beside it remain the
+            # complete denominator.
+            _cls = reqclass.route_class({
+                "tools": [(c.name, c.input) for c in o.tool_calls],
+                "text":  o.text or "",
+                "think": o.think_chars or 0,
+                "out":   int((o.usage or {}).get("output_tokens") or 0),
+            })
+            _verb = atv1_verbs.verb_for(_cls, [(c.name, c.input) for c in o.tool_calls])
+            if _verb:
+                add("ref", "activity_verb", _verb, 1)
+                # Same two-denominator argument as activity_class_tokens: on one real
+                # block `author_prose` is 9.4% of calls and 25.8% of output tokens
+                # while `retrieve` is 18.9% of calls and 5.5% of tokens. Publishing
+                # one denominator misreports the block. ⚠️ NOT a cost figure --
+                # output is 10-14% of modelled cost, the rest being cache reads.
+                _vout = int((o.usage or {}).get("output_tokens") or 0)
+                if _vout:
+                    add("ref", "activity_verb_tokens", _verb, _vout)
 
         paths = []
         for call in o.tool_calls:

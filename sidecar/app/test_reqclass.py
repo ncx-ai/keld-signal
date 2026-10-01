@@ -49,6 +49,15 @@ def test_it_is_an_inventory_dimension_capped_at_the_whole_vocabulary():
     assert "activity_class" in PRECOMPUTED_LEVELS, "the level registry is DERIVED from " \
         "ALLOCATION+INVENTORY; if this fails the derivation was replaced by a typed list"
 
+def test_the_verb_levels_are_inventory_dimensions_capped_at_the_whole_verb_vocabulary():
+    from app.analysis.verbs import VERBS
+    for name, level in (("activity_verbs", "activity_verb"),
+                        ("activity_verb_tokens", "activity_verb_tokens")):
+        entry = [e for e in INVENTORY if e[0] == name]
+        assert entry, name
+        assert entry[0][1] == level and entry[0][2] == len(VERBS) == 9, entry
+        assert level in PRECOMPUTED_LEVELS, level
+
 def test_unclassified_is_a_real_value_not_a_default():
     # ⚠️ The failure this pins has happened twice in this project: `atv1`'s `other`
     # at 38.8% and an `operate` fallthrough at 57.5%, both of which looked healthy

@@ -247,6 +247,20 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # comment at the emission site in levels.py. ⚠️ Not a cost figure -- output is
              # 10-14% of modelled cost, the rest being cache reads.
              ("activity_class_tokens", "activity_class_tokens", 9),
+             # `activity_verbs` -- the atv1 VERB of each request, as a DISTRIBUTION,
+             # for the same reason activity_classes is one: above ~20 requests no unit
+             # is coherent enough for a single label while the distribution stays
+             # distinctive. Must not be moved to ALLOCATION -- that floor (winning
+             # share >= 0.50 and >= MIN_EVIDENCE) would publish `no_majority` on most
+             # units and discard the signal.
+             #
+             # Cap 9 is the WHOLE closed vocabulary (analysis/verbs.VERBS), so this
+             # level can never be truncated and `inventory_omitted` can never name it.
+             # ⚠️ IT IS 9 ALTHOUGH ONLY SIX VERBS ARE PRODUCED TODAY: the vocabulary is
+             # declared whole so a passing split study changes which values are
+             # produced and never the published vocabulary -- no second schema bump.
+             ("activity_verbs", "activity_verb", 9),
+             ("activity_verb_tokens", "activity_verb_tokens", 9),
              # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
              # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
              #

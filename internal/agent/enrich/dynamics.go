@@ -139,6 +139,21 @@ type WindowAnalysis struct {
 	// is cache reads at roughly a tenth the price. A true per-class cost needs
 	// per-class INPUT, which is not measured. This says where the OUTPUT went.
 	ActivityClassTokens []NameCount
+	// ActivityVerbs is the atv1 VERB each inference request's capability maps to,
+	// as a distribution. DERIVED from ActivityClasses by lookup (sidecar
+	// analysis/verbs.py), never classified independently.
+	//
+	// ⚠️ ITS TOTAL IS NOT THE BLOCK'S REQUEST COUNT. Five of the nine activity
+	// classes publish no verb -- operate/acknowledge/unclassified are excluded as
+	// not-work, and synthesize/retrieve abstain pending their split study -- so
+	// this distribution deliberately covers less than the whole block.
+	// ActivityClasses is the complete denominator; a consumer that normalises
+	// against this one is reporting shares of a subset as shares of the work.
+	ActivityVerbs []NameCount
+	// The same verbs weighted by OUTPUT TOKENS rather than counted. Two
+	// denominators because they disagree by up to 3x on the same block.
+	// ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
+	ActivityVerbTokens []NameCount
 
 	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
 	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative

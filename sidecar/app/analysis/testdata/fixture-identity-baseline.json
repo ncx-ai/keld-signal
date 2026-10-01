@@ -1,6 +1,6 @@
 {
- "rows": 251,
- "sha256": "75df26a3852fa8141c8f67b2deba6d028061df60fc581bf2c2fbcc80400aefad",
+ "rows": 257,
+ "sha256": "8793dafa7321b219506e726d1ba8899181d3f1fdc3286557fc42a33cfdcf18d5",
  "levels": {
   "mag/cache_creation_tokens": {
    "rows": 1,
@@ -67,6 +67,18 @@
    "total": 922.0,
    "distinct": 3,
    "sha256": "a35475f642270107ac6e17e6c839f55f68e02ccf448cd70e69dcbe3525311723"
+  },
+  "ref/activity_verb": {
+   "rows": 3,
+   "total": 3.0,
+   "distinct": 2,
+   "sha256": "708837c4a253b8f5904964ad8422c26b26252d984676d30d0e2bcbaab6aef8b1"
+  },
+  "ref/activity_verb_tokens": {
+   "rows": 3,
+   "total": 850.0,
+   "distinct": 2,
+   "sha256": "5c3ed2651250b0ed38350f53711be175eaec9d2c77224131d644f5c818103663"
   },
   "ref/agent": {
    "rows": 1,

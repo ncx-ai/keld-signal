@@ -178,6 +178,8 @@ func analysisFrom(ws map[string]*Dimension, inv InventoryBlock, omitted map[stri
 		McpServers:           convertIdentifierInventory(inv.McpServers),
 		ActivityClasses:      convertIdentifierInventory(inv.ActivityClasses),
 		ActivityClassTokens:  convertIdentifierInventory(inv.ActivityClassTokens),
+		ActivityVerbs:        convertIdentifierInventory(inv.ActivityVerbs),
+		ActivityVerbTokens:   convertIdentifierInventory(inv.ActivityVerbTokens),
 		SystemCategories:     convertIdentifierInventory(inv.SystemCategories),
 		SystemActions:        convertIdentifierInventory(inv.SystemActions),
 		SystemVendors:        convertIdentifierInventory(inv.SystemVendors),

@@ -78,6 +78,8 @@ type AnalysisFacets struct {
 	McpServers           []enrich.NameCount `json:"mcp_servers,omitempty"`
 	ActivityClasses      []enrich.NameCount `json:"activity_classes,omitempty"`
 	ActivityClassTokens  []enrich.NameCount `json:"activity_class_tokens,omitempty"`
+	ActivityVerbs        []enrich.NameCount `json:"activity_verbs,omitempty"`
+	ActivityVerbTokens   []enrich.NameCount `json:"activity_verb_tokens,omitempty"`
 	SystemCategories     []enrich.NameCount `json:"system_categories,omitempty"`
 	SystemActions        []enrich.NameCount `json:"system_actions,omitempty"`
 	SystemVendors        []enrich.NameCount `json:"system_vendors,omitempty"`
@@ -120,6 +122,8 @@ func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 		McpServers:           a.McpServers,
 		ActivityClasses:      a.ActivityClasses,
 		ActivityClassTokens:  a.ActivityClassTokens,
+		ActivityVerbs:        a.ActivityVerbs,
+		ActivityVerbTokens:   a.ActivityVerbTokens,
 		SystemCategories:     a.SystemCategories,
 		SystemActions:        a.SystemActions,
 		SystemVendors:        a.SystemVendors,

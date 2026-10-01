@@ -168,6 +168,68 @@ def test_a_repo_row_needs_a_resolved_workspace_not_only_a_resolved_repo():
         assert not [r for r in rows if r[6] == "repo"], rows
 
 
+def _verb_rows(tmp, role, content, out_tokens=None):
+    msg = {"content": content}
+    if out_tokens is not None:
+        msg["usage"] = {"output_tokens": out_tokens}
+    p = _write(tmp, [{"type": role, "timestamp": "2026-08-01T00:00:00Z", "cwd": tmp,
+                      "message": msg}])
+    rows, _pd, _n = events_for_turns(list(iter_turns(p)), p, tmp, None)
+    return rows
+
+
+def _tool(name, inp):
+    return [{"type": "tool_use", "name": name, "id": "t1", "input": inp}]
+
+
+def test_activity_verb_is_emitted_beside_activity_class():
+    """A Write of a .go file is author_code, which is atv1 `code.write`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 120)
+        assert ("activity_verb", "code.write") in {(r[6], r[7]) for r in rows}, rows
+
+
+def test_activity_verb_tokens_carries_the_output_weight():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 120)
+        w = [r[8] for r in rows if r[6] == "activity_verb_tokens" and r[7] == "code.write"]
+        assert w == [120], w
+
+
+def test_zero_output_tokens_emits_no_token_row():
+    """Matches activity_class_tokens' `if _out:` guard: a zero-weight row would claim a
+    request produced output when it produced none."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 0)
+        assert not [r for r in rows if r[6] == "activity_verb_tokens"]
+        assert [r for r in rows if r[6] == "activity_verb"]
+
+
+def test_an_excluded_class_emits_no_verb_row_at_all():
+    """`git push` is `operate` -- not work, so no verb and no token row."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Bash", {"command": "git push"}), 40)
+        assert ("activity_class", "operate") in {(r[6], r[7]) for r in rows}, rows
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
+def test_a_pending_split_emits_no_verb_row():
+    """A plain Read is `retrieve`, which abstains until the split study lands."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Read", {"file_path": "x.go"}), 40)
+        assert ("activity_class", "retrieve") in {(r[6], r[7]) for r in rows}, rows
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
+def test_a_user_turn_emits_no_verb_row():
+    """A new level may DESCRIBE existing evidence; it may never CREATE evidence where a
+    turn produced none -- a verb row on a user turn would make its bin ACTIVE and shift
+    every block boundary."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "user", [{"type": "text", "text": "do the thing"}])
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

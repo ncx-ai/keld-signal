@@ -14,6 +14,10 @@
 {"bin_ts": 1772442000, "level": "activity_class_tokens", "mode": "capture", "n": 340.0, "ref": "retrieve", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "activity_class_tokens", "mode": "plain", "n": 340.0, "ref": "author_code", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "activity_class_tokens", "mode": "plain", "n": 340.0, "ref": "retrieve", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "activity_verb", "mode": "capture", "n": 1.0, "ref": "code.edit", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "activity_verb", "mode": "plain", "n": 1.0, "ref": "code.edit", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "activity_verb_tokens", "mode": "capture", "n": 340.0, "ref": "code.edit", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "activity_verb_tokens", "mode": "plain", "n": 340.0, "ref": "code.edit", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "artifact", "mode": "capture", "n": 2.0, "ref": "code", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "artifact", "mode": "plain", "n": 2.0, "ref": "code", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "branch", "mode": "capture", "n": 4.0, "ref": "feat/record-seam", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
@@ -56,6 +60,10 @@
 {"bin_ts": 1772442300, "level": "activity_class", "mode": "plain", "n": 2.0, "ref": "delegate", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442300, "level": "activity_class_tokens", "mode": "capture", "n": 420.0, "ref": "delegate", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442300, "level": "activity_class_tokens", "mode": "plain", "n": 420.0, "ref": "delegate", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442300, "level": "activity_verb", "mode": "capture", "n": 2.0, "ref": "plan", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442300, "level": "activity_verb", "mode": "plain", "n": 2.0, "ref": "plan", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442300, "level": "activity_verb_tokens", "mode": "capture", "n": 420.0, "ref": "plan", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442300, "level": "activity_verb_tokens", "mode": "plain", "n": 420.0, "ref": "plan", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442300, "level": "agent", "mode": "capture", "n": 1.0, "ref": "Explore", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442300, "level": "agent", "mode": "plain", "n": 1.0, "ref": "Explore", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442300, "level": "branch", "mode": "capture", "n": 2.0, "ref": "feat/record-seam", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
@@ -130,6 +138,10 @@
 {"bin_ts": 1786352400, "level": "activity_class_tokens", "mode": "capture", "n": 72.0, "ref": "retrieve", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "activity_class_tokens", "mode": "plain", "n": 410.0, "ref": "author_code", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "activity_class_tokens", "mode": "plain", "n": 72.0, "ref": "retrieve", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "activity_verb", "mode": "capture", "n": 1.0, "ref": "code.write", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "activity_verb", "mode": "plain", "n": 1.0, "ref": "code.write", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "activity_verb_tokens", "mode": "capture", "n": 410.0, "ref": "code.write", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "activity_verb_tokens", "mode": "plain", "n": 410.0, "ref": "code.write", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "artifact", "mode": "capture", "n": 2.0, "ref": "prose", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "artifact", "mode": "capture", "n": 5.0, "ref": "code", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "artifact", "mode": "plain", "n": 2.0, "ref": "prose", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
@@ -260,6 +272,14 @@
 {"bin_ts": 1786456800, "level": "activity_class_tokens", "mode": "capture", "n": 260.0, "ref": "author_code", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
 {"bin_ts": 1786456800, "level": "activity_class_tokens", "mode": "plain", "n": 180.0, "ref": "delegate", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
 {"bin_ts": 1786456800, "level": "activity_class_tokens", "mode": "plain", "n": 260.0, "ref": "author_code", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb", "mode": "capture", "n": 1.0, "ref": "code.write", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb", "mode": "capture", "n": 1.0, "ref": "plan", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb", "mode": "plain", "n": 1.0, "ref": "code.write", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb", "mode": "plain", "n": 1.0, "ref": "plan", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb_tokens", "mode": "capture", "n": 180.0, "ref": "plan", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb_tokens", "mode": "capture", "n": 260.0, "ref": "code.write", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb_tokens", "mode": "plain", "n": 180.0, "ref": "plan", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
+{"bin_ts": 1786456800, "level": "activity_verb_tokens", "mode": "plain", "n": 260.0, "ref": "code.write", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
 {"bin_ts": 1786456800, "level": "agent", "mode": "capture", "n": 1.0, "ref": "general-purpose", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
 {"bin_ts": 1786456800, "level": "agent", "mode": "plain", "n": 1.0, "ref": "general-purpose", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}
 {"bin_ts": 1786456800, "level": "artifact", "mode": "capture", "n": 1.0, "ref": "chart", "session": "-workspace-fixture-corpus-priya-beacon-api/f4b2d810-7c3e-4a15-9e02-88a1c4e0b002.jsonl", "table": "bin"}

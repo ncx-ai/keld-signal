@@ -282,14 +282,21 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		// system-touching requests touch exactly one system, 2.7% touch more.
 		"system_category_tokens": false,
 		"system_vendor_tokens":   false,
+		// THE TWENTY-FIRST AND TWENTY-SECOND: the atv1 VERB of each request as a
+		// distribution, and the same weighted by output tokens. DERIVED from
+		// activity_class by lookup (analysis/verbs.py), so they carry no evidence the
+		// class rows do not; five of nine classes publish no verb, so the total is not
+		// the block's request count.
+		"activity_verbs":       false,
+		"activity_verb_tokens": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all twenty inventory keys and no others should be "+
-			"decodable — a twenty-first needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all twenty-two inventory keys and no others should be "+
+			"decodable — a twenty-third needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
