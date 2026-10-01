@@ -1,6 +1,6 @@
 KELD SIGNAL END USER LICENSE AGREEMENT
 
-Version 1.0 — Last updated: July 9, 2026
+Version 1.1 — Last updated: September 30, 2026
 
 IMPORTANT — PLEASE READ CAREFULLY. This End User License Agreement (the
 "Agreement") is a legal agreement between you ("you") and KELD ("Keld",
@@ -115,15 +115,13 @@ Keld may make updated versions of the Software available. Updates may be
 required for continued operation with Keld Atlas. This Agreement applies
 to updates unless an updated agreement accompanies them.
 
-10. OWNERSHIP AND OPEN SOURCE
+10. OWNERSHIP AND THIRD-PARTY COMPONENTS
 
 The Software and all associated intellectual property rights are and
-remain the property of Keld and its licensors. The Software's source code
-is published at https://github.com/ncx-ai/keld-signal; source code made
-available under an open-source license is governed by that license, and
-nothing in this Agreement restricts rights granted to you under it. The
-Software includes third-party open-source components, each governed by
-its own license.
+remain the property of Keld and its licensors. The Software includes
+third-party open-source components, each governed by its own license;
+nothing in this Agreement restricts rights granted to you under those
+licenses.
 
 11. RESTRICTIONS
 
