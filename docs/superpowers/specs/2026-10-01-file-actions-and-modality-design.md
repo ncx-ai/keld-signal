@@ -96,7 +96,15 @@ rather than inventing a shape.
 - An extension of `""` publishes as `(none)`; an action of `None` publishes **no row**, matching
   `_sys_act`'s refusal to guess a verb.
 
-## 4. The modality gap, which is the table that genuinely does not exist
+## 4. The modality gap — ⚠️ NOT BUILT, deliberately
+
+**Decided 2026-10-01: §3 ships; §4 does not.** The routing motivation that justified a modality
+table was retired by §1's measurement, and the descriptive case for it is weaker than the join's
+— the join already answers "what material is this work touching" at a fraction of the cost. This
+section is retained as the record of what was considered and why it was declined, not as a
+backlog item. Reviving it needs a reason §1 does not already refute.
+
+### What it would have been
 
 `EXE_ACTION` answers **what act** (`run code`, `convert a document`). It does not answer **what
 modality** — and modality is the axis that implies a model capability.
@@ -140,7 +148,13 @@ justification is not enough for a reader, the correct response is to build §3 a
 
 ## 5. ⚠️ A KNOWN UNDERCOUNT, stated because it will otherwise be discovered as a defect
 
-Every measurement in §3 reads `file_path` / `notebook_path` — **harness tool inputs only**. A
+Every measurement in §3 reads `file_path` / `notebook_path` — **two of the three keys in
+`paths.PATH_INPUTS`, which is `("file_path", "notebook_path", "path")`. The `path` key was
+missed entirely**, so the pair counts above are slightly low on top of the larger undercount
+below. The implementation uses `PATH_INPUTS` and is therefore not subject to it; the MEASURED
+FIGURES in this document are.
+
+Separately, those measurements read **harness tool inputs only**. A
 `Bash` call running `ffmpeg input.mov` carries no `file_path`, so it was **invisible** to the
 12.25% / 3.63% specialised-format figures in
 `docs/notes/2026-10-01-activity-verb-v2-and-routing.md`.
@@ -166,8 +180,9 @@ the table exists** — do not carry the 12.25% figure forward as if it were comp
 
 ## 7. Scope
 
-**In:** the `file_actions` level; `vocab.MODALITY` and a `modalities` level; extending
-`EXE_ACTION` with the eleven missing programs; a schema bump; the re-measurement in §5.
+**In:** the `file_actions` level (§3) and a schema bump. **That is all.**
+
+**Out:** `vocab.MODALITY`, a `modalities` level, and the eleven `EXE_ACTION` additions — see §4.
 
 **Out:** reading file contents from disk — rejected, and not only on privacy. **The transcript is
 a historical record; the filesystem is current state.** `KELD_BLOCKS_BACKFILL` defaults ON, so
