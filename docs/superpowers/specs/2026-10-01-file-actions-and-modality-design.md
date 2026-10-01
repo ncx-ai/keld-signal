@@ -10,9 +10,17 @@ from this machine's two corpora.
 Today `action`, `file`, `dir`, `component`, `ext` and `repo` all publish **independently**. The
 pairing between them is computed and thrown away. This spec keeps it.
 
-The question it serves: **what kind of material is this work touching** — source, prose, images,
-documents, notebooks. That is a DESCRIPTIVE question about what the work is, and it is the
-whole justification for this spec.
+The question it serves: **what kind of material is this work touching, and what was done to
+it** — source, prose, images, documents, notebooks, and whether each was read, edited or
+created. That is a DESCRIPTIVE question about the SEMANTICS of the work, and it is the whole
+justification for this spec.
+
+⚠️ **The pairing is the point, and neither half carries it alone.** `edit:.tsx` is frontend
+development; `read:.md` is orienting in documentation; `create:.py` is writing new tooling;
+`read:.jpg` is working from a design or a screenshot. A block's `action` distribution says how
+the work was done and its `ext` distribution says what it was done to, but only the JOIN says
+what kind of work it was. That is why this is worth publishing even though both marginals
+already ship, and it is the justification that survives §1's retirement of the routing case.
 
 ⚠️ **THE ROUTING MOTIVATION WAS MEASURED AND IT DOES NOT HOLD. This section used to say the
 signal "implies a capability the default model does not have."** It does not, on either half of

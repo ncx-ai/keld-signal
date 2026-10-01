@@ -24,6 +24,7 @@ import json, os, sys, tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.analysis import systems
 from app.analysis.analyze import analyze_window
 from app.analysis.ingest import ingest_file
 from app.analysis.store import open_store
@@ -306,6 +307,37 @@ def test_an_unrecognized_system_contributes_no_token_row():
     with tempfile.TemporaryDirectory() as tmp:
         tools = [fetch("https://some-unknown-vendor.example.net/x")]
         assert not _weighted(tmp, "unk", tools, "system_category_tokens")
+def test_browser_automation_verbs_resolve_to_an_action():
+    """⚠️ MEASURED GAP, not a hypothetical. On two real corpora 167 of 765 MCP calls resolved
+    NO action, and 160 of those were Claude's own browser tools. Without these the browser lane
+    publishes a category and no verb, so an afternoon spent driving a browser is
+    indistinguishable from one unrecognised call."""
+    assert systems.action_for_tool("computer") == "run"
+    assert systems.action_for_tool("javascript_tool") == "run"
+    assert systems.action_for_tool("navigate") == "read"
+    assert systems.action_for_tool("resize_window") == "update"
+    assert systems.action_for_tool("mark_chapter") == "update"
+
+
+def test_generic_tokens_are_deliberately_absent_from_the_verb_table():
+    """`_VERB` matches ANY token of ANY MCP tool name, so a generic word silently re-labels
+    unrelated tools in a system of record — the failure `action_for_tool`'s docstring refuses.
+    `browser_batch` resolving to nothing is the intended outcome, not an oversight.
+
+    ⚠️ If a future change makes this pass by adding `batch`/`tool`/`browser`, it has widened the
+    table in exactly the way that produces false statements about someone's work."""
+    assert systems.action_for_tool("browser_batch") is None
+    assert systems.action_for_tool("tool") is None
+    assert systems.action_for_tool("some_batch_operation") is None
+
+
+def test_adding_browser_verbs_did_not_move_any_existing_resolution():
+    """The regression guard for the change above: every verb that resolved before must resolve
+    to the same action now. A new token that shadows an old one is the real risk here."""
+    for tool, expected in (("notion-fetch", "read"), ("notion-update-page", "update"),
+                           ("notion-search", "search"), ("notion-create-pages", "create"),
+                           ("preview_start", "run"), ("tabs_close", "update")):
+        assert systems.action_for_tool(tool) == expected, tool
 
 
 if __name__ == "__main__":
@@ -313,3 +345,4 @@ if __name__ == "__main__":
     for fn in fns:
         fn(); print(f"PASS {fn.__name__}")
     print(f"\n{len(fns)} passed")
+

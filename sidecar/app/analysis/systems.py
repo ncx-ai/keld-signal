@@ -491,6 +491,19 @@ _VERB = {
     "publish": "send", "share": "send", "invite": "send", "message": "send",
     "run": "run", "execute": "run", "trigger": "run", "start": "run", "sync": "run",
     "refresh": "run", "import": "run",
+    # ⚠️ BROWSER-AUTOMATION VERBS. Measured on two real corpora: 167 of 765 MCP calls
+    # resolved no action, and 160 of those were Claude's own browser tools -- `computer`
+    # (63), `javascript_tool` (52), `navigate` (32), `resize_window` (10), `mark_chapter`
+    # (3). Without these the browser lane publishes a category and no verb, so a session
+    # spent driving a browser is indistinguishable from one that touched an unknown system
+    # once.
+    # Only SPECIFIC tokens are added. `batch`, `tool` and `browser` are deliberately NOT
+    # here: this table matches ANY token of ANY MCP tool name, so a generic word would
+    # silently re-label unrelated tools in systems of record -- the exact failure
+    # `action_for_tool`'s docstring refuses ("a wrong verb here is a false statement about
+    # what someone did"). `browser_batch` therefore still resolves to nothing, on purpose.
+    "navigate": "read", "computer": "run", "javascript": "run",
+    "resize": "update", "mark": "update",
 }
 
 
