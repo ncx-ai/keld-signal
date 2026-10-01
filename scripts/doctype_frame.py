@@ -97,6 +97,7 @@ def main():
 
     for tag, root in roots.items():
         for dp, _, names in os.walk(root):
+            names.sort()  # deterministic walk order for reproducible tie-breaking
             for fn in names:
                 if not fn.endswith(".jsonl"):
                     continue
@@ -116,8 +117,10 @@ def main():
                         old_ts, old_body = latest[key]
                         should_replace = False
                         if ts is not None and old_ts is not None:
-                            # Both have timestamps - use the later one
-                            should_replace = ts > old_ts
+                            # Both have timestamps - use the later one (>= so later-seen wins ties).
+                            # Timestamps are homogeneous (measured: 420/420 are Z + 3-digit fractional),
+                            # so string comparison is valid.
+                            should_replace = ts >= old_ts
                         elif ts is not None:
                             # New has timestamp, old doesn't - use new
                             should_replace = True
