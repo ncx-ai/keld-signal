@@ -154,6 +154,10 @@ type WindowAnalysis struct {
 	// denominators because they disagree by up to 3x on the same block.
 	// ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
 	ActivityVerbTokens []NameCount
+	// FileActions pairs the physical act with the extension of the file it touched,
+	// `<action>:<ext>` (`edit:.tsx`, `read:.jpg`, `create:(none)`). Extension only, never
+	// a path. The vocabulary is OPEN, so `inventory_omitted` can name this level.
+	FileActions []NameCount
 
 	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
 	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative

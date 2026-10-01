@@ -233,6 +233,67 @@ def test_a_user_turn_emits_no_verb_row():
         assert not [r for r in rows if r[6].startswith("activity_verb")]
 
 
+def _fa(rows):
+    return sorted(r[7] for r in rows if r[6] == "file_action")
+
+
+def test_file_action_is_what_action_for_returns_joined_to_the_extension():
+    """`action_for(tool="Write")` was CHECKED and returns `create`, not an assumed verb."""
+    from app.analysis.vocab import action_for
+    assert action_for(tool="Write") == "create"
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 10)
+        assert _fa(rows) == ["create:.go"], rows
+
+
+def test_file_action_read_of_a_png():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Read", {"file_path": "a/X.PNG"}), 10)
+        assert _fa(rows) == ["read:.png"], rows
+
+
+def test_file_action_with_no_extension_is_none_marker():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "Makefile"}), 10)
+        assert _fa(rows) == ["edit:(none)"], rows
+
+
+def test_file_action_reads_all_three_path_keys():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("NotebookEdit", {"notebook_path": "n.ipynb"}), 10)
+        assert _fa(rows) == ["edit:.ipynb"], rows
+        rows = _verb_rows(tmp, "assistant", _tool("Glob", {"path": "src/a.ts"}), 10)
+        assert _fa(rows) == ["search:.ts"], rows
+
+
+def test_a_call_with_no_path_emits_no_file_action():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Glob", {"pattern": "*.go"}), 10)
+        assert any(r[6] == "action" for r in rows), "control: the act itself is emitted"
+        assert not _fa(rows), rows
+
+
+def test_an_mcp_prefixed_tool_name_is_NOT_resolved_by_action_for():
+    """PINNED AS A FINDING, not a feature: `action_for` does not strip `mcp__x__`, so
+    `mcp__abc__Write` has no act and publishes neither `action` nor `file_action`. That is
+    pre-existing behaviour of the shipped `action` level; reqclass strips, action_for does not."""
+    from app.analysis.vocab import action_for
+    assert action_for(tool="mcp__abc__Write") is None
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("mcp__abc__Write", {"file_path": "x.go"}), 10)
+        assert not _fa(rows), rows
+
+
+def test_a_user_turn_emits_no_file_action():
+    """FALSIFIABLE (and the guard is in the emission itself, since the loop is outside the block-level one): the user turn carries a tool_use that WOULD emit `create:.go` on an
+    assistant turn (asserted as the control), so removing the role guard fails this."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctl = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 10)
+        assert _fa(ctl) == ["create:.go"], ctl
+        rows = _verb_rows(tmp, "user", _tool("Write", {"file_path": "x.go"}))
+        assert not _fa(rows), rows
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

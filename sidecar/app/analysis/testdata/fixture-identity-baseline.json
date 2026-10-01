@@ -1,6 +1,6 @@
 {
- "rows": 257,
- "sha256": "8793dafa7321b219506e726d1ba8899181d3f1fdc3286557fc42a33cfdcf18d5",
+ "rows": 263,
+ "sha256": "fd149ed8e882ea3c6e86b764b6062eaeb6e26e6849f0cf9a9143bf37f9406b28",
  "levels": {
   "mag/cache_creation_tokens": {
    "rows": 1,
@@ -127,6 +127,12 @@
    "total": 9.0,
    "distinct": 7,
    "sha256": "52f1147e4e9511f22278433f8c747fee0fe3e2fa900e95e4bff9b36e09c54588"
+  },
+  "ref/file_action": {
+   "rows": 6,
+   "total": 6.0,
+   "distinct": 6,
+   "sha256": "7535275c2e180ac262e91af4b2fa37ff7b20bd93a25a858fb1ce9b7add5de04c"
   },
   "ref/lang": {
    "rows": 6,

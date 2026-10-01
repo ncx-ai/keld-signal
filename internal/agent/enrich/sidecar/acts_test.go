@@ -289,14 +289,16 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		// the block's request count.
 		"activity_verbs":       false,
 		"activity_verb_tokens": false,
+		// THE TWENTY-THIRD: the act joined to the file extension it touched. Open vocabulary.
+		"file_actions": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all twenty-two inventory keys and no others should be "+
-			"decodable — a twenty-third needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all twenty-three inventory keys and no others should be "+
+			"decodable — a twenty-fourth needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")

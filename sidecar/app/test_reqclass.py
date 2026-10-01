@@ -58,6 +58,11 @@ def test_the_verb_levels_are_inventory_dimensions_capped_at_the_whole_verb_vocab
         assert entry[0][1] == level and entry[0][2] == len(VERBS) == 9, entry
         assert level in PRECOMPUTED_LEVELS, level
 
+def test_file_actions_is_an_open_inventory_dimension_capped_at_twelve():
+    entry = [e for e in INVENTORY if e[0] == "file_actions"]
+    assert entry and entry[0][1] == "file_action" and entry[0][2] == 12, entry
+    assert "file_action" in PRECOMPUTED_LEVELS
+
 def test_unclassified_is_a_real_value_not_a_default():
     # ⚠️ The failure this pins has happened twice in this project: `atv1`'s `other`
     # at 38.8% and an `operate` fallthrough at 57.5%, both of which looked healthy

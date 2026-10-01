@@ -479,6 +479,20 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             act = action_for(tool=name)
             if act:
                 add("ref", "action", act, 1)
+            # `file_action` -- the act joined to the extension of the file it touched,
+            # `<action>:<ext>` (`edit:.tsx`, `read:.jpg`). Both halves are already in hand
+            # here and were being discarded separately. No row without an act (matching
+            # `_sys_act`'s refusal to guess a verb) and none for a call carrying no path.
+            # The extension is the identifier; the path itself never leaves this line.
+            # ⚠️ This loop is NOT inside the `o.role != "user"` guard above (the `action` and
+            # `tool` rows beside it fire on a user-role turn that carries a tool_use), so the
+            # role is checked HERE: this level may describe an assistant's act, never create
+            # evidence on a user turn.
+            if act and o.role != "user":
+                _fp = next((inp[k] for k in PATH_INPUTS if isinstance(inp, dict) and inp.get(k)), None)
+                if _fp:
+                    add("ref", "file_action",
+                        f"{act}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}", 1)
             # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
             # per turn, because the count of edits is precisely the useless predictor this
             # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from

@@ -261,6 +261,13 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # produced and never the published vocabulary -- no second schema bump.
              ("activity_verbs", "activity_verb", 9),
              ("activity_verb_tokens", "activity_verb_tokens", 9),
+             # `file_actions` -- `<action>:<ext>`, the act joined to the file type it touched.
+             # Cap 12 is MEASURED: distinct pairs per transcript are p50=3, p90=7 on both
+             # corpora (p99 18/11, max 31/12), so 12 sits just above both p90s, the rule the
+             # 40/24/16 caps were set by. ⚠️ UNLIKE `activity_classes` THIS VOCABULARY IS OPEN
+             # (52 and 58 distinct pairs across the two corpora), so truncation is real and
+             # `inventory_omitted` can legitimately name this level.
+             ("file_actions", "file_action", 12),
              # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
              # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
              #

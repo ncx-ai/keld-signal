@@ -496,6 +496,7 @@ type InventoryBlock struct {
 	ActivityClassTokens  []InventoryItem `json:"activity_class_tokens"`
 	ActivityVerbs        []InventoryItem `json:"activity_verbs"`
 	ActivityVerbTokens   []InventoryItem `json:"activity_verb_tokens"`
+	FileActions          []InventoryItem `json:"file_actions"`
 	SystemCategories     []InventoryItem `json:"system_categories"`
 	SystemActions        []InventoryItem `json:"system_actions"`
 	SystemVendors        []InventoryItem `json:"system_vendors"`
