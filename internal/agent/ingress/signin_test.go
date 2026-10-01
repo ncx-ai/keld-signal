@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,8 +34,13 @@ type pkceAtlas struct {
 	challenge string // the code's bound challenge; "" = not yet authorized
 	code      string
 	gone      bool // answer every enroll with 410
-	requests  atomic.Int32
-	verifier  string // what the last enroll carried
+	// enrollFail / onboardFail, when non-zero, answer that route with this
+	// status and a body ECHOING what the daemon sent — the worst case for a
+	// log line built from the error.
+	enrollFail  int
+	onboardFail int
+	requests    atomic.Int32
+	verifier    string // what the last enroll carried
 }
 
 func newPKCEAtlas(t *testing.T) *pkceAtlas {
@@ -50,6 +56,11 @@ func newPKCEAtlas(t *testing.T) *pkceAtlas {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		a.verifier = body.CodeVerifier
+		if a.enrollFail != 0 {
+			w.WriteHeader(a.enrollFail)
+			fmt.Fprintf(w, "bad code %s verifier %s", body.Code, body.CodeVerifier)
+			return
+		}
 		sum := sha256.Sum256([]byte(body.CodeVerifier))
 		if a.gone || body.Code != a.code || a.challenge == "" ||
 			base64.RawURLEncoding.EncodeToString(sum[:]) != a.challenge {
@@ -65,6 +76,14 @@ func newPKCEAtlas(t *testing.T) *pkceAtlas {
 	mux.HandleFunc("/v1/cli/onboarding", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok-web" {
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		a.mu.Lock()
+		fail := a.onboardFail
+		a.mu.Unlock()
+		if fail != 0 {
+			w.WriteHeader(fail)
+			fmt.Fprintf(w, "no onboarding for %s", r.Header.Get("Authorization"))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -752,3 +771,91 @@ func TestPairAnnouncesTheNewPairing(t *testing.T) {
 		t.Fatal("the pairing was announced before hook.json was written")
 	}
 }
+
+// A sign-in that fails inside pair() says WHERE in the log — which step
+// failed and the error — because "refused (atlas_error)" alone left a failed
+// sign-in undiagnosable. ⚠️ Never the code, the verifier, the state or a
+// token, even when Atlas's error body echoes them back. And a hook.json that
+// cannot be written is this computer's failure, not Atlas's, so it has its
+// own last_error and page.
+func TestSignInFailureLogsTheStageAndNoSecret(t *testing.T) {
+	cases := []struct {
+		name     string
+		setup    func(h *signInHarness)
+		stage    string
+		lastErr  string
+		wantPage string
+		status   int
+	}{
+		{
+			name:  "Atlas refuses the redeem",
+			setup: func(h *signInHarness) { h.atlas.enrollFail = http.StatusInternalServerError },
+			stage: "login", lastErr: "atlas_error", wantPage: "could not finish signing in", status: http.StatusBadGateway,
+		},
+		{
+			name:  "the onboarding hand-off fails",
+			setup: func(h *signInHarness) { h.atlas.onboardFail = http.StatusServiceUnavailable },
+			stage: "onboarding", lastErr: "atlas_error", wantPage: "could not finish signing in", status: http.StatusBadGateway,
+		},
+		{
+			name: "hook.json cannot be written",
+			setup: func(h *signInHarness) {
+				// A directory where the file should go: WriteFile fails, nothing else does.
+				if err := os.MkdirAll(paths.HookConfigPath(), 0o700); err != nil {
+					h.t.Fatal(err)
+				}
+			},
+			stage: "hook_write", lastErr: "save_failed", wantPage: "couldn't save the sign-in on this computer", status: http.StatusInternalServerError,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf strings.Builder
+			var mu sync.Mutex
+			log.SetOutput(writerFunc(func(p []byte) (int, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				return buf.Write(p)
+			}))
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			h := newSignInHarness(t)
+			c.setup(h)
+			_, v := h.start()
+			code := h.atlas.authorize(v.Get("code_challenge"))
+			res, body := h.callback(q(code, v.Get("state")))
+			if res.StatusCode != c.status {
+				t.Fatalf("status = %d, want %d: %s", res.StatusCode, c.status, body)
+			}
+			if !strings.Contains(body, c.wantPage) {
+				t.Fatalf("page does not say %q: %s", c.wantPage, body)
+			}
+			if st := h.state(); st.LastError == nil || *st.LastError != c.lastErr {
+				t.Fatalf("last_error = %v, want %q", st.LastError, c.lastErr)
+			}
+
+			mu.Lock()
+			logged := buf.String()
+			mu.Unlock()
+			if !strings.Contains(logged, "keld-agent: sign-in failed at "+c.stage+": ") {
+				t.Fatalf("log does not name the stage %q:\n%s", c.stage, logged)
+			}
+			h.atlas.mu.Lock()
+			verifier := h.atlas.verifier
+			h.atlas.mu.Unlock()
+			bareCode := code[strings.LastIndex(code, "/")+1:]
+			for name, secret := range map[string]string{
+				"code": bareCode, "pairing code": code, "verifier": verifier, "state": v.Get("state"),
+				"access token": "tok-web", "ingest token": "ingest-web",
+			} {
+				if secret != "" && strings.Contains(logged, secret) {
+					t.Fatalf("the log carries the %s:\n%s", name, logged)
+				}
+			}
+		})
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

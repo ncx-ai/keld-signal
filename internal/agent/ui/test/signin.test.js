@@ -106,7 +106,7 @@ test("still pending -> keep polling", () => {
 });
 
 test("the attempt is no longer pending and the daemon names why -> stop with that reason", () => {
-  for (const code of ["not_started_here", "expired", "atlas_mismatch", "atlas_off", "atlas_error"]) {
+  for (const code of ["not_started_here", "expired", "atlas_mismatch", "atlas_off", "atlas_error", "save_failed"]) {
     assert.deepEqual(signinPollStep(auth({ last_error: code }), { startedAt: t0, now: t0 + 3000 }), {
       stop: true,
       status: "failed",
@@ -145,7 +145,7 @@ test("gives up at the daemon's own pending lifetime, and paired still wins at th
 // --- error-code -> message ---
 
 test("every last_error in contract C5 has its own sentence, never the raw code", () => {
-  for (const code of ["not_started_here", "expired", "atlas_mismatch", "atlas_off", "atlas_error"]) {
+  for (const code of ["not_started_here", "expired", "atlas_mismatch", "atlas_off", "atlas_error", "save_failed"]) {
     const text = signinErrorText(code);
     assert.ok(text && text !== code, code);
     assert.equal(text, SIGNIN_ERROR_TEXT[code]);
@@ -220,4 +220,9 @@ test("envPillText: once a choice exists the pill says what it is", () => {
 
 test("envPillText: no settings yet, no pill", () => {
   assert.equal(envPillText(null, auth()), "");
+});
+
+test("a sign-in that could not be saved here is this computer's failure, not Atlas's", () => {
+  assert.equal(signinErrorText("save_failed"), "Signal couldn't save the sign-in on this computer.");
+  assert.notEqual(signinErrorText("save_failed"), signinErrorText("atlas_error"));
 });

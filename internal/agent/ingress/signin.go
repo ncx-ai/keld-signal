@@ -53,6 +53,9 @@ const (
 	signInAtlasMismatch  = "atlas_mismatch"
 	signInAtlasOff       = "atlas_off"
 	signInAtlasError     = "atlas_error"
+	// The sign-in worked at Atlas and could not be saved HERE (hook.json):
+	// this computer's failure, so not "Atlas could not finish".
+	signInSaveFailed = "save_failed"
 )
 
 type pendingSignIn struct {
@@ -323,14 +326,23 @@ func (s *signInStore) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := pair(e.apiBase, code, e.verifier); err != nil {
 		var pe *pairError
+		errors.As(err, &pe) // pair() returns nothing else
+		// Which step failed, and how — the refusal reason alone left a failed
+		// sign-in undiagnosable. ⚠️ Never a secret: redacted() scrubs what
+		// pair() handled, and the state and raw pairing code are added here.
+		log.Printf("keld-agent: sign-in failed at %s: %s", pe.stage, pe.redacted(e.state, q.Get("pairing_code")))
 		var se *retry.StatusError
-		if errors.As(err, &pe) && pe.stage == pairLogin && errors.As(err, &se) && se.Code == http.StatusGone {
+		switch {
+		case pe.stage == pairLogin && errors.As(err, &se) && se.Code == http.StatusGone:
 			s.refuse(signInExpired, true)
 			writeSignInPage(w, http.StatusGone, pageCodeExpired)
-			return
+		case pe.stage == pairHookWrite:
+			s.refuse(signInSaveFailed, true)
+			writeSignInPage(w, http.StatusInternalServerError, pageSaveFailed)
+		default:
+			s.refuse(signInAtlasError, true)
+			writeSignInPage(w, http.StatusBadGateway, pageAtlasError)
 		}
-		s.refuse(signInAtlasError, true)
-		writeSignInPage(w, http.StatusBadGateway, pageAtlasError)
 		return
 	}
 	s.succeeded()
@@ -379,6 +391,7 @@ var (
 	pageAtlasMismatch  = signInPage{"Not signed in", "This sign-in came back from a different Atlas than the one Signal asked. Nothing was changed. Start again from Signal."}
 	pageAtlasOff       = signInPage{"Not signed in", "Send to Atlas is off, so Signal did not sign in. Turn it on in Signal's Settings and try again."}
 	pageAtlasError     = signInPage{"Not signed in", "Signal could not finish signing in. Start again from Signal."}
+	pageSaveFailed     = signInPage{"Not signed in", "Signal couldn't save the sign-in on this computer. Start again from Signal."}
 )
 
 // writeSignInPage writes one of the constant pages above. Its only inputs are

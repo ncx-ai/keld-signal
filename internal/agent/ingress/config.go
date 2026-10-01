@@ -3,6 +3,7 @@ package ingress
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
@@ -99,13 +100,41 @@ const (
 	pairHookWrite                   // hook.json could not be written
 )
 
+// String is the stage's name in a log line.
+func (s pairStage) String() string {
+	switch s {
+	case pairLogin:
+		return "login"
+	case pairOnboarding:
+		return "onboarding"
+	default:
+		return "hook_write"
+	}
+}
+
 type pairError struct {
 	stage pairStage
 	err   error
+	// secrets are what this pairing handled — the code, the verifier, the
+	// tokens Atlas handed back — for redacted() to scrub.
+	secrets []string
 }
 
 func (e *pairError) Error() string { return e.err.Error() }
 func (e *pairError) Unwrap() error { return e.err }
+
+// redacted is the error as ONE log line with every secret pair() handled, and
+// any the caller adds, replaced. An Atlas error body is quoted into the error
+// (api.checkStatus keeps 200 bytes of it), and Atlas may echo what it was sent.
+func (e *pairError) redacted(more ...string) string {
+	msg := strings.ReplaceAll(e.err.Error(), "\n", "; ")
+	for _, sec := range append(append([]string(nil), e.secrets...), more...) {
+		if sec != "" {
+			msg = strings.ReplaceAll(msg, sec, "[redacted]")
+		}
+	}
+	return msg
+}
 
 // pair is THE ONE WAY this daemon pairs itself with an Atlas: redeem the code
 // at base (with the PKCE verifier when the code came from a browser sign-in),
@@ -115,14 +144,14 @@ func (e *pairError) Unwrap() error { return e.err }
 func pair(base, code, verifier string) (*auth.AuthData, error) {
 	a, err := auth.LoginWithCodeVerifier(api.NewClient(base, ""), code, verifier)
 	if err != nil {
-		return nil, &pairError{stage: pairLogin, err: err}
+		return nil, &pairError{stage: pairLogin, err: err, secrets: []string{code, verifier}}
 	}
 	ob, err := api.NewClient(a.APIURL, a.AccessToken).Onboarding()
 	if err != nil {
-		return nil, &pairError{stage: pairOnboarding, err: err}
+		return nil, &pairError{stage: pairOnboarding, err: err, secrets: []string{code, verifier, a.AccessToken}}
 	}
 	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
-		return nil, &pairError{stage: pairHookWrite, err: err}
+		return nil, &pairError{stage: pairHookWrite, err: err, secrets: []string{code, verifier, a.AccessToken, ob.IngestToken}}
 	}
 	if f := onPaired.Load(); f != nil {
 		(*f)()

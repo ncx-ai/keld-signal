@@ -85,7 +85,7 @@ URL from its own query string.
   (nothing from the URL echoed), `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
   `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`.
 - `GET /v1/auth/state` (page secret) → `{"paired": bool, "principal": str|null, "org": str|null,
-  "first_run": bool, "pending": bool, "last_error": null|"not_started_here"|"expired"|"atlas_mismatch"|"atlas_off"|"atlas_error"}`.
+  "first_run": bool, "pending": bool, "last_error": null|"not_started_here"|"expired"|"atlas_mismatch"|"atlas_off"|"atlas_error"|"save_failed"}` (`save_failed`: Atlas finished, hook.json could not be written here).
   `first_run` = not paired AND `send_to_atlas` absent from agent-config.json AND `KELD_ATLAS` unset.
 - `paths.AtlasWebBase()` = `KELD_ATLAS_WEB_URL`, else `APIBase()`.
 - `auth.LoginWithCode` / the API client send `code_verifier` when given one.

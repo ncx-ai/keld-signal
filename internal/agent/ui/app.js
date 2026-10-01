@@ -535,7 +535,7 @@ export const SIGNIN_TEXT = {
   account: "Atlas account",
 };
 
-/** One plain sentence per reason a sign-in can end without pairing: the five
+/** One plain sentence per reason a sign-in can end without pairing: the six
  *  `last_error` codes contract C5 names, the start route's 409, and the two
  *  the page itself concludes (the daemon stopped answering; the attempt
  *  vanished with no reason). */
@@ -545,6 +545,9 @@ export const SIGNIN_ERROR_TEXT = {
   atlas_mismatch: "The browser came back from a different Atlas than the one this sign-in started with.",
   atlas_off: "Send to Atlas was turned off, so Signal refused the sign-in.",
   atlas_error: "Atlas could not finish the sign-in.",
+  // Atlas finished; writing hook.json on this machine did not. Blaming Atlas
+  // for it would send a person to the wrong place.
+  save_failed: "Signal couldn't save the sign-in on this computer.",
   send_to_atlas_is_off: "Send to Atlas is off. Turn it on in Settings to sign in.",
   unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
   abandoned: "This sign-in is no longer waiting.",
