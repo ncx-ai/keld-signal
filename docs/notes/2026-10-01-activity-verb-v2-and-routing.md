@@ -12,22 +12,62 @@ second-person check. Reproduce with the snippets in §6.
 
 | `activity_class` | share of requests | what the verb adds |
 |---|---|---|
-| `retrieve` | 29.4% | nothing — abstains |
-| `synthesize` | 19.9% | nothing — abstains |
+| `retrieve` | 30.1% | nothing — abstains |
+| `synthesize` | 18.6% | nothing — abstains |
 | `acknowledge` | 13.2% | nothing — abstains |
-| `operate` | 7.8% | nothing — excluded as not-work |
-| `unclassified` | 1.3% | nothing — abstains |
-| `verify` | 6.9% | a pure rename to `review` |
-| `delegate` | 1.5% | a pure rename to `plan` |
-| **`author_code`** | **16.0%** | **splits** into `code.write` / `code.edit` / neither |
+| `operate` | 7.9% | nothing — excluded as not-work |
+| `unclassified` | 1.4% | nothing — abstains |
+| `verify` | 7.2% | a pure rename to `review` |
+| `delegate` | 1.9% | a pure rename to `plan` |
+| **`author_code`** | **15.7%** | **splits** into `code.write` / `code.edit` / neither |
 | **`author_prose`** | **4.0%** | **splits** into `text.create` / `text.transform` / neither |
 
-So the verb **restates the class on 9% of requests, refines it on 20%, and is silent on 71%.**
+So the verb **restates the class on 9.1% of requests, refines it on 19.7%, and is silent on 71.2%.**
 ⚠️ **The create-vs-edit split is the only new information in the level.** A reader who treats
 `activity_verbs` as an independent classification of the work will double-count it against
 `activity_classes`.
 
-⚠️ **The verb distribution's total is NOT the block's request count.** It covers 24.3% of
+### 1a. The mapping, exactly
+
+`verbs.verb_for(cls, tools)` — all nine classes, with the condition each one turns on.
+`None` means **no row is emitted at all**, not an empty value.
+
+| `activity_class` | condition on the request's tools | → `activity_verb` |
+|---|---|---|
+| `verify` | — (unconditional) | `review` |
+| `delegate` | — (unconditional) | `plan` |
+| `author_code` | a `Write` is present | `code.write` |
+| `author_code` | an `Edit` / `MultiEdit` / `NotebookEdit`, and no `Write` | `code.edit` |
+| `author_code` | neither in evidence | **`None`** |
+| `author_prose` | a `Write` is present | `text.create` |
+| `author_prose` | an `Edit` / `MultiEdit` / `NotebookEdit`, and no `Write` | `text.transform` |
+| `author_prose` | neither in evidence | **`None`** |
+| `retrieve` | — | **`None`** (pending split, §2) |
+| `synthesize` | — | **`None`** (pending split, §2) |
+| `operate` | — | **`None`** (excluded: not work) |
+| `acknowledge` | — | **`None`** (excluded: not work) |
+| `unclassified` | — | **`None`** (an honest abstention, kept as one) |
+
+Four things in that table are decisions rather than mechanics, and each is load-bearing:
+
+- **Tool names are matched after stripping any MCP prefix** (`name.split("__")[-1]`), matching
+  `reqclass`. So `mcp__abc__Write` resolves. ⚠️ A reviewer mutated this line and found the suite
+  stayed green, so it is now pinned by its own test.
+- ⚠️ **`author_code` / `author_prose` with NEITHER tool returns `None` and does not guess.**
+  `classify_bash` and `CODE_TOOLS` both reach `author_code` with no authoring tool in evidence at
+  all (`python3 -c '...'`, `javascript_tool`), and `PROSE_TOOLS` reaches `author_prose` the same
+  way. Picking a side there would publish a false claim about someone's work from evidence that
+  does not contain the answer. It is 1.5% and 2.7% of requests respectively — not a rounding
+  error, and the reason the verb's coverage is 24.7% rather than 28.8%.
+- **A request carrying BOTH a create and an edit resolves to create.** Creating a new thing is
+  the larger claim about the work. The alternative was tool-list order deciding it, which made
+  the answer depend on an ordering nothing controls; a wrong-but-stable rule beats that. Pinned
+  from both orders by a test.
+- **A class that is not in the table returns `None`.** A tenth class added to `reqclass` would
+  therefore abstain silently, which is indistinguishable from a deliberate exclusion — so
+  `HANDLED == set(reqclass.CLASSES)` is asserted by a test and a new class fails loudly instead.
+
+⚠️ **The verb distribution's total is NOT the block's request count.** It covers 24.7% of
 requests. `activity_classes` is the complete denominator; normalising against the verb
 distribution reports shares of a subset as shares of the work.
 
