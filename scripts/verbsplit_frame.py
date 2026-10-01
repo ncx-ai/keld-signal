@@ -15,7 +15,7 @@ corpora can answer this question when they could not answer that one.
 frame reports that cell as empty rather than inventing rows for it.
 
 Corpus paths come from the environment and are NEVER hardcoded:
-    KELD_CORPUS_A, KELD_CORPUS_B   our transcript roots (both are `corpus: "ours"`)
+    KELD_CORPUS_A, KELD_CORPUS_B   our transcript roots (recorded separately as `corpus_a` / `corpus_b`)
     KELD_WILDCHAT                  the WildChat parquet shard
 Run WildChat access with the throwaway pyarrow venv (/tmp/claude-1000/wcvenv); never
 install pyarrow into the production sidecar venv.
@@ -30,7 +30,7 @@ from app.analysis import reqclass, transcript
 
 OUT = "/tmp/claude-1000/verbsplit/frame.ndjson"
 PRIOR_N = 5
-TARGET_PER_CELL = 40          # 4 cells: {ours,wildchat} x {synthesize,retrieve}
+TARGET_PER_CELL = 40          # cells: {corpus_a,corpus_b} x {synthesize,retrieve}, + wildchat/synthesize
 SEED = 20261001
 
 
@@ -53,7 +53,7 @@ def _requests_from(turns):
         yield i, reqclass.route_class(rec), tools, t["out"], text
 
 
-def collect(corpus, sessions, label=None):
+def collect(corpus, sessions):
     """sessions: iterable of (session_id, [turn dict, ...])."""
     rows = []
     for sid, turns in sessions:
@@ -63,9 +63,9 @@ def collect(corpus, sessions, label=None):
             if cls not in ("synthesize", "retrieve"):
                 continue
             rows.append({
-                # the id is salted by the SOURCE label so two roots cannot collide,
-                # while the published `corpus` field stays "ours" for both.
-                "id": _rid(label or corpus, sid, idx),
+                # the id is salted by the corpus so two roots cannot collide,
+                # and `corpus` records which person's transcripts it came from.
+                "id": _rid(corpus, sid, idx),
                 "corpus": corpus,
                 "cls": cls,
                 "tools": [[n, i] for n, i in tools],
@@ -125,13 +125,22 @@ def _wildchat_sessions():
 def main():
     rng = random.Random(SEED)
     allrows = []
-    allrows += collect("ours", _our_sessions("KELD_CORPUS_A"), label="A")
-    allrows += collect("ours", _our_sessions("KELD_CORPUS_B"), label="B")
+    allrows += collect("corpus_a", _our_sessions("KELD_CORPUS_A"))
+    allrows += collect("corpus_b", _our_sessions("KELD_CORPUS_B"))
     allrows += collect("wildchat", _wildchat_sessions())
 
     picked = []
-    for corpus in ("ours", "wildchat"):
-        for cls in ("synthesize", "retrieve"):
+    # ⚠️ THE WILDCHAT CELL CANNOT DISCRIMINATE, AND MUST NEVER BE READ AS VALIDATING A
+    # SPLITTER. The `synthesize` splitter's discriminator is "did retrieval precede this
+    # request"; chat has no tool calls, so no WildChat prior can contain `retrieve` (0 of 40
+    # measured, against 22 of 40 in the per-person cells) and the splitter structurally cannot
+    # answer `research` there. That cell only answers whether tool-free synthesis is really
+    # summarization. The real independence axis is corpus_a vs corpus_b: two different
+    # people's transcripts, a weaker holdout than a different distribution would be.
+    cells = [(c, k) for c in ("corpus_a", "corpus_b") for k in ("synthesize", "retrieve")]
+    cells.append(("wildchat", "synthesize"))
+    for corpus, cls in cells:
+        if True:
             cell = sorted((r for r in allrows if r["corpus"] == corpus and r["cls"] == cls),
                           key=lambda r: r["id"])           # order-independent shuffle input
             rng.shuffle(cell)
