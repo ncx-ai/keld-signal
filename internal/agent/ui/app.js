@@ -523,7 +523,8 @@ export const SIGNIN_TEXT = {
   waiting: "Finish signing in in your browser",
   // The link is ALWAYS shown (AC-1: "the page always shows the link too"); only
   // the sentence in front of it changes with whether the daemon managed to
-  // open a browser. A Linux service with no display is the common `false`.
+  // open a browser: `false` means KELD_AUTH_NO_BROWSER=1 or the opener failed to
+  // start. A machine with no display still STARTS xdg-open, so it reads `true`.
   linkOpened: "Browser didn't open? Use this link:",
   linkNotOpened: "Your browser didn't open. Open this link to finish:",
   linkLabel: "Open the Atlas sign-in page",
@@ -621,6 +622,11 @@ export function signinPollStep(auth, { startedAt, now, failures = 0 }) {
   }
   if (auth.pending) return { stop: false, status: "waiting", error: null };
   return { stop: true, status: "failed", error: auth.last_error || "abandoned" };
+}
+
+/** The sentence in front of the always-shown sign-in link. */
+export function signinLinkSentence(opened) {
+  return opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened;
 }
 
 export function signinErrorText(code) {
@@ -4135,7 +4141,7 @@ if (typeof document !== "undefined") {
           ? el(
               "span",
               { class: "signin-link" },
-              `${flow.opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened} `,
+              `${signinLinkSentence(flow.opened)} `,
               el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel),
               " ",
               copyLinkButton(flow.url)

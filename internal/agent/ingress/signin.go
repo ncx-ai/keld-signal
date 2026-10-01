@@ -193,7 +193,7 @@ func (s *signInStore) refuse(reason string, knownState bool) {
 	log.Printf("keld-agent: sign-in return refused (%s)", reason)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !knownState && s.pendingLocked() {
+	if !knownState && (s.completing > 0 || s.pendingLocked()) {
 		return
 	}
 	s.lastErr = reason

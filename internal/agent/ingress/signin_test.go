@@ -424,16 +424,22 @@ func TestStateStaysPendingWhileAReturnIsPairing(t *testing.T) {
 		done := make(chan struct{})
 		go func() { defer close(done); _, _ = h.callback(q(code, v.Get("state"))) }()
 		<-entered
+		// A forged return (a state this daemon never issued) lands while the
+		// real one is pairing: it must not record its refusal over the real one.
+		forged, _ := h.callback(q(code, "a-state-signal-never-issued-aaaaaaaaaaaaaaaa"))
 		mid := h.state()
 		close(release) // before any assertion, so a failing check cannot leave the server hung
 		<-done
+		if forged.StatusCode != http.StatusBadRequest {
+			t.Fatalf("fail=%v: the forged return must be refused, got %d", fail, forged.StatusCode)
+		}
 		if !mid.Pending || mid.Paired || mid.LastError != nil {
-			t.Fatalf("fail=%v: mid-pairing the page must still see a pending sign-in: %+v", fail, mid)
+			t.Fatalf("fail=%v: mid-pairing the page must still see a pending sign-in and no error: %+v", fail, mid)
 		}
 		st := h.state()
 		switch {
-		case fail && (st.Pending || st.Paired || st.LastError == nil):
-			t.Fatalf("after a failed pairing the page must see the error: %+v", st)
+		case fail && (st.Pending || st.Paired || st.LastError == nil || *st.LastError != signInAtlasError):
+			t.Fatalf("after a failed pairing the page must see the real error: %+v", st)
 		case !fail && (st.Pending || !st.Paired):
 			t.Fatalf("after pairing the page must see signed in: %+v", st)
 		}
@@ -679,8 +685,13 @@ func TestAuthStateWireShape(t *testing.T) {
 func TestSignInStoreEvictsTheOldestAndIsSingleUse(t *testing.T) {
 	now := time.Now()
 	s := newSignInStore(func() time.Time { return now }, nil)
+	// Literal numbers, so moving the cap fails here: four held, the fifth
+	// start evicts the oldest.
+	if maxPendingSignIns != 4 {
+		t.Fatalf("the cap is %d; the spec says 4", maxPendingSignIns)
+	}
 	var states []string
-	for i := 0; i < maxPendingSignIns+1; i++ {
+	for i := 0; i < 5; i++ {
 		e, err := s.begin("http://a")
 		if err != nil {
 			t.Fatal(err)
@@ -707,7 +718,16 @@ func TestSignInStoreExpiry(t *testing.T) {
 	now := time.Now()
 	s := newSignInStore(func() time.Time { return now }, nil)
 	e, _ := s.begin("http://a")
-	now = now.Add(pendingSignInTTL + time.Nanosecond)
+	if pendingSignInTTL != 10*time.Minute {
+		t.Fatalf("the pending TTL is %v; the spec says 10 minutes", pendingSignInTTL)
+	}
+	// One second short of ten minutes it still works; see the row just after.
+	probe, _ := s.begin("http://a")
+	now = now.Add(10*time.Minute - time.Second)
+	if _, ok, expired := s.take(probe.state); !ok || expired {
+		t.Fatalf("at 10m-1s: ok=%v expired=%v, want found and not expired", ok, expired)
+	}
+	now = now.Add(time.Second + time.Nanosecond)
 	if s.pending() {
 		t.Fatal("an expired sign-in is not pending")
 	}

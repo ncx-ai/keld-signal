@@ -15,6 +15,7 @@ import {
   SIGNIN_GIVE_UP_MS,
   SIGNIN_MAX_POLL_FAILURES,
   SIGNIN_DONE_LINGER_MS,
+  signinLinkSentence,
 } from "../app.js";
 
 // GET /v1/auth/state (contract C5): {paired, principal, org, first_run, pending, last_error}.
@@ -252,4 +253,10 @@ test("copyText falls back to the selection copy when the clipboard refuses", asy
 test("copyText says false when nothing could copy", async () => {
   assert.equal(await copyText("u", { clipboard: null, fallback: () => false }), false);
   assert.equal(await copyText("", { clipboard: { writeText: async () => {} } }), false);
+});
+
+test("the link's sentence says whether the browser opened; the link shows either way", () => {
+  assert.equal(signinLinkSentence(true), "Browser didn't open? Use this link:");
+  assert.equal(signinLinkSentence(false), "Your browser didn't open. Open this link to finish:");
+  assert.equal(signinLinkSentence(undefined), "Your browser didn't open. Open this link to finish:");
 });

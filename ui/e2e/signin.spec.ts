@@ -103,6 +103,17 @@ test.describe("Web sign-in", () => {
     await expect(restartBar.getByRole("button", { name: "Restart" })).toBeEnabled();
   });
 
+  test("KELD_ATLAS=0 pins Send to Atlas off: Settings' Sign in is disabled and says why", async ({ page, harness }) => {
+    await harness.stopDaemon();
+    await harness.startDaemon({ KELD_ATLAS: "0" });
+    await page.goto(harness.pageURL("settings"));
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await expect(tile.getByRole("button", { name: "Sign in with Atlas" })).toBeDisabled();
+    await expect(tile.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
+    // The env var already chose, so the first-open choice never shows either.
+    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+  });
+
   test("Send to Atlas on but never signed in: the not-signed-in bar signs in", async ({ page, harness }) => {
     // Decision-table row 3: send_to_atlas set to true by hand, not paired.
     await harness.stopDaemon();

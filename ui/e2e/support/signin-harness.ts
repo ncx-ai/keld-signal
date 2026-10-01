@@ -150,7 +150,7 @@ export class SigninHarness {
   /** Start (or restart) the daemon on this harness's home. Resolves once the
    *  NEW daemon answers its page routes with its NEW secret — agent.json is
    *  rewritten with a fresh secret and a fresh random port on every start. */
-  async startDaemon(): Promise<Daemon> {
+  async startDaemon(extraEnv: Record<string, string> = {}): Promise<Daemon> {
     if (!this.apiURL) throw new Error("start the mock Atlas (or useAtlas) first");
     const infoPath = path.join(this.home, "agent.json");
     const prevSecret = this.readAgentJSON()?.secret || "";
@@ -165,6 +165,8 @@ export class SigninHarness {
       KELD_TELEMETRY_PORT: this.telemetryPort,
       KELD_AUTOUPDATE: "0",
       KELD_WATCH_POLL: "2s",
+      // Last, so a test can set a variable the defaults above leave alone (KELD_ATLAS=0).
+      ...extraEnv,
     };
     this.agent = spawn(AGENT_BIN, ["run"], { stdio: ["ignore", "pipe", "pipe"], env });
     this.agent.stdout?.on("data", (d) => this.log.write(d));
