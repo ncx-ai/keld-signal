@@ -333,7 +333,8 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #   21 -> 22: `/analyze` and `/blocks` gain `activity_verbs` and `activity_verb_tokens`. (The earlier
 #           `activity_class` addition missed its bump, so 21 does not separate payloads with/without it.)
 #   22 -> 23: `/analyze` and `/blocks` gain `file_actions` (`<action>:<ext>`, e.g. `edit:.tsx`).
-SCHEMA = 23
+#   23 -> 24: `/analyze` and `/blocks` gain `file_action_tokens` (`file_actions` weighted by output tokens).
+SCHEMA = 24
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

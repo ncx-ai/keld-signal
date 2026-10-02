@@ -158,6 +158,10 @@ type WindowAnalysis struct {
 	// `<action>:<ext>` (`edit:.tsx`, `read:.jpg`, `create:(none)`). Extension only, never
 	// a path. The vocabulary is OPEN, so `inventory_omitted` can name this level.
 	FileActions []NameCount
+	// FileActionTokens is FileActions weighted by the turn's OUTPUT TOKENS rather than counted
+	// per call; the two denominators diverge up to 5.58x (`read:.md` 8.4% of calls, 1.5% of
+	// tokens). ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
+	FileActionTokens []NameCount
 
 	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
 	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative

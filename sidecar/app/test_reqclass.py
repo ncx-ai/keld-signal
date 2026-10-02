@@ -63,6 +63,12 @@ def test_file_actions_is_an_open_inventory_dimension_capped_at_twelve():
     assert entry and entry[0][1] == "file_action" and entry[0][2] == 12, entry
     assert "file_action" in PRECOMPUTED_LEVELS
 
+
+def test_file_action_tokens_is_an_inventory_dimension_capped_at_twelve():
+    entry = [e for e in INVENTORY if e[0] == "file_action_tokens"]
+    assert entry and entry[0][1] == "file_action_tokens" and entry[0][2] == 12, entry
+    assert "file_action_tokens" in PRECOMPUTED_LEVELS
+
 def test_unclassified_is_a_real_value_not_a_default():
     # ⚠️ The failure this pins has happened twice in this project: `atv1`'s `other`
     # at 38.8% and an `operate` fallthrough at 57.5%, both of which looked healthy

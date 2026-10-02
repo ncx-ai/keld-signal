@@ -71,6 +71,6 @@
   "extractor_versions": {
     "workstreams": "workstreams-v22"
   },
-  "schema_version": 28,
+  "schema_version": 29,
   "ts": "2026-09-01T10:20:05Z"
 }

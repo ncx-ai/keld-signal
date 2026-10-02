@@ -474,6 +474,8 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "activity_verb_tokens", _verb, _vout)
 
         paths = []
+        _fa_seen = set()
+        _fa_out = int((o.usage or {}).get("output_tokens") or 0)
         for call in o.tool_calls:
             name, inp = call.name, call.input
             act = action_for(tool=name)
@@ -491,8 +493,28 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             if act and o.role != "user":
                 _fp = next((inp[k] for k in PATH_INPUTS if isinstance(inp, dict) and inp.get(k)), None)
                 if _fp:
-                    add("ref", "file_action",
-                        f"{act}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}", 1)
+                    _fav = f"{act}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}"
+                    add("ref", "file_action", _fav, 1)
+                    # `file_action_tokens` -- the same value, weighted by the turn's OUTPUT
+                    # TOKENS instead of counted once per call. The two denominators disagree:
+                    # across both corpora on 14,102 path-carrying calls `read:.md` is 8.4% of
+                    # calls but 1.5% of output tokens (0.18x), `read:.png` 3.6% vs 0.8%, while
+                    # `edit:.tsx` sits at 0.99x; the largest divergence among pairs with n>=50
+                    # is 5.58x, LARGER than the up-to-3x `activity_class_tokens` documents. A
+                    # consumer holding only counts would report a block as dominated by reading
+                    # documentation when editing consumed the output.
+                    # The value is computed ONCE above and shared, so the two levels cannot
+                    # drift. Output is PER TURN, so, as `system_*_tokens` does, a value is
+                    # charged ONCE PER DISTINCT VALUE per turn (`_fa_seen`): three edits of
+                    # `.tsx` in one turn are one request and one output budget. Distinct values
+                    # in one turn are each charged the full turn output (double-attributed,
+                    # never split), so these rows do not sum to the block total. No row at 0
+                    # output tokens, as `activity_class_tokens`.
+                    # ⚠️ NOT A COST FIGURE -- output is 10-14% of modelled cost, the rest
+                    # being cache reads.
+                    if _fa_out and _fav not in _fa_seen:
+                        _fa_seen.add(_fav)
+                        add("ref", "file_action_tokens", _fav, _fa_out)
             # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
             # per turn, because the count of edits is precisely the useless predictor this
             # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from

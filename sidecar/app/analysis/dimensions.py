@@ -268,6 +268,9 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # (52 and 58 distinct pairs across the two corpora), so truncation is real and
              # `inventory_omitted` can legitimately name this level.
              ("file_actions", "file_action", 12),
+             # `file_action_tokens` -- the same values weighted by the turn's output tokens;
+             # same cap and the same open-vocabulary caveat as `file_actions`.
+             ("file_action_tokens", "file_action_tokens", 12),
              # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
              # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
              #

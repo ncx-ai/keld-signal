@@ -81,6 +81,7 @@ type AnalysisFacets struct {
 	ActivityVerbs        []enrich.NameCount `json:"activity_verbs,omitempty"`
 	ActivityVerbTokens   []enrich.NameCount `json:"activity_verb_tokens,omitempty"`
 	FileActions          []enrich.NameCount `json:"file_actions,omitempty"`
+	FileActionTokens     []enrich.NameCount `json:"file_action_tokens,omitempty"`
 	SystemCategories     []enrich.NameCount `json:"system_categories,omitempty"`
 	SystemActions        []enrich.NameCount `json:"system_actions,omitempty"`
 	SystemVendors        []enrich.NameCount `json:"system_vendors,omitempty"`
@@ -126,6 +127,7 @@ func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 		ActivityVerbs:        a.ActivityVerbs,
 		ActivityVerbTokens:   a.ActivityVerbTokens,
 		FileActions:          a.FileActions,
+		FileActionTokens:     a.FileActionTokens,
 		SystemCategories:     a.SystemCategories,
 		SystemActions:        a.SystemActions,
 		SystemVendors:        a.SystemVendors,

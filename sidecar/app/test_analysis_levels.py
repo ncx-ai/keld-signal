@@ -294,6 +294,39 @@ def test_a_user_turn_emits_no_file_action():
         assert not _fa(rows), rows
 
 
+def _fat(rows):
+    return sorted((r[7], r[8]) for r in rows if r[6] == "file_action_tokens")
+
+
+def test_file_action_tokens_carries_the_turns_output_weight():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 77)
+        assert _fat(rows) == [("edit:.tsx", 77)], rows
+
+
+def test_zero_output_tokens_emits_no_file_action_tokens_but_still_file_action():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 0)
+        assert not _fat(rows), rows
+        assert _fa(rows) == ["edit:.tsx"], rows
+
+
+def test_file_action_and_file_action_tokens_share_one_value_string():
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, f in (("Edit", "a.tsx"), ("Read", "b.md"), ("Write", "c"), ("Read", "D.PNG")):
+            rows = _verb_rows(tmp, "assistant", _tool(name, {"file_path": f}), 9)
+            assert _fa(rows) == [v for v, _ in _fat(rows)] and _fa(rows), rows
+
+
+def test_repeated_value_in_one_turn_is_charged_once_per_turn():
+    """Follows system_*_tokens: one turn is one output budget, not one per call."""
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = [{"type": "tool_use", "name": "Edit", "id": f"t{i}", "input": {"file_path": f"{i}.tsx"}}
+                 for i in range(3)]
+        rows = _verb_rows(tmp, "assistant", calls, 50)
+        assert _fa(rows) == ["edit:.tsx"] * 3 and _fat(rows) == [("edit:.tsx", 50)], rows
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
