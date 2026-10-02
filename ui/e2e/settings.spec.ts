@@ -15,8 +15,7 @@ test.describe("Settings", () => {
     // KELD_ATLAS=0 pins it, and the page says so next to the control.
     await expect(input).toBeDisabled();
     await expect(page.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
-    await expect(page.getByText("Local only", { exact: true })).toBeVisible();
-    await expect(page.getByText("Send to Atlas: on")).toHaveCount(0);
+    await expect(page.locator("#envPill")).toHaveText("Local");
   });
 
   // ⚠️ **THIS ASSERTED THE CONTROL WAS VISIBLE, AND IT IS NOW HIDDEN ON

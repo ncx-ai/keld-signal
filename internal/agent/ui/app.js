@@ -586,13 +586,16 @@ export function showFirstRun(auth) {
   return !!auth && auth.first_run === true && auth.paired !== true;
 }
 
-/** The top bar's Send to Atlas pill, or "" to hide it. Hidden while the
- *  first-open choice is up: the pill states a choice, and on that screen
- *  nobody has made one yet — "Send to Atlas: on" there reads as a decision
- *  already taken for them, right beside the button that takes it. */
-export function envPillText(settings, auth) {
-  if (!settings || showFirstRun(auth)) return "";
-  return atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
+/** The top bar's label: where this machine's data goes, or null to hide it.
+ *  `icon` is "local" or "cloud"; a cloud label names the Atlas environment
+ *  when it is not production ("Atlas dev", "Atlas local"), set with
+ *  `keld signal env`. Hidden while the first-open choice is up: the label
+ *  states a choice, and on that screen nobody has made one yet. */
+export function envPill(settings, auth) {
+  if (!settings || showFirstRun(auth)) return null;
+  if (!atlasEnabled(settings)) return { icon: "local", text: "Local" };
+  const name = settings.atlas_env && settings.atlas_env.name;
+  return { icon: "cloud", text: name && name !== "prod" ? `Atlas ${name}` : "Atlas" };
 }
 
 /** What the bar above every pane shows: "flow" (a sign-in in progress or just
@@ -4531,11 +4534,19 @@ if (typeof document !== "undefined") {
     return parts[parts.length - 1] || String(remote || "");
   }
 
+  const ENV_ICONS = {
+    local: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5V10H3zM1.5 12.5h13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    cloud: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 12.5a3 3 0 0 1-.4-6A4 4 0 0 1 11.8 6a3.25 3.25 0 0 1 .2 6.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  };
   function renderEnvPill() {
     const pill = document.getElementById("envPill");
-    const text = state.offline ? envPillText(state.settings, null) : envPillText(state.settings, state.auth);
-    pill.hidden = text === "";
-    pill.textContent = text;
+    const label = state.offline ? envPill(state.settings, null) : envPill(state.settings, state.auth);
+    pill.hidden = !label;
+    pill.innerHTML = "";
+    if (label) {
+      const icon = el("span", { class: "env-icon", html: ENV_ICONS[label.icon] });
+      pill.append(icon.firstChild, el("span", {}, label.text));
+    }
     renderGenerateButton();
   }
 

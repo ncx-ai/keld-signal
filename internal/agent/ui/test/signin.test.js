@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   copyText,
-  envPillText,
+  envPill,
   showFirstRun,
   signinBarMode,
   signinPollStep,
@@ -208,22 +208,33 @@ test("the first-open copy is the wireframe's", () => {
 
 // --- the "Send to Atlas" pill in the top bar ---
 
-test("envPillText: no pill while the first-open choice is up — nobody has chosen yet", () => {
-  assert.equal(envPillText({ send_to_atlas: true }, auth({ first_run: true })), "");
-  assert.equal(envPillText({ send_to_atlas: false }, auth({ first_run: true })), "");
+test("envPill: no label while the first-open choice is up — nobody has chosen yet", () => {
+  assert.equal(envPill({ send_to_atlas: true }, auth({ first_run: true })), null);
+  assert.equal(envPill({ send_to_atlas: false }, auth({ first_run: true })), null);
 });
 
-test("envPillText: once a choice exists the pill says what it is", () => {
-  assert.equal(envPillText({ send_to_atlas: true }, auth({ first_run: false })), "Send to Atlas: on");
-  assert.equal(envPillText({ send_to_atlas: false }, auth({ first_run: false })), "Local only");
-  // A paired machine never shows the choice, so its pill stays.
-  assert.equal(envPillText({ send_to_atlas: true }, auth({ paired: true, first_run: true })), "Send to Atlas: on");
+test("envPill: once a choice exists the label says where the data goes", () => {
+  const atlas = { icon: "cloud", text: "Atlas" };
+  assert.deepEqual(envPill({ send_to_atlas: true }, auth({ first_run: false })), atlas);
+  assert.deepEqual(envPill({ send_to_atlas: false }, auth({ first_run: false })), { icon: "local", text: "Local" });
+  // A paired machine never shows the choice, so its label stays.
+  assert.deepEqual(envPill({ send_to_atlas: true }, auth({ paired: true, first_run: true })), atlas);
   // An older daemon with no /v1/auth/state is not a first run.
-  assert.equal(envPillText({ send_to_atlas: true }, null), "Send to Atlas: on");
+  assert.deepEqual(envPill({ send_to_atlas: true }, null), atlas);
 });
 
-test("envPillText: no settings yet, no pill", () => {
-  assert.equal(envPillText(null, auth()), "");
+test("envPill: a non-production Atlas is named; production and local-only are not", () => {
+  const on = (name) => ({ send_to_atlas: true, atlas_env: { name } });
+  assert.deepEqual(envPill(on("prod"), auth()), { icon: "cloud", text: "Atlas" });
+  assert.deepEqual(envPill(on("dev"), auth()), { icon: "cloud", text: "Atlas dev" });
+  assert.deepEqual(envPill(on("local"), auth()), { icon: "cloud", text: "Atlas local" });
+  assert.deepEqual(envPill(on("custom"), auth()), { icon: "cloud", text: "Atlas custom" });
+  // Nothing is sent, so which Atlas is configured does not matter here.
+  assert.deepEqual(envPill({ send_to_atlas: false, atlas_env: { name: "dev" } }, auth()), { icon: "local", text: "Local" });
+});
+
+test("envPill: no settings yet, no label", () => {
+  assert.equal(envPill(null, auth()), null);
 });
 
 test("a sign-in that could not be saved here is this computer's failure, not Atlas's", () => {

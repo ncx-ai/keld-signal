@@ -31,7 +31,7 @@ test.describe("First open", () => {
     // Local only is a choice, not a fault: no not-signed-in bar.
     await expect(page.locator("#signinBanner")).toBeHidden();
     // Once chosen, the top bar says what was chosen.
-    await expect(page.locator("#envPill")).toHaveText("Local only");
+    await expect(page.locator("#envPill")).toHaveText("Local");
 
     await page.reload();
     await expect(page.getByText("Loading…")).toBeHidden();

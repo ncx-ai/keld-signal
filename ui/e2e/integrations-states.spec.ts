@@ -574,7 +574,7 @@ test.describe("Developer · extended tool telemetry (OTLP)", () => {
   test("the row is not reachable until developer mode is on", async ({ page, shell }) => {
     await openSettings(page, shell);
     // The Atlas box is drawn; the developer rows under it are not.
-    await expect(page.getByText("Atlas", { exact: true })).toBeVisible();
+    await expect(page.locator("#paneRoot").getByText("Atlas", { exact: true })).toBeVisible();
     await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(0);
     await expect(page.getByText("Developer", { exact: true })).toHaveCount(0);
 
