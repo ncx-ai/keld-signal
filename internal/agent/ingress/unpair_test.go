@@ -87,17 +87,22 @@ func TestUnpairOnAnUnpairedMachineChangesNothing(t *testing.T) {
 }
 
 func TestUnpairRefusesAPairingSetByTheEnvironment(t *testing.T) {
-	u := newUnpairH(t)
-	writePairing(t)
-	t.Setenv("KELD_CTX_TOKEN", "from-env")
-	code, body := u.do(t)
-	if code != http.StatusConflict || body["error"] != "pairing_set_by_env" {
-		t.Fatalf("unpair with an env pairing: %d %v", code, body)
+	// Either variable alone names the pairing, so each is checked on its own.
+	for _, name := range []string{"KELD_CTX_TOKEN", "KELD_CTX_ENDPOINT"} {
+		t.Run(name, func(t *testing.T) {
+			u := newUnpairH(t)
+			writePairing(t)
+			t.Setenv(name, "from-env")
+			code, body := u.do(t)
+			if code != http.StatusConflict || body["error"] != "pairing_set_by_env" {
+				t.Fatalf("unpair with %s set: %d %v", name, code, body)
+			}
+			if _, err := os.Stat(paths.HookConfigPath()); err != nil {
+				t.Fatalf("hook.json must survive a refused unpair: %v", err)
+			}
+			waitRestarts(t, u.restarts, 0)
+		})
 	}
-	if _, err := os.Stat(paths.HookConfigPath()); err != nil {
-		t.Fatalf("hook.json must survive a refused unpair: %v", err)
-	}
-	waitRestarts(t, u.restarts, 0)
 }
 
 func TestUnpairRefusesWhileASignInIsWaiting(t *testing.T) {
