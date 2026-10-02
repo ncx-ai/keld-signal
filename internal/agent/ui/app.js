@@ -516,7 +516,6 @@ export const SIGNIN_TEXT = {
   localOnly: "Use without an account",
   firstRunTitle: "Welcome to Signal",
   // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
-  welcomeEyebrow: "Keld Signal",
   welcomeHeadA: "See where your",
   welcomeHeadB: "AI work goes",
   welcomeLede:
@@ -4276,9 +4275,14 @@ if (typeof document !== "undefined") {
     '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
     '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v4c0 3-2.2 5.3-5 6.4-2.8-1.1-5-3.4-5-6.4v-4z M5.8 8l1.6 1.6L10.4 6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
   ];
-  // The K mark, as the app icon draws it (app/src-tauri/icons/src/keld-k-small-white.svg).
-  const KELD_K =
-    '<svg viewBox="0 0 160.93 150" aria-hidden="true"><path d="M53.13 86 5.85 49.06M53.13 0v150" fill="none" stroke="currentColor" stroke-width="19"/><path d="m126.63 90.9 34.2 59.1h-28.1l-22.8-39.3-14 16.7V150H71.53V0h24.4v89.5L129.03 50h31.9" fill="currentColor"/></svg>';
+  // The sidebar's own brand node, so the logo sits in exactly the same place
+  // before and after the choice is made.
+  function welcomeBrand() {
+    const src = document.querySelector(".nav .brand");
+    const node = src ? src.cloneNode(true) : el("div", { class: "brand" }, "Keld Signal");
+    node.classList.add("welcome-brand");
+    return node;
+  }
   function renderFirstRun(root) {
     root.innerHTML = "";
     const err = settingsErrorFor("send_to_atlas");
@@ -4293,10 +4297,10 @@ if (typeof document !== "undefined") {
         "section",
         { class: "welcome", "aria-label": SIGNIN_TEXT.firstRunTitle },
         canvas,
+        welcomeBrand(),
         el(
           "div",
           { class: "welcome-inner" },
-          el("div", { class: "welcome-eyebrow" }, el("span", { class: "welcome-mark", html: KELD_K }), el("span", { class: "welcome-eyebrow-text" }, SIGNIN_TEXT.welcomeEyebrow)),
           el("h1", { class: "welcome-head" }, SIGNIN_TEXT.welcomeHeadA, el("br", {}), el("span", {}, SIGNIN_TEXT.welcomeHeadB)),
           el("p", { class: "welcome-lede" }, SIGNIN_TEXT.welcomeLede),
           el(

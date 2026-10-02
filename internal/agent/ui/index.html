@@ -13,7 +13,11 @@
 <body>
 <div id="app" class="shell">
   <aside class="nav" aria-label="Keld Signal">
-    <div class="brand">Keld Signal</div>
+    <!-- The app header's left half: the K mark (as the app icon draws it,
+         app/src-tauri/icons/src/keld-k-small-white.svg) and the name. The
+         welcome screen clones this node, so the brand never moves between the
+         two. -->
+    <div class="brand"><span class="brand-mark"><svg viewBox="0 0 160.93 150" aria-hidden="true"><path d="M53.13 86 5.85 49.06M53.13 0v150" fill="none" stroke="currentColor" stroke-width="19"/><path d="m126.63 90.9 34.2 59.1h-28.1l-22.8-39.3-14 16.7V150H71.53V0h24.4v89.5L129.03 50h31.9" fill="currentColor"/></svg></span><span>Keld Signal</span></div>
     <nav aria-label="Panes">
       <a href="#/overview" data-pane="overview">Overview</a>
       <a href="#/focus" data-pane="today">Focus blocks</a>
