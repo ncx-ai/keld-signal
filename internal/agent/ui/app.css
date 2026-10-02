@@ -321,20 +321,7 @@ body.is-welcome .pane-root { padding: 0; }
   text-wrap: balance;
 }
 .welcome-head span { color: var(--green); }
-.welcome-lede { margin: 0 0 18px; max-width: 540px; font-size: 17.5px; line-height: 1.55; color: var(--ink-2); }
-.welcome-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 28px;
-  padding: 4px 10px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: rgba(255, 254, 251, .8);
-  font-size: 13px;
-  color: var(--ink);
-}
-.welcome-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.welcome-lede { margin: 0 0 28px; max-width: 540px; font-size: 17.5px; line-height: 1.55; color: var(--ink-2); }
 .welcome-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .welcome-actions .btn { padding: 12px 22px; font-size: 14.5px; border-radius: 3px; }
 .welcome .btn.welcome-primary { background: var(--green); color: var(--on-dark); border: 1px solid var(--green); }

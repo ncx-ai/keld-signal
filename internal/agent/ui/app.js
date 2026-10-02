@@ -517,7 +517,6 @@ export const SIGNIN_TEXT = {
   later: "You can sign in later from Settings.",
   localNote: "Local only: nothing leaves this computer.",
   firstRunTitle: "Welcome to Signal",
-  firstRunLead: "Signal is already collecting on this computer.",
   firstRunBody: "Sign in to send it to your company's Atlas, or keep everything here.",
   // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
   welcomeEyebrow: "Keld Signal",
@@ -4300,7 +4299,6 @@ if (typeof document !== "undefined") {
           el("div", { class: "welcome-eyebrow" }, SIGNIN_TEXT.welcomeEyebrow),
           el("h1", { class: "welcome-head" }, SIGNIN_TEXT.welcomeHeadA, el("br", {}), el("span", {}, SIGNIN_TEXT.welcomeHeadB)),
           el("p", { class: "welcome-lede" }, SIGNIN_TEXT.welcomeLede),
-          el("p", { class: "welcome-live" }, el("span", { class: "dot" }), SIGNIN_TEXT.firstRunLead),
           el(
             "div",
             { class: "welcome-actions" },

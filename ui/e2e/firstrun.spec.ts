@@ -9,7 +9,7 @@ test.describe("First open", () => {
     for (const pane of ["today", "projects", "settings"]) {
       await page.goto(harness.pageURL(pane));
       await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
-      await expect(page.getByText("Signal is already collecting on this computer.")).toBeVisible();
+      await expect(page.getByText("Signal is already collecting on this computer.")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Use locally only" })).toBeVisible();
       await expect(page.getByText("You can sign in later from Settings.")).toBeVisible();
