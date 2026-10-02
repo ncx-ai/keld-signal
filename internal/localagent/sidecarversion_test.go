@@ -36,7 +36,7 @@ func TestDoctorSidecarVersionSkew(t *testing.T) {
 	if !strings.Contains(line, "2.3.0") || !strings.Contains(line, "2.2.1") {
 		t.Errorf("the line must name BOTH versions: %q", line)
 	}
-	if !strings.Contains(line, "onboard.command") {
+	if !strings.Contains(line, "keld signal install-sidecar --tag v2.3.0") {
 		t.Errorf("the remedy must be the installer — `keld signal restart` cannot fix the "+
 			"wrong artifact being on disk: %q", line)
 	}

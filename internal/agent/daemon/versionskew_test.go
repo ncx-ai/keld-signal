@@ -71,9 +71,10 @@ func TestSidecarVersionSkewEvent(t *testing.T) {
 		t.Errorf("the log line must name BOTH versions, or a reader cannot tell which "+
 			"half to move: %q", line)
 	}
-	if !strings.Contains(line, "installer") {
-		t.Errorf("the remedy must be the INSTALLER: restarting the daemon fixes nothing "+
-			"when the wrong artifact is on disk. got: %q", line)
+	if !strings.Contains(line, "keld signal install-sidecar --tag v2.3.0") {
+		t.Errorf("the remedy must REPLACE the sidecar, pinned to this agent's release: "+
+			"restarting the daemon fixes nothing when the wrong artifact is on disk, and "+
+			"/usr/local/keld/onboard.command no longer ships. got: %q", line)
 	}
 }
 
