@@ -540,8 +540,6 @@ export const SIGNIN_TEXT = {
   copied: "Copied",
   copyFailed: "Couldn't copy — select the link instead",
   tryAgain: "Try again",
-  notSignedIn: "Not signed in to Atlas.",
-  notSignedInBody: "Signal is collecting on this machine and sends it once you sign in.",
   notSignedInSettings: "Not signed in.",
   turnsAtlasOn: "Signing in turns Send to Atlas on.",
   account: "Atlas account",
@@ -599,9 +597,9 @@ export function envPill(settings, auth) {
 }
 
 /** What the bar above every pane shows: "flow" (a sign-in in progress or just
- *  failed, from wherever it was started), "done" (a confirmation that lingers),
- *  "prompt" (not signed in while Send to Atlas is on) or null. Local only is a
- *  choice, not a fault, so it gets no bar; Settings keeps Sign in. */
+ *  failed, from wherever it was started), "done" (a confirmation that lingers)
+ *  or null. Not being signed in is never a bar of its own: the top bar's label
+ *  says where data goes, and Settings keeps Sign in. */
 export function signinBarMode(auth, settings, flow, now) {
   // The first-open screen carries its own sign-in progress; a second copy of
   // it in a bar above would be the same sentence twice.
@@ -609,8 +607,7 @@ export function signinBarMode(auth, settings, flow, now) {
   const status = (flow && flow.status) || "idle";
   if (status === "starting" || status === "waiting" || status === "failed") return "flow";
   if (status === "done" && now - (flow.doneAt || 0) < SIGNIN_DONE_LINGER_MS) return "done";
-  if (!auth || auth.paired) return null;
-  return atlasEnabled(settings) ? "prompt" : null;
+  return null;
 }
 
 /** One poll's verdict: keep polling, or stop as done/failed with a reason.
@@ -4258,13 +4255,6 @@ if (typeof document !== "undefined") {
     node.hidden = !mode;
     node.className = "signin-banner" + (mode ? ` ${mode}` : "");
     if (!mode) return;
-    if (mode === "prompt") {
-      node.appendChild(
-        el("div", { class: "signin-copy" }, el("strong", {}, SIGNIN_TEXT.notSignedIn), el("span", {}, SIGNIN_TEXT.notSignedInBody))
-      );
-      node.appendChild(el("button", { class: "btn", type: "button", onclick: () => startSignin() }, SIGNIN_TEXT.signIn));
-      return;
-    }
     const flow = signinFlowNode();
     if (flow) node.appendChild(flow);
   }

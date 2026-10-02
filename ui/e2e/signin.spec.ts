@@ -131,7 +131,7 @@ test.describe("Web sign-in", () => {
     assertPaired(harness);
   });
 
-  test("Send to Atlas on but never signed in: the not-signed-in bar signs in", async ({ page, harness }) => {
+  test("Send to Atlas on but never signed in: no bar nags, and Settings signs in", async ({ page, harness }) => {
     // Decision-table row 3: send_to_atlas set to true by hand, not paired.
     await harness.stopDaemon();
     const cfgPath = path.join(harness.home, "agent-config.json");
@@ -141,8 +141,10 @@ test.describe("Web sign-in", () => {
     await page.goto(harness.pageURL("today"));
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     const bar = page.locator("#signinBanner");
-    await expect(bar.getByText("Not signed in to Atlas.")).toBeVisible();
-    await bar.getByRole("button", { name: "Sign in with Atlas" }).click();
+    await expect(bar).toBeHidden();
+    await page.goto(harness.pageURL("settings"));
+    await expect(bar).toBeHidden();
+    await page.locator(".tile", { hasText: "Atlas account" }).getByRole("button", { name: "Sign in with Atlas" }).click();
     await expect(bar.getByText("Finish signing in in your browser")).toBeVisible();
     await finishInBrowser(page);
     await expect(bar.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });

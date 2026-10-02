@@ -60,8 +60,8 @@ const atlasOn = { send_to_atlas: true };
 const atlasOff = { send_to_atlas: false };
 const idle = { status: "idle" };
 
-test("unpaired with Send to Atlas on and no choice screen -> the not-signed-in prompt (table row 3)", () => {
-  assert.equal(signinBarMode(auth(), atlasOn, idle, 0), "prompt");
+test("unpaired with Send to Atlas on -> no bar: not being signed in is never a bar of its own", () => {
+  assert.equal(signinBarMode(auth(), atlasOn, idle, 0), null);
 });
 
 test("unpaired and local only -> no bar: that was a choice, Settings keeps Sign in (table row 2)", () => {
