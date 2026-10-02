@@ -72,10 +72,23 @@ type AnalysisFacets struct {
 	// dimension that says work was DELEGATED, and the SERVER where Integrations
 	// is the tool. Absent when the span used nothing in that dimension; never
 	// an empty list.
-	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
-	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
-	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
-	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
+	FileTypes            []enrich.NameCount `json:"file_types,omitempty"`
+	ShellVerbs           []enrich.NameCount `json:"shell_verbs,omitempty"`
+	Subagents            []enrich.NameCount `json:"subagents,omitempty"`
+	McpServers           []enrich.NameCount `json:"mcp_servers,omitempty"`
+	ActivityClasses      []enrich.NameCount `json:"activity_classes,omitempty"`
+	ActivityClassTokens  []enrich.NameCount `json:"activity_class_tokens,omitempty"`
+	ActivityVerbs        []enrich.NameCount `json:"activity_verbs,omitempty"`
+	ActivityVerbTokens   []enrich.NameCount `json:"activity_verb_tokens,omitempty"`
+	FileActions          []enrich.NameCount `json:"file_actions,omitempty"`
+	FileActionTokens     []enrich.NameCount `json:"file_action_tokens,omitempty"`
+	FileKinds            []enrich.NameCount `json:"file_kinds,omitempty"`
+	FileKindTokens       []enrich.NameCount `json:"file_kind_tokens,omitempty"`
+	SystemCategories     []enrich.NameCount `json:"system_categories,omitempty"`
+	SystemActions        []enrich.NameCount `json:"system_actions,omitempty"`
+	SystemVendors        []enrich.NameCount `json:"system_vendors,omitempty"`
+	SystemCategoryTokens []enrich.NameCount `json:"system_category_tokens,omitempty"`
+	SystemVendorTokens   []enrich.NameCount `json:"system_vendor_tokens,omitempty"`
 	// InventoryOmitted is the cut-visibility map beside the inventories above —
 	// same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
@@ -95,24 +108,37 @@ type AnalysisFacets struct {
 // itself exists.
 func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 	return AnalysisFacets{
-		Dimensions:       a.Dimensions,
-		Dynamics:         a.Dynamics,
-		Effort:           a.Effort,
-		PhysicalActs:     a.PhysicalActs,
-		Files:            a.Files,
-		Directories:      a.Directories,
-		Components:       a.Components,
-		HarnessTools:     a.HarnessTools,
-		Programs:         a.Programs,
-		ExternalSystems:  a.ExternalSystems,
-		Integrations:     a.Integrations,
-		NamedTerms:       a.NamedTerms,
-		FileTypes:        a.FileTypes,
-		ShellVerbs:       a.ShellVerbs,
-		Subagents:        a.Subagents,
-		McpServers:       a.McpServers,
-		InventoryOmitted: a.InventoryOmitted,
-		Prior:            a.Prior,
+		Dimensions:           a.Dimensions,
+		Dynamics:             a.Dynamics,
+		Effort:               a.Effort,
+		PhysicalActs:         a.PhysicalActs,
+		Files:                a.Files,
+		Directories:          a.Directories,
+		Components:           a.Components,
+		HarnessTools:         a.HarnessTools,
+		Programs:             a.Programs,
+		ExternalSystems:      a.ExternalSystems,
+		Integrations:         a.Integrations,
+		NamedTerms:           a.NamedTerms,
+		FileTypes:            a.FileTypes,
+		ShellVerbs:           a.ShellVerbs,
+		Subagents:            a.Subagents,
+		McpServers:           a.McpServers,
+		ActivityClasses:      a.ActivityClasses,
+		ActivityClassTokens:  a.ActivityClassTokens,
+		ActivityVerbs:        a.ActivityVerbs,
+		ActivityVerbTokens:   a.ActivityVerbTokens,
+		FileActions:          a.FileActions,
+		FileActionTokens:     a.FileActionTokens,
+		FileKinds:            a.FileKinds,
+		FileKindTokens:       a.FileKindTokens,
+		SystemCategories:     a.SystemCategories,
+		SystemActions:        a.SystemActions,
+		SystemVendors:        a.SystemVendors,
+		SystemCategoryTokens: a.SystemCategoryTokens,
+		SystemVendorTokens:   a.SystemVendorTokens,
+		InventoryOmitted:     a.InventoryOmitted,
+		Prior:                a.Prior,
 	}
 }
 

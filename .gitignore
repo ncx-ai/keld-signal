@@ -54,3 +54,8 @@ installers/windows/keld-wizard-host.exe
 installers/windows/keld-agent-sidecar/
 installers/windows/Output/
 installers/windows/keld-agent-wizardtest.iss
+
+# SDD subagent scratch: per-plan ledgers, task briefs and implementer reports.
+# Internal process artifacts, not repo content — three task reports reached a PR
+# via `git add -A` before this line existed.
+.superpowers/

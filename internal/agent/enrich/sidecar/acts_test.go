@@ -147,7 +147,7 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 // `mcp_servers`.
 //
 // WITH NOTHING WITHHELD, THE STRUCT IS STILL THE MECHANISM, and this test is why
-// it keeps working: it asserts the field count EXACTLY, so a fourteenth key the
+// it keeps working: it asserts the field count EXACTLY, so an eighteenth key the
 // sidecar starts emitting cannot be decoded without failing here first and being
 // argued for. "Nothing is withheld today" is not the same as "anything may be
 // added tomorrow".
@@ -158,14 +158,152 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		"harness_tools": false, "programs": false, "external_systems": false, "integrations": false,
 		"named_terms": false,
 		"file_types":  false, "shell_verbs": false, "subagents": false, "mcp_servers": false,
+		// THE FOURTEENTH, AND ITS ARGUMENT, since this guard exists to demand one.
+		//
+		// `activity_classes` is not another thing counted from tool-call metadata like
+		// the thirteen above -- it is a DISTRIBUTION over the unit's inference requests
+		// of which model CAPABILITY each one stressed. It earns a key rather than
+		// riding an existing one because no other dimension answers it: `harness_tools`
+		// says WHICH tool ran, `physical_acts` says what kind of act it was, and
+		// neither says whether the model had to AUTHOR the thing it acted on, which is
+		// the only part a router can act on.
+		//
+		// It is here rather than as a facet because it is computed at INGEST from the
+		// same tool-call metadata every other level is, needs no model, and must be a
+		// distribution: measured across two corpora, above ~20 requests no unit is
+		// coherent enough for a single label while the distribution stays distinctive.
+		//
+		// ⚠️ Its cap is the WHOLE vocabulary (9), so unlike every other inventory it can
+		// never be truncated -- a cut distribution is a wrong one, not a shorter one.
+		"activity_classes": false,
+		// THE FIFTEENTH, AND ITS ARGUMENT.
+		//
+		// `activity_class_tokens` is the SAME nine values as the key above, weighted by
+		// output tokens instead of counted. It is a separate key rather than a richer
+		// item shape because `window.rollup` sums a level's `n`, so a second level costs
+		// no new machinery and no change to `NameCount` -- and because every other
+		// inventory on this wire is {name, n}, so widening that struct for one dimension
+		// would make fourteen consumers handle a field only one of them populates.
+		//
+		// It earns a key because the two denominators DISAGREE, and not slightly: on one
+		// real block `author_prose` is 9.4% of calls and 25.8% of output tokens, while
+		// `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer given only counts
+		// reports that block as retrieval-dominated when prose authoring consumed the
+		// output. Publishing one denominator is choosing which of those a reader sees.
+		//
+		// ⚠️ It is NOT a cost figure and must not be rendered as one: output is 10-14% of
+		// modelled cost, the rest being cache reads at roughly a tenth the price.
+		"activity_class_tokens": false,
+		// THE SIXTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_categories` says WHICH KIND OF VENDOR PRODUCT the work ran through --
+		// `issue_tracking`, `crm_sales`, `hr_people`. It earns a key because nothing
+		// else on this wire answers it: `activity_classes` says what CAPABILITY was
+		// stressed and is silent about where, `external_systems` says which HOST was
+		// contacted and is a raw string that is mostly loopback, and `integrations`
+		// names an MCP tool without saying what kind of thing it is.
+		//
+		// ⚠️ IT IS A DECLARATIVE LOOKUP, NOT AN INFERENCE, and that is why it may ship
+		// on evidence neither corpus can supply. That Workday is an HR system is true
+		// by construction. Both corpora here are engineering work and one holds zero
+		// MCP calls in 499 sessions, so the orgs this dimension is FOR are exactly the
+		// ones they cannot speak for -- which is also why `unrecognized` is a published
+		// VALUE: a thin answer must read as unknown coverage, never as an org touching
+		// nothing.
+		//
+		// ⚠️ It is strictly LESS identifying than the `external_systems` it sits beside:
+		// a category names no host, no environment and no org. This adds a coarser view
+		// of evidence already crossing, not a new exposure.
+		"system_categories": false,
+		// THE SEVENTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_actions` pairs that category with WHAT WAS DONE inside the system --
+		// `issue_tracking:create` against `issue_tracking:read`. Creating tickets and
+		// reading them are not the same work, and the category alone cannot tell them
+		// apart.
+		//
+		// ⚠️ It is NOT reconstructable by joining `system_categories` with
+		// `activity_classes`, which is the obvious objection to a second key. That class
+		// is ONE label per inference REQUEST, covering every tool the request issued, so
+		// a request that fetches a Notion page and then greps a file has a single class
+		// and no way to say which of its tools the verb belonged to. Pairing at the
+		// reference is what keeps them attached.
+		//
+		// ⚠️ MCP-only, so it is SPARSER than the key above and that is not a defect: a
+		// URL host names a system and no action, and a second verb vocabulary parsed out
+		// of shell commands would start disagreeing with the one `shell.py` already
+		// derives for the same call. An unknown verb publishes the CATEGORY and no
+		// action rather than a guess -- a wrong verb is a false statement about what
+		// someone did in a system of record.
+		"system_actions": false,
+		// THE EIGHTEENTH, AND ITS ARGUMENT.
+		//
+		// `system_vendors` names the PRODUCT inside the category -- `issue_tracking:jira`
+		// rather than `issue_tracking`. The obvious objection is that the vendor already
+		// crosses: `mcp_servers` publishes the bare brand, `external_systems` the raw host.
+		//
+		// ⚠️ THAT OBJECTION IS THE ARGUMENT. This adds NO new information -- it adds the
+		// PAIRING, which is not derivable downstream at any price because vendor ->
+		// category lives only in the sidecar's table. A consumer wanting "Issue tracker:
+		// Jira" must either receive the pair or keep its own copy of that table, and a
+		// copy is the thing to avoid: the table's whole operational value is that it grows
+		// client-side as connectors appear, and two copies drift in silence.
+		//
+		// ⚠️ A SUBDOMAIN NEVER CROSSES, the one privacy edge in this group. Enterprise
+		// SaaS hosts each customer on its own subdomain (`acme.atlassian.net`), so the
+		// first label is frequently the CUSTOMER'S OWN NAME. The vendor half is always a
+		// token from the table, never a slice of the host, pinned end to end by a test
+		// that publishes such URLs and asserts the subdomain appears in no published value.
+		//
+		// ⚠️ An UNRECOGNISED system publishes nothing here, unlike its siblings: the level
+		// means "we can name this", and that something could not be named is already said
+		// by `system_categories`.
+		"system_vendors": false,
+		// THE NINETEENTH AND TWENTIETH, AND THEIR ARGUMENT.
+		//
+		// The same two dimensions weighted by OUTPUT TOKENS rather than counted: how much
+		// the model WROTE while working in that system. They earn keys for the reason
+		// `activity_class_tokens` does -- `window.rollup` sums a level's `n`, so a weight
+		// needs a second level rather than a wider item shape, and the level's NAME is
+		// what says which denominator it carries.
+		//
+		// ⚠️ OUTPUT ONLY, MEASURED. Across 970 system-touching requests in two corpora the
+		// median uncached input is 2 tokens against a median cache_read of 355,776 --
+		// input is ~100% the conversation prefix replayed -- and total input rises 9.0x
+		// between a session's first ten turns and turn 50+ for the same kinds of call. A
+		// total-token figure would report a late Jira call as consuming nine times an
+		// early one for identical work. That is session depth wearing a vendor's name, and
+		// it is why the request to publish totals was answered with output.
+		//
+		// ⚠️ THEY DO NOT SUM TO THE BLOCK TOTAL and no consumer may treat them as shares.
+		// A call touching two systems counts fully toward both. Splitting would invent a
+		// ratio with nothing behind it -- the model did not spend half its output on each
+		// -- and the over-count double-attribution admits is bounded and small: 97.3% of
+		// system-touching requests touch exactly one system, 2.7% touch more.
+		"system_category_tokens": false,
+		"system_vendor_tokens":   false,
+		// THE TWENTY-FIRST AND TWENTY-SECOND: the atv1 VERB of each request as a
+		// distribution, and the same weighted by output tokens. DERIVED from
+		// activity_class by lookup (analysis/verbs.py), so they carry no evidence the
+		// class rows do not; five of nine classes publish no verb, so the total is not
+		// the block's request count.
+		"activity_verbs":       false,
+		"activity_verb_tokens": false,
+		// THE TWENTY-THIRD: the act joined to the file extension it touched. Open vocabulary.
+		"file_actions": false,
+		// THE TWENTY-FOURTH: `file_actions` weighted by output tokens, the sibling of the verb pair.
+		"file_action_tokens": false,
+		// THE TWENTY-FIFTH AND TWENTY-SIXTH: `file_actions` one level coarser, and its token weight.
+		"file_kinds":       false,
+		"file_kind_tokens": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all thirteen inventory keys and no others should be "+
-			"decodable — a fourteenth needs its own argument, not a silent field", names)
+		t.Fatalf("InventoryBlock models %v; all twenty-six inventory keys and no others should be "+
+			"decodable — a twenty-seventh needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")

@@ -144,6 +144,18 @@ type Enrichment struct {
 	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
 	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
 	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
+	// ⚠️ activity_classes / activity_class_tokens (and likewise activity_verbs /
+	// activity_verb_tokens) are DELIBERATELY ABSENT here and
+	// live on the BLOCK row only (publish.AnalysisFacets, via facetsOf).
+	//
+	// This is a per-PROMPT row and its window facets cover the 60 MINUTES ENDING AT
+	// THAT PROMPT, so consecutive prompts' windows OVERLAP: a busy hour with ten
+	// prompts yields ten windows over largely the same requests. A distribution here
+	// therefore cannot be summed, averaged or aggregated by any consumer, and a
+	// field whose only correct use needs that warning is one somebody eventually
+	// sums without it. Blocks tile the ACTIVE part of a session and do not overlap,
+	// so they can carry it; the block cutter's span is 20 minutes, which is also the
+	// span this level was measured at.
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped. It is the visibility the truncation
 	// lacked before this: the pre-existing inventory dimensions truncated

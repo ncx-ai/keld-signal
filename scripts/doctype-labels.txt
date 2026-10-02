@@ -1,0 +1,67 @@
+# BLIND LABELS for the document-type study.
+# Assigned from filename + first 40 lines ONLY. No signature table existed when these were
+# written — Task 3 creates it, and this file is committed first, which git proves.
+# Labeller and signature author are the same party, so this ORDER is the only thing
+# preventing the signatures from being fitted to the answers.
+#
+# <id> <type>    type in: readme design_spec adr runbook postmortem meeting_notes changelog plan other
+877f6cc514 readme
+d600a8a632 plan
+c264da4fe8 other
+db75685094 other
+b65260b420 other
+fc5271a1fc other
+17dac784af other
+a0d4968022 other
+63413ca2ab other
+81320791e7 other
+8d506bcb69 other
+fa6b570588 other
+259c3d9eba design_spec
+32a7dc611a other
+95420502c7 other
+9cf4f7b80b other
+a5687164e7 design_spec
+0f9e6c824b other
+6ec7d4acb2 plan
+4b087dcbf9 other
+178a959bee other
+235f38cd87 other
+951e772364 other
+c7356dd1c2 plan
+48ff81d9c1 other
+fe8640f049 other
+6d0da2b15f other
+21798daa4b other
+4dd708effd other
+59705a0c49 other
+79583a107e other
+9a723805df readme
+9b664f7ece design_spec
+ce8385c45e runbook
+867307e514 plan
+59d027762b other
+aab6c467f8 other
+a9e5d01250 other
+9692182f47 other
+32331306d0 other
+5c0ba8a295 other
+576b7193e1 other
+cdc11021a2 other
+c529ad02c8 other
+234e581d5e other
+4eb6842dca other
+f7235fae39 design_spec
+c96673e22d design_spec
+99ba7ccf77 other
+5e71a39908 other
+7c16096b0c other
+10e29d7b28 other
+e6bded8b5f runbook
+cd0618e693 plan
+752d3818ec other
+e31780fdcd other
+a8a3676b4f readme
+a8d46b4697 other
+a3699b82db other
+2ef1073ac1 design_spec

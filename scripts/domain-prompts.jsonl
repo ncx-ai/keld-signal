@@ -1,0 +1,127 @@
+{"_comment": "LABELLED PROMPT SET for the GLiNER2 domain-discernment spike. Committed BEFORE any model runs. Each record: {id, domain, tier, text}. TIER IS THE EXPERIMENT: 'obvious' prompts contain the domain's giveaway vocabulary; 'oblique' prompts describe the SAME work without it. A model that only scores on 'obvious' is a keyword matcher, and we would implement that in 50 lines without a 1.9GB dependency. Written by Claude, so these carry the author's own tells -- synthetic accuracy is an UPPER BOUND, never a prediction for real prompts."}
+{"id": "mk01", "domain": "marketing", "tier": "obvious", "text": "Draft a campaign brief for our Q4 product launch. Include target personas, the key message, and channel mix across paid social and email."}
+{"id": "mk02", "domain": "marketing", "tier": "obvious", "text": "Our open rate on the last three newsletters dropped from 24% to 15%. Suggest subject line A/B tests we could run."}
+{"id": "mk03", "domain": "marketing", "tier": "obvious", "text": "Write five ad headlines for a retargeting campaign aimed at people who abandoned the pricing page."}
+{"id": "mk04", "domain": "marketing", "tier": "obvious", "text": "Summarise this competitor's positioning from their homepage copy and tell me where our messaging overlaps."}
+{"id": "mk05", "domain": "marketing", "tier": "obvious", "text": "We need a content calendar for the next six weeks. Two blog posts a week, each tied to a keyword we're trying to rank for."}
+{"id": "mk06", "domain": "marketing", "tier": "obvious", "text": "Rewrite this landing page hero so it leads with the outcome rather than the feature list."}
+{"id": "mk07", "domain": "marketing", "tier": "obvious", "text": "Build a UTM naming convention we can use consistently across all paid channels."}
+{"id": "mk08", "domain": "marketing", "tier": "oblique", "text": "Nobody noticed the thing we shipped last month. Help me figure out how to tell people about it in a way that doesn't sound like every other announcement."}
+{"id": "mk09", "domain": "marketing", "tier": "oblique", "text": "I have to write something for the Tuesday send. The last few got ignored. What would make someone actually open it?"}
+{"id": "mk10", "domain": "marketing", "tier": "oblique", "text": "Our words on the website say what the product does. They don't say why anyone would care. Fix the top section."}
+{"id": "mk11", "domain": "marketing", "tier": "oblique", "text": "People get to the page where we say how much it costs, then they leave. Give me a few lines we could put in front of them afterwards."}
+{"id": "mk12", "domain": "marketing", "tier": "oblique", "text": "Plan out what we write about for the next month and a half, so each piece targets something people are searching for."}
+{"id": "mk13", "domain": "marketing", "tier": "oblique", "text": "Look at how this other company describes themselves and tell me where we sound the same."}
+{"id": "mk14", "domain": "marketing", "tier": "oblique", "text": "We tag links inconsistently so nothing lines up in reporting. Design a scheme everyone can follow."}
+{"id": "fn01", "domain": "financial", "tier": "obvious", "text": "Reconcile the September general ledger against the bank statement and flag anything over $500 that doesn't match."}
+{"id": "fn02", "domain": "financial", "tier": "obvious", "text": "Build a three-statement model for the next eight quarters assuming 15% revenue growth and flat headcount."}
+{"id": "fn03", "domain": "financial", "tier": "obvious", "text": "Explain the variance between budgeted and actual opex for Q3, broken out by cost centre."}
+{"id": "fn04", "domain": "financial", "tier": "obvious", "text": "Draft the revenue recognition policy for our new annual contracts with monthly delivery."}
+{"id": "fn05", "domain": "financial", "tier": "obvious", "text": "Calculate our current runway given the burn in the last two months and $4.2M in the bank."}
+{"id": "fn06", "domain": "financial", "tier": "obvious", "text": "Prepare the schedule of deferred revenue for the auditors, by contract and by month."}
+{"id": "fn07", "domain": "financial", "tier": "obvious", "text": "Review these invoices for duplicate payments to the same vendor in the same period."}
+{"id": "fn08", "domain": "financial", "tier": "oblique", "text": "The numbers from the bank and the numbers in our books don't agree for last month. Help me find where they diverge."}
+{"id": "fn09", "domain": "financial", "tier": "oblique", "text": "If we keep spending at the rate of the last two months and we have 4.2 million left, when do we run out?"}
+{"id": "fn10", "domain": "financial", "tier": "oblique", "text": "We said we'd spend X on the team last quarter and we spent Y. I need to explain the gap to the board, broken down by which group overspent."}
+{"id": "fn11", "domain": "financial", "tier": "oblique", "text": "Customers pay us for a year up front but we deliver monthly. Write up how we should count that as earned."}
+{"id": "fn12", "domain": "financial", "tier": "oblique", "text": "Project what the next two years look like if we grow 15% a quarter and don't hire anyone."}
+{"id": "fn13", "domain": "financial", "tier": "oblique", "text": "Go through these and tell me if we paid the same company twice for the same thing."}
+{"id": "fn14", "domain": "financial", "tier": "oblique", "text": "The people checking our books want a breakdown of money we've taken but not yet earned, by agreement and by month."}
+{"id": "sl01", "domain": "sales", "tier": "obvious", "text": "Write a cold outreach sequence of four emails for VPs of Engineering at Series B startups."}
+{"id": "sl02", "domain": "sales", "tier": "obvious", "text": "This prospect went dark after the demo. Draft a break-up email that gives them an easy way back in."}
+{"id": "sl03", "domain": "sales", "tier": "obvious", "text": "Summarise this discovery call transcript into pain points, budget signals, and next steps."}
+{"id": "sl04", "domain": "sales", "tier": "obvious", "text": "Our pipeline shows 40 opportunities in stage 2 and only 3 in stage 4. What questions should I ask the reps?"}
+{"id": "sl05", "domain": "sales", "tier": "obvious", "text": "Build an objection handling doc for the three pricing pushbacks we hear most."}
+{"id": "sl06", "domain": "sales", "tier": "obvious", "text": "Draft a mutual action plan to send the champion after a successful technical evaluation."}
+{"id": "sl07", "domain": "sales", "tier": "obvious", "text": "Score these inbound leads against our ICP and tell me which three to call first."}
+{"id": "sl08", "domain": "sales", "tier": "oblique", "text": "Someone seemed keen, sat through the whole walkthrough, and then stopped replying. Write something that makes it easy for them to say they're not interested."}
+{"id": "sl09", "domain": "sales", "tier": "oblique", "text": "I recorded an hour with a potential customer. Pull out what hurts for them, whether they have money, and what we agreed to do next."}
+{"id": "sl10", "domain": "sales", "tier": "oblique", "text": "Lots of people start talking to us and almost nobody gets near signing. What should I be asking the team?"}
+{"id": "sl11", "domain": "sales", "tier": "oblique", "text": "Write four messages I can send, one after another, to people who run engineering at companies that just raised money and have never heard of us."}
+{"id": "sl12", "domain": "sales", "tier": "oblique", "text": "Three things come up every time money is discussed. Write me something to say back to each."}
+{"id": "sl13", "domain": "sales", "tier": "oblique", "text": "Here are twenty people who filled in the form. Which ones look most like the customers we already do well with?"}
+{"id": "sl14", "domain": "sales", "tier": "oblique", "text": "The technical side went well. Write them a shared plan with dates so it doesn't drift."}
+{"id": "lg01", "domain": "legal", "tier": "obvious", "text": "Review this MSA and flag any indemnification clauses that are broader than our standard terms."}
+{"id": "lg02", "domain": "legal", "tier": "obvious", "text": "Draft a mutual NDA for a vendor evaluation, governed by Delaware law, two year term."}
+{"id": "lg03", "domain": "legal", "tier": "obvious", "text": "Summarise the termination and auto-renewal provisions across these five customer contracts."}
+{"id": "lg04", "domain": "legal", "tier": "obvious", "text": "Does this data processing addendum meet GDPR Article 28 requirements for sub-processors?"}
+{"id": "lg05", "domain": "legal", "tier": "obvious", "text": "Redline this SOW to cap our liability at fees paid in the preceding twelve months."}
+{"id": "lg06", "domain": "legal", "tier": "obvious", "text": "What notice period do we owe under this lease if we want to exit early?"}
+{"id": "lg07", "domain": "legal", "tier": "obvious", "text": "Compare the IP assignment language in this contractor agreement against our employee template."}
+{"id": "lg08", "domain": "legal", "tier": "oblique", "text": "Go through this agreement and tell me where we'd be on the hook for more than we usually accept."}
+{"id": "lg09", "domain": "legal", "tier": "oblique", "text": "We're about to talk to a supplier about something confidential. Write the document both sides sign first, two years, Delaware."}
+{"id": "lg10", "domain": "legal", "tier": "oblique", "text": "Across these five agreements, when can each side walk away and what rolls over automatically if nobody says anything?"}
+{"id": "lg11", "domain": "legal", "tier": "oblique", "text": "Change this so the most we could ever owe them is what they've paid us in the last year."}
+{"id": "lg12", "domain": "legal", "tier": "oblique", "text": "If we want out of this building early, how much warning do we have to give?"}
+{"id": "lg13", "domain": "legal", "tier": "oblique", "text": "Who ends up owning what someone builds for us under this arrangement, compared to someone we employ directly?"}
+{"id": "lg14", "domain": "legal", "tier": "oblique", "text": "This document covers how a supplier handles personal information for us. Does it say everything the European rules require about them using others underneath?"}
+{"id": "md01", "domain": "medical", "tier": "obvious", "text": "Summarise this patient's discharge notes into a problem list with active diagnoses and current medications."}
+{"id": "md02", "domain": "medical", "tier": "obvious", "text": "Draft a prior authorisation letter to the insurer justifying continued infliximab therapy."}
+{"id": "md03", "domain": "medical", "tier": "obvious", "text": "What are the contraindications for prescribing an ACE inhibitor to a patient with bilateral renal artery stenosis?"}
+{"id": "md04", "domain": "medical", "tier": "obvious", "text": "Map these free-text diagnoses to ICD-10 codes and flag any that are ambiguous."}
+{"id": "md05", "domain": "medical", "tier": "obvious", "text": "Write patient-facing instructions for post-operative care after an arthroscopic meniscectomy, at a sixth grade reading level."}
+{"id": "md06", "domain": "medical", "tier": "obvious", "text": "Summarise the inclusion and exclusion criteria from this clinical trial protocol."}
+{"id": "md07", "domain": "medical", "tier": "obvious", "text": "Review this chart note for documentation gaps that would affect the E/M level billed."}
+{"id": "md08", "domain": "medical", "tier": "oblique", "text": "Turn these notes from when they left the ward into a short list of what's currently wrong with them and what they're taking for it."}
+{"id": "md09", "domain": "medical", "tier": "oblique", "text": "Someone has narrowing in the arteries to both kidneys. Why would you not give them this class of blood pressure drug?"}
+{"id": "md10", "domain": "medical", "tier": "oblique", "text": "The insurer wants justification for keeping them on the same drug. Write the letter."}
+{"id": "md11", "domain": "medical", "tier": "oblique", "text": "Take these written descriptions of what's wrong with each person and match them to the standard codes, flagging anything unclear."}
+{"id": "md12", "domain": "medical", "tier": "oblique", "text": "Write what someone should do at home after keyhole knee surgery, in plain language a child could follow."}
+{"id": "md13", "domain": "medical", "tier": "oblique", "text": "Who can and can't be enrolled in this study? Pull it out of the protocol."}
+{"id": "md14", "domain": "medical", "tier": "oblique", "text": "Check this visit record for anything missing that would change what we can charge for the appointment."}
+{"id": "sc01", "domain": "scientific", "tier": "obvious", "text": "Summarise the methods section of this paper and tell me whether the sample size was powered for the effect they claim."}
+{"id": "sc02", "domain": "scientific", "tier": "obvious", "text": "Help me write the limitations paragraph for a study with a 14% attrition rate and no active control arm."}
+{"id": "sc03", "domain": "scientific", "tier": "obvious", "text": "What's the appropriate correction for multiple comparisons across 40 independent hypothesis tests?"}
+{"id": "sc04", "domain": "scientific", "tier": "obvious", "text": "Draft a response to reviewer two, who says our instrument lacks construct validity."}
+{"id": "sc05", "domain": "scientific", "tier": "obvious", "text": "Design a pre-registration for an experiment comparing two annotation protocols, including the stopping rule."}
+{"id": "sc06", "domain": "scientific", "tier": "obvious", "text": "Extract the reported effect sizes and confidence intervals from these twelve abstracts into a table."}
+{"id": "sc07", "domain": "scientific", "tier": "obvious", "text": "Is a mixed effects model with random intercepts per subject appropriate for this repeated measures design?"}
+{"id": "sc08", "domain": "scientific", "tier": "oblique", "text": "They ran 40 separate tests and reported the ones that came out significant. What should they have done about that?"}
+{"id": "sc09", "domain": "scientific", "tier": "oblique", "text": "Read how they did it and tell me whether they had enough participants to find what they say they found."}
+{"id": "sc10", "domain": "scientific", "tier": "oblique", "text": "14% of people dropped out and there was no group that got nothing. Write the paragraph where we admit what that means."}
+{"id": "sc11", "domain": "scientific", "tier": "oblique", "text": "Write down exactly what we expect to find and when we'll stop collecting, before we start."}
+{"id": "sc12", "domain": "scientific", "tier": "oblique", "text": "Someone says our questionnaire doesn't measure what we claim it measures. Help me answer them."}
+{"id": "sc13", "domain": "scientific", "tier": "oblique", "text": "Pull the numbers and the ranges around them out of these twelve summaries and put them in a table."}
+{"id": "sc14", "domain": "scientific", "tier": "oblique", "text": "Each person was measured several times. Should the model let every person have their own baseline?"}
+{"id": "sp01", "domain": "support", "tier": "obvious", "text": "Draft a macro for tickets where the customer can't log in because their SSO session expired."}
+{"id": "sp02", "domain": "support", "tier": "obvious", "text": "Our first response time went from 2 hours to 9 hours last week. Help me work out which queues caused it."}
+{"id": "sp03", "domain": "support", "tier": "obvious", "text": "Write a public status page update for a partial outage affecting file uploads in the EU region."}
+{"id": "sp04", "domain": "support", "tier": "obvious", "text": "Summarise the top five ticket drivers this month and which ones look like product bugs rather than user error."}
+{"id": "sp05", "domain": "support", "tier": "obvious", "text": "This customer is escalating for the third time. Draft a response that acknowledges the history without over-promising."}
+{"id": "sp06", "domain": "support", "tier": "obvious", "text": "Write a help centre article explaining how to rotate an API key, with screenshots noted as placeholders."}
+{"id": "sp07", "domain": "support", "tier": "obvious", "text": "Build a triage rubric so agents route billing questions separately from technical ones."}
+{"id": "sp08", "domain": "support", "tier": "oblique", "text": "People are waiting nine hours to hear back from us when it used to be two. Help me find out where the delay is."}
+{"id": "sp09", "domain": "support", "tier": "oblique", "text": "Uploads are broken for people in Europe but working elsewhere. Write what we put on the public page."}
+{"id": "sp10", "domain": "support", "tier": "oblique", "text": "Same person, third time complaining. Write back in a way that shows we know, without committing to anything we can't do."}
+{"id": "sp11", "domain": "support", "tier": "oblique", "text": "What are people writing in about most this month, and which of those are actually our fault?"}
+{"id": "sp12", "domain": "support", "tier": "oblique", "text": "Write the standard reply for when someone's signed-in session has run out and they can't get back in."}
+{"id": "sp13", "domain": "support", "tier": "oblique", "text": "Write the page that explains how someone swaps out their key, note where pictures go."}
+{"id": "sp14", "domain": "support", "tier": "oblique", "text": "Give the team a way to decide whether a question is about money or about the product, so it goes to the right place."}
+{"id": "op01", "domain": "operations", "tier": "obvious", "text": "Build a standard operating procedure for onboarding a new vendor, including the approval chain."}
+{"id": "op02", "domain": "operations", "tier": "obvious", "text": "Our warehouse pick accuracy is 94%. Map the process and tell me where errors are most likely introduced."}
+{"id": "op03", "domain": "operations", "tier": "obvious", "text": "Draft an incident postmortem template that separates contributing factors from root cause."}
+{"id": "op04", "domain": "operations", "tier": "obvious", "text": "We have three suppliers for the same component with different lead times. Build a reorder policy."}
+{"id": "op05", "domain": "operations", "tier": "obvious", "text": "Summarise this quarter's headcount plan into a hiring sequence with dependencies."}
+{"id": "op06", "domain": "operations", "tier": "obvious", "text": "Write the runbook for the monthly close process, naming the owner of each step."}
+{"id": "op07", "domain": "operations", "tier": "obvious", "text": "Audit our approval thresholds — anything over what amount should require two signatures?"}
+{"id": "op08", "domain": "operations", "tier": "oblique", "text": "Six out of a hundred items get picked wrong. Walk through how the job actually gets done and tell me where it goes wrong."}
+{"id": "op09", "domain": "operations", "tier": "oblique", "text": "Write down the steps for bringing on a new supplier, including who has to sign off at each point."}
+{"id": "op10", "domain": "operations", "tier": "oblique", "text": "We buy the same part from three places and each takes a different amount of time to arrive. When should we order from whom?"}
+{"id": "op11", "domain": "operations", "tier": "oblique", "text": "Make a template for writing up what went wrong afterwards, that keeps what caused it separate from what made it worse."}
+{"id": "op12", "domain": "operations", "tier": "oblique", "text": "Turn the plan for who we're hiring this quarter into an order, showing which roles need to come first."}
+{"id": "op13", "domain": "operations", "tier": "oblique", "text": "Write down every step of what we do at the end of each month and who is responsible for each one."}
+{"id": "op14", "domain": "operations", "tier": "oblique", "text": "Above what amount should two people have to say yes before money goes out?"}
+{"id": "en01", "domain": "engineering", "tier": "obvious", "text": "This goroutine leaks when the context is cancelled mid-write. Find where the channel isn't drained."}
+{"id": "en02", "domain": "engineering", "tier": "obvious", "text": "Refactor this handler so the database transaction is committed before the webhook fires, not after."}
+{"id": "en03", "domain": "engineering", "tier": "obvious", "text": "Write a migration that adds a partial index on (org_id, created_at) where deleted_at is null."}
+{"id": "en04", "domain": "engineering", "tier": "obvious", "text": "The test passes locally and fails in CI. Diff the environments and tell me what's different."}
+{"id": "en05", "domain": "engineering", "tier": "obvious", "text": "Add retry with exponential backoff to this HTTP client, but only for idempotent methods."}
+{"id": "en06", "domain": "engineering", "tier": "obvious", "text": "Profile this endpoint — p99 went from 80ms to 1.2s after the last deploy."}
+{"id": "en07", "domain": "engineering", "tier": "obvious", "text": "Review this pull request for race conditions in the cache invalidation path."}
+{"id": "en08", "domain": "engineering", "tier": "oblique", "text": "It works on my machine and breaks on the build server. Help me work out what's different between the two."}
+{"id": "en09", "domain": "engineering", "tier": "oblique", "text": "The thing that notifies the other service is firing before we've actually saved the record. Swap the order."}
+{"id": "en10", "domain": "engineering", "tier": "oblique", "text": "Requests used to come back in under a tenth of a second and now take over a second. Figure out what changed."}
+{"id": "en11", "domain": "engineering", "tier": "oblique", "text": "When we give up halfway through writing, something stays running and never stops. Find it."}
+{"id": "en12", "domain": "engineering", "tier": "oblique", "text": "If a call fails, try again after a wait that doubles each time — but only when trying twice is safe."}
+{"id": "en13", "domain": "engineering", "tier": "oblique", "text": "Look over these changes and tell me whether two things could clear the stored copy at the same time and leave it wrong."}
+{"id": "en14", "domain": "engineering", "tier": "oblique", "text": "Add a lookup shortcut covering the owner and the creation time, but only for rows that haven't been removed."}

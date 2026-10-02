@@ -9,18 +9,35 @@ import os
 import re
 from datetime import datetime
 
-from app.analysis import magnitude, terms
+from app.analysis import filekinds, magnitude, terms
 from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
 from app.analysis.readers import coerce
 from app.analysis.shell import bash_refs
+from app.analysis import systems
 from app.analysis.text import is_command_echo
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
+from . import reqclass
+from . import verbs as atv1_verbs  # not `verbs`: events_for_turns has a local of that name
 
 LEVELS = ["workspace", "workspace_evidence", "repo", "repo_from_text", "repo_mentioned", "vcs",
           "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
           "mcp_tool", "term"]
+# ⚠️ `system_category`, `system_action`, `activity_class` and `activity_class_tokens` are
+# EMITTED but deliberately ABSENT from LEVELS, and the omission is load-bearing rather than an
+# oversight. LEVELS is not "every level"; it is the set that contributes SHAPE STATISTICS to the
+# feature vector, and `features.DIMS` is computed as len(LEVELS) * len(SHAPE_STATS) per shell.
+# Registering a level here therefore widens the frozen manifest -- adding these two moved
+# per-shell 288 -> 298 and DIMS off 1534 -- which makes every feature row collected under the
+# old width incomparable with every row after it. That incoherent-corpus failure is the exact
+# thing the frozen manifest exists to prevent.
+#
+# Nothing else depends on this list: `store.PRECOMPUTED_LEVELS` is derived from
+# `dimensions.ALLOCATION + INVENTORY`, so binning, the window rollup and publication all work
+# for a level that is not here. Adding these to the feature ladder is a legitimate future
+# change; it is a deliberate FEATURE_SPEC_VERSION bump, never a side effect of publishing a
+# new dimension.
 
 # What the work REACHES OUT TO. Evidence-based only: a host that actually appears in a tool input,
 # never a service inferred from a CLI's name. Ports are dropped because a test harness binds a
@@ -29,6 +46,44 @@ URL_HOST = re.compile(r"\bhttps?://(?:[^@/\s]*@)?([A-Za-z0-9._\-]+)", re.I)
 SSH_HOST = re.compile(r"\b(?:ssh|scp|rsync)\s+(?:-\S+\s+)*(?:[\w.\-]+@)?"
                       r"([A-Za-z0-9.\-]+\.[A-Za-z0-9.\-]+|localhost)\b", re.I)
 MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
+
+
+def _sys_cat(add, cat, seen=None):
+    """Emit one `system_category` row, or nothing when the key named no external system.
+
+    A function rather than four inline `if cat:` guards because the None/`unrecognized`
+    distinction is the whole contract and it must be applied identically at every site:
+    None means THERE WAS NO SYSTEM HERE (loopback, a spec URL, `ls`), `unrecognized` means a
+    system was used and the table cannot name it. Four copies of that test is four chances to
+    write one of them as `if cat is not None` and quietly start publishing local commands."""
+    if cat:
+        add("ref", "system_category", cat, 1)
+        if seen is not None and cat != "unrecognized":
+            seen.add(cat)
+
+
+def _sys_ven(add, pair, seen=None):
+    """Emit one `system_vendors` row, or nothing when the vendor could not be named.
+
+    ⚠️ Unlike its two siblings this one is silent for an UNRECOGNISED system, and that is the
+    contract rather than an omission: the level's entire content is "we can name this". An
+    unnameable system is already reported by `system_category` as `unrecognized`, which is
+    where that fact belongs; repeating it here as a pair with no vendor would be a second,
+    emptier way of saying the same thing."""
+    if pair:
+        add("ref", "system_vendor", pair, 1)
+        if seen is not None:
+            seen.add(pair)
+
+
+def _sys_act(add, pair):
+    """Emit one `system_action` row, or nothing when the tool named no action we know.
+
+    Same shape and same reason as `_sys_cat`: None means the verb was not recognised, and a
+    reference publishes its CATEGORY alone rather than a guessed verb. A wrong verb here is a
+    false statement about what someone did in a system of record."""
+    if pair:
+        add("ref", "system_action", pair, 1)
 
 
 def services_in(text):
@@ -224,12 +279,23 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "repo_mentioned", rr, 1)
         if base[3]:
             add("ref", "branch", base[3], 1)
+        # ⚠️ DISTINCT SYSTEMS FOR THIS TURN, collected so the token weights below can be
+        # emitted ONCE PER SYSTEM rather than once per reference. A turn that calls
+        # `notion-fetch` three times is ONE inference request with one output budget;
+        # charging its tokens three times would make a chatty tool dominate the figure by
+        # how often it is called, which the sibling COUNT dimension already reports.
+        _seen_cats, _seen_vendors = set(), set()
         if o.skill:
             add("ref", "skill", o.skill, 1)
             for kind in artifacts_for(skill=o.skill):
                 add("ref", "artifact", kind, 1)
         if o.mcp_server:
-            add("ref", "mcp_server", mcp_provider(o.mcp_server, o.mcp_tool), 1)
+            provider = mcp_provider(o.mcp_server, o.mcp_tool)
+            add("ref", "mcp_server", provider, 1)
+            _cat = systems.category_for_brand(provider)
+            _sys_cat(add, _cat, _seen_cats)
+            _sys_act(add, systems.system_action(_cat, o.mcp_tool, provider))
+            _sys_ven(add, systems.system_vendor(_cat, systems.vendor_for_brand(provider)), _seen_vendors)
         if o.mcp_tool:
             add("ref", "mcp_tool", o.mcp_tool, 1)
 
@@ -315,12 +381,156 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     # still counts as one request.
                     add("mag", magnitude.REQUESTS, "", 1)
 
+        # `activity_class` — what CAPABILITY this one inference request stressed.
+        # ⚠️ ONE ROW PER ASSISTANT TURN, which is one inference request: the unit is
+        # the whole point (see reqclass's docstring on why the rolled-up `action`
+        # mapping in activity.py beside it was refuted four times). It is emitted
+        # BEFORE the per-call loop below so it counts the request once, never once
+        # per tool call — a turn with six Bash calls is one request, and counting it
+        # six times would make a long tool-using turn dominate every distribution.
+        # ⚠️ ONLY WHEN THE TURN ALREADY CONTRIBUTES EVIDENCE. Emitting this
+        # unconditionally made a turn with neither text nor tool calls produce a row
+        # where it produced none before -- which makes its 5-minute bin ACTIVE, and
+        # since blocks TILE THE ACTIVE BINS that silently moves block boundaries and
+        # every number derived from them. Caught by
+        # `test_a_prompt_that_falls_in_dead_air_is_in_no_block`, which is exactly the
+        # shape it was written to catch. A new level may describe existing evidence;
+        # it may never CREATE evidence where there was none.
+        # ⚠️ ASSISTANT TURNS ONLY, and only when the turn already contributes evidence.
+        #
+        # This classifies one INFERENCE REQUEST, and a user turn is not one -- it is the
+        # thing a request answers. Emitting it here (this code is common to both roles)
+        # put a row on a bare user turn, which is what
+        # `test_a_prompt_that_falls_in_dead_air_is_in_no_block` caught: that fixture's
+        # premise is a prompt "contributing no reference event of its own", and a row
+        # makes its 5-minute bin ACTIVE. Blocks TILE THE ACTIVE BINS, so the prompt
+        # landed inside a block that should not exist, and every number derived from
+        # those boundaries would have shifted silently.
+        #
+        # The rule the two conditions encode: a new level may DESCRIBE existing
+        # evidence; it may never CREATE evidence where a turn produced none.
+        if o.role != "user" and (o.tool_calls or (o.text or "").strip()):
+            add("ref", "activity_class", reqclass.route_class({
+                "tools": [(c.name, c.input) for c in o.tool_calls],
+                "text":  o.text or "",
+                "think": o.think_chars or 0,
+                "out":   int((o.usage or {}).get("output_tokens") or 0),
+            }), 1)
+            # ⚠️ THE SAME CLASS, WEIGHTED BY OUTPUT TOKENS RATHER THAN COUNTED.
+            #
+            # Two denominators are needed because they DISAGREE, and not slightly: on one
+            # real block `author_prose` is 9.4% of calls and 25.8% of output tokens, while
+            # `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer with only the call
+            # count would report that block as dominated by retrieval when prose authoring
+            # consumed the output. Neither denominator is wrong; publishing one is.
+            #
+            # It rides the ordinary `n` field because `window.rollup` SUMS n per (level, ref),
+            # so a token weight needs no new shape and no new machinery -- the level's name is
+            # what says which denominator it carries.
+            #
+            # ⚠️ NOT A COST FIGURE, and must not be rendered as one. Output is only 10-14% of
+            # modelled cost; 97-98.6% of input is cache reads at roughly a tenth the price. A
+            # true per-class cost needs per-class INPUT too, which is not measured here and was
+            # not judged worth it. This says where the OUTPUT went, nothing more.
+            _out = int((o.usage or {}).get("output_tokens") or 0)
+            if _out:
+                add("ref", "activity_class_tokens", reqclass.route_class({
+                    "tools": [(c.name, c.input) for c in o.tool_calls],
+                    "text":  o.text or "",
+                    "think": o.think_chars or 0,
+                    "out":   _out,
+                }), _out)
+            # `activity_verb` -- the atv1 VERB this request's capability maps to.
+            #
+            # ⚠️ DERIVED FROM THE CLASS ABOVE, NOT INDEPENDENTLY CLASSIFIED. It is a
+            # lookup over `route_class`'s existing output (analysis/verbs.py), which is
+            # why it needs no validation of its own for the six verbs it produces and
+            # why it must never drift from the class rows beside it.
+            #
+            # ⚠️ ABSENT ON PURPOSE for three classes. `operate`, `acknowledge` and
+            # `unclassified` are not work -- running `git push` stresses no model
+            # capability that routing could act on -- and `synthesize`/`retrieve`
+            # abstain pending their split study. `verb_for` returns None for all five
+            # and NO ROW IS EMITTED: the verb distribution is deliberately over less
+            # than the whole block, and a consumer must not read its total as the
+            # block's request count. The `activity_class` rows beside it remain the
+            # complete denominator.
+            _cls = reqclass.route_class({
+                "tools": [(c.name, c.input) for c in o.tool_calls],
+                "text":  o.text or "",
+                "think": o.think_chars or 0,
+                "out":   int((o.usage or {}).get("output_tokens") or 0),
+            })
+            _verb = atv1_verbs.verb_for(_cls, [(c.name, c.input) for c in o.tool_calls])
+            if _verb:
+                add("ref", "activity_verb", _verb, 1)
+                # Same two-denominator argument as activity_class_tokens: on one real
+                # block `author_prose` is 9.4% of calls and 25.8% of output tokens
+                # while `retrieve` is 18.9% of calls and 5.5% of tokens. Publishing
+                # one denominator misreports the block. ⚠️ NOT a cost figure --
+                # output is 10-14% of modelled cost, the rest being cache reads.
+                _vout = int((o.usage or {}).get("output_tokens") or 0)
+                if _vout:
+                    add("ref", "activity_verb_tokens", _verb, _vout)
+
         paths = []
+        _fa_seen = set()
+        _fk_seen = set()
+        _fa_out = int((o.usage or {}).get("output_tokens") or 0)
         for call in o.tool_calls:
             name, inp = call.name, call.input
             act = action_for(tool=name)
             if act:
                 add("ref", "action", act, 1)
+            # `file_action` -- the act joined to the extension of the file it touched,
+            # `<action>:<ext>` (`edit:.tsx`, `read:.jpg`). Both halves are already in hand
+            # here and were being discarded separately. No row without an act (matching
+            # `_sys_act`'s refusal to guess a verb) and none for a call carrying no path.
+            # The extension is the identifier; the path itself never leaves this line.
+            # ⚠️ This loop is NOT inside the `o.role != "user"` guard above (the `action` and
+            # `tool` rows beside it fire on a user-role turn that carries a tool_use), so the
+            # role is checked HERE: this level may describe an assistant's act, never create
+            # evidence on a user turn.
+            if act and o.role != "user":
+                _fp = next((inp[k] for k in PATH_INPUTS if isinstance(inp, dict) and inp.get(k)), None)
+                if _fp:
+                    # ⚠️ The kind is computed ONCE and BOTH values are built from this one
+                    # local, so `file_kind` is `file_action` with its last segment dropped BY
+                    # CONSTRUCTION -- a second derivation could disagree about which kind an
+                    # extension belongs to, the failure the 3-part value exists to rule out.
+                    # `<action>:<kind>:<ext>` is split by Atlas with `split(":", 2)`, so no kind
+                    # id may hold a colon (`test_filekinds.py` asserts it).
+                    _fk = filekinds.kind_for(_fp)
+                    _fkv = f"{act}:{_fk}"
+                    _fav = f"{_fkv}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}"
+                    add("ref", "file_action", _fav, 1)
+                    add("ref", "file_kind", _fkv, 1)
+                    # `file_action_tokens` -- the same value, weighted by the turn's OUTPUT
+                    # TOKENS instead of counted once per call. The two denominators disagree:
+                    # across both corpora on 14,102 path-carrying calls `read:.md` is 8.4% of
+                    # calls but 1.5% of output tokens (0.18x), `read:.png` 3.6% vs 0.8%, while
+                    # `edit:.tsx` sits at 0.99x; the largest divergence among pairs with n>=50
+                    # is 5.58x, LARGER than the up-to-3x `activity_class_tokens` documents. A
+                    # consumer holding only counts would report a block as dominated by reading
+                    # documentation when editing consumed the output.
+                    # The value is computed ONCE above and shared, so the two levels cannot
+                    # drift. Output is PER TURN, so, as `system_*_tokens` does, a value is
+                    # charged ONCE PER DISTINCT VALUE per turn (`_fa_seen`): three edits of
+                    # `.tsx` in one turn are one request and one output budget. Distinct values
+                    # in one turn are each charged the full turn output (double-attributed,
+                    # never split), so these rows do not sum to the block total. No row at 0
+                    # output tokens, as `activity_class_tokens`.
+                    # ⚠️ NOT A COST FIGURE -- output is 10-14% of modelled cost, the rest
+                    # being cache reads.
+                    if _fa_out and _fav not in _fa_seen:
+                        _fa_seen.add(_fav)
+                        add("ref", "file_action_tokens", _fav, _fa_out)
+                    # `file_kind_tokens` -- the same, one level coarser, with its OWN per-turn
+                    # dedupe: two extensions of one kind in a turn (`.ts` and `.tsx`) are one
+                    # `edit:typescript` and charge the turn's output ONCE (FAMILY B).
+                    if _fa_out and _fkv not in _fk_seen:
+                        _fk_seen.add(_fkv)
+                        add("ref", "file_kind_tokens", _fkv, _fa_out)
             # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
             # per turn, because the count of edits is precisely the useless predictor this
             # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from
@@ -337,8 +547,16 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 add("ref", "mcp_tool", m["tool"], 1)
                 # The server id is a uuid; the tool name carries the recognisable
                 # service ("notion-fetch" -> notion), which is what a reader needs.
-                add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
-                    1)
+                # ⚠️ Via mcp_provider, NOT a bare split: a verb-led tool name
+                # (`get_file_metadata`) has no brand in it and the split invented
+                # services called `mcp:get`. Same defect, same fix, one function.
+                provider = mcp_provider(m["server"], m["tool"])
+                add("ref", "service", "mcp:" + provider, 1)
+                _cat = systems.category_for_brand(provider)
+                _sys_cat(add, _cat, _seen_cats)
+                _sys_act(add, systems.system_action(_cat, m["tool"], provider))
+                _sys_ven(add, systems.system_vendor(_cat,
+                                                    systems.vendor_for_brand(provider)), _seen_vendors)
             else:
                 add("ref", "tool", name, 1)
             if name == "Agent" and inp.get("subagent_type"):
@@ -353,6 +571,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                                                      inp.get("query"))
                                          if isinstance(v, str)))):
                 add("ref", "service", host, 1)
+                _sys_cat(add, systems.category_for_host(host), _seen_cats)
+                _sys_ven(add, systems.system_vendor(systems.category_for_host(host),
+                                                    systems.vendor_for_host(host)), _seen_vendors)
             for k in PATH_INPUTS:
                 if isinstance(inp.get(k), str):
                     paths.append((inp[k], True))     # a tool's file_path IS a file
@@ -362,6 +583,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "verb", v, 1)
                 for e in dict.fromkeys(exes):
                     add("ref", "exe", e, 1)
+                    _sys_cat(add, systems.category_for_program(e), _seen_cats)
+                    _sys_ven(add, systems.system_vendor(systems.category_for_program(e),
+                                                        systems.vendor_for_program(e)), _seen_vendors)
                     for kind in toolchain_for(e):
                         add("ref", "toolchain", kind, 1)
                 # The acts come from `bash_refs`, not from a second pass over `verbs`: a
@@ -371,6 +595,34 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 for act in acts:
                     add("ref", "action", act, 1)
                 paths += [(q, False) for q in bp]
+        # ⚠️ OUTPUT TOKENS OF THE CALLS THAT TOUCHED EACH SYSTEM. Not a cost figure and not
+        # summable, and both caveats are measured rather than hedges.
+        #
+        # OUTPUT ONLY, because input is not a property of the call. Measured over 970
+        # system-touching requests in two corpora: median uncached input 2 tokens against a
+        # median cache_read of 355,776 -- input is ~100% the conversation prefix replayed --
+        # and total input rises 9.0x from a session's first ten turns (median 45,347) to turn
+        # 50+ (median 409,517) for the same kinds of call. A total-token figure would report
+        # that a Jira call late in a session consumed nine times one early in it, for
+        # identical work: that is session depth wearing a vendor's name. Output is only 0.4%
+        # of all tokens here, so this says HOW MUCH THE MODEL WROTE while working in that
+        # system -- never what the system cost.
+        #
+        # DOUBLE-ATTRIBUTED, never split: a call touching two systems counts fully toward
+        # both, so these rows do NOT sum to the block total. Splitting would invent a ratio
+        # (there is no basis for 50/50 -- the model did not spend half its output on each),
+        # and the error double-counting admits is bounded and small: measured, 97.3% of
+        # system-touching requests touch exactly one system and only 2.7% touch more.
+        #
+        # `unrecognized` is excluded by `_sys_cat`'s own filter, so an unnameable system
+        # contributes no token row -- matching `system_vendors`, which never pairs one.
+        _sys_out = int((o.usage or {}).get("output_tokens") or 0)
+        if _sys_out:
+            for _c in sorted(_seen_cats):
+                add("ref", "system_category_tokens", _c, _sys_out)
+            for _v in sorted(_seen_vendors):
+                add("ref", "system_vendor_tokens", _v, _sys_out)
+
         for p, from_input in paths:
             rel = rel_within(p, root_dir, o.cwd)
             if not rel or rel.startswith("."):

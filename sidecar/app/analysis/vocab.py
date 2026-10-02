@@ -347,13 +347,39 @@ def artifacts_for(ext=None, rel=None, skill=None):
 UUIDISH = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
+# ⚠️ THE TOOL-NAME CONVENTION HOLDS ONLY WHEN THE TOOL IS BRAND-LED, AND PLENTY ARE NOT.
+# `notion-fetch` leads with the brand; `get_file_metadata`, `read_file_content` and `update-page`
+# lead with a VERB, and taking their head yields a "provider" called `get`, `read` or `update`.
+# Measured on a real corpus: 5 of 765 MCP calls (0.65%) across 3 of 8 servers. Small, but these
+# values are not internal -- Atlas renders the `mcp_servers` inventory verbatim in its block pane,
+# so a reader would see `get` listed beside `notion` as though a connector were called that.
+#
+# A brand cannot be recovered from a verb-led name at this seam: mcp_provider sees ONE call and
+# cannot observe that the same server's siblings all start differently. So the answer is to stop
+# guessing, not to guess harder -- `mcp:<first 8>` is already the function's word for "no readable
+# provider", and visibly opaque beats confidently wrong, which is what the docstring always said.
+#
+# Derived from observed MCP tool names, not invented: corpus A's servers plus the connector suites
+# available to this repo's own agents (notion-*, chrome-devtools, claude-in-chrome, docs, calendar).
+# Deliberately EXCLUDES words that are also real products -- `box`, `drive`, `calendar`, `slack` --
+# so a brand-led name can never be suppressed as generic. The cost of a miss is one junk label; the
+# cost of a false hit is a real connector rendered as an opaque id, which is worse.
+_VERB_HEADS = frozenset("""
+add authenticate batch browser check clear click close complete computer copy create delete drag
+download emulate evaluate execute export fetch fill find form get guide handle hover insert install
+invoke list load make mark move navigate new open performance press query read remove rename replace
+reset resize run save schedule scroll search select send set show spawn start stop submit take type
+update upload wait write
+""".split())
+
+
 def mcp_provider(server, tool):
-    """Readable provider for an MCP server. Falls back to the id when it is already a name, and
-    to `mcp:<first 8>` when neither the id nor the tool yields one — visibly opaque rather than
-    silently wrong."""
+    """Readable provider for an MCP server. Falls back to the id when it is already a name, to the
+    tool's leading token when that token is brand-shaped, and to `mcp:<first 8>` otherwise — visibly
+    opaque rather than silently wrong. See the note above on why a verb-led tool yields no brand."""
     if server and not UUIDISH.match(server):
         return server
     head = (tool or "").split("-")[0].split("_")[0].strip()
-    if head:
+    if head and head.lower() not in _VERB_HEADS:
         return head
     return "mcp:" + (server or "unknown")[:8]

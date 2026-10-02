@@ -62,6 +62,35 @@
 // worked, since watch/filter.go names prompts by `promptId` while the sidecar's
 // store indexes the per-message `uuid`, so every real block published an empty
 // list.
+//
+// ⚠️ THAT JOIN IS CORRECT AND IT IS NOT THE WHOLE STORY: FOR A PARENT BLOCK IT
+// COVERS DIFFERENT WORK THAN THE BLOCK'S OWN MIX DOES, so a consumer dividing
+// one by the other is wrong by however much was delegated.
+//
+// A block's facets are counted from ONE transcript. Claude Code writes each
+// delegated run to its own `agent-<hash>.jsonl`, so a parent block's
+// `activity_classes` and `system_*` dimensions EXCLUDE everything its subagents
+// did — correctly; that work is described by the subagent's own blocks.
+//
+// The cost join does not exclude it. A subagent runs DURING the parent's Task
+// call, so its events fall inside the parent block's span and the
+// `event_ts ∈ [start, end)` join sweeps them in. Measured on the frozen corpus:
+// 200 of 200 subagent transcripts carry the PARENT's `sessionId`, none its own,
+// while `sessionIDFor` keys the subagent's block on the filename `agent-<hash>`
+// — a value no tool_event can carry. So a subagent block joins to NOTHING and
+// its spend lands in the parent's span. (The transcript evidence is direct; that
+// OTel emits those calls under the parent's `session.id` follows from it and has
+// not been observed in tool_events here.)
+//
+// The consequence, and it is the reason this is written down rather than left to
+// be rediscovered: for a parent block MIX EXCLUDES DELEGATED WORK WHILE COST
+// INCLUDES IT. Tokens-per-call, cost-per-activity, or any other ratio over the
+// two is meaningless on a block that delegated. The `is_subagent_run` marker
+// exists so a consumer can tell the two kinds of block apart; it does not make
+// the ratio safe. Keld Atlas's own spec forbids that division for this reason
+// (`docs/superpowers/specs/2026-09-29-work-mix-and-systems-design.md`, recorded
+// 2026-09-29) — stated here too, because a constraint that lives only in the
+// consumer's repo is one this side will break without noticing.
 package blocks
 
 import (
@@ -619,7 +648,7 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		chunk := blocks[start:end]
 		rows := make([]publish.BlockEnrichment, 0, len(chunk))
 		for _, b := range chunk {
-			row := publish.BuildBlock(b, e.actor, now)
+			row := publish.BuildBlock(b, e.actor, now, tgt.Path)
 			// ⚠️ STAMPED HERE, NOT IN publish.BuildBlock, because deciding which
 			// projects a block enters is the decision layer's job and this
 			// package must not import it. Nil on a daemon that wires no hook

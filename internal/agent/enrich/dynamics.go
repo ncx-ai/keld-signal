@@ -75,8 +75,166 @@ type Dynamic struct {
 // published as an empty object: "we looked and found nothing" is a different
 // fact from "nobody looked".
 type WindowAnalysis struct {
-	Dimensions map[string]Labeled
-	Dynamics   map[string]Dynamic
+	// ActivityClasses is the DISTRIBUTION of what CAPABILITY each inference
+	// request in this window stressed: retrieve, operate, verify, author_code,
+	// author_prose, synthesize, delegate, acknowledge, unclassified.
+	//
+	// ⚠️ IT IS A DISTRIBUTION AND MUST STAY ONE. Measured across two people's
+	// corpora, above ~20 requests NO unit -- session, block or subagent run --
+	// is coherent enough for a single label, while the distribution stays
+	// distinctive at every size. Anything reducing this to one winner publishes
+	// a false statement about the unit, which is also why it is an INVENTORY
+	// dimension and not an ALLOCATION one.
+	//
+	// ⚠️ NOT the refuted `activity_type`. That rolled the `action` level up by
+	// precedence -- act to intent -- and failed four measurements. This
+	// classifies one REQUEST by its tool name, arguments and output shape, and
+	// never rolls up. See sidecar/app/analysis/reqclass.py.
+	//
+	// ⚠️ VALIDATED ON CODE AND EDITORIAL WORK THROUGH CLI AGENTS. Measured over
+	// 202 real sessions split by doc-vs-code files: the unclassified residual is
+	// 1.3% on editorial work against 1.1% on engineering, so coverage does NOT
+	// degrade -- and the distribution discriminates (author_prose 15.6% vs 8.3%,
+	// synthesize 13.0% vs 4.4%, verify 3.3% vs 11.2%).
+	//
+	// NOT validated on non-technical users, and that is a CAPTURE question before
+	// it is a vocabulary one: Signal's sources are claude_code/codex/cowork/gemini,
+	// there is no web-app path at all, and Cowork is VM-backed. With no tool calls
+	// the vocabulary reaches only two of nine values (74.8% acknowledge / 25.2%
+	// synthesize over 11,575 tool-free turns). The vocabulary is OPEN for that
+	// reason, and `unclassified` is the instrument: a population it does not fit
+	// announces itself by its residual, with no labels and no transcripts.
+	//
+	// ⚠️ ATLAS ACCEPTS THIS AND WILL SHOW NOTHING, WHICH IS EXPECTED, NOT A BUG.
+	// Checked against keld-atlas origin/main on 2026-09-29, by RUNNING the
+	// validators rather than reading them:
+	//   - Both ingests are lenient. `BlockIn` declares extra="ignore"; the
+	//     enrichment path's `EnrichmentIn` declares no model_config and so gets
+	//     pydantic v2's default. An extra field is dropped, never a 422, and the
+	//     untouched body is stored as raw JSONB on both routes.
+	//   - But Atlas filters inventories through TWO FIXED LISTS and this key is in
+	//     neither: `INVENTORY_KEYS` (services/blocks.py) decides what reaches the
+	//     `Block.inventories` column, and `PUBLISHED_INVENTORY_LEVELS`
+	//     (web/lib/workstream-catalog.ts) decides what the UI can describe. So the
+	//     field arrives, lands in `raw`, and is SILENTLY ABSENT from the column and
+	//     the catalog.
+	// It therefore fails QUIET on the Atlas side. Seeing no activity classes in
+	// Atlas after this merges is the expected state, not evidence of a Signal bug.
+	// Making it usable needs an Atlas change (both lists, plus a re-POST or
+	// backfill to populate the column for blocks already stored) and is not
+	// attempted here.
+	//
+	// ⚠️ The enrichment route's leniency is an UNDECLARED DEFAULT, not a contract:
+	// nothing Atlas-side pins it, and anyone adding extra="forbid" to
+	// `EnrichmentIn` would turn this additive field into a 422 on live traffic.
+	ActivityClasses []NameCount
+	// ActivityClassTokens is the same nine values weighted by OUTPUT TOKENS rather
+	// than counted. Both denominators are published because they DISAGREE: on one
+	// real block `author_prose` is 9.4% of calls and 25.8% of output tokens, and
+	// `retrieve` is 18.9% of calls and 5.5% of tokens. A consumer with only the
+	// call count reports that block as retrieval-dominated when prose authoring
+	// consumed the output.
+	//
+	// ⚠️ NOT A COST FIGURE. Output is 10-14% of modelled cost; 97-98.6% of input
+	// is cache reads at roughly a tenth the price. A true per-class cost needs
+	// per-class INPUT, which is not measured. This says where the OUTPUT went.
+	ActivityClassTokens []NameCount
+	// ActivityVerbs is the atv1 VERB each inference request's capability maps to,
+	// as a distribution. DERIVED from ActivityClasses by lookup (sidecar
+	// analysis/verbs.py), never classified independently.
+	//
+	// ⚠️ ITS TOTAL IS NOT THE BLOCK'S REQUEST COUNT. Five of the nine activity
+	// classes publish no verb -- operate/acknowledge/unclassified are excluded as
+	// not-work, and synthesize/retrieve abstain pending their split study -- so
+	// this distribution deliberately covers less than the whole block.
+	// ActivityClasses is the complete denominator; a consumer that normalises
+	// against this one is reporting shares of a subset as shares of the work.
+	ActivityVerbs []NameCount
+	// The same verbs weighted by OUTPUT TOKENS rather than counted. Two
+	// denominators because they disagree by up to 3x on the same block.
+	// ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
+	ActivityVerbTokens []NameCount
+	// FileActions pairs the physical act with the extension of the file it touched,
+	// `<action>:<kind>:<ext>` (`edit:typescript:.tsx`, `read:image:.jpg`, `create:make:(none)`). Extension only, never
+	// a path. The vocabulary is OPEN, so `inventory_omitted` can name this level.
+	FileActions []NameCount
+	// FileActionTokens is FileActions weighted by the turn's OUTPUT TOKENS rather than counted
+	// per call; the two denominators diverge up to 5.58x (`read:.md` 8.4% of calls, 1.5% of
+	// tokens). ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
+	FileActionTokens []NameCount
+	// FileKinds is `<action>:<kind>` -- FileActions with the extension dropped, so
+	// `edit:typescript` rather than `edit:typescript:.tsx`. Always FileActions minus its last
+	// segment (one derivation sidecar-side). The vocabulary is CLOSED (analysis/filekinds.py,
+	// `unrecognized` included) and the cap is computed from it, so it never appears in
+	// `inventory_omitted`. No kind id contains a colon: consumers split with `split(":", 2)`.
+	FileKinds []NameCount
+	// FileKindTokens is FileKinds weighted by the turn's output tokens, as FileActionTokens.
+	FileKindTokens []NameCount
+
+	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
+	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative
+	// table (sidecar `analysis/systems.py`), never an inference over text.
+	//
+	// ⚠️ It sits beside ExternalSystems and is the COARSER of the two on purpose.
+	// That one publishes raw hosts and has put internal infrastructure names on
+	// the wire; a category names no host, no environment and no org, so this is
+	// strictly less identifying than its neighbour rather than a new exposure.
+	//
+	// `unrecognized` is a real published value, not a gap: an org whose systems
+	// the table does not know yet must read as UNKNOWN COVERAGE, never as an org
+	// that touches nothing.
+	SystemCategories []NameCount
+	// SystemActions pairs that category with WHAT WAS DONE inside the system —
+	// `issue_tracking:create`, `crm_sales:update`. MCP-only, because a URL host
+	// names a system and no action, so this is sparser than its sibling by
+	// design.
+	//
+	// ⚠️ Not reconstructable by joining SystemCategories with the activity class:
+	// that class is ONE label per inference request covering every tool the
+	// request issued, so which tool a verb belonged to is already gone.
+	SystemActions []NameCount
+	// SystemVendors pairs the category with the NAMED PRODUCT —
+	// `issue_tracking:jira`. The category says a tracker was used; this says
+	// which one, which is what a reader recognises.
+	//
+	// ⚠️ It carries NO NEW INFORMATION, and that is the argument for it. The
+	// vendor already crosses: McpServers publishes the bare brand and
+	// ExternalSystems the raw host. What did not cross is the PAIRING, which
+	// lives only in the sidecar's table — so a consumer cannot join them without
+	// its own copy, and a second copy drifts in silence.
+	//
+	// ⚠️ A SUBDOMAIN NEVER CROSSES. Enterprise SaaS hosts each customer on its
+	// own subdomain (`acme.atlassian.net`), so the first label is frequently the
+	// CUSTOMER'S name. The vendor half is a token from the table, never a slice
+	// of the host string.
+	//
+	// ⚠️ An UNRECOGNISED system publishes nothing here, unlike the two fields
+	// above: this level means "we can name this", and that something could not
+	// be named is already carried by SystemCategories.
+	SystemVendors []NameCount
+	// SystemCategoryTokens and SystemVendorTokens are the two dimensions above
+	// weighted by OUTPUT TOKENS rather than counted — how much the model WROTE
+	// while working in that system.
+	//
+	// ⚠️ OUTPUT ONLY, and measured rather than conservative. Over 970
+	// system-touching requests across two corpora the median uncached input is
+	// 2 tokens against a median cache_read of 355,776 — input is ~100% the
+	// conversation prefix replayed on every call — and total input rises 9.0x
+	// between a session's first ten turns and turn 50+ for the same kinds of
+	// call. A total-token figure would say a late Jira call consumed nine times
+	// an early one for identical work: session depth wearing a vendor's name.
+	//
+	// ⚠️ NOT A COST FIGURE. Output is 0.4% of all tokens here.
+	//
+	// ⚠️ THESE DO NOT SUM TO THE BLOCK TOTAL. A call touching two systems counts
+	// fully toward both; splitting would invent a ratio with nothing behind it,
+	// and the over-count is bounded — 97.3% of system-touching requests touch
+	// exactly one system. Render as "tokens in calls that used this system",
+	// never as a share of a whole.
+	SystemCategoryTokens []NameCount
+	SystemVendorTokens   []NameCount
+	Dimensions           map[string]Labeled
+	Dynamics             map[string]Dynamic
 	// PhysicalActs is what the window's hour physically DID — the `action` level,
 	// published as an INVENTORY rather than a workstream (see Acts for the
 	// measurement, and Act for the shape). Nil, never an empty slice, when the

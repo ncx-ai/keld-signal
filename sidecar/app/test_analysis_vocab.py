@@ -149,6 +149,44 @@ def test_mcp_provider_never_returns_a_uuid():
     assert mcp_provider(u, None).startswith("mcp:")
 
 
+def test_a_verb_led_tool_yields_no_provider_rather_than_a_verb():
+    """A uuid server plus a VERB-led tool has no recoverable brand, and inventing one from the
+    head puts a connector called `get` in front of a reader.
+
+    These pairs are REAL: measured on corpus A, 5 of 765 MCP calls across 3 of 8 servers lead with
+    a verb rather than a brand. It is 0.65% and it is still worth refusing, because Atlas renders
+    the `mcp_servers` inventory verbatim in its block pane — so the junk is not internal, it is
+    shown beside `notion` as though a product were called that. `mcp:<first 8>` is the function's
+    existing word for "no readable provider"; this just stops the head from outranking it."""
+    docs = "c78d9895-d0ef-43c2-b7c3-db6cfc34856e"
+    files = "92e9c436-216b-4d4b-ac78-6210bc6da11c"
+    for server, tool in ((docs, "update-page"), (files, "get_file_metadata"),
+                         (files, "read_file_content")):
+        assert mcp_provider(server, tool) == "mcp:" + server[:8], (server, tool)
+
+
+def test_a_brand_led_tool_on_a_uuid_server_still_resolves():
+    """The refusal above must not cost the case the fallback exists for. `notion` and `slack` are
+    the two brands actually observed behind uuid servers; `linear` and `jira` are the shape a new
+    connector arrives in, and neither may be suppressed as generic."""
+    u = "c78d9895-d0ef-43c2-b7c3-db6cfc34856e"
+    assert mcp_provider(u, "notion-update-page") == "notion"
+    assert mcp_provider(u, "slack_read_channel") == "slack"
+    assert mcp_provider(u, "linear-list-issues") == "linear"
+    assert mcp_provider(u, "jira_create_issue") == "jira"
+
+
+def test_no_real_product_name_is_treated_as_a_generic_verb():
+    """⚠️ The failure this guards is the EXPENSIVE direction. A miss in _VERB_HEADS costs one junk
+    label; a false hit renders a real connector as an opaque id, and nobody would know which
+    connector vanished. `box`, `drive`, `calendar`, `slack` and `notion` are all ordinary English
+    words AND real products, so they must never enter that set."""
+    from app.analysis.vocab import _VERB_HEADS
+    for brand in ("box", "drive", "calendar", "slack", "notion", "linear", "jira", "asana",
+                  "figma", "stripe", "sentry", "github", "gitlab", "zoom", "airtable"):
+        assert brand not in _VERB_HEADS, brand
+
+
 def test_code_ext_excludes_prose_and_config():
     for e in (".md", ".json", ".yaml", ".yml"):
         assert e not in CODE_EXT

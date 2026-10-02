@@ -13,6 +13,10 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
+// sessionPath is a MAIN-LINE transcript. These tests assert the payload a normal
+// block produces, which the subagent marker must leave unchanged.
+const sessionPath = "/t/d6638eab.jsonl"
+
 func sampleBlock() enrich.BlockCharacterisation {
 	w := sampleWindow()
 	novel := false
@@ -43,7 +47,7 @@ func sampleBlock() enrich.BlockCharacterisation {
 // than the struct, because a missing json tag is exactly the defect that would
 // pass a struct-level check and 422 in production.
 func TestABlockRowMatchesTheAtlasContract(t *testing.T) {
-	body, err := json.Marshal(BuildBlock(sampleBlock(), "dg@keld.co", time.Unix(1787145300, 0)))
+	body, err := json.Marshal(BuildBlock(sampleBlock(), "dg@keld.co", time.Unix(1787145300, 0), sessionPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +97,8 @@ func TestABlockRowMatchesTheAtlasContract(t *testing.T) {
 // window.
 func TestABlockCorrelationIsDeterministicAndPerBlock(t *testing.T) {
 	b := sampleBlock()
-	one := BuildBlock(b, "x", time.Now()).Correlation
-	two := BuildBlock(b, "x", time.Now().Add(time.Hour)).Correlation
+	one := BuildBlock(b, "x", time.Now(), sessionPath).Correlation
+	two := BuildBlock(b, "x", time.Now().Add(time.Hour), sessionPath).Correlation
 	if one.ID != two.ID {
 		t.Fatalf("the same block produced two ids: %q vs %q", one.ID, two.ID)
 	}
@@ -107,13 +111,13 @@ func TestABlockCorrelationIsDeterministicAndPerBlock(t *testing.T) {
 	}
 	next := b
 	next.Ref.Start = "2026-08-19T13:10:00Z"
-	if BuildBlock(next, "x", time.Now()).Correlation.ID == one.ID {
+	if BuildBlock(next, "x", time.Now(), sessionPath).Correlation.ID == one.ID {
 		t.Fatal("two blocks of one session share an id — they would overwrite each other")
 	}
 	// Two spellings of one instant must not become two ids.
 	same := b
 	same.Ref.Start = "2026-08-19T13:50:00+01:00"
-	if BuildBlock(same, "x", time.Now()).Correlation.ID != one.ID {
+	if BuildBlock(same, "x", time.Now(), sessionPath).Correlation.ID != one.ID {
 		t.Fatal("the same instant in two zones produced two ids")
 	}
 }
@@ -123,7 +127,7 @@ func TestABlockCorrelationIsDeterministicAndPerBlock(t *testing.T) {
 // {"value":"","confidence":0}, which Atlas reads as a classification of the
 // empty string. Its own struct is what makes that unrepresentable.
 func TestABlockRowStatesNoTextFacetItNeverComputed(t *testing.T) {
-	body, _ := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now()))
+	body, _ := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now(), sessionPath))
 	for _, k := range []string{"task_type", "domain", "sensitivity", "activity_type",
 		"personal", "function_guess", "subcategory", "sensitivity_spans", "entities"} {
 		if strings.Contains(string(body), `"`+k+`"`) {
@@ -136,7 +140,7 @@ func TestABlockRowStatesNoTextFacetItNeverComputed(t *testing.T) {
 // The same allowlist discipline the window row is held to: every new key is a
 // channel a transcript fragment could occupy.
 func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
-	body, err := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now()))
+	body, err := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now(), sessionPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +183,7 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 // off the raw body as top-level keys, so an accidental json tag on the embedded
 // field would silently hide every one of them behind a `facets` object.
 func TestTheSharedFacetsInlineOnBothRowTypes(t *testing.T) {
-	blockBody, _ := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now()))
+	blockBody, _ := json.Marshal(BuildBlock(sampleBlock(), "x", time.Now(), sessionPath))
 	windowBody, _ := json.Marshal(BuildWindow(sampleWindow(), "x", time.Now()))
 	for _, body := range []string{string(blockBody), string(windowBody)} {
 		if strings.Contains(body, `"AnalysisFacets"`) || strings.Contains(body, `"facets"`) {
@@ -210,8 +214,8 @@ func TestSendBlocksPostsABatchEnvelopeAndTheIngestToken(t *testing.T) {
 
 	p := New(srv.URL, func() string { return "tok" }, "actor")
 	rows := []BlockEnrichment{
-		BuildBlock(sampleBlock(), "actor", time.Now()),
-		BuildBlock(sampleBlock(), "actor", time.Now()),
+		BuildBlock(sampleBlock(), "actor", time.Now(), sessionPath),
+		BuildBlock(sampleBlock(), "actor", time.Now(), sessionPath),
 	}
 	if err := p.SendBlocks(rows); err != nil {
 		t.Fatalf("SendBlocks: %v", err)
@@ -236,7 +240,7 @@ func TestSendBlocksErrorsOnAnAtlasRefusal(t *testing.T) {
 	}))
 	defer srv.Close()
 	p := New(srv.URL, func() string { return "t" }, "a")
-	if err := p.SendBlocks([]BlockEnrichment{BuildBlock(sampleBlock(), "a", time.Now())}); err == nil {
+	if err := p.SendBlocks([]BlockEnrichment{BuildBlock(sampleBlock(), "a", time.Now(), sessionPath)}); err == nil {
 		t.Fatal("a 422 must surface as an error — the emitter holds its cursor on it")
 	}
 }
@@ -267,7 +271,7 @@ func TestSendBlocksSkipsAnEmptyBatch(t *testing.T) {
 // broken: watch/filter.go yields `promptId` and the sidecar's store indexes the
 // per-message `uuid`, so every real run published an empty list.
 func TestABlockRowCarriesNoCoversMapping(t *testing.T) {
-	body, err := json.Marshal(BuildBlock(sampleBlock(), "dg@keld.co", time.Unix(1787145300, 0)))
+	body, err := json.Marshal(BuildBlock(sampleBlock(), "dg@keld.co", time.Unix(1787145300, 0), sessionPath))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -168,6 +168,229 @@ def test_a_repo_row_needs_a_resolved_workspace_not_only_a_resolved_repo():
         assert not [r for r in rows if r[6] == "repo"], rows
 
 
+def _verb_rows(tmp, role, content, out_tokens=None):
+    msg = {"content": content}
+    if out_tokens is not None:
+        msg["usage"] = {"output_tokens": out_tokens}
+    p = _write(tmp, [{"type": role, "timestamp": "2026-08-01T00:00:00Z", "cwd": tmp,
+                      "message": msg}])
+    rows, _pd, _n = events_for_turns(list(iter_turns(p)), p, tmp, None)
+    return rows
+
+
+def _tool(name, inp):
+    return [{"type": "tool_use", "name": name, "id": "t1", "input": inp}]
+
+
+def test_activity_verb_is_emitted_beside_activity_class():
+    """A Write of a .go file is author_code, which is atv1 `code.write`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 120)
+        assert ("activity_verb", "code.write") in {(r[6], r[7]) for r in rows}, rows
+
+
+def test_activity_verb_tokens_carries_the_output_weight():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 120)
+        w = [r[8] for r in rows if r[6] == "activity_verb_tokens" and r[7] == "code.write"]
+        assert w == [120], w
+
+
+def test_zero_output_tokens_emits_no_token_row():
+    """Matches activity_class_tokens' `if _out:` guard: a zero-weight row would claim a
+    request produced output when it produced none."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 0)
+        assert not [r for r in rows if r[6] == "activity_verb_tokens"]
+        assert [r for r in rows if r[6] == "activity_verb"]
+
+
+def test_an_excluded_class_emits_no_verb_row_at_all():
+    """`git push` is `operate` -- not work, so no verb and no token row."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Bash", {"command": "git push"}), 40)
+        assert ("activity_class", "operate") in {(r[6], r[7]) for r in rows}, rows
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
+def test_a_pending_split_emits_no_verb_row():
+    """A plain Read is `retrieve`, which abstains until the split study lands."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Read", {"file_path": "x.go"}), 40)
+        assert ("activity_class", "retrieve") in {(r[6], r[7]) for r in rows}, rows
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
+def test_a_user_turn_emits_no_verb_row():
+    """A new level may DESCRIBE existing evidence; it may never CREATE evidence where a
+    turn produced none -- a verb row on a user turn would make its bin ACTIVE and shift
+    every block boundary."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "user", _tool("Write", {"file_path": "x.go"}), 120)
+        # Falsifiable: an assistant turn with these exact blocks DOES yield code.write
+        # (see test_activity_verb_is_emitted_beside_activity_class), so only the role
+        # guard can be what keeps this empty.
+        assert not [r for r in rows if r[6].startswith("activity_verb")]
+
+
+def _fa(rows):
+    return sorted(r[7] for r in rows if r[6] == "file_action")
+
+
+def test_file_action_is_what_action_for_returns_joined_to_the_extension():
+    """`action_for(tool="Write")` was CHECKED and returns `create`, not an assumed verb."""
+    from app.analysis.vocab import action_for
+    assert action_for(tool="Write") == "create"
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 10)
+        assert _fa(rows) == ["create:go:.go"], rows
+
+
+def test_file_action_read_of_a_png():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Read", {"file_path": "a/X.PNG"}), 10)
+        assert _fa(rows) == ["read:image:.png"], rows
+
+
+def test_file_action_with_no_extension_is_none_marker():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "Makefile"}), 10)
+        assert _fa(rows) == ["edit:make:(none)"], rows
+
+
+def test_file_action_reads_all_three_path_keys():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("NotebookEdit", {"notebook_path": "n.ipynb"}), 10)
+        assert _fa(rows) == ["edit:notebook:.ipynb"], rows
+        rows = _verb_rows(tmp, "assistant", _tool("Glob", {"path": "src/a.ts"}), 10)
+        assert _fa(rows) == ["search:typescript:.ts"], rows
+
+
+def test_a_call_with_no_path_emits_no_file_action():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Glob", {"pattern": "*.go"}), 10)
+        assert any(r[6] == "action" for r in rows), "control: the act itself is emitted"
+        assert not _fa(rows), rows
+
+
+def test_an_mcp_prefixed_tool_name_is_NOT_resolved_by_action_for():
+    """PINNED AS A FINDING, not a feature: `action_for` does not strip `mcp__x__`, so
+    `mcp__abc__Write` has no act and publishes neither `action` nor `file_action`. That is
+    pre-existing behaviour of the shipped `action` level; reqclass strips, action_for does not."""
+    from app.analysis.vocab import action_for
+    assert action_for(tool="mcp__abc__Write") is None
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("mcp__abc__Write", {"file_path": "x.go"}), 10)
+        assert not _fa(rows), rows
+
+
+def test_a_user_turn_emits_no_file_action():
+    """FALSIFIABLE (and the guard is in the emission itself, since the loop is outside the block-level one): the user turn carries a tool_use that WOULD emit `create:.go` on an
+    assistant turn (asserted as the control), so removing the role guard fails this."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctl = _verb_rows(tmp, "assistant", _tool("Write", {"file_path": "x.go"}), 10)
+        assert _fa(ctl) == ["create:go:.go"], ctl
+        rows = _verb_rows(tmp, "user", _tool("Write", {"file_path": "x.go"}))
+        assert not _fa(rows), rows
+
+
+def _fat(rows):
+    return sorted((r[7], r[8]) for r in rows if r[6] == "file_action_tokens")
+
+
+def test_file_action_tokens_carries_the_turns_output_weight():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 77)
+        assert _fat(rows) == [("edit:typescript:.tsx", 77)], rows
+
+
+def test_zero_output_tokens_emits_no_file_action_tokens_but_still_file_action():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 0)
+        assert not _fat(rows), rows
+        assert _fa(rows) == ["edit:typescript:.tsx"], rows
+
+
+def test_file_action_and_file_action_tokens_share_one_value_string():
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, f in (("Edit", "a.tsx"), ("Read", "b.md"), ("Write", "c"), ("Read", "D.PNG")):
+            rows = _verb_rows(tmp, "assistant", _tool(name, {"file_path": f}), 9)
+            assert _fa(rows) == [v for v, _ in _fat(rows)] and _fa(rows), rows
+
+
+def test_repeated_value_in_one_turn_is_charged_once_per_turn():
+    """Follows system_*_tokens: one turn is one output budget, not one per call."""
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = [{"type": "tool_use", "name": "Edit", "id": f"t{i}", "input": {"file_path": f"{i}.tsx"}}
+                 for i in range(3)]
+        rows = _verb_rows(tmp, "assistant", calls, 50)
+        assert _fa(rows) == ["edit:typescript:.tsx"] * 3 and _fat(rows) == [("edit:typescript:.tsx", 50)], rows
+
+
+def _fk(rows):
+    return sorted(r[7] for r in rows if r[6] == "file_kind")
+
+
+def _fkt(rows):
+    return sorted((r[7], r[8]) for r in rows if r[6] == "file_kind_tokens")
+
+
+def test_editing_a_tsx_emits_the_three_part_action_and_the_two_part_kind():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 10)
+        assert _fa(rows) == ["edit:typescript:.tsx"], rows
+        assert _fk(rows) == ["edit:typescript"], rows
+
+
+def test_a_dockerfile_is_classified_by_its_name_not_its_missing_extension():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "svc/Dockerfile"}), 10)
+        assert _fa(rows) == ["edit:docker:(none)"] and _fk(rows) == ["edit:docker"], rows
+
+
+def test_reading_a_png_is_an_image():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Read", {"file_path": "x.png"}), 10)
+        assert _fa(rows) == ["read:image:.png"] and _fk(rows) == ["read:image"], rows
+
+
+def test_an_unmapped_extension_is_unrecognized_never_a_guess():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.zzz"}), 10)
+        assert _fa(rows) == ["edit:unrecognized:.zzz"], rows
+        assert _fk(rows) == ["edit:unrecognized"], rows
+
+
+def test_zero_output_tokens_emits_no_kind_token_row_but_the_counts_remain():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "assistant", _tool("Edit", {"file_path": "x.tsx"}), 0)
+        assert not _fkt(rows) and not _fat(rows), rows
+        assert _fk(rows) == ["edit:typescript"] and _fa(rows), rows
+
+
+def test_file_kind_is_always_file_action_minus_the_last_segment():
+    """THE INVARIANT: over a multi-call turn, kinds are exactly the actions with the extension
+    dropped -- in the counts AND in the token levels."""
+    with tempfile.TemporaryDirectory() as tmp:
+        files = [("Edit", "a.tsx"), ("Edit", "b.ts"), ("Read", "c.md"), ("Write", "d"),
+                 ("Read", "Dockerfile"), ("Edit", "e.zzz"), ("Glob", "src/f.go"), ("Read", "g.png")]
+        calls = [{"type": "tool_use", "name": n, "id": f"t{i}", "input": {"file_path": f}}
+                 for i, (n, f) in enumerate(files)]
+        rows = _verb_rows(tmp, "assistant", calls, 40)
+        drop = lambda v: v.rsplit(":", 1)[0]
+        assert _fk(rows) == sorted(drop(v) for v in _fa(rows)), (_fk(rows), _fa(rows))
+        assert {v for v, _ in _fkt(rows)} == {drop(v) for v, _ in _fat(rows)}, rows
+        # `.ts` and `.tsx` are two actions but ONE kind: charged once per turn at the kind level.
+        assert _fkt(rows).count(("edit:typescript", 40)) == 1, _fkt(rows)
+        assert len([v for v, _ in _fat(rows) if v.startswith("edit:typescript:")]) == 2
+
+
+def test_a_user_turn_emits_no_file_kind():
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = _verb_rows(tmp, "user", _tool("Write", {"file_path": "x.go"}), 10)
+        assert not _fk(rows) and not _fkt(rows), rows
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

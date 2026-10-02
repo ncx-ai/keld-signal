@@ -19,6 +19,8 @@ was impossible ("evidence is dropped on the way to the published enrichment").
 """
 from app.analysis import SCHEMA
 from app.analysis.window import attribution
+from app.analysis import filekinds
+from app.analysis.vocab import ACTIONS as _ACTS
 
 # ALLOCATION workstreams: spend divides among them, so one value must own the window. The floor is
 # what makes "unattributed" honest — below it there is no dominant value and we say so rather than
@@ -207,13 +209,164 @@ ALLOCATION = [
 # levels enter `store.PRECOMPUTED_LEVELS` automatically, since that tuple is DERIVED from
 # ALLOCATION + INVENTORY rather than restated; an unbinned published level would under-count the
 # interior of every historical window.
+# ⚠️ ADDING AN ENTRY HERE HAS A CONSUMER-SIDE CONSEQUENCE THAT NOTHING IN THIS REPO ENFORCES.
+#
+# Keld Atlas reads these as workstream dimensions by default and EXCLUDES a named set of
+# measure-type levels (`activity_classes`, `activity_class_tokens`, `system_categories`,
+# `system_actions`, `system_vendors`, `system_category_tokens`, `system_vendor_tokens`) from
+# that reader, because a distribution over capabilities or vendors is not a workstream and
+# renders as nonsense beside project/branch/language.
+#
+# That exclusion list is HAND-MAINTAINED on the Atlas side and keyed on the names below, so a
+# NEW measure-type level added here is NOT auto-excluded -- it will appear in Atlas's workstream
+# readers until someone adds it there. Confirmed by the Atlas side 2026-09-29.
+#
+# So: a new level that DESCRIBES the work (a path, a tool, a term) needs nothing. A new level
+# that MEASURES something about it needs a message to the Atlas side in the same change. This
+# is written here rather than only in their repo for the reason the block emitter's note gives:
+# a constraint recorded only in the consumer is one this side breaks without noticing.
+# Every act x every kind: the whole closed vocabulary of `file_kinds`, so it cannot truncate.
+_FILE_KIND_CAP = len(_ACTS) * len(filekinds.KINDS)
+
 INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
              ("named_terms", "term", 12), ("physical_acts", "action", None),
              ("files", "file", 40), ("directories", "dir", 24),
              ("components", "component", 16),
              ("file_types", "ext", 12), ("shell_verbs", "verb", 24),
-             ("subagents", "agent", 12), ("mcp_servers", "mcp_server", 12)]
+             ("subagents", "agent", 12), ("mcp_servers", "mcp_server", 12),
+             # `activity_classes` is a DISTRIBUTION over the block's requests, and that is
+             # the design rather than a convenience. Measured: above ~20 requests NO unit --
+             # session, block or subagent run -- is coherent enough for a single label, while
+             # the distribution stays distinctive at every size. So it is an INVENTORY (many
+             # values with counts) and must not be moved to ALLOCATION: that floor (winning
+             # share >= 0.50 and >= MIN_EVIDENCE) would publish `no_majority` on most units
+             # and discard the thing that carries the signal.
+             #
+             # Cap 9 is the WHOLE closed vocabulary, so this level can never be truncated and
+             # `inventory_omitted` can never name it -- a cut distribution is a wrong one, not
+             # a shorter one. `unclassified` is a real value and publishes as itself.
+             ("activity_classes", "activity_class", 9),
+             # The same nine values weighted by OUTPUT TOKENS instead of counted. Two
+             # denominators because they disagree by up to 3x on the same block; see the
+             # comment at the emission site in levels.py. ⚠️ Not a cost figure -- output is
+             # 10-14% of modelled cost, the rest being cache reads.
+             ("activity_class_tokens", "activity_class_tokens", 9),
+             # `activity_verbs` -- the atv1 VERB of each request, as a DISTRIBUTION,
+             # for the same reason activity_classes is one: above ~20 requests no unit
+             # is coherent enough for a single label while the distribution stays
+             # distinctive. Must not be moved to ALLOCATION -- that floor (winning
+             # share >= 0.50 and >= MIN_EVIDENCE) would publish `no_majority` on most
+             # units and discard the signal.
+             #
+             # Cap 9 is the WHOLE closed vocabulary (analysis/verbs.VERBS), so this
+             # level can never be truncated and `inventory_omitted` can never name it.
+             # ⚠️ IT IS 9 ALTHOUGH ONLY SIX VERBS ARE PRODUCED TODAY: the vocabulary is
+             # declared whole so a passing split study changes which values are
+             # produced and never the published vocabulary -- no second schema bump.
+             ("activity_verbs", "activity_verb", 9),
+             ("activity_verb_tokens", "activity_verb_tokens", 9),
+             # `file_actions` -- `<action>:<ext>`, the act joined to the file type it touched.
+             # Cap 12 is MEASURED: distinct pairs per transcript are p50=3, p90=7 on both
+             # corpora (p99 18/11, max 31/12), so 12 sits just above both p90s, the rule the
+             # 40/24/16 caps were set by. ⚠️ UNLIKE `activity_classes` THIS VOCABULARY IS OPEN
+             # (52 and 58 distinct pairs across the two corpora), so truncation is real and
+             # `inventory_omitted` can legitimately name this level.
+             ("file_actions", "file_action", 12),
+             # `file_action_tokens` -- the same values weighted by the turn's output tokens;
+             # same cap and the same open-vocabulary caveat as `file_actions`.
+             ("file_action_tokens", "file_action_tokens", 12),
+             # `file_kinds` -- `<action>:<kind>`, `file_actions` with the extension dropped (the
+             # kind comes from the declarative `analysis/filekinds.py`). ⚠️ The cap is COMPUTED --
+             # every act x every kind -- never typed, so this headline level can never truncate
+             # and `inventory_omitted` can never name it. (`vocab.ACTIONS`, not the four labelled
+             # acts: any act whose call carries a path publishes a row.) `file_actions` keeps 12
+             # because the extension multiplies its vocabulary open-endedly.
+             ("file_kinds", "file_kind", _FILE_KIND_CAP),
+             ("file_kind_tokens", "file_kind_tokens", _FILE_KIND_CAP),
+             # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
+             # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
+             #
+             # ⚠️ IT SITS BESIDE `external_systems`, NOT INSTEAD OF IT, and is the coarser of
+             # the two on purpose. That level publishes RAW HOSTS and a real corpus put
+             # `api-gateway-dev.keld.co` on the wire; a category names no host, no environment
+             # and no org, so this is strictly less identifying than its neighbour. It is also
+             # the only readable form of that evidence at all: 88.5% of one corpus's host
+             # mentions are loopback, and the top distinct value in the other is the org's own
+             # domain.
+             #
+             # ⚠️ WHAT IS MEASURED HERE IS THE KEY EXTRACTION, NOT THE COVERAGE. Both corpora
+             # are engineering work -- one contains zero MCP calls in 499 sessions -- so an org
+             # running on Jira, Salesforce or Workday is exactly the population this level is
+             # for and exactly the one neither corpus can speak for. Its coverage there is
+             # asserted from the table. That is why `unrecognized` is a published VALUE and not
+             # a silent drop: a thin answer must be legible as unknown coverage rather than as
+             # an org that touches nothing.
+             #
+             # Cap 22 is the whole closed vocabulary, like activity_classes: a truncated
+             # distribution is a wrong one, not a shorter one.
+             ("system_categories", "system_category", 22),
+             # `system_actions` -- `<category>:<verb>`, WHAT WAS DONE inside the system rather
+             # than only which system it was. `crm_sales` says a CRM was touched;
+             # `crm_sales:update` says a record was CHANGED, which is pipeline work rather than
+             # a lookup. The verb is already in the MCP tool name, so this costs no new
+             # evidence and no second parse.
+             #
+             # ⚠️ NOT REPLACEABLE BY JOINING `system_categories` WITH `activity_class`. That
+             # class is ONE label per inference REQUEST, covering every tool the request issued,
+             # so a request that fetches a Notion page and then greps a file has one class and
+             # no way to say which tool the verb belonged to. Pairing at the reference keeps
+             # them attached; the coarse view is still right there in the sibling dimension.
+             #
+             # ⚠️ MCP-ONLY BY DESIGN, so this dimension is SPARSER than its sibling and that is
+             # not a defect. A URL host names a system and no action. A CLI could be parsed for
+             # a subcommand, but `shell.py` already derives verbs on its own terms and a second
+             # verb vocabulary over the same commands is how two levels begin disagreeing about
+             # one call. Cap 24, above the realistic per-window distinct count.
+             ("system_actions", "system_action", 24),
+             # `system_vendors` -- `<category>:<vendor>`, WHICH NAMED PRODUCT inside the
+             # category. `issue_tracking` says a tracker was used; `issue_tracking:jira` says
+             # which one, which is what a reader recognises.
+             #
+             # ⚠️ IT PUBLISHES NO NEW INFORMATION AND THAT IS THE ARGUMENT FOR IT. The vendor
+             # ALREADY crosses -- `mcp_servers` publishes the bare brand, `external_systems`
+             # publishes the raw host it came from. What did not cross is the PAIRING, because
+             # vendor -> category lives only in `systems.py`, so a consumer cannot join the two
+             # without its own copy of that table. A copy is the thing to avoid: the table's
+             # whole operational value is that it grows client-side as connectors appear, and
+             # two copies drift silently.
+             #
+             # ⚠️ AN UNRECOGNISED SYSTEM PUBLISHES NOTHING HERE, unlike the two dimensions
+             # above. The level means "we can name this"; the fact that something could not be
+             # named is already carried by `system_categories` as `unrecognized`.
+             #
+             # ⚠️ The vendor half is an OPEN-LOOKING but CLOSED vocabulary: a value can only
+             # ever be a token from the table, never a raw host, so this is not the
+             # open-vocabulary exposure `named_terms` is. In particular a SUBDOMAIN never
+             # crosses -- `acme.atlassian.net` publishes `atlassian`, and `acme` is frequently
+             # the customer's own name.
+             ("system_vendors", "system_vendor", 24),
+             # The two dimensions above, weighted by OUTPUT TOKENS instead of counted --
+             # "how much did the model WRITE while working in this system".
+             #
+             # ⚠️ OUTPUT ONLY, and that is measured rather than conservative. Over 970
+             # system-touching requests in two corpora, median uncached input is 2 tokens
+             # against a median cache_read of 355,776 -- input is ~100% the conversation
+             # prefix replayed on every call -- and total input rises 9.0x between a
+             # session's first ten turns and turn 50+ for the same kinds of call. A
+             # total-token figure would report a late Jira call as consuming nine times an
+             # early one for identical work: session depth wearing a vendor's name.
+             #
+             # ⚠️ NOT A COST FIGURE. Output is 0.4% of all tokens here; the rest is cache
+             # reads at roughly a tenth the price.
+             #
+             # ⚠️ THESE ROWS DO NOT SUM TO THE BLOCK TOTAL, by design. A call touching two
+             # systems counts fully toward both. Splitting would invent a ratio with nothing
+             # behind it, and the over-count is bounded: 97.3% of system-touching requests
+             # touch exactly one system, 2.7% touch more. A consumer must render them as
+             # "tokens in calls that used this system" and never as shares of a whole.
+             ("system_category_tokens", "system_category_tokens", 22),
+             ("system_vendor_tokens", "system_vendor_tokens", 24)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
