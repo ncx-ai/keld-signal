@@ -34,7 +34,7 @@ Never on a machine whose Signal someone uses: the installer replaces it.
 |---|---|---|
 | 1.1 | Double-click the installer and click through with the defaults. 📸 each page. | No page asks for a setup code, a sign-in or which tools to use. |
 | 1.2 | Finish. 📸 the last page. | Exactly **one** "open Signal" option is shown and ticked. Windows: it opens the Keld Signal desktop app. No console window stays open. |
-| 1.3 | Let it open Signal. 📸 | The first-open screen: **Sign in with Atlas** and **Keep it on this computer**. |
+| 1.3 | Let it open Signal. 📸 | The first-open screen: **Sign in with Atlas** and **Keep it local**. |
 | 1.4 | Click **Sign in with Atlas**. 📸 the browser. | The default browser opens `…/cli/signal/authorize?…` on atlas-dev. The Signal window says to finish in the browser and shows the link. |
 | 1.5 | Sign in if asked, then 📸 the Continue screen. | It shows the tester's email and org and one **Continue** button. |
 | 1.6 | Click **Continue**. 📸 the tab, then 📸 Signal. | The tab says **"Signed in. Close this tab."** Within about 5 s Signal shows "Signed in as <email> · <org>". |
@@ -44,7 +44,7 @@ Never on a machine whose Signal someone uses: the installer replaces it.
 
 | # | Do | Pass when |
 |---|---|---|
-| 2.1 | Install by double-click, open Signal, click **Keep it on this computer**. 📸 | The normal Signal page appears. A "restart to apply" bar may show; note it, it is a known polish item. |
+| 2.1 | Install by double-click, open Signal, click **Keep it local**. 📸 | The normal Signal page appears. A "restart to apply" bar may show; note it, it is a known polish item. |
 | 2.2 | Close and reopen Signal; reboot once and reopen. | The first-open screen does not come back. `~/.keld/agent-config.json` has `"send_to_atlas": false`. |
 | 2.3 | Settings → **Sign in with Atlas**, finish in the browser. | Pairs as in 1.4–1.7. |
 

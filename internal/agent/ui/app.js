@@ -513,7 +513,7 @@ export function configErrorText(status, body) {
  *  spec's wireframe ("What the first open looks like") verbatim. */
 export const SIGNIN_TEXT = {
   signIn: "Sign in with Atlas",
-  localOnly: "Keep it on this computer",
+  localOnly: "Keep it local",
   firstRunTitle: "Welcome to Signal",
   // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
   welcomeEyebrow: "Keld Signal",
@@ -4163,7 +4163,7 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  /** "Keep it on this computer": the existing Send to Atlas switch, turned off,
+  /** "Keep it local": the existing Send to Atlas switch, turned off,
    *  through the page's one settings call. The daemon then answers
    *  first_run:false (send_to_atlas is no longer absent), which is what keeps
    *  the screen from ever coming back — the flag set here only saves the

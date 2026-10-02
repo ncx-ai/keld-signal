@@ -81,7 +81,7 @@ test.describe("Web sign-in", () => {
 
   test("from local only, Settings' Sign in turns Send to Atlas back on and signs in", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));
-    await page.getByRole("button", { name: "Keep it on this computer" }).click();
+    await page.getByRole("button", { name: "Keep it local" }).click();
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
 
