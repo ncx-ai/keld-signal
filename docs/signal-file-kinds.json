@@ -1,0 +1,330 @@
+{
+  "schema": 25,
+  "groups": [
+    "code",
+    "docs",
+    "data",
+    "config",
+    "image",
+    "document",
+    "other"
+  ],
+  "action_labels": {
+    "create": "Creating",
+    "edit": "Editing",
+    "read": "Reading",
+    "search": "Searching"
+  },
+  "kinds": [
+    {
+      "id": "go",
+      "display": "Go",
+      "group": "code"
+    },
+    {
+      "id": "python",
+      "display": "Python",
+      "group": "code"
+    },
+    {
+      "id": "typescript",
+      "display": "TypeScript",
+      "group": "code"
+    },
+    {
+      "id": "javascript",
+      "display": "JavaScript",
+      "group": "code"
+    },
+    {
+      "id": "rust",
+      "display": "Rust",
+      "group": "code"
+    },
+    {
+      "id": "java",
+      "display": "Java",
+      "group": "code"
+    },
+    {
+      "id": "ruby",
+      "display": "Ruby",
+      "group": "code"
+    },
+    {
+      "id": "sql",
+      "display": "SQL",
+      "group": "code"
+    },
+    {
+      "id": "bash",
+      "display": "Bash",
+      "group": "code"
+    },
+    {
+      "id": "css",
+      "display": "CSS",
+      "group": "code"
+    },
+    {
+      "id": "terraform",
+      "display": "Terraform",
+      "group": "code"
+    },
+    {
+      "id": "c_cpp",
+      "display": "C/C++",
+      "group": "code"
+    },
+    {
+      "id": "swift",
+      "display": "Swift",
+      "group": "code"
+    },
+    {
+      "id": "kotlin",
+      "display": "Kotlin",
+      "group": "code"
+    },
+    {
+      "id": "php",
+      "display": "PHP",
+      "group": "code"
+    },
+    {
+      "id": "csharp",
+      "display": "C#",
+      "group": "code"
+    },
+    {
+      "id": "html",
+      "display": "HTML",
+      "group": "code"
+    },
+    {
+      "id": "elixir",
+      "display": "Elixir",
+      "group": "code"
+    },
+    {
+      "id": "erlang",
+      "display": "Erlang",
+      "group": "code"
+    },
+    {
+      "id": "haskell",
+      "display": "Haskell",
+      "group": "code"
+    },
+    {
+      "id": "lua",
+      "display": "Lua",
+      "group": "code"
+    },
+    {
+      "id": "julia",
+      "display": "Julia",
+      "group": "code"
+    },
+    {
+      "id": "dart",
+      "display": "Dart",
+      "group": "code"
+    },
+    {
+      "id": "scala",
+      "display": "Scala",
+      "group": "code"
+    },
+    {
+      "id": "clojure",
+      "display": "Clojure",
+      "group": "code"
+    },
+    {
+      "id": "zig",
+      "display": "Zig",
+      "group": "code"
+    },
+    {
+      "id": "powershell",
+      "display": "PowerShell",
+      "group": "code"
+    },
+    {
+      "id": "r",
+      "display": "R",
+      "group": "code"
+    },
+    {
+      "id": "perl",
+      "display": "Perl",
+      "group": "code"
+    },
+    {
+      "id": "groovy",
+      "display": "Groovy",
+      "group": "code"
+    },
+    {
+      "id": "fortran",
+      "display": "Fortran",
+      "group": "code"
+    },
+    {
+      "id": "solidity",
+      "display": "Solidity",
+      "group": "code"
+    },
+    {
+      "id": "vue",
+      "display": "Vue",
+      "group": "code"
+    },
+    {
+      "id": "svelte",
+      "display": "Svelte",
+      "group": "code"
+    },
+    {
+      "id": "protobuf",
+      "display": "Protobuf",
+      "group": "code"
+    },
+    {
+      "id": "graphql",
+      "display": "GraphQL",
+      "group": "code"
+    },
+    {
+      "id": "diff",
+      "display": "Diff",
+      "group": "code"
+    },
+    {
+      "id": "notebook",
+      "display": "Notebook",
+      "group": "code"
+    },
+    {
+      "id": "hurl",
+      "display": "HTTP request file",
+      "group": "code"
+    },
+    {
+      "id": "markdown",
+      "display": "Markdown",
+      "group": "docs"
+    },
+    {
+      "id": "plaintext",
+      "display": "Plain text",
+      "group": "docs"
+    },
+    {
+      "id": "markup_doc",
+      "display": "Markup document",
+      "group": "docs"
+    },
+    {
+      "id": "json",
+      "display": "JSON",
+      "group": "data"
+    },
+    {
+      "id": "xml",
+      "display": "XML",
+      "group": "data"
+    },
+    {
+      "id": "csv",
+      "display": "CSV/TSV",
+      "group": "data"
+    },
+    {
+      "id": "database",
+      "display": "Database",
+      "group": "data"
+    },
+    {
+      "id": "log",
+      "display": "Log / captured output",
+      "group": "data"
+    },
+    {
+      "id": "yaml",
+      "display": "YAML",
+      "group": "config"
+    },
+    {
+      "id": "toml",
+      "display": "TOML",
+      "group": "config"
+    },
+    {
+      "id": "config",
+      "display": "Config",
+      "group": "config"
+    },
+    {
+      "id": "template",
+      "display": "Template / example file",
+      "group": "config"
+    },
+    {
+      "id": "image",
+      "display": "Image",
+      "group": "image"
+    },
+    {
+      "id": "svg",
+      "display": "SVG",
+      "group": "image"
+    },
+    {
+      "id": "pdf",
+      "display": "PDF",
+      "group": "document"
+    },
+    {
+      "id": "office_doc",
+      "display": "Office document",
+      "group": "document"
+    },
+    {
+      "id": "archive",
+      "display": "Archive",
+      "group": "other"
+    },
+    {
+      "id": "binary",
+      "display": "Binary",
+      "group": "other"
+    },
+    {
+      "id": "media",
+      "display": "Audio / video",
+      "group": "other"
+    },
+    {
+      "id": "docker",
+      "display": "Docker",
+      "group": "config"
+    },
+    {
+      "id": "make",
+      "display": "Make",
+      "group": "config"
+    },
+    {
+      "id": "docs",
+      "display": "Documentation",
+      "group": "docs"
+    },
+    {
+      "id": "unrecognized",
+      "display": "Unrecognised",
+      "group": "other"
+    }
+  ]
+}

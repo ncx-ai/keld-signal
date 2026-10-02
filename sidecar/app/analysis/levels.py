@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime
 
-from app.analysis import magnitude, terms
+from app.analysis import filekinds, magnitude, terms
 from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
 from app.analysis.readers import coerce
 from app.analysis.shell import bash_refs
@@ -475,6 +475,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
 
         paths = []
         _fa_seen = set()
+        _fk_seen = set()
         _fa_out = int((o.usage or {}).get("output_tokens") or 0)
         for call in o.tool_calls:
             name, inp = call.name, call.input
@@ -493,8 +494,17 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             if act and o.role != "user":
                 _fp = next((inp[k] for k in PATH_INPUTS if isinstance(inp, dict) and inp.get(k)), None)
                 if _fp:
-                    _fav = f"{act}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}"
+                    # ⚠️ The kind is computed ONCE and BOTH values are built from this one
+                    # local, so `file_kind` is `file_action` with its last segment dropped BY
+                    # CONSTRUCTION -- a second derivation could disagree about which kind an
+                    # extension belongs to, the failure the 3-part value exists to rule out.
+                    # `<action>:<kind>:<ext>` is split by Atlas with `split(":", 2)`, so no kind
+                    # id may hold a colon (`test_filekinds.py` asserts it).
+                    _fk = filekinds.kind_for(_fp)
+                    _fkv = f"{act}:{_fk}"
+                    _fav = f"{_fkv}:{os.path.splitext(str(_fp))[1].lower() or '(none)'}"
                     add("ref", "file_action", _fav, 1)
+                    add("ref", "file_kind", _fkv, 1)
                     # `file_action_tokens` -- the same value, weighted by the turn's OUTPUT
                     # TOKENS instead of counted once per call. The two denominators disagree:
                     # across both corpora on 14,102 path-carrying calls `read:.md` is 8.4% of
@@ -515,6 +525,12 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     if _fa_out and _fav not in _fa_seen:
                         _fa_seen.add(_fav)
                         add("ref", "file_action_tokens", _fav, _fa_out)
+                    # `file_kind_tokens` -- the same, one level coarser, with its OWN per-turn
+                    # dedupe: two extensions of one kind in a turn (`.ts` and `.tsx`) are one
+                    # `edit:typescript` and charge the turn's output ONCE (FAMILY B).
+                    if _fa_out and _fkv not in _fk_seen:
+                        _fk_seen.add(_fkv)
+                        add("ref", "file_kind_tokens", _fkv, _fa_out)
             # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
             # per turn, because the count of edits is precisely the useless predictor this
             # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from

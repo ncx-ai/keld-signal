@@ -182,6 +182,8 @@ func analysisFrom(ws map[string]*Dimension, inv InventoryBlock, omitted map[stri
 		ActivityVerbTokens:   convertIdentifierInventory(inv.ActivityVerbTokens),
 		FileActions:          convertIdentifierInventory(inv.FileActions),
 		FileActionTokens:     convertIdentifierInventory(inv.FileActionTokens),
+		FileKinds:            convertIdentifierInventory(inv.FileKinds),
+		FileKindTokens:       convertIdentifierInventory(inv.FileKindTokens),
 		SystemCategories:     convertIdentifierInventory(inv.SystemCategories),
 		SystemActions:        convertIdentifierInventory(inv.SystemActions),
 		SystemVendors:        convertIdentifierInventory(inv.SystemVendors),

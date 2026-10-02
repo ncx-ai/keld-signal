@@ -155,13 +155,21 @@ type WindowAnalysis struct {
 	// ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
 	ActivityVerbTokens []NameCount
 	// FileActions pairs the physical act with the extension of the file it touched,
-	// `<action>:<ext>` (`edit:.tsx`, `read:.jpg`, `create:(none)`). Extension only, never
+	// `<action>:<kind>:<ext>` (`edit:typescript:.tsx`, `read:image:.jpg`, `create:make:(none)`). Extension only, never
 	// a path. The vocabulary is OPEN, so `inventory_omitted` can name this level.
 	FileActions []NameCount
 	// FileActionTokens is FileActions weighted by the turn's OUTPUT TOKENS rather than counted
 	// per call; the two denominators diverge up to 5.58x (`read:.md` 8.4% of calls, 1.5% of
 	// tokens). ⚠️ Not a cost figure -- output is 10-14% of modelled cost.
 	FileActionTokens []NameCount
+	// FileKinds is `<action>:<kind>` -- FileActions with the extension dropped, so
+	// `edit:typescript` rather than `edit:typescript:.tsx`. Always FileActions minus its last
+	// segment (one derivation sidecar-side). The vocabulary is CLOSED (analysis/filekinds.py,
+	// `unrecognized` included) and the cap is computed from it, so it never appears in
+	// `inventory_omitted`. No kind id contains a colon: consumers split with `split(":", 2)`.
+	FileKinds []NameCount
+	// FileKindTokens is FileKinds weighted by the turn's output tokens, as FileActionTokens.
+	FileKindTokens []NameCount
 
 	// SystemCategories is WHICH KIND OF VENDOR PRODUCT the window's work ran
 	// through — `issue_tracking`, `crm_sales`, `hr_people` — from a declarative

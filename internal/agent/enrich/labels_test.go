@@ -3,14 +3,15 @@ package enrich
 import "testing"
 
 func TestSchemaVersion(t *testing.T) {
+	// 29 -> 30: window rows gained `file_kinds` / `file_kind_tokens`; `file_actions` is now `<action>:<kind>:<ext>`.
 	// 28 -> 29: window rows gained `file_action_tokens` (`file_actions` by output tokens).
 	// 27 -> 28: window rows gained `file_actions` (`<action>:<ext>`).
 	// 26 -> 27: window rows gained `activity_verbs` / `activity_verb_tokens` (atv1).
 	// 22 -> 23: block rows gained `concepts` (enrich.Concept) and the attribution
 	// meta gained `concept_ms`. A published-vocabulary change, so the version moves
 	// with it — that is what this test is for.
-	if SchemaVersion != 29 {
-		t.Fatalf("SchemaVersion = %d, want 29", SchemaVersion)
+	if SchemaVersion != 30 {
+		t.Fatalf("SchemaVersion = %d, want 30", SchemaVersion)
 	}
 }
 

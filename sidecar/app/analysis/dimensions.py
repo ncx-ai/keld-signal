@@ -19,6 +19,8 @@ was impossible ("evidence is dropped on the way to the published enrichment").
 """
 from app.analysis import SCHEMA
 from app.analysis.window import attribution
+from app.analysis import filekinds
+from app.analysis.vocab import ACTIONS as _ACTS
 
 # ALLOCATION workstreams: spend divides among them, so one value must own the window. The floor is
 # what makes "unattributed" honest — below it there is no dominant value and we say so rather than
@@ -223,6 +225,9 @@ ALLOCATION = [
 # that MEASURES something about it needs a message to the Atlas side in the same change. This
 # is written here rather than only in their repo for the reason the block emitter's note gives:
 # a constraint recorded only in the consumer is one this side breaks without noticing.
+# Every act x every kind: the whole closed vocabulary of `file_kinds`, so it cannot truncate.
+_FILE_KIND_CAP = len(_ACTS) * len(filekinds.KINDS)
+
 INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
              ("named_terms", "term", 12), ("physical_acts", "action", None),
@@ -271,6 +276,14 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              # `file_action_tokens` -- the same values weighted by the turn's output tokens;
              # same cap and the same open-vocabulary caveat as `file_actions`.
              ("file_action_tokens", "file_action_tokens", 12),
+             # `file_kinds` -- `<action>:<kind>`, `file_actions` with the extension dropped (the
+             # kind comes from the declarative `analysis/filekinds.py`). ⚠️ The cap is COMPUTED --
+             # every act x every kind -- never typed, so this headline level can never truncate
+             # and `inventory_omitted` can never name it. (`vocab.ACTIONS`, not the four labelled
+             # acts: any act whose call carries a path publishes a row.) `file_actions` keeps 12
+             # because the extension multiplies its vocabulary open-endedly.
+             ("file_kinds", "file_kind", _FILE_KIND_CAP),
+             ("file_kind_tokens", "file_kind_tokens", _FILE_KIND_CAP),
              # `system_categories` -- WHAT KIND OF BUSINESS SYSTEM the window reached out to,
              # from a DECLARATIVE table (`analysis/systems.py`) rather than an inference.
              #
