@@ -4296,7 +4296,7 @@ if (typeof document !== "undefined") {
         el(
           "div",
           { class: "welcome-inner" },
-          el("div", { class: "welcome-eyebrow" }, el("span", { class: "welcome-mark", html: KELD_K }), SIGNIN_TEXT.welcomeEyebrow),
+          el("div", { class: "welcome-eyebrow" }, el("span", { class: "welcome-mark", html: KELD_K }), el("span", { class: "welcome-eyebrow-text" }, SIGNIN_TEXT.welcomeEyebrow)),
           el("h1", { class: "welcome-head" }, SIGNIN_TEXT.welcomeHeadA, el("br", {}), el("span", {}, SIGNIN_TEXT.welcomeHeadB)),
           el("p", { class: "welcome-lede" }, SIGNIN_TEXT.welcomeLede),
           el(
