@@ -82,7 +82,7 @@ _EXTRA = (
     ("json", "JSON", "data", (".json", ".jsonl", ".ndjson", ".jsonc", ".json5")),
     ("xml", "XML", "data", (".xml", ".rels", ".xsd", ".xsl", ".plist")),
     ("csv", "CSV/TSV", "data", (".csv", ".tsv")),
-    ("database", "Database", "data", (".db", ".sqlite", ".sqlite3", ".parquet", ".avro",
+    ("database", "Database", "data", (".dbf", ".db", ".sqlite", ".sqlite3", ".parquet", ".avro",
                                  ".orc", ".feather", ".accdb", ".mdb")),   # columnar files ride with `.parquet`
     ("log", "Log / captured output", "data", (".log", ".output")),
     # config
@@ -116,7 +116,7 @@ _EXTRA = (
     # analytics / stats (`.parquet` stays under `database`, which already owned it)
     ("stats_data", "Statistical data", "data",
      (".sav", ".dta", ".rdata", ".rds", ".mat", ".sas7bdat", ".jmp", ".sps")),
-    ("geo", "Geospatial data", "data", (".geojson", ".kml", ".kmz", ".shp", ".gpx", ".shx", ".dbf", ".mxd", ".qgs", ".qgz",
+    ("geo", "Geospatial data", "data", (".geojson", ".kml", ".kmz", ".shp", ".gpx", ".shx", ".mxd", ".qgs", ".qgz",
                                      ".gpkg")),
     # imaging and interchange messages are different work (clinical vs integration)
     ("medical_image", "Medical image", "data", (".dcm",)),
