@@ -421,22 +421,82 @@
       "group": "data"
     },
     {
-      "id": "design",
-      "display": "Design file",
-      "phrase": "designs",
+      "id": "raster_image",
+      "display": "Raster image file",
+      "phrase": "raster images",
       "group": "design"
     },
     {
+      "id": "vector_graphic",
+      "display": "Vector illustration",
+      "phrase": "vector illustrations",
+      "group": "design"
+    },
+    {
+      "id": "ui_design",
+      "display": "UI design file",
+      "phrase": "UI designs",
+      "group": "design"
+    },
+    {
+      "id": "page_layout",
+      "display": "Page layout",
+      "phrase": "page layouts",
+      "group": "design"
+    },
+    {
+      "id": "motion_project",
+      "display": "Video / motion project",
+      "phrase": "video projects",
+      "group": "media"
+    },
+    {
+      "id": "audio_project",
+      "display": "Audio production project",
+      "phrase": "audio projects",
+      "group": "media"
+    },
+    {
+      "id": "diagram",
+      "display": "Diagram",
+      "phrase": "diagrams",
+      "group": "document"
+    },
+    {
+      "id": "project_plan",
+      "display": "Project plan",
+      "phrase": "project plans",
+      "group": "document"
+    },
+    {
+      "id": "onenote",
+      "display": "OneNote",
+      "phrase": "OneNote",
+      "group": "document"
+    },
+    {
+      "id": "survey",
+      "display": "Survey definition",
+      "phrase": "surveys",
+      "group": "data"
+    },
+    {
+      "id": "bi_report",
+      "display": "BI report / workbook",
+      "phrase": "BI reports",
+      "group": "data"
+    },
+    {
       "id": "cad",
-      "display": "CAD drawing",
-      "phrase": "CAD models",
+      "display": "CAD / BIM model",
+      "phrase": "CAD and BIM models",
       "group": "other"
     },
     {
       "id": "model_3d",
-      "display": "3D mesh",
-      "phrase": "3D meshes",
-      "group": "other"
+      "display": "3D model / animation",
+      "phrase": "3D models",
+      "group": "design"
     },
     {
       "id": "font",

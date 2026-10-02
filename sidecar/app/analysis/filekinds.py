@@ -83,7 +83,7 @@ _EXTRA = (
     ("xml", "XML", "data", (".xml", ".rels", ".xsd", ".xsl", ".plist")),
     ("csv", "CSV/TSV", "data", (".csv", ".tsv")),
     ("database", "Database", "data", (".db", ".sqlite", ".sqlite3", ".parquet", ".avro",
-                                 ".orc", ".feather")),   # columnar files ride with `.parquet`
+                                 ".orc", ".feather", ".accdb", ".mdb")),   # columnar files ride with `.parquet`
     ("log", "Log / captured output", "data", (".log", ".output")),
     # config
     ("yaml", "YAML", "config", (".yaml", ".yml")),
@@ -109,23 +109,51 @@ _EXTRA = (
     ("presentation", "Presentation", "document", (".pptx", ".ppt", ".odp", ".key")),
     ("ebook", "E-book", "document", (".epub", ".mobi", ".azw3")),
     ("typesetting", "LaTeX / bibliography", "docs", (".tex", ".bib")),
-    ("email", "Email", "document", (".eml", ".msg", ".mbox")),
+    ("email", "Email", "document", (".eml", ".msg", ".mbox", ".pst", ".ost", ".olm")),
     ("calendar", "Calendar / contacts", "document", (".ics", ".vcf")),
     # finance / accounting (spreadsheets are above)
-    ("financial_data", "Financial data", "data", (".qbo", ".qfx", ".ofx", ".iif", ".xbrl")),
+    ("financial_data", "Financial data", "data", (".qbo", ".qfx", ".ofx", ".iif", ".xbrl", ".qbw", ".qbb", ".sage")),
     # analytics / stats (`.parquet` stays under `database`, which already owned it)
     ("stats_data", "Statistical data", "data",
-     (".sav", ".dta", ".rdata", ".rds", ".mat", ".sas7bdat")),
-    ("geo", "Geospatial data", "data", (".geojson", ".kml", ".kmz", ".shp", ".gpx")),
+     (".sav", ".dta", ".rdata", ".rds", ".mat", ".sas7bdat", ".jmp", ".sps")),
+    ("geo", "Geospatial data", "data", (".geojson", ".kml", ".kmz", ".shp", ".gpx", ".shx", ".dbf", ".mxd", ".qgs", ".qgz",
+                                     ".gpkg")),
     # imaging and interchange messages are different work (clinical vs integration)
     ("medical_image", "Medical image", "data", (".dcm",)),
     ("health_message", "Healthcare message", "data", (".hl7",)),
     # design. `.svg` stays `image`: it is XML text an agent edits as code-like markup and is
     # already published as `svg`; re-homing it would move existing rows.
-    ("design", "Design file", "design",
-     (".fig", ".sketch", ".psd", ".ai", ".xd", ".indd", ".afdesign", ".afphoto", ".eps")),
-    ("cad", "CAD drawing", "other", (".dwg", ".dxf", ".step", ".iges")),
-    ("model_3d", "3D mesh", "other", (".stl",)),
+    # ⚠️ SPLIT ALONG THE WORK, NOT THE VENDOR. This was one `design` kind holding .fig .psd .ai
+    # .indd .eps -- the collapse `office_doc` had. A raster comp, a vector asset, a UI file and a
+    # print layout are different crafts done by different roles. (`.afdesign`/`.afphoto`/`.afpub`
+    # are Affinity Designer/Photo/Publisher: one vendor, three crafts, so three kinds.)
+    ("raster_image", "Raster image file", "design", (".psd", ".psb", ".xcf", ".afphoto", ".cpt")),
+    ("vector_graphic", "Vector illustration", "design",
+     (".ai", ".eps", ".cdr", ".afdesign", ".svgz", ".odg")),
+    ("ui_design", "UI design file", "design", (".fig", ".sketch", ".xd", ".framer", ".protopie")),
+    # `.pub` is Microsoft Publisher: page layout, whatever Office folder it ships in.
+    ("page_layout", "Page layout", "design", (".indd", ".idml", ".qxp", ".afpub", ".pmd", ".pub")),
+    ("motion_project", "Video / motion project", "media",
+     (".aep", ".prproj", ".veg", ".fcpxml", ".drp")),
+    ("audio_project", "Audio production project", "media",
+     (".als", ".flp", ".logicx", ".ptx", ".band", ".rpp", ".aup3")),
+    # office / planning
+    ("diagram", "Diagram", "document", (".vsdx", ".vsd")),
+    ("project_plan", "Project plan", "document", (".mpp",)),
+    ("onenote", "OneNote", "document", (".one",)),
+    # survey / forms. (`.sps` is SPSS syntax and sits with `stats_data`: it is analysis work.)
+    ("survey", "Survey definition", "data", (".qsf",)),
+    # BI / reporting
+    ("bi_report", "BI report / workbook", "data", (".pbix", ".twb", ".twbx", ".rpt", ".qvw")),
+    # CAD and AEC (BIM) are one kind: both are model-and-drawing authoring, and no extension here
+    # is ambiguous between them.
+    ("cad", "CAD / BIM model", "other",
+     (".dwg", ".dxf", ".step", ".iges", ".rvt", ".skp", ".ifc", ".catpart", ".sldprt", ".sldasm",
+      ".ipt")),
+    # `model_3d` KEPT as the id (renaming moves published `.stl` rows) and widened to the
+    # modelling/animation crafts: a mesh, a DCC scene and an interchange file are one artist's work.
+    ("model_3d", "3D model / animation", "design",
+     (".stl", ".blend", ".c4d", ".ma", ".mb", ".max", ".fbx", ".obj", ".dae", ".usdz")),
     ("font", "Font", "other", (".ttf", ".otf", ".woff", ".woff2", ".eot")),
     ("certificate", "Certificate / keystore", "config",
      (".pem", ".crt", ".cer", ".p12", ".pfx", ".jks")),
@@ -204,9 +232,12 @@ _PHRASE = {
     "pdf": "PDFs", "document": "documents", "spreadsheet": "spreadsheets",
     "presentation": "presentations", "ebook": "e-books", "typesetting": "LaTeX and bibliography files",
     "email": "email files", "calendar": "calendar and contact files",
-    "audio": "audio", "video": "video", "model_3d": "3D meshes", "financial_data": "financial data files",
+    "audio": "audio", "video": "video", "model_3d": "3D models", "financial_data": "financial data files",
     "stats_data": "statistical data files", "geo": "geospatial files",
-    "medical_image": "medical images", "health_message": "healthcare messages", "design": "designs", "cad": "CAD models",
+    "medical_image": "medical images", "health_message": "healthcare messages", "raster_image": "raster images", "vector_graphic": "vector illustrations",
+    "ui_design": "UI designs", "page_layout": "page layouts", "motion_project": "video projects",
+    "audio_project": "audio projects", "diagram": "diagrams", "project_plan": "project plans",
+    "survey": "surveys", "bi_report": "BI reports", "cad": "CAD and BIM models",
     "font": "fonts", "certificate": "certificates",
     "archive": "archives", "binary": "binaries",
     UNRECOGNIZED: "unrecognized files",

@@ -137,7 +137,7 @@ def test_dot_key_is_keynote_not_a_certificate():
 
 def test_every_business_domain_resolves_to_its_kind():
     for path, kind in (("a.qfx", "financial_data"), ("a.xbrl", "financial_data"),
-                       ("a.fig", "design"), ("a.psd", "design"), ("a.eps", "design"),
+                       ("a.fig", "ui_design"), ("a.psd", "raster_image"), ("a.eps", "vector_graphic"),
                        ("a.mkv", "video"), ("a.flac", "audio"), ("a.eml", "email"),
                        ("a.ics", "calendar"), ("a.epub", "ebook"), ("a.tex", "typesetting"),
                        ("a.sav", "stats_data"), ("a.rds", "stats_data"), ("a.orc", "database"),
@@ -150,12 +150,55 @@ def test_every_business_domain_resolves_to_its_kind():
 def test_every_group_is_used_and_every_kind_has_one():
     used = {g for _, g in F.KINDS.values()}
     assert used == set(F.GROUPS), set(F.GROUPS) ^ used
-    assert F.group_for("audio") == F.group_for("video") == "media" and F.group_for("design") == "design"
+    assert F.group_for("audio") == F.group_for("video") == "media" and F.group_for("ui_design") == "design"
 
 
-def test_non_code_kinds_outnumber_code_kinds():
-    code = sum(1 for _, g in F.KINDS.values() if g == "code")
-    assert len(F.KINDS) - code > code, (code, len(F.KINDS))
+# ⚠️ COVERAGE, NOT COUNT. This replaces a test asserting non-code kinds outnumber code kinds,
+# which shaped the taxonomy to satisfy a tally (four kinds were split to pass it). This table
+# fails when a domain's extension stops resolving and is indifferent to how many kinds exist, so
+# neither splitting nor merging a kind can move it. Each row is a REAL format of a real tool.
+_COVERAGE = (
+    # graphics: five crafts
+    (".psd", "raster_image"), (".xcf", "raster_image"), (".ai", "vector_graphic"),
+    (".cdr", "vector_graphic"), (".fig", "ui_design"), (".sketch", "ui_design"),
+    (".indd", "page_layout"), (".pub", "page_layout"), (".aep", "motion_project"),
+    (".prproj", "motion_project"), (".blend", "model_3d"), (".fbx", "model_3d"),
+    # audio production
+    (".als", "audio_project"), (".logicx", "audio_project"), (".rpp", "audio_project"),
+    # CAD / AEC
+    (".dwg", "cad"), (".rvt", "cad"), (".ifc", "cad"), (".sldprt", "cad"), (".step", "cad"),
+    # office / planning
+    (".docx", "document"), (".xlsx", "spreadsheet"), (".pptx", "presentation"),
+    (".vsdx", "diagram"), (".mpp", "project_plan"), (".one", "onenote"),
+    (".accdb", "database"), (".mdb", "database"),
+    # finance / accounting
+    (".qbw", "financial_data"), (".qbo", "financial_data"), (".ofx", "financial_data"),
+    (".xbrl", "financial_data"),
+    # statistics
+    (".sav", "stats_data"), (".dta", "stats_data"), (".sas7bdat", "stats_data"),
+    (".jmp", "stats_data"), (".rds", "stats_data"),
+    # GIS
+    (".shp", "geo"), (".gpkg", "geo"), (".qgz", "geo"), (".kmz", "geo"), (".gpx", "geo"),
+    # email archives
+    (".pst", "email"), (".ost", "email"), (".olm", "email"), (".mbox", "email"), (".eml", "email"),
+    # survey / BI
+    (".qsf", "survey"), (".pbix", "bi_report"), (".twbx", "bi_report"), (".qvw", "bi_report"),
+    # code stays derived
+    (".py", "python"), (".ts", "typescript"),
+)
+
+
+def test_every_business_domain_extension_resolves_to_a_specific_kind():
+    for ext, kind in _COVERAGE:
+        got = F.kind_for("work" + ext)
+        assert got != F.UNRECOGNIZED, ext
+        assert got == kind, (ext, got, kind)
+
+
+def test_design_is_no_longer_one_kind():
+    assert "design" not in F.KINDS
+    graphics = {F.kind_for("a" + e) for e in (".psd", ".ai", ".fig", ".indd", ".aep", ".blend")}
+    assert len(graphics) == 6, graphics
 
 
 if __name__ == "__main__":
