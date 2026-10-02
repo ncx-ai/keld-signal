@@ -31,7 +31,19 @@ GROUPS = ("code", "docs", "data", "config", "image", "document", "other")
 # Display labels for the acts a file-touching call can carry. Only the four that `file_action`
 # publishes for a file in practice; any other act still publishes (the vocabulary of ACTS is
 # `vocab.ACTIONS`), it just has no label here.
-ACTION_LABELS = {"create": "Creating", "edit": "Editing", "read": "Reading", "search": "Searching"}
+# ⚠️ COVERS EVERY `vocab.TOOL_ACTION` VALUE, not just the ones seen in our corpora, because any
+# tool carrying a path key publishes a `file_kind` row with that action in front. Measured across
+# both corpora: `edit` 6283, `read` 6126, `create` 1552 and **`publish` 140** (the `Artifact`
+# tool) actually occur — while `search` does NOT, despite being the obvious fourth guess. A table
+# built from the obvious four would have shipped a label for an action that never happens and
+# none for one that happens 140 times. The rest are here so a tool that gains a path input later
+# cannot produce an unlabelled row.
+ACTION_LABELS = {
+    "create": "Creating", "edit": "Editing", "read": "Reading", "search": "Searching",
+    "publish": "Publishing", "fetch": "Fetching", "delegate": "Delegating",
+    "apply a skill": "Applying a skill", "ask the person": "Asking",
+    "deliver a file": "Delivering a file",
+}
 
 UNRECOGNIZED = "unrecognized"
 

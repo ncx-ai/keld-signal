@@ -13,7 +13,13 @@
     "create": "Creating",
     "edit": "Editing",
     "read": "Reading",
-    "search": "Searching"
+    "search": "Searching",
+    "publish": "Publishing",
+    "fetch": "Fetching",
+    "delegate": "Delegating",
+    "apply a skill": "Applying a skill",
+    "ask the person": "Asking",
+    "deliver a file": "Delivering a file"
   },
   "kinds": [
     {
