@@ -306,7 +306,10 @@ body.is-welcome .pane-root { padding: 0; }
   display: flex;
   flex-direction: column;
 }
-.welcome-eyebrow { margin-top: auto; }
+.welcome-eyebrow { margin-top: auto; display: flex; align-items: center; gap: 12px; }
+/* The app icon: a dark rounded square with the K in the page colour. */
+.welcome-mark { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 7px; background: var(--ink); color: var(--bg); }
+.welcome-mark svg { width: 15px; height: auto; display: block; }
 .welcome-eyebrow {
   font-family: var(--mono);
   font-size: 12px;
