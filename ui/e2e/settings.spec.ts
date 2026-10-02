@@ -79,4 +79,26 @@ test.describe("Settings", () => {
     const { input } = signal.settingSwitch(/^Vector attribution/);
     await expect(input).not.toBeChecked();
   });
+
+  // A developer can look at the first-open screen again without resetting the
+  // machine: the preview lives in the page, so the daemon's state is untouched
+  // and Back returns to the pane it was opened from.
+  test("the Developer box shows the welcome screen, and Back to Signal returns to Settings", async ({ signal, page }) => {
+    await signal.open("settings");
+    await expect(page.getByRole("button", { name: "Show welcome screen" })).toHaveCount(0);
+
+    const version = page.locator("#navVersion");
+    await expect(version).toBeVisible();
+    for (let i = 0; i < 7; i++) await version.click();
+
+    await page.getByRole("button", { name: "Show welcome screen" }).click();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Use without an account" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Back to Signal" }).click();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.locator("#envPill")).toHaveText("Local");
+  });
 });

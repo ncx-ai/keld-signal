@@ -564,6 +564,21 @@ export function showFirstRun(auth) {
   return !!auth && auth.first_run === true && auth.paired !== true;
 }
 
+/** Does the welcome screen stand in for the panes? The daemon's first-open
+ *  choice, or the Developer box's preview of it. Never while offline: the
+ *  cached page is showing what it last knew, and neither button could act. */
+export function welcomeShown(auth, preview, offline) {
+  return (showFirstRun(auth) || !!preview) && !offline;
+}
+
+/** The Developer box's welcome-screen row, and the way back out of it. */
+export const WELCOME_PREVIEW_TEXT = {
+  title: "Welcome screen",
+  desc: "Shows the first-open screen on this page. Its buttons work for real. Nothing changes until you press one.",
+  show: "Show welcome screen",
+  back: "Back to Signal",
+};
+
 /** The top bar's label: where this machine's data goes, or null to hide it.
  *  `icon` is "local" or "cloud"; a cloud label names the Atlas environment
  *  when it is not production ("Atlas dev", "Atlas local"), set with
@@ -2378,6 +2393,9 @@ if (typeof document !== "undefined") {
     // renders as no first-open screen and no sign-in bar, never as "not
     // signed in": the page does not know that, so it does not say it.
     auth: null,
+    // The Developer box's "Show welcome screen". Page memory only, so a reload
+    // ends it, and so does any choice made on the screen.
+    welcomePreview: false,
     // signin: the web sign-in in progress, from whichever entry point started
     // it. {status: idle|starting|waiting|failed|done, url, opened, startedAt,
     // failures, message, doneAt, restartAfter, enableAtlas}. See
@@ -3764,6 +3782,8 @@ if (typeof document !== "undefined") {
       SHOW_BLOCK_GRANULARITY ? note : null,
       SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
       SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      renderDevWelcome(),
+      el("div", { class: "settings-sep" }),
       renderDevGenerate(settings),
       el("div", { class: "settings-sep" }),
       renderDevAttribution(settings, readonly),
@@ -3841,6 +3861,20 @@ if (typeof document !== "undefined") {
         switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
       ),
       fieldNote("attribution", readonly)
+    );
+  }
+
+  function setWelcomePreview(on) {
+    state.welcomePreview = on;
+    route();
+  }
+
+  function renderDevWelcome() {
+    return el(
+      "div",
+      { class: "settings-row" },
+      el("span", {}, WELCOME_PREVIEW_TEXT.title, el("div", { class: "desc" }, WELCOME_PREVIEW_TEXT.desc)),
+      el("button", { class: "btn btn-small", type: "button", onclick: () => setWelcomePreview(true) }, WELCOME_PREVIEW_TEXT.show)
     );
   }
 
@@ -4013,6 +4047,7 @@ if (typeof document !== "undefined") {
     }
     if (step.status === "done") {
       state.signin = { status: "done", doneAt: Date.now() };
+      state.welcomePreview = false;
       if (flow.restartAfter) {
         state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
         state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
@@ -4038,6 +4073,7 @@ if (typeof document !== "undefined") {
   async function chooseLocalOnly() {
     clearTimeout(signinTimer);
     state.signin = { status: "idle" };
+    state.welcomePreview = false;
     await updateSettings({ send_to_atlas: false });
     if (settingsErrorFor("send_to_atlas")) return; // updateSettings already routed it
     if (state.auth) state.auth = { ...state.auth, first_run: false };
@@ -4167,8 +4203,12 @@ if (typeof document !== "undefined") {
           el(
             "div",
             { class: "welcome-actions" },
-            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
-            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
+            // A preview can be opened on a machine that already chose local
+            // only, where the start route refuses until Send to Atlas is on —
+            // Settings' own sign-in path handles that, so the preview uses it.
+            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin(state.welcomePreview ? { enableAtlas: !atlasEnabled(state.settings) } : {}) }, SIGNIN_TEXT.signIn),
+            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly),
+            state.welcomePreview ? el("button", { class: "btn welcome-secondary", type: "button", onclick: () => setWelcomePreview(false) }, WELCOME_PREVIEW_TEXT.back) : null
           ),
           signinFlowNode(),
           err ? el("div", { class: "settings-note error-note" }, err) : null,
@@ -4812,7 +4852,7 @@ if (typeof document !== "undefined") {
     // The first-open choice stands in for every pane until it is answered.
     // Not while offline: the cached page is showing what it last knew, and
     // neither button could do anything.
-    const welcome = showFirstRun(state.auth) && !state.offline;
+    const welcome = welcomeShown(state.auth, state.welcomePreview, state.offline);
     document.body.classList.toggle("is-welcome", welcome);
     if (welcome) {
       document.body.classList.remove("pane-today");
@@ -4820,7 +4860,7 @@ if (typeof document !== "undefined") {
       // route() runs on every poll (each second during a sign-in). Redraw only
       // when something this screen shows has changed, so the ribbons keep
       // moving instead of restarting from a fresh canvas every tick.
-      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas")]);
+      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas"), state.welcomePreview]);
       const live = root.querySelector(":scope > section.welcome");
       if (live && live.dataset.key === key) return;
       renderFirstRun(root);

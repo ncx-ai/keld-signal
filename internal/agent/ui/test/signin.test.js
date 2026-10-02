@@ -4,6 +4,7 @@ import {
   copyText,
   envPill,
   showFirstRun,
+  welcomeShown,
   signinBarMode,
   signinPollStep,
   signinErrorText,
@@ -30,6 +31,20 @@ const auth = (over = {}) => ({
   pending: false,
   last_error: null,
   ...over,
+});
+
+// --- welcomeShown: the first-open choice, or the Developer box's preview of it. ---
+
+test("the welcome screen shows on the daemon's first_run, or on the preview, and never offline", () => {
+  assert.equal(welcomeShown(auth({ first_run: true }), false, false), true);
+  assert.equal(welcomeShown(auth({ first_run: false }), false, false), false);
+  // The preview shows it whatever the daemon says, signed in included.
+  assert.equal(welcomeShown(auth({ first_run: false }), true, false), true);
+  assert.equal(welcomeShown(auth({ paired: true }), true, false), true);
+  assert.equal(welcomeShown(null, true, false), true);
+  // Offline, neither button could act, so neither path shows it.
+  assert.equal(welcomeShown(auth({ first_run: true }), false, true), false);
+  assert.equal(welcomeShown(auth({ first_run: false }), true, true), false);
 });
 
 // --- showFirstRun: the spec's "does the first-open choice show?" table (AC-12). ---
