@@ -18,7 +18,10 @@ Never on a machine whose Signal someone uses: the installer replaces it.
     → `keld-setup.exe` (signed).
   - macOS: `gh run download 36719519251 -R ncx-ai/keld-signal -n installers-macos-14-arm64` → the `.pkg`.
   If `gh` is not signed in on the machine, the lead downloads them and copies them over.
-- Point Signal at dev **before** installing, for the signed-in user:
+- Point Signal at dev. With an installer built from #58 after `keld signal env` landed (2026-10-02),
+  run `keld signal env dev` right after installing: it saves the choice in `agent-config.json` and
+  restarts Signal, and `keld signal status` then says "Atlas: dev … not production". With the older
+  installer from run 36719519251, set the variables **before** installing, for the signed-in user:
   - Windows (PowerShell): `setx KELD_API_URL https://atlas-dev.keld.co` and
     `setx KELD_ATLAS_WEB_URL https://atlas-dev.keld.co`, then sign out and back in so new processes see them.
   - macOS: `launchctl setenv KELD_API_URL https://atlas-dev.keld.co` and

@@ -709,6 +709,16 @@ export function unpairView(status, error) {
   }
 }
 
+/** The Developer box's read-only Atlas line, or null on production when
+ *  developer mode is off (production is the default; nothing to say). */
+export function atlasEnvLine(env, devMode) {
+  if (!env || !env.name) return null;
+  const off = env.name !== "prod";
+  if (!off && !devMode) return null;
+  const where = env.web && env.web !== env.api ? `API ${env.api} · web ${env.web}` : env.api;
+  return { name: env.name, where, offProduction: off };
+}
+
 export function signedInText(auth) {
   const who = auth && auth.principal;
   const org = auth && auth.org;
@@ -3854,7 +3864,27 @@ if (typeof document !== "undefined") {
       dev ? el("div", { class: "settings-sep" }) : null,
       dev ? renderDevAttribution(settings, readonly) : null,
       dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevToolOTLP(settings, readonly) : null
+      dev ? renderDevToolOTLP(settings, readonly) : null,
+      renderAtlasEnvRow(settings, dev)
+    );
+  }
+
+  /** Which Atlas this machine uses. Read-only: it is switched from a terminal
+   *  with `keld signal env`, never from the page. */
+  function renderAtlasEnvRow(settings, dev) {
+    const line = atlasEnvLine(settings && settings.atlas_env, dev);
+    if (!line) return null;
+    return el(
+      "div",
+      {},
+      el("div", { class: "settings-sep" }),
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, "Atlas environment", el("div", { class: "desc" }, "Switch with keld signal env prod, dev or local, from a terminal.")),
+        el("span", { class: "pill" + (line.offProduction ? " atlas-env-off" : "") }, line.name)
+      ),
+      el("div", { class: "settings-note" + (line.offProduction ? " atlas-env-note" : "") }, line.where)
     );
   }
 

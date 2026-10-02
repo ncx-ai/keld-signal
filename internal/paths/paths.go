@@ -138,15 +138,23 @@ func TelemetrySpoolDir() string { return filepath.Join(SpoolDir(), "telemetry") 
 func FeaturesSpoolDir() string { return filepath.Join(SpoolDir(), "features") }
 
 // AtlasWebBase is where Atlas's web pages live — the browser sign-in's
-// authorize page. KELD_ATLAS_WEB_URL, else APIBase(): one host serves both in
-// dev and prod, and only a local Atlas splits them (:3000 web, :8000 API).
+// authorize page. KELD_ATLAS_WEB_URL; else, when the API address was set
+// explicitly (KELD_API_URL or --api-url), that same host; else the web address
+// of the environment agent-config.json names (atlas_env). One host serves both
+// in dev and prod; only a local Atlas splits them (:3000 web, :8000 API).
 func AtlasWebBase() string {
 	if v := os.Getenv("KELD_ATLAS_WEB_URL"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	return APIBase()
+	if apiOverrideSet || os.Getenv("KELD_API_URL") != "" {
+		return APIBase()
+	}
+	return configuredAtlasEnv().Web
 }
 
+// APIBase is where the CLI and the daemon call Atlas: a CLI --api-url, else
+// KELD_API_URL, else the environment agent-config.json names (atlas_env,
+// set by `keld signal env`), else production.
 func APIBase() string {
 	if apiOverrideSet {
 		return apiOverride
@@ -154,5 +162,5 @@ func APIBase() string {
 	if v := os.Getenv("KELD_API_URL"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	return DefaultAPIURL
+	return configuredAtlasEnv().API
 }

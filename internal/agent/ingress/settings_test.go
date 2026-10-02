@@ -380,3 +380,24 @@ func TestSettingsCarryNoGroupsOffAndLeaveTheStoredListAlone(t *testing.T) {
 		t.Fatalf("groups_off must never be written: %s", b)
 	}
 }
+
+func TestGetSettingsReportsTheAtlasEnvironment(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_API_URL", "")
+	t.Setenv("KELD_ATLAS_WEB_URL", "")
+	srv := httptest.NewServer(DiscardHandler("s3cret", SettingsRoute(nil)))
+	defer srv.Close()
+
+	var v settingsView
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
+	if v.AtlasEnv.Name != "prod" || v.AtlasEnv.API != "https://atlas.keld.co" {
+		t.Fatalf("default atlas_env = %+v", v.AtlasEnv)
+	}
+	if err := settings.WriteAtlasEnv("local"); err != nil {
+		t.Fatal(err)
+	}
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
+	if v.AtlasEnv != (atlasEnvView{Name: "local", API: "http://localhost:8000", Web: "http://localhost:3000"}) {
+		t.Fatalf("local atlas_env = %+v", v.AtlasEnv)
+	}
+}

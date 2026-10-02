@@ -19,6 +19,7 @@ import {
   unpairView,
   unpairErrorText,
   UNPAIR_TEXT,
+  atlasEnvLine,
 } from "../app.js";
 
 // GET /v1/auth/state (contract C5): {paired, principal, org, first_run, pending, last_error}.
@@ -288,4 +289,13 @@ test("a refused Unpair says why and offers the button again", () => {
   assert.equal(v.note, "Finish or cancel the sign-in first.");
   assert.match(unpairErrorText("pairing_set_by_env"), /KELD_CTX_TOKEN/);
   assert.equal(unpairErrorText(null), "Signal couldn't unpair. Try again.");
+});
+
+test("the Atlas environment line: silent on production unless developer mode, always shown off it", () => {
+  const prod = { name: "prod", api: "https://atlas.keld.co", web: "https://atlas.keld.co" };
+  assert.equal(atlasEnvLine(prod, false), null);
+  assert.deepEqual(atlasEnvLine(prod, true), { name: "prod", where: "https://atlas.keld.co", offProduction: false });
+  const local = { name: "local", api: "http://localhost:8000", web: "http://localhost:3000" };
+  assert.deepEqual(atlasEnvLine(local, false), { name: "local", where: "API http://localhost:8000 · web http://localhost:3000", offProduction: true });
+  assert.equal(atlasEnvLine(undefined, true), null);
 });

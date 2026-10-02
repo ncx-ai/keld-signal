@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"github.com/ncx-ai/keld-signal/internal/paths"
 	"log"
 	"net/http"
 	"os"
@@ -60,6 +61,15 @@ type settingsView struct {
 	Readonly    []string `json:"readonly"`
 	DevGenerate bool     `json:"dev_generate"`
 	DevRepos    []string `json:"dev_repos"`
+	// Which Atlas this machine uses (`keld signal env`): read-only here, shown
+	// in the Developer box, and always when it is not production.
+	AtlasEnv atlasEnvView `json:"atlas_env"`
+}
+
+type atlasEnvView struct {
+	Name string `json:"name"`
+	API  string `json:"api"`
+	Web  string `json:"web"`
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +88,13 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		Attribution: attrib.Enabled(set.Attribution),
 		ToolOTLP:    set.ToolOTLPEnabled(),
 		Readonly:    readonlySettingsKeys(),
+		AtlasEnv:    currentAtlasEnvView(),
 	})
+}
+
+func currentAtlasEnvView() atlasEnvView {
+	e := paths.CurrentAtlasEnv()
+	return atlasEnvView{Name: e.Name, API: e.API, Web: e.Web}
 }
 
 // readonlySettingsKeys names every v3 key whose value is currently PINNED by

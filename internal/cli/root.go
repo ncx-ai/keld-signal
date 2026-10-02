@@ -38,6 +38,7 @@ func NewRootCmd() *cobra.Command {
 	signal.AddCommand(newSignalEnrichCmd())
 	signal.AddCommand(newInstallSidecarCmd())
 	signal.AddCommand(newDoctorCmd())
+	signal.AddCommand(newSignalEnvCmd())
 	signal.AddCommand(newUninstallCmd())
 	signal.AddCommand(newRestoreCmd())
 	for _, c := range newSignalServiceCmds() {
