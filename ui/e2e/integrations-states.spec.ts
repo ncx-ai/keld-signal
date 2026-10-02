@@ -179,6 +179,8 @@ async function startShell(): Promise<Shell> {
       return json(res, settings);
     }
     if (p === "/v1/projects") return json(res, { projects: [] });
+    // Signed in, so Settings draws the account tile, which openSettings waits on.
+    if (p === "/v1/auth/state") return json(res, { paired: true, principal: "dev@example.com" });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
     const file = p === "/" ? "index.html" : p.slice(1);
@@ -549,9 +551,9 @@ async function openSettings(page: Page, shell: Shell): Promise<void> {
   await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
   await page.goto(`${shell.url}/?secret=irrelevant&n=${nonce++}#/settings`);
   await expect(page.getByText("Loading…")).toBeHidden();
-  // The Attribution tile's own label: unique, always drawn, and from nothing the
+  // The account tile's own label: unique, always drawn, and from nothing the
   // Developer box depends on, so it settles the pane without vouching for it.
-  await expect(page.getByText("Attribution", { exact: true })).toBeVisible();
+  await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
 }
 
 /** Developer mode, the way a person reaches it: seven taps on the version in the

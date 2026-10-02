@@ -430,15 +430,6 @@ export function sameAsOptions(projects) {
     .map((p) => ({ id: p.id, label: p.title }));
 }
 
-/** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
- *  toggle until the desktop shell (Tauri autostart, D9) owns it. Always
- *  unchecked and disabled, with a note saying where it actually lives — a
- *  toggle that silently does nothing is the defect this whole page exists to
- *  remove, so this is never rendered as live state from settings/localStorage. */
-export function startAtLoginProps() {
-  return { checked: false, disabled: true, note: "in the desktop app" };
-}
-
 /** The env var GET /v1/settings' `readonly` names a key by, and the note the
  *  page shows next to a control that key disables — "keys named in readonly
  *  render disabled with 'set by KELD_… on this machine'" (the D2 brief).
@@ -2315,11 +2306,8 @@ if (typeof document !== "undefined") {
 
   // "Show details on cards" is a page-only preference (docs/v3/contracts.md's
   // page convention 3): it changes nothing the daemon does, so it lives
-  // entirely client-side rather than in agent-config.json. "Start at login"
-  // used to live here too, as a toggle that looked real and did nothing —
-  // page convention 4 is explicit that this is the defect to remove, so it is
-  // no longer a stored preference at all; startAtLoginProps() always renders
-  // it disabled.
+  // entirely client-side rather than in agent-config.json. Its switch is the
+  // "Show details" one in the Focus blocks toggles.
   function loadLocalPrefs() {
     return readJSONStorage(LOCAL_PREFS_KEY, {
       showDetails: false,
@@ -3690,7 +3678,6 @@ if (typeof document !== "undefined") {
     }
     const readonly = new Set(settings.readonly || []);
     const atlasOn = atlasEnabled(settings);
-    const startAtLogin = startAtLoginProps();
 
     const bar = renderRestartBar();
     if (bar) root.appendChild(bar);
@@ -3700,34 +3687,6 @@ if (typeof document !== "undefined") {
         "div",
         { class: "tiles", style: "grid-template-columns:1fr 1fr" },
         renderAccountTile(atlasOn, readonly),
-        el(
-          "div",
-          { class: "tile" },
-          el("div", { class: "l" }, "Attribution"),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Suggest projects from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
-            switchEl({ checked: true, disabled: true })
-          ),
-          // Vector attribution used to be the second row here. It is a
-          // developer control while the feature is still being built — see
-          // renderDevAttribution — so a person who never turned developer mode
-          // on cannot switch on a 1.2 GB download and a message-reading model
-          // from this tile.
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Start at login", el("div", { class: "desc" }, `Not yet a working toggle here — ${startAtLogin.note}.`)),
-            switchEl({ checked: startAtLogin.checked, disabled: startAtLogin.disabled })
-          ),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Show details on cards"),
-            switchEl({ checked: !!state.local.showDetails, onChange: (v) => { state.local.showDetails = v; saveLocalPrefs(state.local); route(); } })
-          )
-        ),
         renderDevBlocksTile(settings, atlasOn, readonly)
       )
     );

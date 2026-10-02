@@ -48,12 +48,14 @@ test.describe("Settings", () => {
     await expect(signal.breakRows()).toHaveCount(0);
   });
 
-  test('"Start at login" is disabled, with "in the desktop app"', async ({ signal, page }) => {
+  // The Attribution tile held two switches that could not be changed ("Suggest
+  // projects…", always on; "Start at login", owned by the desktop app) and a
+  // copy of the Focus blocks "Show details" switch. Removed 2026-10-02.
+  test("there is no Attribution tile and no Start at login switch", async ({ signal, page }) => {
     await signal.open("settings");
-    const { input } = signal.settingSwitch(/^Start at login/);
-    await expect(input).toBeDisabled();
-    await expect(input).not.toBeChecked();
-    await expect(page.getByText(/in the desktop app/)).toBeVisible();
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.getByText("Attribution", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/^Start at login/)).toHaveCount(0);
   });
 
   // Vector attribution is a DEVELOPER control while the feature is being built

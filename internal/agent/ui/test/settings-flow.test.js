@@ -4,7 +4,6 @@ import {
   readonlyNote,
   settingsErrorText,
   localOnlyConfirmationText,
-  startAtLoginProps,
   projectRulesSummary,
   restartBarText,
   restartBarView,
@@ -65,15 +64,6 @@ test("localOnlyConfirmationText says the change is local and never implies the o
   const text = localOnlyConfirmationText();
   assert.match(text, /Applied on this machine/);
   assert.doesNotMatch(text, /synced|published|sent to Atlas|the org (now )?knows/i);
-});
-
-// --- startAtLoginProps: page convention 4 — not a working toggle until D9. ---
-
-test("Start at login always renders unchecked, disabled, and says where it really lives", () => {
-  const props = startAtLoginProps();
-  assert.equal(props.checked, false);
-  assert.equal(props.disabled, true);
-  assert.equal(props.note, "in the desktop app");
 });
 
 // --- projectRulesSummary: the response's `rules`, never raw repos/keywords. ---
