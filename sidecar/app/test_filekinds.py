@@ -35,7 +35,7 @@ def test_no_kind_id_contains_a_colon():
 
 
 def test_unrecognized_is_a_real_kind():
-    assert F.KINDS["unrecognized"] == ("Unrecognised", "other")
+    assert F.KINDS["unrecognized"] == ("Unrecognized", "other")
     assert F.kind_for("x.zzz") == "unrecognized" and F.kind_for("noext") == "unrecognized"
 
 
@@ -92,6 +92,32 @@ def test_the_committed_json_matches_the_live_tables():
     import gen_file_kinds
     assert committed == gen_file_kinds.build(), "run: python3 scripts/gen_file_kinds.py"
     assert committed["schema"] == SCHEMA
+
+
+def test_every_kind_has_a_phrase_that_reads_after_an_action_label():
+    """⚠️ `phrase` is NOT `display`. Consumers render "<action label> <phrase>", so a standalone
+    name produces "Reading Image" and "Editing Office document". A missing phrase is therefore a
+    rendering bug in every consumer at once, which is why this asserts over the whole table."""
+    for kind in F.KINDS:
+        ph = F.phrase_for(kind)
+        assert ph, kind
+        assert ph.strip() == ph, kind
+
+
+def test_proper_nouns_keep_their_case_and_common_nouns_do_not():
+    """The two rules pull in opposite directions, so both sides are pinned. A future addition
+    that plural-lower-cases a language name would read as "Editing typescripts"."""
+    for kind in ("typescript", "sql", "markdown", "docker", "make"):
+        assert F.phrase_for(kind)[0].isupper(), kind
+    for kind in ("image", "log", "config", "archive", "binary", "docs"):
+        assert F.phrase_for(kind)[0].islower(), kind
+
+
+def test_unrecognized_is_spelled_the_american_way_like_its_own_id():
+    """The id has always been `unrecognized`; the display briefly was not, which made the table
+    disagree with itself. Atlas UI copy is American English throughout."""
+    assert F.KINDS[F.UNRECOGNIZED][0] == "Unrecognized"
+    assert "Unrecognised" not in open(F.__file__).read()
 
 
 if __name__ == "__main__":

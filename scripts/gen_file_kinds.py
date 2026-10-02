@@ -23,7 +23,8 @@ def build():
         "schema": SCHEMA,
         "groups": list(F.GROUPS),
         "action_labels": dict(F.ACTION_LABELS),
-        "kinds": [{"id": k, "display": d, "group": g} for k, (d, g) in F.KINDS.items()],
+        "kinds": [{"id": k, "display": d, "phrase": F.phrase_for(k), "group": g}
+                  for k, (d, g) in F.KINDS.items()],
     }
 
 

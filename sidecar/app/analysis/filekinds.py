@@ -123,7 +123,7 @@ for _id, _display, _group, _exts in _EXTRA:
         EXT_KIND.setdefault(_e, _id)
 for _id, _display, _group in _NAMED:
     KINDS.setdefault(_id, (_display, _group))
-KINDS[UNRECOGNIZED] = ("Unrecognised", "other")
+KINDS[UNRECOGNIZED] = ("Unrecognized", "other")
 
 # Lower-cased file NAMES that decide the kind regardless of extension. `splitext` returns an empty
 # extension for every one of these, which is why they need a table of their own.
@@ -151,6 +151,35 @@ def kind_for(path):
         if name.startswith(prefix + "."):
             return kind
     return UNRECOGNIZED
+
+
+# ⚠️ THE NOUN AS IT READS AFTER AN ACTION LABEL, which is NOT the standalone display name.
+# Consumers render "<action label> <phrase>": "Editing TypeScript", "Reading images",
+# "Reading PDFs". Using `display` there produces "Reading Image" and "Editing Office document",
+# which read wrong. Two rules, and they pull in opposite directions:
+#   - a PROPER noun keeps its case and stays singular -- TypeScript, SQL, Docker, Markdown;
+#   - a COMMON noun goes plural and lower-case -- images, config files, logs, diffs.
+# Only the kinds whose phrase DIFFERS from their display are listed; `phrase_for` falls back to
+# `display`, which is correct for every language name and every acronym.
+_PHRASE = {
+    "diff": "diffs", "notebook": "notebooks", "hurl": "HTTP request files",
+    "plaintext": "plain text files", "markup_doc": "markup documents",
+    "docs": "documentation",
+    "csv": "CSV files", "database": "databases", "log": "logs",
+    "config": "config files", "template": "template files",
+    "docker": "Docker files", "make": "Makefiles",
+    "image": "images", "svg": "SVGs",
+    "pdf": "PDFs", "office_doc": "Office documents",
+    "archive": "archives", "binary": "binaries", "media": "audio and video",
+    UNRECOGNIZED: "unrecognized files",
+}
+
+
+def phrase_for(kind):
+    """The noun to follow an action label with. Falls back to the display name, which is already
+    right for a proper noun ("Editing TypeScript") and wrong only for common nouns."""
+    d = KINDS.get(kind, (None, None))[0]
+    return _PHRASE.get(kind, d)
 
 
 def display_for(kind):
