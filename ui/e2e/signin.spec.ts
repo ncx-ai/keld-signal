@@ -34,7 +34,7 @@ function assertPaired(h: SigninHarness): void {
 test.describe("Web sign-in", () => {
   test("first open → Sign in with Atlas → the browser comes back → the page says signed in within 5 s", async ({ page, harness, browserName }) => {
     await page.goto(harness.pageURL("today"));
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
     await page.getByRole("button", { name: "Sign in with Atlas" }).click();
 
     // AC-1: the page always shows the link, and with no browser opened it says so.
@@ -62,7 +62,7 @@ test.describe("Web sign-in", () => {
 
     // AC-5: within 5 s of the callback, with no reload.
     await expect(page.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     assertPaired(harness);
     // And the health strip under it agrees while the confirmation is still up,
     // rather than saying "Atlas not paired" until the page's 30 s refresh.
@@ -73,7 +73,7 @@ test.describe("Web sign-in", () => {
     // A paired machine never sees the choice again, and Settings says who it is.
     await page.goto(harness.pageURL("settings"));
     await expect(page.getByText("Loading…")).toBeHidden();
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator(".tile", { hasText: "Atlas account" }).getByText(SIGNED_IN)).toBeVisible();
     // The setup-code box is still there (AC-8).
     await expect(page.locator("#codeInput")).toBeVisible();
@@ -82,7 +82,7 @@ test.describe("Web sign-in", () => {
   test("from local only, Settings' Sign in turns Send to Atlas back on and signs in", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));
     await page.getByRole("button", { name: "Use locally only" }).click();
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
 
     await page.goto(harness.pageURL("settings"));
@@ -111,7 +111,7 @@ test.describe("Web sign-in", () => {
     await expect(tile.getByRole("button", { name: "Sign in with Atlas" })).toBeDisabled();
     await expect(tile.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
     // The env var already chose, so the first-open choice never shows either.
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
   });
 
   test("signed in, Settings offers Unpair and asks first; Cancel leaves the pairing alone", async ({ page, harness }) => {
@@ -139,7 +139,7 @@ test.describe("Web sign-in", () => {
     await harness.startDaemon();
 
     await page.goto(harness.pageURL("today"));
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     const bar = page.locator("#signinBanner");
     await expect(bar.getByText("Not signed in to Atlas.")).toBeVisible();
     await bar.getByRole("button", { name: "Sign in with Atlas" }).click();
@@ -151,7 +151,7 @@ test.describe("Web sign-in", () => {
 
   test("a return with a state Signal never issued is refused: nothing written, no call to Atlas, the page still signed out", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
 
     const forged = await page.context().newPage();
     const bogus = `${harness.daemon!.baseURL}/auth/callback?pairing_code=${encodeURIComponent(
@@ -175,7 +175,7 @@ test.describe("Web sign-in", () => {
     expect(counts["/v1/cli/enroll"] || 0, "the refused return reached Atlas").toBe(0);
 
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
     await expect(page.getByText(SIGNED_IN)).toHaveCount(0);
   });
 

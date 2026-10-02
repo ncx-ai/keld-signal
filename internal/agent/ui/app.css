@@ -276,27 +276,98 @@ body.pane-today .health-strip { margin-top: 12px; }
 .btn-small { padding: 2px 10px; font-size: 12px; }
 .unpair-confirm { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 
-.firstrun {
-  max-width: 520px;
-  margin: 48px auto;
-  padding: 32px 28px;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 14px;
-  box-shadow: var(--shadow);
-  text-align: center;
+/* ---- Welcome: the first-open screen ----
+   The whole window, no sidebar or top bar (body.is-welcome), keld.co's hero
+   type and its moving ribbons (canvas.mesh-fx, initMeshFx in app.js). */
+body.is-welcome .shell { grid-template-columns: 1fr; }
+body.is-welcome .nav,
+body.is-welcome .topbar,
+body.is-welcome .signin-banner,
+body.is-welcome .service-banner { display: none !important; }
+body.is-welcome .pane-root { padding: 0; }
+.welcome {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  background: var(--bg);
 }
-.firstrun h1 { margin: 0 0 12px; font-size: 26px; font-weight: 700; }
-.firstrun p { margin: 0; color: var(--ink-2); }
-.firstrun .firstrun-lead { color: var(--ink); }
-.firstrun-actions { display: flex; flex-direction: column; gap: 10px; align-items: center; margin: 24px 0 18px; }
-.firstrun-actions .btn { min-width: 220px; padding: 9px 18px; font-size: 14px; }
-.firstrun .signin-flow { margin: 0 0 16px; align-items: center; text-align: center; }
-.firstrun .signin-flow.failed { justify-content: center; }
-.firstrun .firstrun-note { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.welcome .mesh-fx { position: absolute; inset: 0; pointer-events: none; }
+.welcome-inner {
+  position: relative;
+  max-width: 640px;
+  margin: 0 auto 0 clamp(24px, 9vw, 132px);
+  padding: 56px 24px 56px 0;
+}
+.welcome-eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 22px;
+}
+.welcome-head {
+  margin: 0 0 22px;
+  font-size: clamp(34px, 5.2vw, 56px);
+  line-height: 1.04;
+  font-weight: 400;
+  letter-spacing: .005em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.welcome-head span { color: var(--green); }
+.welcome-lede { margin: 0 0 18px; max-width: 540px; font-size: 17.5px; line-height: 1.55; color: var(--ink-2); }
+.welcome-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: rgba(255, 254, 251, .8);
+  font-size: 13px;
+  color: var(--ink);
+}
+.welcome-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.welcome-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.welcome-actions .btn { padding: 12px 22px; font-size: 14.5px; border-radius: 3px; }
+.welcome .btn.welcome-primary { background: var(--green); color: var(--on-dark); border: 1px solid var(--green); }
+.welcome .btn.welcome-primary:hover:not(:disabled) { background: var(--green-strong); }
+.welcome-primary::after { content: " →"; }
+.welcome .btn.welcome-secondary { background: rgba(255, 254, 251, .85); color: var(--ink); border: 1px solid var(--rule-strong); }
+.welcome .btn.welcome-secondary:hover { border-color: var(--ink-2); }
+.welcome .signin-flow { margin: 0 0 16px; }
+.welcome-note { margin: 0 0 4px; font-size: 13px; color: var(--muted); max-width: 540px; }
+.welcome-points {
+  list-style: none;
+  margin: 36px 0 0;
+  padding: 22px 0 0;
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: 12px;
+}
+.welcome-points li { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 12px; letter-spacing: .04em; color: var(--muted); }
+.welcome-points strong { color: var(--ink); font-weight: 600; }
+.welcome-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--forest-light);
+  color: var(--green);
+}
+.welcome-icon svg { width: 15px; height: 15px; }
 @media (max-width: 560px) {
   .signin-banner { margin: 0 16px 14px; }
-  .firstrun { margin: 24px 16px; padding: 24px 16px; }
+  .welcome-inner { margin: 0 16px; padding: 40px 0; }
+  .welcome-actions .btn { flex: 1 1 100%; }
+}
 }
 
 /* ---- Pills ---- */

@@ -519,6 +519,17 @@ export const SIGNIN_TEXT = {
   firstRunTitle: "Welcome to Signal",
   firstRunLead: "Signal is already collecting on this computer.",
   firstRunBody: "Sign in to send it to your company's Atlas, or keep everything here.",
+  // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
+  welcomeEyebrow: "Keld Signal",
+  welcomeHeadA: "See where your",
+  welcomeHeadB: "AI work goes",
+  welcomeLede:
+    "Signal runs quietly beside Claude Code, Codex and Gemini on this computer. It turns your sessions into focus blocks, projects and spend, and your prompt text never leaves this machine.",
+  welcomePoints: [
+    ["Track", "every session: time, tokens and estimated spend"],
+    ["Understand", "which projects your AI work goes to"],
+    ["Private", "by default: prompt text stays on this computer"],
+  ],
   starting: "Starting sign-in…",
   waiting: "Finish signing in in your browser",
   // The link is ALWAYS shown (AC-1: "the page always shows the link too"); only
@@ -4232,28 +4243,120 @@ if (typeof document !== "undefined") {
 
   /** The first-open choice (AC-12), in place of whichever pane was asked for.
    *  It shows only while the daemon says first_run — see showFirstRun. */
+  // The first thing a person sees: the whole window, no sidebar, keld.co's
+  // moving ribbons behind it. body.is-welcome (route()) hides the app chrome.
+  const WELCOME_ICONS = [
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 14h12M4 12V7M8 12V3M12 12V9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v4c0 3-2.2 5.3-5 6.4-2.8-1.1-5-3.4-5-6.4v-4z M5.8 8l1.6 1.6L10.4 6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  ];
   function renderFirstRun(root) {
     root.innerHTML = "";
     const err = settingsErrorFor("send_to_atlas");
+    const canvas = el("canvas", { class: "mesh-fx", "aria-hidden": "true" });
+    const points = SIGNIN_TEXT.welcomePoints.map(([k, rest], i) => {
+      const icon = el("span", { class: "welcome-icon" });
+      icon.innerHTML = WELCOME_ICONS[i] || "";
+      return el("li", {}, icon, el("span", {}, el("strong", {}, k.toUpperCase()), " " + rest.toUpperCase()));
+    });
     root.appendChild(
       el(
         "section",
-        { class: "firstrun", "aria-labelledby": "firstrunTitle" },
-        el("h1", { id: "firstrunTitle" }, SIGNIN_TEXT.firstRunTitle),
-        el("p", { class: "firstrun-lead" }, SIGNIN_TEXT.firstRunLead),
-        el("p", {}, SIGNIN_TEXT.firstRunBody),
+        { class: "welcome", "aria-label": SIGNIN_TEXT.firstRunTitle },
+        canvas,
         el(
           "div",
-          { class: "firstrun-actions" },
-          el("button", { class: "btn", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
-          el("button", { class: "btn secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
-        ),
-        signinFlowNode(),
-        err ? el("div", { class: "settings-note error-note" }, err) : null,
-        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.later),
-        el("p", { class: "firstrun-note" }, SIGNIN_TEXT.localNote)
+          { class: "welcome-inner" },
+          el("div", { class: "welcome-eyebrow" }, SIGNIN_TEXT.welcomeEyebrow),
+          el("h1", { class: "welcome-head" }, SIGNIN_TEXT.welcomeHeadA, el("br", {}), el("span", {}, SIGNIN_TEXT.welcomeHeadB)),
+          el("p", { class: "welcome-lede" }, SIGNIN_TEXT.welcomeLede),
+          el("p", { class: "welcome-live" }, el("span", { class: "dot" }), SIGNIN_TEXT.firstRunLead),
+          el(
+            "div",
+            { class: "welcome-actions" },
+            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
+            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
+          ),
+          signinFlowNode(),
+          err ? el("div", { class: "settings-note error-note" }, err) : null,
+          el("p", { class: "welcome-note" }, SIGNIN_TEXT.firstRunBody + " " + SIGNIN_TEXT.later),
+          el("p", { class: "welcome-note" }, SIGNIN_TEXT.localNote),
+          el("ul", { class: "welcome-points" }, ...points)
+        )
       )
     );
+    initMeshFx(canvas);
+  }
+
+  /* keld.co's ribbon decoration (keld.co assets/site.js, "Network mesh
+     decoration"): N parallel lines blended between two wavy guide curves, so
+     they pinch where the guides cross and fan out where they separate; three
+     bands drift in opposite directions. Same shapes, opacity and ~30 fps
+     throttle as the site. It stops when the canvas leaves the page and draws
+     one still frame for anyone who asks the system for reduced motion. */
+  function initMeshFx(cv) {
+    const host = cv.parentElement;
+    const ctx = cv.getContext && cv.getContext("2d");
+    if (!host || !ctx) return;
+    const rgb = "46,122,72";
+    const a0 = 0.05;
+    const seed = Math.random() * 6.28;
+    const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const SHAPES = [
+      { sep: 0.09, slope: 0.06, ampA: 0.16, ampB: 0.15, fa: 1.7, fb: 2.5, ph: 0.0, dir: 1 },
+      { sep: 0.085, slope: -0.05, ampA: 0.18, ampB: 0.16, fa: 1.3, fb: 2.1, ph: 1.7, dir: -1 },
+      { sep: 0.09, slope: 0.04, ampA: 0.15, ampB: 0.17, fa: 2.1, fb: 1.6, ph: 3.1, dir: 1 },
+    ];
+    let W = 0, H = 0, K = 0, N = 34, SEG = 150, bands = [];
+    function resize() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      W = host.offsetWidth;
+      H = host.offsetHeight;
+      cv.width = W * dpr;
+      cv.height = H * dpr;
+      cv.style.width = W + "px";
+      cv.style.height = H + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const portrait = H > W * 0.55;
+      K = portrait ? W * 0.55 : H;
+      N = Math.max(portrait ? 14 : 22, Math.min(48, Math.round(K / 14)));
+      SEG = Math.max(90, Math.round(W / 9));
+      const n = portrait ? Math.max(3, Math.min(9, Math.round(H / (0.245 * K)))) : 3;
+      const cys = portrait ? Array.from({ length: n }, (_, j) => (H / (n + 0.55)) * (j + 0.775)) : [0.3, 0.55, 0.78].map((f) => H * f);
+      bands = cys.map((cy, i) => ({ cy, ...SHAPES[i % 3], ph: SHAPES[i % 3].ph + seed + Math.floor(i / 3) * 1.31 }));
+    }
+    function draw(t) {
+      if (!W || !H) return;
+      ctx.clearRect(0, 0, W, H);
+      ctx.lineWidth = 1;
+      for (const b of bands) {
+        const sep = K * b.sep, slope = K * b.slope, ampA = K * b.ampA, ampB = K * b.ampB;
+        for (let i = 0; i < N; i++) {
+          const k = i / (N - 1);
+          ctx.strokeStyle = "rgba(" + rgb + "," + (a0 + 0.04 * Math.sin(k * Math.PI)).toFixed(3) + ")";
+          ctx.beginPath();
+          for (let s = 0; s <= SEG; s++) {
+            const u = s / SEG, x = u * W, env = 0.45 + 0.55 * Math.sin(u * Math.PI);
+            const ya = b.cy - sep + slope * (u - 0.5) + ampA * env * Math.sin(u * 6.283 * b.fa + t * b.dir + b.ph);
+            const yb = b.cy + sep + slope * (u - 0.5) + ampB * env * Math.sin(u * 6.283 * b.fb + b.ph + 1.4 - t * 0.85 * b.dir);
+            const y = ya + (yb - ya) * k;
+            if (s) ctx.lineTo(x, y);
+            else ctx.moveTo(x, y);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+    resize();
+    let t0 = performance.now(), last = 0;
+    const onResize = () => { resize(); if (reduce) draw(0); };
+    window.addEventListener("resize", onResize);
+    if (reduce) return draw(0);
+    (function loop(now) {
+      if (!cv.isConnected) return window.removeEventListener("resize", onResize);
+      if (now - last > 33) { last = now; draw((now - t0) * 0.00012); }
+      requestAnimationFrame(loop);
+    })(performance.now());
   }
 
   /** Settings' account tile: who this machine is signed in as, or a way to
@@ -4810,10 +4913,20 @@ if (typeof document !== "undefined") {
     // The first-open choice stands in for every pane until it is answered.
     // Not while offline: the cached page is showing what it last knew, and
     // neither button could do anything.
-    if (showFirstRun(state.auth) && !state.offline) {
+    const welcome = showFirstRun(state.auth) && !state.offline;
+    document.body.classList.toggle("is-welcome", welcome);
+    if (welcome) {
       document.body.classList.remove("pane-today");
       document.body.classList.remove("pane-overview");
+      // route() runs on every poll (each second during a sign-in). Redraw only
+      // when something this screen shows has changed, so the ribbons keep
+      // moving instead of restarting from a fresh canvas every tick.
+      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas")]);
+      const live = root.querySelector(":scope > section.welcome");
+      if (live && live.dataset.key === key) return;
       renderFirstRun(root);
+      const sec = root.querySelector(":scope > section.welcome");
+      if (sec) sec.dataset.key = key;
       return;
     }
     if (pane === "overview") renderOverview(root);

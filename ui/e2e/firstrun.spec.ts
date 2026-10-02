@@ -8,7 +8,7 @@ test.describe("First open", () => {
   test("a fresh machine offers Sign in with Atlas or Use locally only, on every pane", async ({ page, harness }) => {
     for (const pane of ["today", "projects", "settings"]) {
       await page.goto(harness.pageURL(pane));
-      await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
       await expect(page.getByText("Signal is already collecting on this computer.")).toBeVisible();
       await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Use locally only" })).toBeVisible();
@@ -25,7 +25,7 @@ test.describe("First open", () => {
     await page.goto(harness.pageURL("today"));
     await page.getByRole("button", { name: "Use locally only" }).click();
 
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
     // Local only is a choice, not a fault: no not-signed-in bar.
@@ -36,7 +36,7 @@ test.describe("First open", () => {
     await page.reload();
     await expect(page.getByText("Loading…")).toBeHidden();
     await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
 
     // A restart moves the page to a new port with a new secret; the choice
     // lives in agent-config.json, so it survives.
@@ -45,7 +45,7 @@ test.describe("First open", () => {
     await page.goto(harness.pageURL("today"));
     await expect(page.getByText("Loading…")).toBeHidden();
     await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
-    await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator("#signinBanner")).toBeHidden();
 
     await page.goto(harness.pageURL("settings"));
