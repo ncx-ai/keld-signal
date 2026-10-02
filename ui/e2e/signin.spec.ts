@@ -114,6 +114,23 @@ test.describe("Web sign-in", () => {
     await expect(page.getByRole("heading", { name: "Welcome to Signal" })).toHaveCount(0);
   });
 
+  test("signed in, Settings offers Unpair and asks first; Cancel leaves the pairing alone", async ({ page, harness }) => {
+    // Never confirms: the confirm path restarts the INSTALLED service, which in a
+    // test would be the developer's own Signal. That path is the Go unit tests'.
+    await page.goto(harness.pageURL("today"));
+    await page.getByRole("button", { name: "Sign in with Atlas" }).click();
+    await finishInBrowser(page);
+    await expect(page.getByText(SIGNED_IN).first()).toBeVisible({ timeout: 5_000 });
+    await page.goto(harness.pageURL("settings"));
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await tile.getByRole("button", { name: "Unpair" }).click();
+    await expect(tile.getByText(/keeps collecting here and stops sending to Atlas/)).toBeVisible();
+    await expect(tile.getByRole("button", { name: "Unpair" })).toHaveCount(1); // the confirm button only
+    await tile.getByRole("button", { name: "Cancel" }).click();
+    await expect(tile.getByRole("button", { name: "Unpair" })).toBeVisible();
+    assertPaired(harness);
+  });
+
   test("Send to Atlas on but never signed in: the not-signed-in bar signs in", async ({ page, harness }) => {
     // Decision-table row 3: send_to_atlas set to true by hand, not paired.
     await harness.stopDaemon();

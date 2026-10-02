@@ -1026,6 +1026,7 @@ func Run(ctx context.Context) error {
 		// reused rather than a bespoke exit(0), since it already exists and
 		// already does exactly this.
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
+		ingress.UnpairRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
 		// Mounted here too: a paired machine can sign in again (to another org),
 		// and a sign-in started before the handler swap finishes after it — the

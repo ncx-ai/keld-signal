@@ -16,6 +16,9 @@ import {
   SIGNIN_MAX_POLL_FAILURES,
   SIGNIN_DONE_LINGER_MS,
   signinLinkSentence,
+  unpairView,
+  unpairErrorText,
+  UNPAIR_TEXT,
 } from "../app.js";
 
 // GET /v1/auth/state (contract C5): {paired, principal, org, first_run, pending, last_error}.
@@ -259,4 +262,30 @@ test("the link's sentence says whether the browser opened; the link shows either
   assert.equal(signinLinkSentence(true), "Browser didn't open? Use this link:");
   assert.equal(signinLinkSentence(false), "Your browser didn't open. Open this link to finish:");
   assert.equal(signinLinkSentence(undefined), "Your browser didn't open. Open this link to finish:");
+});
+
+test("Unpair asks before it acts: idle shows the button, confirm shows the question and no button", () => {
+  assert.deepEqual(unpairView("idle", null), { button: true, confirm: false, note: null, busy: false });
+  const c = unpairView("confirm", null);
+  assert.equal(c.button, false);
+  assert.equal(c.confirm, true);
+  assert.match(c.note, /keeps collecting here and stops sending to Atlas until you sign in again/);
+});
+
+test("Unpair while sending or restarting offers nothing to click", () => {
+  for (const st of ["sending", "done"]) {
+    const v = unpairView(st, null);
+    assert.equal(v.button, false, st);
+    assert.equal(v.confirm, false, st);
+    assert.equal(v.busy, true, st);
+  }
+  assert.equal(unpairView("done", null).note, UNPAIR_TEXT.done);
+});
+
+test("a refused Unpair says why and offers the button again", () => {
+  const v = unpairView("failed", "signin_in_progress");
+  assert.equal(v.button, true);
+  assert.equal(v.note, "Finish or cancel the sign-in first.");
+  assert.match(unpairErrorText("pairing_set_by_env"), /KELD_CTX_TOKEN/);
+  assert.equal(unpairErrorText(null), "Signal couldn't unpair. Try again.");
 });

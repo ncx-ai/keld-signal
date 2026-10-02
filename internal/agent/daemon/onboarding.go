@@ -163,6 +163,7 @@ func onboardingHandler(set settings.Settings, secret string) http.Handler {
 	sig := newV3(set, atlas.Off{})
 	routes := append(sig.routes(),
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
+		ingress.UnpairRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
 		// The browser sign-in pairs through the same pair() /v1/config uses, and
 		// an unpaired machine is exactly where it starts.

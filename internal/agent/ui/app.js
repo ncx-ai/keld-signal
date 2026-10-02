@@ -666,6 +666,38 @@ export async function copyText(text, { clipboard, fallback } = {}) {
   return false;
 }
 
+/** The Atlas account tile's Unpair control, as a pure view of its status:
+ *  idle → confirm → sending → done (Signal restarts) | failed. */
+export const UNPAIR_TEXT = {
+  button: "Unpair",
+  confirm: "Unpair this computer? Signal keeps collecting here and stops sending to Atlas until you sign in again.",
+  yes: "Unpair",
+  no: "Cancel",
+  sending: "Unpairing…",
+  done: "Unpaired. Signal is restarting; this page comes back on its own in the app.",
+};
+export const UNPAIR_ERROR_TEXT = {
+  pairing_set_by_env: "This computer's pairing is set by KELD_CTX_TOKEN on this machine, so it can't be undone here.",
+  signin_in_progress: "Finish or cancel the sign-in first.",
+};
+export function unpairErrorText(code) {
+  return UNPAIR_ERROR_TEXT[code] || "Signal couldn't unpair. Try again.";
+}
+export function unpairView(status, error) {
+  switch (status) {
+    case "confirm":
+      return { button: false, confirm: true, note: UNPAIR_TEXT.confirm, busy: false };
+    case "sending":
+      return { button: false, confirm: false, note: UNPAIR_TEXT.sending, busy: true };
+    case "done":
+      return { button: false, confirm: false, note: UNPAIR_TEXT.done, busy: true };
+    case "failed":
+      return { button: true, confirm: false, note: unpairErrorText(error), busy: false };
+    default:
+      return { button: true, confirm: false, note: null, busy: false };
+  }
+}
+
 export function signedInText(auth) {
   const who = auth && auth.principal;
   const org = auth && auth.org;
@@ -2324,6 +2356,7 @@ if (typeof document !== "undefined") {
     // resending with ?restart=1 — empty for a restart /v1/config asked for,
     // since that route already wrote everything itself.
     restart: { status: RESTART_IDLE, patch: {} },
+    unpair: { status: "idle", error: null },
     // serviceRestart: the analysis-service Restart button's own state, and
     // the service state it was pressed against. `forState` is what lets
     // reconcileServiceRestart drop a stale "Restart requested" the moment the
@@ -3306,6 +3339,23 @@ if (typeof document !== "undefined") {
   // config change is what asked for it — that route already wrote
   // hook.json/auth.json itself). Not specified by contracts.md which route a
   // config-triggered restart should use — this lane's choice; see the report.
+  function setUnpair(status, error = null) {
+    state.unpair = { status, error };
+    route();
+  }
+
+  // POST /v1/auth/unpair removes the pairing and restarts Signal. The restart
+  // comes up on a new port and secret, which the desktop app follows on its
+  // own; in a browser tab this page cannot, which the done sentence says.
+  async function clickUnpair() {
+    setUnpair("sending");
+    const res = await sendJSON("/v1/auth/unpair", "POST");
+    if (!res.ok) return setUnpair("failed", (res.body && res.body.error) || null);
+    if (res.body && res.body.restarting) return setUnpair("done");
+    setUnpair("idle");
+    loadAll();
+  }
+
   async function clickRestart() {
     if (signinBusy()) return; // see restartBarView: a restart now kills the sign-in
     state.restart.status = nextRestartStatus(state.restart.status, "clicked");
@@ -4213,7 +4263,27 @@ if (typeof document !== "undefined") {
     const auth = state.auth;
     if (!auth) return null;
     if (auth.paired) {
-      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "signin-who" }, signedInText(auth)));
+      const v = unpairView(state.unpair.status, state.unpair.error);
+      return el(
+        "div",
+        { class: "tile" },
+        el("div", { class: "l" }, SIGNIN_TEXT.account),
+        el(
+          "div",
+          { class: "settings-row" },
+          el("span", { class: "signin-who" }, signedInText(auth)),
+          v.button ? el("button", { class: "btn btn-quiet btn-small", type: "button", disabled: signinBusy(), onclick: () => setUnpair("confirm") }, UNPAIR_TEXT.button) : null
+        ),
+        v.note ? el("div", { class: "settings-note unpair-note" }, v.note) : null,
+        v.confirm
+          ? el(
+              "div",
+              { class: "unpair-confirm" },
+              el("button", { class: "btn", type: "button", onclick: clickUnpair }, UNPAIR_TEXT.yes),
+              el("button", { class: "btn btn-quiet", type: "button", onclick: () => setUnpair("idle") }, UNPAIR_TEXT.no)
+            )
+          : null
+      );
     }
     // Signing in from local-only mode turns Send to Atlas on — impossible
     // while KELD_ATLAS pins it off, so the button says why instead.

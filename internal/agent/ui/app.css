@@ -272,6 +272,9 @@ body.pane-today .health-strip { margin-top: 12px; }
 .signin-link a { color: var(--forest); font-weight: 600; }
 .signin-link .btn-small { padding: 2px 10px; font-size: 12px; margin-left: 4px; vertical-align: baseline; }
 .signin-who { margin-top: 8px; font-weight: 600; overflow-wrap: anywhere; }
+.tile .settings-row .signin-who { margin-top: 0; }
+.btn-small { padding: 2px 10px; font-size: 12px; }
+.unpair-confirm { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 
 .firstrun {
   max-width: 520px;
