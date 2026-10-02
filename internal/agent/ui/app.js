@@ -683,7 +683,7 @@ export const UNPAIR_TEXT = {
   done: "Unpaired. Signal is restarting; this page comes back on its own in the app.",
 };
 export const UNPAIR_ERROR_TEXT = {
-  pairing_set_by_env: "This computer's pairing is set by KELD_CTX_TOKEN on this machine, so it can't be undone here.",
+  pairing_set_by_env: "This computer's pairing is set by KELD_CTX_ENDPOINT or KELD_CTX_TOKEN on this machine, so it can't be undone here.",
   signin_in_progress: "Finish or cancel the sign-in first.",
 };
 export function unpairErrorText(code) {

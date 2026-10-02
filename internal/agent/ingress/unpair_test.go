@@ -97,9 +97,7 @@ func TestUnpairRefusesAPairingSetByTheEnvironment(t *testing.T) {
 			if code != http.StatusConflict || body["error"] != "pairing_set_by_env" {
 				t.Fatalf("unpair with %s set: %d %v", name, code, body)
 			}
-			if _, err := os.Stat(paths.HookConfigPath()); err != nil {
-				t.Fatalf("hook.json must survive a refused unpair: %v", err)
-			}
+			assertPairingKept(t)
 			waitRestarts(t, u.restarts, 0)
 		})
 	}
@@ -115,17 +113,31 @@ func TestUnpairRefusesWhileASignInIsWaiting(t *testing.T) {
 	if code != http.StatusConflict || body["error"] != "signin_in_progress" {
 		t.Fatalf("unpair mid-sign-in: %d %v", code, body)
 	}
+	assertPairingKept(t)
 	waitRestarts(t, u.restarts, 0)
+}
+
+// assertPairingKept: a refused Unpair removes neither file.
+func assertPairingKept(t *testing.T) {
+	t.Helper()
+	for _, p := range []string{paths.HookConfigPath(), paths.AuthPath()} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s must survive a refused unpair: %v", filepath.Base(p), err)
+		}
+	}
 }
 
 func TestUnpairNeedsThePageSecret(t *testing.T) {
 	u := newUnpairH(t)
+	writePairing(t)
 	res, err := http.Post(u.h.srv.URL+"/v1/auth/unpair", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusForbidden {
-		t.Fatalf("unpair without the secret: %d", res.StatusCode)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unpair without the secret: %d, want 401", res.StatusCode)
 	}
+	assertPairingKept(t)
+	waitRestarts(t, u.restarts, 0)
 }

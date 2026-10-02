@@ -296,7 +296,7 @@ test("a refused Unpair says why and offers the button again", () => {
   const v = unpairView("failed", "signin_in_progress");
   assert.equal(v.button, true);
   assert.equal(v.note, "Finish or cancel the sign-in first.");
-  assert.match(unpairErrorText("pairing_set_by_env"), /KELD_CTX_TOKEN/);
+  assert.match(unpairErrorText("pairing_set_by_env"), /KELD_CTX_ENDPOINT or KELD_CTX_TOKEN/);
   assert.equal(unpairErrorText(null), "Signal couldn't unpair. Try again.");
 });
 

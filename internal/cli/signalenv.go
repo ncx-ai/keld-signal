@@ -69,12 +69,20 @@ func printAtlasEnv(out io.Writer) {
 	fmt.Fprintf(out, "Atlas: %s (API %s, web %s)\n", e.Name, e.API, e.Web)
 }
 
-// atlasEnvNote is the one line status and doctor print when this machine is
-// not on production, or "" when it is.
+// atlasEnvNote is the one line status and doctor print when this machine's
+// data does not go to production, or "" when it does. A paired machine is
+// described by where it paired, not by the setting (paths.SendingAtlasEnv).
 func atlasEnvNote() string {
-	e := paths.CurrentAtlasEnv()
+	endpoint := ""
+	if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.IngestToken != "" {
+		endpoint = cfg.Endpoint
+	}
+	e := paths.SendingAtlasEnv(endpoint)
 	if e.Name == paths.AtlasEnvs[0].Name {
 		return ""
+	}
+	if e.Web == "" || e.Web == e.API {
+		return fmt.Sprintf("Atlas: %s (%s), not production. `keld signal env prod` switches back.", e.Name, e.API)
 	}
 	where := e.API
 	if e.Web != e.API {

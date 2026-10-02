@@ -115,4 +115,12 @@ func TestAtlasEnvNoteOnlyOffProduction(t *testing.T) {
 	if _, _, _ = runSignalEnv(t, "prod", "--no-restart"); atlasEnvNote() != "" {
 		t.Fatalf("back on prod the note must go: %q", atlasEnvNote())
 	}
+	// Paired to production and then switched to dev: data still goes to
+	// production, so status must not claim otherwise.
+	if err := os.WriteFile(paths.HookConfigPath(), []byte(`{"endpoint":"https://atlas.keld.co/v1","ingest_token":"tok"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _ = runSignalEnv(t, "dev", "--no-restart"); atlasEnvNote() != "" {
+		t.Fatalf("paired to prod, the note must stay silent: %q", atlasEnvNote())
+	}
 }

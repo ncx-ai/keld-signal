@@ -1,7 +1,6 @@
 package ingress
 
 import (
-	"github.com/ncx-ai/keld-signal/internal/paths"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +9,8 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/hook"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // restartDelay gives the response time to reach the client's TCP buffer
@@ -92,8 +93,14 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// currentAtlasEnvView names the Atlas this machine's data goes to: the paired
+// one while paired, the configured one otherwise (paths.SendingAtlasEnv).
 func currentAtlasEnvView() atlasEnvView {
-	e := paths.CurrentAtlasEnv()
+	endpoint := ""
+	if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.IngestToken != "" {
+		endpoint = cfg.Endpoint
+	}
+	e := paths.SendingAtlasEnv(endpoint)
 	return atlasEnvView{Name: e.Name, API: e.API, Web: e.Web}
 }
 

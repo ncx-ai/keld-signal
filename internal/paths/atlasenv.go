@@ -2,6 +2,7 @@ package paths
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -61,4 +62,29 @@ func CurrentAtlasEnv() AtlasEnv {
 		return AtlasEnv{Name: "custom", API: APIBase(), Web: AtlasWebBase()}
 	}
 	return configuredAtlasEnv()
+}
+
+// SendingAtlasEnv is the Atlas this machine's data goes to. A paired daemon
+// publishes to the endpoint it paired with (hook.json, or KELD_CTX_ENDPOINT)
+// until it is unpaired, whatever `keld signal env` says since: that setting
+// moves sign-in and the CLI, never a pairing. So when pairedEndpoint is set
+// this names it — one of AtlasEnvs by scheme and host, else "custom" — and
+// only an unpaired machine reports the configured environment. Anything that
+// tells a person where their data goes (the top bar, status, doctor) uses
+// this, not CurrentAtlasEnv.
+func SendingAtlasEnv(pairedEndpoint string) AtlasEnv {
+	if strings.TrimSpace(pairedEndpoint) == "" {
+		return CurrentAtlasEnv()
+	}
+	u, err := url.Parse(strings.TrimSpace(pairedEndpoint))
+	if err != nil || u.Host == "" {
+		return AtlasEnv{Name: "custom", API: pairedEndpoint}
+	}
+	for _, e := range AtlasEnvs {
+		if a, err := url.Parse(e.API); err == nil && strings.EqualFold(a.Scheme, u.Scheme) && strings.EqualFold(a.Host, u.Host) {
+			return e
+		}
+	}
+	origin := u.Scheme + "://" + u.Host
+	return AtlasEnv{Name: "custom", API: origin, Web: origin}
 }

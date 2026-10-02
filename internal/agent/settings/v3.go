@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -78,8 +79,25 @@ func (s Settings) DevBlocksMode() (mode string, refused bool) {
 // that merely CONTAINS "localhost" — say `localhost.evil.example.com` — is a
 // perfectly ordinary public name, and a Contains check would hand it a
 // granularity that misstates real work. A test pins that case.
+//
+// ⚠️ BOTH the configured Atlas AND the paired endpoint must be loopback. Blocks
+// publish to the endpoint the machine PAIRED with (hook.json, or
+// KELD_CTX_ENDPOINT), and `keld signal env local` moves only the configured
+// one — so checking the setting alone admitted minute-long blocks on a machine
+// still paired to production, and sent them there.
 func atlasIsLoopback() bool {
-	u, err := url.Parse(paths.APIBase())
+	if !isLoopbackURL(paths.APIBase()) {
+		return false
+	}
+	cfg, err := hook.LoadConfig()
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Endpoint) == "" {
+		return true
+	}
+	return isLoopbackURL(cfg.Endpoint)
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
 	if err != nil {
 		return false
 	}

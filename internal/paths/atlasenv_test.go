@@ -95,3 +95,24 @@ func TestAtlasEnvNamesAreTheThreeDocumented(t *testing.T) {
 		t.Fatal("staging must not be known")
 	}
 }
+
+func TestSendingAtlasEnvNamesWhereAPairedMachineSends(t *testing.T) {
+	// Configured for dev, so any answer below that is not dev came from the
+	// pairing, not the setting.
+	setAtlasEnvFile(t, `{"atlas_env":"dev"}`)
+	cases := []struct{ endpoint, want, api string }{
+		{"", "dev", "https://atlas-dev.keld.co"}, // unpaired: the setting
+		{"https://atlas.keld.co/v1", "prod", DefaultAPIURL},
+		{"https://ATLAS.keld.co", "prod", DefaultAPIURL},
+		{"https://atlas-dev.keld.co/v1/enrichments", "dev", "https://atlas-dev.keld.co"},
+		{"http://localhost:8000", "local", "http://localhost:8000"},
+		{"https://ingest.acme.example/v1", "custom", "https://ingest.acme.example"},
+		{"http://atlas.keld.co", "custom", "http://atlas.keld.co"}, // scheme matters
+	}
+	for _, c := range cases {
+		got := SendingAtlasEnv(c.endpoint)
+		if got.Name != c.want || got.API != c.api {
+			t.Errorf("SendingAtlasEnv(%q) = %+v, want %s at %s", c.endpoint, got, c.want, c.api)
+		}
+	}
+}
