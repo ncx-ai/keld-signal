@@ -524,7 +524,7 @@ export const SIGNIN_TEXT = {
   welcomeHeadA: "See where your",
   welcomeHeadB: "AI work goes",
   welcomeLede:
-    "Signal runs quietly beside Claude Code, Codex and Gemini on this computer. It turns your sessions into focus blocks, projects and spend, and your prompt text never leaves this machine.",
+    "Signal runs quietly beside your favorite AI tools on this computer. It turns your sessions into focus blocks, projects and spend, and your prompt text never leaves this machine.",
   welcomePoints: [
     ["Track", "every session: time, tokens and estimated spend"],
     ["Understand", "which projects your AI work goes to"],
