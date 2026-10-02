@@ -291,7 +291,6 @@ body.is-welcome .pane-root { padding: 0; }
   position: relative;
   min-height: 100vh;
   display: flex;
-  align-items: center;
   overflow: hidden;
   background: var(--bg);
 }
@@ -300,8 +299,14 @@ body.is-welcome .pane-root { padding: 0; }
   position: relative;
   max-width: 640px;
   margin: 0 auto 0 clamp(24px, 9vw, 132px);
-  padding: 56px 24px 56px 0;
+  padding: 56px 24px 40px 0;
+  /* Hero centred in the window, the three points pinned to its bottom. */
+  box-sizing: border-box;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
+.welcome-eyebrow { margin-top: auto; }
 .welcome-eyebrow {
   font-family: var(--mono);
   font-size: 12px;
@@ -322,7 +327,7 @@ body.is-welcome .pane-root { padding: 0; }
 }
 .welcome-head span { color: var(--green); }
 .welcome-lede { margin: 0 0 28px; max-width: 540px; font-size: 17.5px; line-height: 1.55; color: var(--ink-2); }
-.welcome-actions { display: flex; flex-direction: column; align-items: center; gap: 10px; width: max-content; max-width: 100%; margin-bottom: 18px; }
+.welcome-actions { display: flex; flex-direction: column; align-items: center; gap: 10px; width: max-content; max-width: 100%; margin-bottom: 36px; }
 .welcome-actions .btn { padding: 12px 22px; font-size: 14.5px; border-radius: 3px; }
 .welcome .btn.welcome-primary { background: var(--green); color: var(--on-dark); border: 1px solid var(--green); }
 .welcome .btn.welcome-primary:hover:not(:disabled) { background: var(--green-strong); }
@@ -332,7 +337,7 @@ body.is-welcome .pane-root { padding: 0; }
 .welcome .signin-flow { margin: 0 0 16px; }
 .welcome-points {
   list-style: none;
-  margin: 36px 0 0;
+  margin: auto 0 0;
   padding: 22px 0 0;
   border-top: 1px solid var(--rule);
   display: grid;
