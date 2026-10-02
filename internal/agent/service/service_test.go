@@ -66,3 +66,15 @@ func TestLaunchAgentPlistDoesNotRespawnAfterCleanExit(t *testing.T) {
 		t.Fatalf("KeepAlive is not the SuccessfulExit=false dictionary:\n%s", p)
 	}
 }
+
+// Background throttles the daemon and its sidecar to the lowest CPU and I/O
+// tier; see the ProcessType note on LaunchAgentPlist for what that cost.
+func TestLaunchAgentPlistRunsAtStandardPriority(t *testing.T) {
+	p := LaunchAgentPlist("/usr/local/bin/keld-agent", "/o.log", "/e.log")
+	if !strings.Contains(p, "<key>ProcessType</key><string>Standard</string>") {
+		t.Fatalf("ProcessType must be Standard:\n%s", p)
+	}
+	if strings.Contains(p, "Background") {
+		t.Fatalf("ProcessType Background is back:\n%s", p)
+	}
+}
