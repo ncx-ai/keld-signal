@@ -84,9 +84,5 @@ func atlasEnvNote() string {
 	if e.Web == "" || e.Web == e.API {
 		return fmt.Sprintf("Atlas: %s (%s), not production. `keld signal env prod` switches back.", e.Name, e.API)
 	}
-	where := e.API
-	if e.Web != e.API {
-		where = "API " + e.API + ", web " + e.Web
-	}
-	return fmt.Sprintf("Atlas: %s (%s), not production. `keld signal env prod` switches back.", e.Name, where)
+	return fmt.Sprintf("Atlas: %s (API %s, web %s), not production. `keld signal env prod` switches back.", e.Name, e.API, e.Web)
 }

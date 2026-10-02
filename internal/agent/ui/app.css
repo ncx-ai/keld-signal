@@ -278,8 +278,7 @@ body.pane-today .health-strip { margin-top: 12px; }
   color: var(--forest);
 }
 .signin-banner.done { background: var(--green-soft); border-color: var(--green); color: var(--green-strong); }
-.signin-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.signin-copy strong, .signin-flow strong { font-weight: 600; }
+.signin-flow strong { font-weight: 600; }
 .signin-flow { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .signin-flow.failed { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--error-strong); }
 .signin-link { color: var(--ink-2); overflow-wrap: anywhere; }

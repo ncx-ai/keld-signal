@@ -722,9 +722,7 @@ export function safeAuthorizeURL(u) {
 }
 
 /** The restart-bar state machine. `PUT /v1/settings` answers
- *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
- *  answers it on every success (a new host always needs one). Either landing
- *  moves NEEDED → the bar shows and offers Restart; the daemon's only
+ *  `restart_required` for `send_to_atlas`/`dev_blocks`, which moves NEEDED → the bar shows and offers Restart; the daemon's only
  *  restart trigger is `PUT /v1/settings?restart=1` (docs/v3/contracts.md), so
  *  clicking it re-PUTs (RESTARTING), then the page polls `/v1/ledger`
  *  (WAITING) until the new process answers (READY), and reloads. A pure
@@ -2357,8 +2355,7 @@ if (typeof document !== "undefined") {
     todayUsage: null,
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
-    // resending with ?restart=1 — empty for a restart /v1/config asked for,
-    // since that route already wrote everything itself.
+    // resending with ?restart=1.
     restart: { status: RESTART_IDLE, patch: {} },
     unpair: { status: "idle", error: null },
     // serviceRestart: the analysis-service Restart button's own state, and
@@ -3338,12 +3335,6 @@ if (typeof document !== "undefined") {
     return state.settingsError && state.settingsError.keys.includes(key) ? state.settingsError.text : null;
   }
 
-  // The daemon's only restart trigger is PUT /v1/settings?restart=1
-  // (docs/v3/contracts.md); POST /v1/config's own restart_required rides the
-  // same mechanism with whatever settings patch is pending (empty when a
-  // config change is what asked for it — that route already wrote
-  // hook.json/auth.json itself). Not specified by contracts.md which route a
-  // config-triggered restart should use — this lane's choice; see the report.
   function setUnpair(status, error = null) {
     state.unpair = { status, error };
     route();
@@ -3981,8 +3972,8 @@ if (typeof document !== "undefined") {
   /** Start a web sign-in: POST /v1/auth/start, then poll /v1/auth/state.
    *
    *  `enableAtlas` is Settings' path from local-only mode: the start route
-   *  refuses while Send to Atlas is off (409, as /v1/config does), so the
-   *  switch is turned on first through the same PUT the switch itself uses.
+   *  refuses while Send to Atlas is off (409), so it is turned on first
+   *  through the page's one settings PUT.
    *
    *  ⚠️ The restart that PUT asks for is DEFERRED until the sign-in finishes.
    *  The daemon's page port is random on every start and the pending sign-in
@@ -4032,7 +4023,7 @@ if (typeof document !== "undefined") {
 
   // One poll. Re-renders only when the verdict changes: route() rebuilds the
   // whole pane, and doing that every second would wipe whatever a person is
-  // typing into the setup-code box meanwhile.
+  // typing meanwhile (the Developer box's repository list).
   async function pollSignin() {
     const flow = state.signin;
     if (flow.status !== "waiting") return;
@@ -4089,8 +4080,8 @@ if (typeof document !== "undefined") {
   }
 
   /** "Copy link" beside the sign-in link. Its feedback changes only its own
-   *  label: route() would rebuild the pane and wipe whatever is being typed
-   *  into the setup-code box, the same reason pollSignin avoids it. */
+   *  label: route() would rebuild the pane and wipe whatever is being typed,
+   *  the same reason pollSignin avoids it. */
   function copyLinkButton(url) {
     const btn = el("button", { class: "btn secondary btn-small", type: "button" }, SIGNIN_TEXT.copyLink);
     let reset = null;
@@ -4297,8 +4288,7 @@ if (typeof document !== "undefined") {
   }
 
   /** Settings' account tile: who this machine is signed in as, or a way to
-   *  sign in. Beside the setup-code box, which stays (AC-8). Nothing at all
-   *  on a daemon without /v1/auth/state. */
+   *  sign in. Nothing at all on a daemon without /v1/auth/state. */
   function renderAccountTile(atlasOn, readonly) {
     const auth = state.auth;
     if (!auth) return null;

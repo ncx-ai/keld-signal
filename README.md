@@ -423,8 +423,8 @@ terminal (only when stdout really is one).
 configure tools whenever stdout looked like a terminal, with `--headless` to opt
 out. It was right while the CLI was the only place a machine could be onboarded:
 an install that did not onboard left a daemon idling with no way to fix it. The
-app removed that constraint — `POST /v1/config` pairs a machine from Settings, and
-the daemon serves that route before it has any config — so a command called
+app removed that constraint — the app signs a machine in from its own page, which
+the daemon serves before it has any config — so a command called
 `install` opening a browser became a command doing three things, and the common
 path needed a flag to get the obvious behaviour. `--headless` is still accepted and
 inert, because scripts and MDM payloads outlive a release and cobra rejects an
