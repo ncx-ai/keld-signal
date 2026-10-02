@@ -12,8 +12,13 @@ test.describe("Settings", () => {
     await signal.open("settings");
     // There is no switch: being signed in is what sends. (The account tile's
     // "Set by KELD_ATLAS" note is pinned by signin.spec.ts's KELD_ATLAS=0 case.)
-    await expect(page.getByText(/^Send to Atlas/)).toHaveCount(0);
+    await expect(page.locator(".settings-row", { hasText: /Send to Atlas/ }).locator("input[type=checkbox]")).toHaveCount(0);
     await expect(page.locator("#envPill")).toHaveText("Local");
+    // This daemon is paired, so the tile offers the way back to sending, held
+    // off by the pin and saying why.
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await expect(tile.getByRole("button", { name: "Send to Atlas again" })).toBeDisabled();
+    await expect(tile.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
   });
 
   // ⚠️ **THIS ASSERTED THE CONTROL WAS VISIBLE, AND IT IS NOW HIDDEN ON
@@ -78,6 +83,15 @@ test.describe("Settings", () => {
     await expect(page.getByText("Vector attribution")).toBeVisible();
     const { input } = signal.settingSwitch(/^Vector attribution/);
     await expect(input).not.toBeChecked();
+  });
+
+  // The account tile is the whole pane outside developer mode, so a sign-in
+  // state that does not answer must never leave Settings blank.
+  test("when the sign-in state can't be read, the account tile says so instead of vanishing", async ({ signal, page }) => {
+    await page.route(/\/v1\/auth\/state/, (route) => route.abort());
+    await signal.open("settings");
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Couldn't read this computer's sign-in/)).toBeVisible();
   });
 
   // A developer can look at the first-open screen again without resetting the

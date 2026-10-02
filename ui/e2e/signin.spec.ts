@@ -88,7 +88,7 @@ test.describe("Web sign-in", () => {
 
     await page.goto(harness.pageURL("settings"));
     const tile = page.locator(".tile", { hasText: "Atlas account" });
-    await expect(tile.getByText("Signing in turns Send to Atlas on.")).toBeVisible();
+    await expect(tile.getByText(/^Signing in sends focus blocks to Atlas/)).toBeVisible();
     await tile.getByRole("button", { name: "Sign in with Atlas" }).click();
 
     await expect(page.getByText("Finish signing in in your browser")).toBeVisible();
@@ -129,6 +129,29 @@ test.describe("Web sign-in", () => {
     await expect(tile.getByRole("button", { name: "Unpair" })).toHaveCount(1); // the confirm button only
     await tile.getByRole("button", { name: "Cancel" }).click();
     await expect(tile.getByRole("button", { name: "Unpair" })).toBeVisible();
+    assertPaired(harness);
+  });
+
+  // Settings has no Send to Atlas switch, so a machine signed in with sending
+  // off (an upgrade from a release that had the switch, or the welcome
+  // preview's "Use without an account") needs a way back that is not Unpair.
+  test("signed in but not sending: the account tile says so and Send to Atlas again turns it back on", async ({ page, harness }) => {
+    await page.goto(harness.pageURL("today"));
+    await page.getByRole("button", { name: "Sign in with Atlas" }).click();
+    await finishInBrowser(page);
+    await expect(page.getByText(SIGNED_IN).first()).toBeVisible({ timeout: 5_000 });
+    await harness.stopDaemon();
+    const cfgPath = path.join(harness.home, "agent-config.json");
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, "utf8")), send_to_atlas: false }));
+    await harness.startDaemon();
+
+    await page.goto(harness.pageURL("settings"));
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await expect(tile.getByText("Not sending. Signal keeps everything on this computer.")).toBeVisible();
+    await expect(page.locator("#envPill")).toHaveText("Local");
+    await tile.getByRole("button", { name: "Send to Atlas again" }).click();
+    await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(true);
+    await expect(tile.getByRole("button", { name: "Send to Atlas again" })).toHaveCount(0);
     assertPaired(harness);
   });
 

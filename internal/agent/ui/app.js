@@ -521,9 +521,27 @@ export const SIGNIN_TEXT = {
   copyFailed: "Couldn't copy — select the link instead",
   tryAgain: "Try again",
   notSignedInSettings: "Not signed in.",
-  turnsAtlasOn: "Signing in turns Send to Atlas on.",
   account: "Atlas account",
+  // Signed in, but this machine was set to keep everything here: the one way
+  // back to sending now that Settings has no Send to Atlas switch.
+  notSending: "Not sending. Signal keeps everything on this computer.",
+  sendAgain: "Send to Atlas again",
+  // GET /v1/auth/state did not answer (a restart, a slow first load).
+  authUnknown: "Couldn't read this computer's sign-in. Signal may be restarting; this updates on its own.",
 };
+
+/** The Atlas this machine would send to, as the top bar names it: "Atlas" for
+ *  production, "Atlas dev" / "Atlas local" otherwise. */
+export function atlasName(settings) {
+  const name = settings && settings.atlas_env && settings.atlas_env.name;
+  return name && name !== "prod" ? `Atlas ${name}` : "Atlas";
+}
+
+/** The line under "Not signed in.": where signing in sends, said before the
+ *  click that decides it. */
+export function signinDestinationText(settings) {
+  return `Signing in sends focus blocks to ${atlasName(settings)}. Prompt text stays on this computer.`;
+}
 
 /** One plain sentence per reason a sign-in can end without pairing: the six
  *  `last_error` codes contract C5 names, the start route's 409, and the two
@@ -591,8 +609,7 @@ export const WELCOME_PREVIEW_TEXT = {
 export function envPill(settings, auth) {
   if (!settings || showFirstRun(auth)) return null;
   if (!atlasEnabled(settings)) return { icon: "local", text: "Local" };
-  const name = settings.atlas_env && settings.atlas_env.name;
-  const atlas = name && name !== "prod" ? `Atlas ${name}` : "Atlas";
+  const atlas = atlasName(settings);
   if (auth && auth.paired === false) return { icon: "cloud", text: `${atlas} · not signed in` };
   return { icon: "cloud", text: atlas };
 }
@@ -3697,12 +3714,15 @@ if (typeof document !== "undefined") {
     const bar = renderRestartBar();
     if (bar) root.appendChild(bar);
 
+    // Two columns only when the Developer box is beside the account tile; a
+    // lone tile is one capped column, and one full column on a narrow window.
+    const devTile = renderDevBlocksTile(settings, atlasOn, readonly);
     root.appendChild(
       el(
         "div",
-        { class: "tiles", style: "grid-template-columns:1fr 1fr" },
+        { class: devTile ? "tiles settings-tiles" : "tiles settings-tiles single" },
         renderAccountTile(atlasOn, readonly),
-        renderDevBlocksTile(settings, atlasOn, readonly)
+        devTile
       )
     );
   }
@@ -4288,12 +4308,16 @@ if (typeof document !== "undefined") {
   }
 
   /** Settings' account tile: who this machine is signed in as, or a way to
-   *  sign in. Nothing at all on a daemon without /v1/auth/state. */
+   *  sign in. Drawn even when /v1/auth/state did not answer, since it is the
+   *  whole pane outside developer mode. */
   function renderAccountTile(atlasOn, readonly) {
     const auth = state.auth;
-    if (!auth) return null;
+    if (!auth) {
+      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "settings-note" }, SIGNIN_TEXT.authUnknown));
+    }
     if (auth.paired) {
       const v = unpairView(state.unpair.status, state.unpair.error);
+      const pinned = readonly.has("send_to_atlas");
       return el(
         "div",
         { class: "tile" },
@@ -4304,6 +4328,15 @@ if (typeof document !== "undefined") {
           el("span", { class: "signin-who" }, signedInText(auth)),
           v.button ? el("button", { class: "btn btn-quiet btn-small", type: "button", disabled: signinBusy(), onclick: () => setUnpair("confirm") }, UNPAIR_TEXT.button) : null
         ),
+        atlasOn
+          ? null
+          : el(
+              "div",
+              { class: "settings-row" },
+              el("span", { class: "desc" }, SIGNIN_TEXT.notSending),
+              el("button", { class: "btn btn-small", type: "button", disabled: pinned, onclick: () => updateSettings({ send_to_atlas: true }) }, SIGNIN_TEXT.sendAgain)
+            ),
+        atlasOn ? null : fieldNote("send_to_atlas", readonly),
         v.note ? el("div", { class: "settings-note unpair-note" }, v.note) : null,
         v.confirm
           ? el(
@@ -4325,7 +4358,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, SIGNIN_TEXT.notSignedInSettings, atlasOn ? null : el("div", { class: "desc" }, SIGNIN_TEXT.turnsAtlasOn)),
+        el("span", {}, SIGNIN_TEXT.notSignedInSettings, el("div", { class: "desc" }, signinDestinationText(state.settings))),
         el(
           "button",
           { class: "btn", type: "button", disabled: pinnedOff || signinBusy(), onclick: () => startSignin({ enableAtlas: !atlasOn }) },

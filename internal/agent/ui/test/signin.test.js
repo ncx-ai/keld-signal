@@ -5,6 +5,8 @@ import {
   envPill,
   showFirstRun,
   welcomeShown,
+  atlasName,
+  signinDestinationText,
   signinBarMode,
   signinPollStep,
   signinErrorText,
@@ -253,6 +255,15 @@ test("envPill: a non-production Atlas is named; production and local-only are no
   assert.deepEqual(envPill(on("custom"), paired), { icon: "cloud", text: "Atlas custom" });
   // Nothing is sent, so which Atlas is configured does not matter here.
   assert.deepEqual(envPill({ send_to_atlas: false, atlas_env: { name: "dev" } }, auth()), { icon: "local", text: "Local" });
+});
+
+test("signinDestinationText names the Atlas sign-in would send to, as the top bar does", () => {
+  assert.equal(atlasName({ atlas_env: { name: "prod" } }), "Atlas");
+  assert.equal(atlasName({}), "Atlas");
+  assert.equal(atlasName(null), "Atlas");
+  assert.equal(atlasName({ atlas_env: { name: "dev" } }), "Atlas dev");
+  assert.equal(signinDestinationText({ atlas_env: { name: "local" } }), "Signing in sends focus blocks to Atlas local. Prompt text stays on this computer.");
+  assert.equal(SIGNIN_TEXT.turnsAtlasOn, undefined, "the line must not name the removed Send to Atlas switch");
 });
 
 test("envPill: no settings yet, no label", () => {

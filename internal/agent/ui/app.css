@@ -585,6 +585,13 @@ fieldset:disabled { opacity: .55; }
   .tiles, .tiles.three { grid-template-columns: 1fr 1fr; }
 }
 
+/* Settings: the account tile, and the Developer box beside it when it is on. */
+.tiles.settings-tiles { grid-template-columns: 1fr 1fr; }
+.tiles.settings-tiles.single { grid-template-columns: minmax(0, 560px); }
+@media (max-width: 720px) {
+  .tiles.settings-tiles { grid-template-columns: 1fr; }
+}
+
 /* The developer "Generate block" button and the repository box beside it.
    Both live in the DEVELOPER surface, so they are deliberately quieter than a
    primary action: this is a switch a person flips while testing, not something

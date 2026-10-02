@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,20 @@ func TestUnconfiguredDaemonServesThePageAndSettings(t *testing.T) {
 	// machine that pairs through the page publishes without touching a toggle.
 	if out["send_to_atlas"] != true {
 		t.Fatalf("send_to_atlas must default to true on a fresh machine, got %v", out["send_to_atlas"])
+	}
+
+	// The setup-code route is gone: a setup code pairs from a terminal only, so
+	// re-adding POST /v1/config is a decision, not something a merge does quietly.
+	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/v1/config", strings.NewReader(`{"code":"ABCD-1234"}`))
+	req.Header.Set("x-keld-agent-secret", "s3cret")
+	req.Header.Set("Content-Type", "application/json")
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/config: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST /v1/config must be gone (404), got %d", res.StatusCode)
 	}
 }
 
