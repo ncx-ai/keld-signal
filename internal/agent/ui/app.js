@@ -430,15 +430,6 @@ export function sameAsOptions(projects) {
     .map((p) => ({ id: p.id, label: p.title }));
 }
 
-/** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
- *  toggle until the desktop shell (Tauri autostart, D9) owns it. Always
- *  unchecked and disabled, with a note saying where it actually lives — a
- *  toggle that silently does nothing is the defect this whole page exists to
- *  remove, so this is never rendered as live state from settings/localStorage. */
-export function startAtLoginProps() {
-  return { checked: false, disabled: true, note: "in the desktop app" };
-}
-
 /** The env var GET /v1/settings' `readonly` names a key by, and the note the
  *  page shows next to a control that key disables — "keys named in readonly
  *  render disabled with 'set by KELD_… on this machine'" (the D2 brief).
@@ -488,21 +479,267 @@ export function settingsErrorText(status, body) {
   return "That change was refused.";
 }
 
-/** `POST /v1/config`'s two documented refusals (docs/v3/contracts.md): a
- *  malformed code is 400, and the route is refused with 409 while
- *  `send_to_atlas` is false (pointing at a different Atlas is meaningless
- *  while nothing is being sent to one). */
-export function configErrorText(status, body) {
-  if (status === 400) return "That does not look like a setup code";
-  if (status === 409) return "Turn on Send to Atlas first";
-  if (body && body.error) return body.error;
-  return "Couldn't reach Signal to set that — try again.";
+// ---- Web sign-in (contract C6 of docs/superpowers/plans/2026-09-29-signal-web-signin-plan.md) ----
+//
+// The page asks the daemon to start a sign-in (POST /v1/auth/start), the
+// daemon opens the system browser at Atlas, and the browser comes back to the
+// daemon's own /auth/callback — never to this page, which has no way to be
+// told. So the page learns the outcome the only way it can: by polling
+// GET /v1/auth/state. Everything that decides what to show or when to stop
+// lives here, as pure functions, so the rules are tested rather than read out
+// of a click handler.
+
+/** Every sentence the sign-in UI shows, in one place. The first four are the
+ *  spec's wireframe ("What the first open looks like") verbatim. */
+export const SIGNIN_TEXT = {
+  signIn: "Sign in with Atlas",
+  localOnly: "Use without an account",
+  firstRunTitle: "Welcome to Signal",
+  // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
+  welcomeHeadA: "See where your",
+  welcomeHeadB: "AI work goes",
+  welcomeLede:
+    "Signal runs quietly beside your favorite AI tools on this computer. It turns your sessions into focus blocks, projects and spend. Your prompts never leave your device.",
+  welcomePoints: [
+    ["Track", "every session: time, tokens and estimated spend"],
+    ["Understand", "which projects your AI work goes to"],
+    ["Private", "by default: prompt text stays on this computer"],
+  ],
+  starting: "Starting sign-in…",
+  waiting: "Finish signing in in your browser",
+  // The link is ALWAYS shown (AC-1: "the page always shows the link too"); only
+  // the sentence in front of it changes with whether the daemon managed to
+  // open a browser: `false` means KELD_AUTH_NO_BROWSER=1 or the opener failed to
+  // start. A machine with no display still STARTS xdg-open, so it reads `true`.
+  linkOpened: "Browser didn't open? Use this link:",
+  linkNotOpened: "Your browser didn't open. Open this link to finish:",
+  linkLabel: "Open the Atlas sign-in page",
+  // Beside the link, for wherever a click on it opens nothing: the desktop
+  // app's web view before its new-window handler, a locked-down browser.
+  copyLink: "Copy link",
+  copied: "Copied",
+  copyFailed: "Couldn't copy — select the link instead",
+  tryAgain: "Try again",
+  notSignedInSettings: "Not signed in.",
+  account: "Atlas account",
+  // Signed in, but this machine was set to keep everything here: the one way
+  // back to sending now that Settings has no Send to Atlas switch.
+  notSending: "Not sending. Signal keeps everything on this computer.",
+  sendAgain: "Send to Atlas again",
+  // GET /v1/auth/state did not answer (a restart, a slow first load).
+  authUnknown: "Couldn't read this computer's sign-in. Signal may be restarting; this updates on its own.",
+};
+
+/** The Atlas this machine would send to, as the top bar names it: "Atlas" for
+ *  production, "Atlas dev" / "Atlas local" otherwise. */
+export function atlasName(settings) {
+  const name = settings && settings.atlas_env && settings.atlas_env.name;
+  return name && name !== "prod" ? `Atlas ${name}` : "Atlas";
+}
+
+/** The line under "Not signed in.": where signing in sends, said before the
+ *  click that decides it. */
+export function signinDestinationText(settings) {
+  return `Signing in sends focus blocks to ${atlasName(settings)}. Prompt text stays on this computer.`;
+}
+
+/** One plain sentence per reason a sign-in can end without pairing: the six
+ *  `last_error` codes contract C5 names, the start route's 409, and the two
+ *  the page itself concludes (the daemon stopped answering; the attempt
+ *  vanished with no reason). */
+export const SIGNIN_ERROR_TEXT = {
+  not_started_here: "Signal did not recognise that sign-in. Start it again from this page.",
+  expired: "That sign-in expired before it finished.",
+  atlas_mismatch: "The browser came back from a different Atlas than the one this sign-in started with.",
+  atlas_off: "Send to Atlas was turned off, so Signal refused the sign-in.",
+  atlas_error: "Atlas could not finish the sign-in.",
+  // Atlas finished; writing hook.json on this machine did not. Blaming Atlas
+  // for it would send a person to the wrong place.
+  save_failed: "Signal couldn't save the sign-in on this computer.",
+  send_to_atlas_is_off: "Send to Atlas is off on this machine, so Signal can't sign in.",
+  unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
+  abandoned: "This sign-in is no longer waiting.",
+};
+
+/** How often the page asks /v1/auth/state while a sign-in is in flight. 1 s,
+ *  so the page shows "signed in" well inside AC-5's 5 seconds of the callback. */
+export const SIGNIN_POLL_MS = 1000;
+/** The daemon forgets a pending sign-in after 10 minutes (C5); past that the
+ *  browser's return cannot succeed, so the page stops waiting for it. */
+export const SIGNIN_GIVE_UP_MS = 10 * 60 * 1000;
+/** Consecutive failed polls before the page concludes the daemon is gone —
+ *  e.g. it restarted mid-flow onto a new port. One missed poll is noise. */
+export const SIGNIN_MAX_POLL_FAILURES = 5;
+/** How long the "Signed in as …" confirmation stays in the bar. */
+export const SIGNIN_DONE_LINGER_MS = 8000;
+
+/** Does the first-open choice show? True only when the daemon says so and the
+ *  machine is not paired — the spec's decision table, whose rows 2, 3 and 5
+ *  the daemon folds into `first_run` itself. No answer (an older daemon
+ *  without the route) is never a yes: a person who already chose must not be
+ *  asked again because a request failed. */
+export function showFirstRun(auth) {
+  return !!auth && auth.first_run === true && auth.paired !== true;
+}
+
+/** Does the welcome screen stand in for the panes? The daemon's first-open
+ *  choice, or the Developer box's preview of it. Never while offline: the
+ *  cached page is showing what it last knew, and neither button could act. */
+export function welcomeShown(auth, preview, offline) {
+  return (showFirstRun(auth) || !!preview) && !offline;
+}
+
+/** The Developer box's welcome-screen row, and the way back out of it. */
+export const WELCOME_PREVIEW_TEXT = {
+  title: "Welcome screen",
+  desc: "Shows the first-open screen on this page. Its buttons work for real. Nothing changes until you press one.",
+  show: "Show welcome screen",
+  back: "Back to Signal",
+};
+
+/** The top bar's label: where this machine's data goes, or null to hide it.
+ *  `icon` is "local" or "cloud"; a cloud label names the Atlas environment
+ *  when it is not production ("Atlas dev", "Atlas local"), set with
+ *  `keld signal env`. Hidden while the first-open choice is up: the label
+ *  states a choice, and on that screen nobody has made one yet.
+ *
+ *  Sending on but not paired says so: nothing reaches that Atlas until a
+ *  sign-in, and a bare "Atlas local" read as connected. No auth answer (an
+ *  older daemon, or offline) is not "not signed in" — the page does not know. */
+export function envPill(settings, auth) {
+  if (!settings || showFirstRun(auth)) return null;
+  if (!atlasEnabled(settings)) return { icon: "local", text: "Local" };
+  const atlas = atlasName(settings);
+  if (auth && auth.paired === false) return { icon: "cloud", text: `${atlas} · not signed in` };
+  return { icon: "cloud", text: atlas };
+}
+
+/** What the bar above every pane shows: "flow" (a sign-in in progress or just
+ *  failed, from wherever it was started), "done" (a confirmation that lingers)
+ *  or null. Not being signed in is never a bar of its own: the top bar's label
+ *  says where data goes, and Settings keeps Sign in. */
+export function signinBarMode(auth, settings, flow, now) {
+  // The first-open screen carries its own sign-in progress; a second copy of
+  // it in a bar above would be the same sentence twice.
+  if (showFirstRun(auth)) return null;
+  const status = (flow && flow.status) || "idle";
+  if (status === "starting" || status === "waiting" || status === "failed") return "flow";
+  if (status === "done" && now - (flow.doneAt || 0) < SIGNIN_DONE_LINGER_MS) return "done";
+  return null;
+}
+
+/** One poll's verdict: keep polling, or stop as done/failed with a reason.
+ *  `auth` is null when the poll itself failed; `failures` counts consecutive
+ *  failed polls including this one.
+ *
+ *  ⚠️ A `last_error` ends the attempt only once the daemon no longer holds a
+ *  pending sign-in. While one is pending, an error belongs to some OTHER
+ *  return — a forged callback with a made-up state, or an older attempt — and
+ *  letting it cancel the real sign-in would hand anyone who can open a URL on
+ *  this machine a way to keep a person from ever signing in. */
+export function signinPollStep(auth, { startedAt, now, failures = 0 }) {
+  if (auth && auth.paired) return { stop: true, status: "done", error: null };
+  if (now - startedAt >= SIGNIN_GIVE_UP_MS) return { stop: true, status: "failed", error: "expired" };
+  if (!auth) {
+    if (failures >= SIGNIN_MAX_POLL_FAILURES) return { stop: true, status: "failed", error: "unreachable" };
+    return { stop: false, status: "waiting", error: null };
+  }
+  if (auth.pending) return { stop: false, status: "waiting", error: null };
+  return { stop: true, status: "failed", error: auth.last_error || "abandoned" };
+}
+
+/** The sentence in front of the always-shown sign-in link. */
+export function signinLinkSentence(opened) {
+  return opened ? SIGNIN_TEXT.linkOpened : SIGNIN_TEXT.linkNotOpened;
+}
+
+export function signinErrorText(code) {
+  if (!code) return "Signing in did not finish.";
+  return SIGNIN_ERROR_TEXT[code] || code;
+}
+
+/** POST /v1/auth/start's refusals. 404 is a daemon older than the route. */
+export function signinStartErrorText(status, body) {
+  const code = body && body.error;
+  if (code) return signinErrorText(code);
+  if (!status) return "Couldn't reach Signal to start signing in — try again.";
+  if (status === 404) return "This version of Signal can't sign in from the page. Update Signal, or run keld login in a terminal.";
+  return "Signal couldn't start signing in just now — try again.";
+}
+
+/** Copy `text` to the clipboard: the async Clipboard API first, then
+ *  `fallback` (the page passes a select-and-execCommand copy) when that is
+ *  missing or refuses. True only when one of them reports the copy happened. */
+export async function copyText(text, { clipboard, fallback } = {}) {
+  if (!text) return false;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch {
+      // refused (no permission, not focused): try the fallback
+    }
+  }
+  if (typeof fallback === "function") {
+    try {
+      return fallback(text) === true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** The Atlas account tile's Unpair control, as a pure view of its status:
+ *  idle → confirm → sending → done (Signal restarts) | failed. */
+export const UNPAIR_TEXT = {
+  button: "Unpair",
+  confirm: "Unpair this computer? Signal keeps collecting here and stops sending to Atlas until you sign in again.",
+  yes: "Unpair",
+  no: "Cancel",
+  sending: "Unpairing…",
+  done: "Unpaired. Signal is restarting; this page comes back on its own in the app.",
+};
+export const UNPAIR_ERROR_TEXT = {
+  pairing_set_by_env: "This computer's pairing is set by KELD_CTX_ENDPOINT or KELD_CTX_TOKEN on this machine, so it can't be undone here.",
+  signin_in_progress: "Finish or cancel the sign-in first.",
+};
+export function unpairErrorText(code) {
+  return UNPAIR_ERROR_TEXT[code] || "Signal couldn't unpair. Try again.";
+}
+export function unpairView(status, error) {
+  switch (status) {
+    case "confirm":
+      return { button: false, confirm: true, note: UNPAIR_TEXT.confirm, busy: false };
+    case "sending":
+      return { button: false, confirm: false, note: UNPAIR_TEXT.sending, busy: true };
+    case "done":
+      return { button: false, confirm: false, note: UNPAIR_TEXT.done, busy: true };
+    case "failed":
+      return { button: true, confirm: false, note: unpairErrorText(error), busy: false };
+    default:
+      return { button: true, confirm: false, note: null, busy: false };
+  }
+}
+
+export function signedInText(auth) {
+  const who = auth && auth.principal;
+  const org = auth && auth.org;
+  if (who && org) return `Signed in as ${who} · ${org}`;
+  if (who) return `Signed in as ${who}`;
+  return "Signed in to Atlas";
+}
+
+/** The authorize URL as an href, or "" when it is not http(s). It comes from
+ *  this machine's own daemon, but an href is the one place a string becomes
+ *  executable (`javascript:`), so the page checks rather than trusts. */
+export function safeAuthorizeURL(u) {
+  const s = String(u || "");
+  return /^https?:\/\//i.test(s) ? s : "";
 }
 
 /** The restart-bar state machine. `PUT /v1/settings` answers
- *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
- *  answers it on every success (a new host always needs one). Either landing
- *  moves NEEDED → the bar shows and offers Restart; the daemon's only
+ *  `restart_required` for `send_to_atlas`/`dev_blocks`, which moves NEEDED → the bar shows and offers Restart; the daemon's only
  *  restart trigger is `PUT /v1/settings?restart=1` (docs/v3/contracts.md), so
  *  clicking it re-PUTs (RESTARTING), then the page polls `/v1/ledger`
  *  (WAITING) until the new process answers (READY), and reloads. A pure
@@ -526,6 +763,21 @@ export function restartBarText(status) {
     default:
       return "";
   }
+}
+
+/** What the restart bar shows: its sentence, whether it carries a Restart
+ *  button, and whether that button can be pressed. `signingIn` is a web
+ *  sign-in in flight — the daemon's page port is random on every start and
+ *  the pending sign-in lives in its memory, so a restart then sends the
+ *  browser's return to a dead port and throws the attempt away. The restart
+ *  is still owed, so the bar stays; it just waits. */
+export function restartBarView(status, signingIn) {
+  const needed = status === RESTART_NEEDED;
+  return {
+    text: needed && signingIn ? "Restart after signing in finishes." : restartBarText(status),
+    button: needed,
+    disabled: needed && !!signingIn,
+  };
 }
 
 export function nextRestartStatus(status, event) {
@@ -2090,11 +2342,8 @@ if (typeof document !== "undefined") {
 
   // "Show details on cards" is a page-only preference (docs/v3/contracts.md's
   // page convention 3): it changes nothing the daemon does, so it lives
-  // entirely client-side rather than in agent-config.json. "Start at login"
-  // used to live here too, as a toggle that looked real and did nothing —
-  // page convention 4 is explicit that this is the defect to remove, so it is
-  // no longer a stored preference at all; startAtLoginProps() always renders
-  // it disabled.
+  // entirely client-side rather than in agent-config.json. Its switch is the
+  // "Show details" one in the Focus blocks toggles.
   function loadLocalPrefs() {
     return readJSONStorage(LOCAL_PREFS_KEY, {
       showDetails: false,
@@ -2123,9 +2372,9 @@ if (typeof document !== "undefined") {
     todayUsage: null,
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
-    // resending with ?restart=1 — empty for a restart /v1/config asked for,
-    // since that route already wrote everything itself.
+    // resending with ?restart=1.
     restart: { status: RESTART_IDLE, patch: {} },
+    unpair: { status: "idle", error: null },
     // serviceRestart: the analysis-service Restart button's own state, and
     // the service state it was pressed against. `forState` is what lets
     // reconcileServiceRestart drop a stale "Restart requested" the moment the
@@ -2136,8 +2385,6 @@ if (typeof document !== "undefined") {
     // it was about, so it renders next to the control that caused it rather
     // than as an unscoped banner nobody can connect to an action.
     settingsError: null,
-    configError: "",
-    configHost: "",
     // naming: {id, title, error} while a suggestion is being turned into a
     // project. Null the rest of the time. It lives in state rather than in the
     // DOM because `route()` re-renders the whole pane, so a value held only in
@@ -2161,6 +2408,19 @@ if (typeof document !== "undefined") {
     // whole pane on every 10s poll, and a confirmation that vanished on the
     // next tick would be unreadable.
     integrationResults: new Map(),
+    // auth: the last GET /v1/auth/state body (contract C5). Null until it has
+    // answered once, and null for good on a daemon without the route — which
+    // renders as no first-open screen and no sign-in bar, never as "not
+    // signed in": the page does not know that, so it does not say it.
+    auth: null,
+    // The Developer box's "Show welcome screen". Page memory only, so a reload
+    // ends it, and so does any choice made on the screen.
+    welcomePreview: false,
+    // signin: the web sign-in in progress, from whichever entry point started
+    // it. {status: idle|starting|waiting|failed|done, url, opened, startedAt,
+    // failures, message, doneAt, restartAfter, enableAtlas}. See
+    // signinPollStep for when "waiting" ends.
+    signin: { status: "idle" },
   };
 
   async function fetchJSON(path, opts) {
@@ -2169,7 +2429,7 @@ if (typeof document !== "undefined") {
     return res.json();
   }
 
-  // sendJSON never throws on a non-2xx — settingsErrorText/configErrorText
+  // sendJSON never throws on a non-2xx — settingsErrorText and friends
   // need the STATUS and the BODY of a refusal (400/409), which fetchJSON's
   // throw-on-!ok would discard. Network failure (daemon down, dev server with
   // no route) is reported as status 0 with a null body, which both error-text
@@ -2237,7 +2497,19 @@ if (typeof document !== "undefined") {
     // older build, or any harness serving the page without it) would have
     // declared the whole machine down over a missing progress bar. Caught by
     // the mock-shell specs, which is exactly the shape an older daemon has.
-    await loadEngine();
+    await Promise.all([loadEngine(), loadAuth()]);
+  }
+
+  // Outside loadAll's Promise.all for the engine's reason: a daemon without
+  // /v1/auth/state is an older build, not a machine that is down. Keeps the
+  // last known answer on a failed read, so one missed request cannot flash
+  // the first-open screen at somebody who already chose.
+  async function loadAuth() {
+    try {
+      state.auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // unchanged
+    }
   }
 
   function paneFromHash() {
@@ -3080,13 +3352,25 @@ if (typeof document !== "undefined") {
     return state.settingsError && state.settingsError.keys.includes(key) ? state.settingsError.text : null;
   }
 
-  // The daemon's only restart trigger is PUT /v1/settings?restart=1
-  // (docs/v3/contracts.md); POST /v1/config's own restart_required rides the
-  // same mechanism with whatever settings patch is pending (empty when a
-  // config change is what asked for it — that route already wrote
-  // hook.json/auth.json itself). Not specified by contracts.md which route a
-  // config-triggered restart should use — this lane's choice; see the report.
+  function setUnpair(status, error = null) {
+    state.unpair = { status, error };
+    route();
+  }
+
+  // POST /v1/auth/unpair removes the pairing and restarts Signal. The restart
+  // comes up on a new port and secret, which the desktop app follows on its
+  // own; in a browser tab this page cannot, which the done sentence says.
+  async function clickUnpair() {
+    setUnpair("sending");
+    const res = await sendJSON("/v1/auth/unpair", "POST");
+    if (!res.ok) return setUnpair("failed", (res.body && res.body.error) || null);
+    if (res.body && res.body.restarting) return setUnpair("done");
+    setUnpair("idle");
+    loadAll();
+  }
+
   async function clickRestart() {
+    if (signinBusy()) return; // see restartBarView: a restart now kills the sign-in
     state.restart.status = nextRestartStatus(state.restart.status, "clicked");
     route();
     await sendJSON("/v1/settings?restart=1", "PUT", state.restart.patch);
@@ -3426,58 +3710,19 @@ if (typeof document !== "undefined") {
     }
     const readonly = new Set(settings.readonly || []);
     const atlasOn = atlasEnabled(settings);
-    const startAtLogin = startAtLoginProps();
 
     const bar = renderRestartBar();
     if (bar) root.appendChild(bar);
 
+    // Two columns only when the Developer box is beside the account tile; a
+    // lone tile is one capped column, and one full column on a narrow window.
+    const devTile = renderDevBlocksTile(settings, atlasOn, readonly);
     root.appendChild(
       el(
         "div",
-        { class: "tiles", style: "grid-template-columns:1fr 1fr" },
-        el(
-          "div",
-          { class: "tile" },
-          el("div", { class: "l" }, "Environment"),
-          el("div", { class: "codebox" },
-            el("input", { type: "text", id: "codeInput", placeholder: "atlas-dev.keld.co/ABCD-EFGH" }),
-            el("button", { class: "btn", onclick: submitCode }, "Switch")
-          ),
-          state.configError
-            ? el("div", { class: "settings-note error-note" }, state.configError)
-            : state.configHost
-            ? el("div", { class: "settings-note", style: "color:var(--green-strong)" }, `Now pointing at ${state.configHost}.`)
-            : el("div", { class: "settings-note", style: "color:var(--muted)" }, "Paste a setup code from any Atlas. Signal restarts and points there.")
-        ),
-        el(
-          "div",
-          { class: "tile" },
-          el("div", { class: "l" }, "Attribution"),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Suggest projects from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
-            switchEl({ checked: true, disabled: true })
-          ),
-          // Vector attribution used to be the second row here. It is a
-          // developer control while the feature is still being built — see
-          // renderDevAttribution — so a person who never turned developer mode
-          // on cannot switch on a 1.2 GB download and a message-reading model
-          // from this tile.
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Start at login", el("div", { class: "desc" }, `Not yet a working toggle here — ${startAtLogin.note}.`)),
-            switchEl({ checked: startAtLogin.checked, disabled: startAtLogin.disabled })
-          ),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Show details on cards"),
-            switchEl({ checked: !!state.local.showDetails, onChange: (v) => { state.local.showDetails = v; saveLocalPrefs(state.local); route(); } })
-          )
-        ),
-        renderDevBlocksTile(settings, atlasOn, readonly)
+        { class: devTile ? "tiles settings-tiles" : "tiles settings-tiles single" },
+        renderAccountTile(atlasOn, readonly),
+        devTile
       )
     );
   }
@@ -3536,42 +3781,31 @@ if (typeof document !== "undefined") {
     if (isReadonly) note = el("div", { class: "settings-note readonly-note" }, readonlyNote("dev_blocks"));
     else if (atlasOn) note = el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.");
     const err = settingsErrorFor("dev_blocks");
-    // ⚠️ **SEND TO ATLAS IS NOT A DEVELOPER CONTROL, AND HIDING IT WITH THE
-    // DEVELOPER ROWS WOULD BE A BUG, NOT A FEATURE.** It decides whether this
-    // machine publishes at all — the single most consequential switch on the
-    // page — and it lives in this box only because the developer rows below it
-    // are refused or reinterpreted depending on it (see the comment on the row
-    // itself). So the box is always drawn and always carries that row; what
-    // developer mode gates is the rows underneath, and the heading, which is
-    // the only part that is actually about developing.
-    const dev = devModeOn();
+    // ⚠️ **THERE IS NO SEND TO ATLAS SWITCH ANY MORE, AND THIS BOX USED TO BE
+    // ITS HOME.** Signing in IS sending and not being signed in is not sending
+    // (Settings' account tile, Unpair); the top bar's label says which Atlas;
+    // `keld signal env` switches it from a terminal. A switch beside those was
+    // a second way to say the same thing that could disagree with the first.
+    // `send_to_atlas` itself stays: the welcome screen's "Use without an
+    // account" writes it, sign-in turns it back on, and KELD_ATLAS still pins it.
+    // So this box is now only the developer rows, drawn in developer mode.
+    if (!devModeOn()) return null;
     return el(
       "div",
       { class: "tile", style: "background:var(--nested)" },
-      el("div", { class: "l" }, dev ? "Developer" : "Atlas"),
-      // ⚠️ Send to Atlas lives HERE rather than in a tile of its own. The two
-      // controls are read together and never separately: every other switch in
-      // this box is refused or reinterpreted depending on it, so putting them
-      // side by side is what makes those refusals legible instead of arriving
-      // as an error from a control three tiles away.
-      el(
-        "div",
-        { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks and the projects they matched. Off: nothing leaves this machine.")),
-        switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
-      ),
-      fieldNote("send_to_atlas", readonly),
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
-      dev && SHOW_BLOCK_GRANULARITY ? grid : null,
-      dev && SHOW_BLOCK_GRANULARITY ? note : null,
-      dev && SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevGenerate(settings) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevToolOTLP(settings, readonly) : null
+      el("div", { class: "l" }, "Developer"),
+      SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
+      SHOW_BLOCK_GRANULARITY ? grid : null,
+      SHOW_BLOCK_GRANULARITY ? note : null,
+      SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
+      SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      renderDevWelcome(),
+      el("div", { class: "settings-sep" }),
+      renderDevGenerate(settings),
+      el("div", { class: "settings-sep" }),
+      renderDevAttribution(settings, readonly),
+      el("div", { class: "settings-sep" }),
+      renderDevToolOTLP(settings, readonly)
     );
   }
 
@@ -3644,6 +3878,20 @@ if (typeof document !== "undefined") {
         switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
       ),
       fieldNote("attribution", readonly)
+    );
+  }
+
+  function setWelcomePreview(on) {
+    state.welcomePreview = on;
+    route();
+  }
+
+  function renderDevWelcome() {
+    return el(
+      "div",
+      { class: "settings-row" },
+      el("span", {}, WELCOME_PREVIEW_TEXT.title, el("div", { class: "desc" }, WELCOME_PREVIEW_TEXT.desc)),
+      el("button", { class: "btn btn-small", type: "button", onclick: () => setWelcomePreview(true) }, WELCOME_PREVIEW_TEXT.show)
     );
   }
 
@@ -3724,35 +3972,401 @@ if (typeof document !== "undefined") {
   function renderRestartBar() {
     const status = state.restart.status;
     if (status === RESTART_IDLE) return null;
-    const text = restartBarText(status);
-    const canClick = status === RESTART_NEEDED;
+    const view = restartBarView(status, signinBusy());
     return el(
       "div",
       { class: "restart-bar" },
-      el("span", {}, text),
-      canClick ? el("button", { class: "btn", onclick: clickRestart }, "Restart") : null
+      el("span", {}, view.text),
+      view.button ? el("button", { class: "btn", type: "button", disabled: view.disabled, onclick: clickRestart }, "Restart") : null
     );
   }
 
-  async function submitCode() {
-    const input = document.getElementById("codeInput");
-    const code = input && input.value.trim();
-    if (!code) return;
-    state.configError = "";
-    state.configHost = "";
-    const res = await sendJSON("/v1/config", "POST", { code });
-    if (!res.ok) {
-      state.configError = configErrorText(res.status, res.body);
+  // ---- Web sign-in ----
+
+  let signinTimer = null;
+
+  function signinBusy() {
+    return state.signin.status === "starting" || state.signin.status === "waiting";
+  }
+
+  /** Start a web sign-in: POST /v1/auth/start, then poll /v1/auth/state.
+   *
+   *  `enableAtlas` is Settings' path from local-only mode: the start route
+   *  refuses while Send to Atlas is off (409), so it is turned on first
+   *  through the page's one settings PUT.
+   *
+   *  ⚠️ The restart that PUT asks for is DEFERRED until the sign-in finishes.
+   *  The daemon's page port is random on every start and the pending sign-in
+   *  lives in its memory, so a restart mid-flow sends the browser's return to
+   *  a dead port and throws the attempt away — offering Restart then would be
+   *  offering to break the thing in progress. */
+  async function startSignin({ enableAtlas = false } = {}) {
+    if (signinBusy()) return;
+    clearTimeout(signinTimer);
+    state.signin = { status: "starting", enableAtlas };
+    route();
+    let restartAfter = false;
+    if (enableAtlas && !atlasEnabled(state.settings)) {
+      const put = await sendJSON("/v1/settings", "PUT", { send_to_atlas: true });
+      if (!put.ok) {
+        state.signin = { status: "failed", enableAtlas, message: settingsErrorText(put.status, put.body) };
+        route();
+        return;
+      }
+      state.settings = { ...state.settings, send_to_atlas: true };
+      restartAfter = !!(put.body && put.body.restart_required);
+      // A restart bar already up (from choosing local only, say) holds a patch
+      // that says send_to_atlas:false; pressing it now would turn Atlas off
+      // again. It carries the value just written instead.
+      if (state.restart.status !== RESTART_IDLE && "send_to_atlas" in state.restart.patch) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+      }
+    }
+    const res = await sendJSON("/v1/auth/start", "POST", {});
+    if (!res.ok || !res.body) {
+      state.signin = { status: "failed", enableAtlas, restartAfter, message: signinStartErrorText(res.status, res.body) };
       route();
       return;
     }
-    state.configHost = (res.body && res.body.host) || "";
-    if (res.body && res.body.restart_required) {
-      state.restart.patch = {};
-      state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
-    }
-    await loadAll();
+    state.signin = {
+      status: "waiting",
+      enableAtlas,
+      restartAfter,
+      url: safeAuthorizeURL(res.body.authorize_url),
+      opened: res.body.opened === true,
+      startedAt: Date.now(),
+      failures: 0,
+    };
     route();
+    signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+  }
+
+  // One poll. Re-renders only when the verdict changes: route() rebuilds the
+  // whole pane, and doing that every second would wipe whatever a person is
+  // typing meanwhile (the Developer box's repository list).
+  async function pollSignin() {
+    const flow = state.signin;
+    if (flow.status !== "waiting") return;
+    let auth = null;
+    try {
+      auth = await fetchJSON("/v1/auth/state");
+    } catch {
+      // counted below
+    }
+    if (state.signin !== flow) return; // superseded by a newer attempt or a choice
+    const failures = auth ? 0 : (flow.failures || 0) + 1;
+    const step = signinPollStep(auth, { startedAt: flow.startedAt, now: Date.now(), failures });
+    if (auth) state.auth = auth;
+    if (!step.stop) {
+      flow.failures = failures;
+      signinTimer = setTimeout(pollSignin, SIGNIN_POLL_MS);
+      return;
+    }
+    if (step.status === "done") {
+      state.signin = { status: "done", doneAt: Date.now() };
+      state.welcomePreview = false;
+      if (flow.restartAfter) {
+        state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
+        state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
+      }
+      route();
+      // The rest of the page (the health strip's Atlas row, the env pill)
+      // reads the ledger and settings, not auth state — refresh them now
+      // rather than on the next 30 s tick.
+      await loadAll();
+      route();
+      setTimeout(route, SIGNIN_DONE_LINGER_MS + 50);
+      return;
+    }
+    state.signin = { status: "failed", enableAtlas: flow.enableAtlas, restartAfter: flow.restartAfter, message: signinErrorText(step.error) };
+    route();
+  }
+
+  /** "Use without an account": the existing Send to Atlas switch, turned off,
+   *  through the page's one settings call. The daemon then answers
+   *  first_run:false (send_to_atlas is no longer absent), which is what keeps
+   *  the screen from ever coming back — the flag set here only saves the
+   *  flash before the next read. */
+  async function chooseLocalOnly() {
+    clearTimeout(signinTimer);
+    state.signin = { status: "idle" };
+    state.welcomePreview = false;
+    await updateSettings({ send_to_atlas: false });
+    if (settingsErrorFor("send_to_atlas")) return; // updateSettings already routed it
+    if (state.auth) state.auth = { ...state.auth, first_run: false };
+    route();
+    await loadAuth();
+    route();
+  }
+
+  /** "Copy link" beside the sign-in link. Its feedback changes only its own
+   *  label: route() would rebuild the pane and wipe whatever is being typed,
+   *  the same reason pollSignin avoids it. */
+  function copyLinkButton(url) {
+    const btn = el("button", { class: "btn secondary btn-small", type: "button" }, SIGNIN_TEXT.copyLink);
+    let reset = null;
+    btn.onclick = async () => {
+      const ok = await copyText(url, { clipboard: navigator.clipboard, fallback: selectionCopy });
+      btn.textContent = ok ? SIGNIN_TEXT.copied : SIGNIN_TEXT.copyFailed;
+      clearTimeout(reset);
+      reset = setTimeout(() => {
+        btn.textContent = SIGNIN_TEXT.copyLink;
+      }, 2000);
+    };
+    return btn;
+  }
+
+  // The pre-Clipboard-API copy, for a web view that has no navigator.clipboard
+  // or refuses it: select a throwaway textarea and ask the document to copy.
+  function selectionCopy(text) {
+    const ta = el("textarea", { readonly: "", "aria-hidden": "true" });
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } finally {
+      ta.remove();
+    }
+    return ok === true;
+  }
+
+  /** The progress of a sign-in, wherever it is drawn (the bar, the
+   *  first-open screen). Null while idle. */
+  function signinFlowNode() {
+    const flow = state.signin;
+    if (flow.status === "starting") return el("div", { class: "signin-flow" }, el("span", {}, SIGNIN_TEXT.starting));
+    if (flow.status === "waiting") {
+      return el(
+        "div",
+        { class: "signin-flow" },
+        el("strong", {}, SIGNIN_TEXT.waiting),
+        flow.url
+          ? el(
+              "span",
+              { class: "signin-link" },
+              `${signinLinkSentence(flow.opened)} `,
+              el("a", { href: flow.url, target: "_blank", rel: "noopener noreferrer" }, SIGNIN_TEXT.linkLabel),
+              " ",
+              copyLinkButton(flow.url)
+            )
+          : null
+      );
+    }
+    if (flow.status === "failed") {
+      return el(
+        "div",
+        { class: "signin-flow failed" },
+        el("span", {}, flow.message || signinErrorText(null)),
+        el("button", { class: "btn", type: "button", onclick: () => startSignin({ enableAtlas: !!flow.enableAtlas }) }, SIGNIN_TEXT.tryAgain)
+      );
+    }
+    if (flow.status === "done") return el("div", { class: "signin-flow done" }, el("strong", {}, signedInText(state.auth)));
+    return null;
+  }
+
+  function renderSigninBanner() {
+    const node = document.getElementById("signinBanner");
+    if (!node) return;
+    const mode = state.offline ? null : signinBarMode(state.auth, state.settings, state.signin, Date.now());
+    node.innerHTML = "";
+    node.hidden = !mode;
+    node.className = "signin-banner" + (mode ? ` ${mode}` : "");
+    if (!mode) return;
+    const flow = signinFlowNode();
+    if (flow) node.appendChild(flow);
+  }
+
+  /** The first-open choice (AC-12), in place of whichever pane was asked for.
+   *  It shows only while the daemon says first_run — see showFirstRun. */
+  // The first thing a person sees: the whole window, no sidebar, keld.co's
+  // moving ribbons behind it. body.is-welcome (route()) hides the app chrome.
+  const WELCOME_ICONS = [
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 14h12M4 12V7M8 12V3M12 12V9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v4c0 3-2.2 5.3-5 6.4-2.8-1.1-5-3.4-5-6.4v-4z M5.8 8l1.6 1.6L10.4 6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  ];
+  // The sidebar's own brand node, so the logo sits in exactly the same place
+  // before and after the choice is made.
+  function welcomeBrand() {
+    const src = document.querySelector(".nav .brand");
+    const node = src ? src.cloneNode(true) : el("div", { class: "brand" }, "Keld Signal");
+    node.classList.add("welcome-brand");
+    return node;
+  }
+  function renderFirstRun(root) {
+    root.innerHTML = "";
+    const err = settingsErrorFor("send_to_atlas");
+    const canvas = el("canvas", { class: "mesh-fx", "aria-hidden": "true" });
+    const points = SIGNIN_TEXT.welcomePoints.map(([k, rest], i) => {
+      const icon = el("span", { class: "welcome-icon" });
+      icon.innerHTML = WELCOME_ICONS[i] || "";
+      return el("li", {}, icon, el("span", {}, el("strong", {}, k.toUpperCase()), " " + rest.toUpperCase()));
+    });
+    root.appendChild(
+      el(
+        "section",
+        { class: "welcome", "aria-label": SIGNIN_TEXT.firstRunTitle },
+        canvas,
+        welcomeBrand(),
+        el(
+          "div",
+          { class: "welcome-inner" },
+          el("h1", { class: "welcome-head" }, SIGNIN_TEXT.welcomeHeadA, el("br", {}), el("span", {}, SIGNIN_TEXT.welcomeHeadB)),
+          el("p", { class: "welcome-lede" }, SIGNIN_TEXT.welcomeLede),
+          el(
+            "div",
+            { class: "welcome-actions" },
+            // A preview can be opened on a machine that already chose local
+            // only, where the start route refuses until Send to Atlas is on —
+            // Settings' own sign-in path handles that, so the preview uses it.
+            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin(state.welcomePreview ? { enableAtlas: !atlasEnabled(state.settings) } : {}) }, SIGNIN_TEXT.signIn),
+            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly),
+            state.welcomePreview ? el("button", { class: "btn welcome-secondary", type: "button", onclick: () => setWelcomePreview(false) }, WELCOME_PREVIEW_TEXT.back) : null
+          ),
+          signinFlowNode(),
+          err ? el("div", { class: "settings-note error-note" }, err) : null,
+          el("ul", { class: "welcome-points" }, ...points)
+        )
+      )
+    );
+    initMeshFx(canvas);
+  }
+
+  /* keld.co's ribbon decoration (keld.co assets/site.js, "Network mesh
+     decoration"): N parallel lines blended between two wavy guide curves, so
+     they pinch where the guides cross and fan out where they separate; three
+     bands drift in opposite directions. Same shapes, opacity and ~30 fps
+     throttle as the site. It stops when the canvas leaves the page and draws
+     one still frame for anyone who asks the system for reduced motion. */
+  function initMeshFx(cv) {
+    const host = cv.parentElement;
+    const ctx = cv.getContext && cv.getContext("2d");
+    if (!host || !ctx) return;
+    const rgb = "46,122,72";
+    const a0 = 0.05;
+    const seed = Math.random() * 6.28;
+    const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const SHAPES = [
+      { sep: 0.09, slope: 0.06, ampA: 0.16, ampB: 0.15, fa: 1.7, fb: 2.5, ph: 0.0, dir: 1 },
+      { sep: 0.085, slope: -0.05, ampA: 0.18, ampB: 0.16, fa: 1.3, fb: 2.1, ph: 1.7, dir: -1 },
+      { sep: 0.09, slope: 0.04, ampA: 0.15, ampB: 0.17, fa: 2.1, fb: 1.6, ph: 3.1, dir: 1 },
+    ];
+    let W = 0, H = 0, K = 0, N = 34, SEG = 150, bands = [];
+    function resize() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      W = host.offsetWidth;
+      H = host.offsetHeight;
+      cv.width = W * dpr;
+      cv.height = H * dpr;
+      cv.style.width = W + "px";
+      cv.style.height = H + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const portrait = H > W * 0.55;
+      K = portrait ? W * 0.55 : H;
+      N = Math.max(portrait ? 14 : 22, Math.min(48, Math.round(K / 14)));
+      SEG = Math.max(90, Math.round(W / 9));
+      const n = portrait ? Math.max(3, Math.min(9, Math.round(H / (0.245 * K)))) : 3;
+      const cys = portrait ? Array.from({ length: n }, (_, j) => (H / (n + 0.55)) * (j + 0.775)) : [0.3, 0.55, 0.78].map((f) => H * f);
+      bands = cys.map((cy, i) => ({ cy, ...SHAPES[i % 3], ph: SHAPES[i % 3].ph + seed + Math.floor(i / 3) * 1.31 }));
+    }
+    function draw(t) {
+      if (!W || !H) return;
+      ctx.clearRect(0, 0, W, H);
+      ctx.lineWidth = 1;
+      for (const b of bands) {
+        const sep = K * b.sep, slope = K * b.slope, ampA = K * b.ampA, ampB = K * b.ampB;
+        for (let i = 0; i < N; i++) {
+          const k = i / (N - 1);
+          ctx.strokeStyle = "rgba(" + rgb + "," + (a0 + 0.04 * Math.sin(k * Math.PI)).toFixed(3) + ")";
+          ctx.beginPath();
+          for (let s = 0; s <= SEG; s++) {
+            const u = s / SEG, x = u * W, env = 0.45 + 0.55 * Math.sin(u * Math.PI);
+            const ya = b.cy - sep + slope * (u - 0.5) + ampA * env * Math.sin(u * 6.283 * b.fa + t * b.dir + b.ph);
+            const yb = b.cy + sep + slope * (u - 0.5) + ampB * env * Math.sin(u * 6.283 * b.fb + b.ph + 1.4 - t * 0.85 * b.dir);
+            const y = ya + (yb - ya) * k;
+            if (s) ctx.lineTo(x, y);
+            else ctx.moveTo(x, y);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+    resize();
+    let t0 = performance.now(), last = 0;
+    const onResize = () => { resize(); if (reduce) draw(0); };
+    window.addEventListener("resize", onResize);
+    if (reduce) return draw(0);
+    (function loop(now) {
+      if (!cv.isConnected) return window.removeEventListener("resize", onResize);
+      if (now - last > 33) { last = now; draw((now - t0) * 0.00012); }
+      requestAnimationFrame(loop);
+    })(performance.now());
+  }
+
+  /** Settings' account tile: who this machine is signed in as, or a way to
+   *  sign in. Drawn even when /v1/auth/state did not answer, since it is the
+   *  whole pane outside developer mode. */
+  function renderAccountTile(atlasOn, readonly) {
+    const auth = state.auth;
+    if (!auth) {
+      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "settings-note" }, SIGNIN_TEXT.authUnknown));
+    }
+    if (auth.paired) {
+      const v = unpairView(state.unpair.status, state.unpair.error);
+      const pinned = readonly.has("send_to_atlas");
+      return el(
+        "div",
+        { class: "tile" },
+        el("div", { class: "l" }, SIGNIN_TEXT.account),
+        el(
+          "div",
+          { class: "settings-row" },
+          el("span", { class: "signin-who" }, signedInText(auth)),
+          v.button ? el("button", { class: "btn btn-quiet btn-small", type: "button", disabled: signinBusy(), onclick: () => setUnpair("confirm") }, UNPAIR_TEXT.button) : null
+        ),
+        atlasOn
+          ? null
+          : el(
+              "div",
+              { class: "settings-row" },
+              el("span", { class: "desc" }, SIGNIN_TEXT.notSending),
+              el("button", { class: "btn btn-small", type: "button", disabled: pinned, onclick: () => updateSettings({ send_to_atlas: true }) }, SIGNIN_TEXT.sendAgain)
+            ),
+        atlasOn ? null : fieldNote("send_to_atlas", readonly),
+        v.note ? el("div", { class: "settings-note unpair-note" }, v.note) : null,
+        v.confirm
+          ? el(
+              "div",
+              { class: "unpair-confirm" },
+              el("button", { class: "btn", type: "button", onclick: clickUnpair }, UNPAIR_TEXT.yes),
+              el("button", { class: "btn btn-quiet", type: "button", onclick: () => setUnpair("idle") }, UNPAIR_TEXT.no)
+            )
+          : null
+      );
+    }
+    // Signing in from local-only mode turns Send to Atlas on — impossible
+    // while KELD_ATLAS pins it off, so the button says why instead.
+    const pinnedOff = !atlasOn && readonly.has("send_to_atlas");
+    return el(
+      "div",
+      { class: "tile" },
+      el("div", { class: "l" }, SIGNIN_TEXT.account),
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, SIGNIN_TEXT.notSignedInSettings, el("div", { class: "desc" }, signinDestinationText(state.settings))),
+        el(
+          "button",
+          { class: "btn", type: "button", disabled: pinnedOff || signinBusy(), onclick: () => startSignin({ enableAtlas: !atlasOn }) },
+          SIGNIN_TEXT.signIn
+        )
+      ),
+      pinnedOff ? el("div", { class: "settings-note readonly-note" }, readonlyNote("send_to_atlas")) : null
+    );
   }
 
   // ---- Router / boot ----
@@ -3847,16 +4461,19 @@ if (typeof document !== "undefined") {
     return parts[parts.length - 1] || String(remote || "");
   }
 
+  const ENV_ICONS = {
+    local: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5V10H3zM1.5 12.5h13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    cloud: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 12.5a3 3 0 0 1-.4-6A4 4 0 0 1 11.8 6a3.25 3.25 0 0 1 .2 6.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  };
   function renderEnvPill() {
     const pill = document.getElementById("envPill");
-    const settings = state.settings;
-    if (!settings) {
-      pill.hidden = true;
-      renderGenerateButton();
-      return;
+    const label = state.offline ? envPill(state.settings, null) : envPill(state.settings, state.auth);
+    pill.hidden = !label;
+    pill.innerHTML = "";
+    if (label) {
+      const icon = el("span", { class: "env-icon", html: ENV_ICONS[label.icon] });
+      pill.append(icon.firstChild, el("span", {}, label.text));
     }
-    pill.hidden = false;
-    pill.textContent = atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
     renderGenerateButton();
   }
 
@@ -4249,6 +4866,7 @@ if (typeof document !== "undefined") {
     renderNavVersion();
     syncNavVisibility();
     document.getElementById("offlineBanner").hidden = !state.offline;
+    renderSigninBanner();
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the
     // middle. Projects and Settings are ordinary documents that should scroll
@@ -4260,6 +4878,25 @@ if (typeof document !== "undefined") {
     // left, the histogram sits at the bottom (see app.css, body.pane-overview).
     document.body.classList.toggle("pane-overview", pane === "overview");
     const root = document.getElementById("paneRoot");
+    // The first-open choice stands in for every pane until it is answered.
+    // Not while offline: the cached page is showing what it last knew, and
+    // neither button could do anything.
+    const welcome = welcomeShown(state.auth, state.welcomePreview, state.offline);
+    document.body.classList.toggle("is-welcome", welcome);
+    if (welcome) {
+      document.body.classList.remove("pane-today");
+      document.body.classList.remove("pane-overview");
+      // route() runs on every poll (each second during a sign-in). Redraw only
+      // when something this screen shows has changed, so the ribbons keep
+      // moving instead of restarting from a fresh canvas every tick.
+      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas"), state.welcomePreview]);
+      const live = root.querySelector(":scope > section.welcome");
+      if (live && live.dataset.key === key) return;
+      renderFirstRun(root);
+      const sec = root.querySelector(":scope > section.welcome");
+      if (sec) sec.dataset.key = key;
+      return;
+    }
     if (pane === "overview") renderOverview(root);
     else if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);

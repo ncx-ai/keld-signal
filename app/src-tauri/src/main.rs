@@ -44,6 +44,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -51,7 +52,8 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     image::Image,
-    Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    webview::NewWindowResponse,
+    Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
@@ -271,6 +273,54 @@ fn show_main_window(app: &tauri::AppHandle) {
     let _ = window.set_focus();
 }
 
+/// external_open_command is how this platform hands `url` to the person's
+/// default browser, or None when `url` is not one to hand over.
+///
+/// ⚠️ **ONLY http(s).** The page builds these links from strings the daemon
+/// returns (the Atlas authorize URL), and `open`/`xdg-open`/`FileProtocolHandler`
+/// will just as happily launch a `file:` path or any registered app scheme. The
+/// page already refuses non-http(s) hrefs (`safeAuthorizeURL`); this is the same
+/// check at the door the OS is behind, not a second policy.
+///
+/// The commands are the ones `internal/auth.OpenURL` uses for the daemon's own
+/// browser launch, so "the shell opened the browser" and "the daemon opened the
+/// browser" are one behaviour — and no opener crate is added for it.
+fn external_open_command(url: &Url) -> Option<(&'static str, Vec<String>)> {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return None;
+    }
+    let u = url.as_str().to_string();
+    if cfg!(target_os = "macos") {
+        Some(("open", vec![u]))
+    } else if cfg!(target_os = "windows") {
+        Some(("rundll32", vec!["url.dll,FileProtocolHandler".to_string(), u]))
+    } else {
+        Some(("xdg-open", vec![u]))
+    }
+}
+
+/// open_in_browser answers every new-window request the page makes.
+///
+/// ⚠️ **WITHOUT IT A `target="_blank"` LINK DOES NOTHING AT ALL.** WKWebView
+/// drops a new-window request that no handler takes, so the sign-in page's
+/// "Open the Atlas sign-in page" fallback — the one link a person has when the
+/// daemon could not open a browser itself — was a dead click in the app while
+/// it worked in a browser tab. An http(s) URL goes to the system browser, which
+/// is where the sign-in must finish anyway (the return lands on the daemon's
+/// loopback port, not in this window); anything else is refused. Either way no
+/// second window is created — this app has exactly one (see the header).
+fn open_in_browser(url: Url) -> NewWindowResponse<tauri::Wry> {
+    if let Some((cmd, args)) = external_open_command(&url) {
+        // Spawn, never wait: the browser outlives this call.
+        let _ = Command::new(cmd)
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    NewWindowResponse::Deny
+}
+
 /// set_autostart enables or disables launching Keld Signal at login, via the
 /// official `tauri-plugin-autostart` (a LaunchAgent on macOS — the same
 /// mechanism class the daemon's own service registration uses, just a
@@ -278,12 +328,10 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// independently).
 ///
 /// ⚠️ **Exposed for the PAGE to call, not wired to any UI here.** The Keld
-/// Signal page's "Start at login" toggle (`internal/agent/ui/app.js`) is D2's
-/// lane, out of scope for this one, and today renders permanently disabled
-/// with "This browser only, until the Keld Signal app manages startup."
-/// `set_autostart`/`get_autostart` are the exact command names D2 calls via
-/// `window.__TAURI__.core.invoke(...)` once that page learns to detect it is
-/// running inside this shell — see app/README.md.
+/// Signal page draws no "Start at login" control today. `set_autostart`/
+/// `get_autostart` are the exact command names it calls via
+/// `window.__TAURI__.core.invoke(...)` once it learns to detect it is running
+/// inside this shell — see app/README.md.
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let manager = app.autolaunch();
@@ -339,6 +387,7 @@ fn main() {
                 .title(title)
                 .inner_size(1180.0, 820.0)
                 .min_inner_size(820.0, 560.0)
+                .on_new_window(|url, _features| open_in_browser(url))
                 .build()?;
 
             // Follow the daemon across restarts. Started for the not-running
@@ -442,6 +491,29 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new-window request is handed to the system browser only for http(s);
+    /// `file:`, `javascript:` and app schemes never reach the OS opener.
+    #[test]
+    fn external_open_command_passes_only_http_and_https() {
+        for ok in [
+            "http://127.0.0.1:3000/cli/signal/authorize?state=x",
+            "https://atlas.keld.co/cli/signal/authorize",
+        ] {
+            let url: Url = ok.parse().unwrap();
+            let (_, args) = external_open_command(&url).expect(ok);
+            assert_eq!(args.last().map(String::as_str), Some(url.as_str()), "{ok}");
+        }
+        for refused in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "keld://anything",
+            "data:text/html,hi",
+        ] {
+            let url: Url = refused.parse().unwrap();
+            assert!(external_open_command(&url).is_none(), "{refused} must not be opened");
+        }
+    }
 
     /// Covers read_agent/page_url/urlencode together, in one test function
     /// rather than several: all three read/write the process-global

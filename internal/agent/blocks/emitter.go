@@ -298,8 +298,8 @@ func (e *Emitter) noteRouteUnsupported(ans enrich.BlocksAnswer) {
 		return
 	}
 	log.Printf("keld-agent: the analysis sidecar has no /blocks route — it is older than " +
-		"this agent, so NO BLOCKS CAN BE EMITTED until it is updated. Re-run the Keld " +
-		"installer (macOS: /usr/local/keld/onboard.command). Blocks resume on the next " +
+		"this agent, so NO BLOCKS CAN BE EMITTED until it is updated. Press Try again on " +
+		"Signal's page, or run `keld signal install-sidecar`. Blocks resume on the next " +
 		"sweep after that, with nothing lost: the cursor is held.")
 }
 

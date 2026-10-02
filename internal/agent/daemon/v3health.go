@@ -55,6 +55,12 @@ var healthRefresh atomic.Pointer[func()]
 // this page exists to remove.
 func setSidecarProbe(p *sidecarHealthProbe) {
 	sidecarProbe.Store(p)
+	refreshHealth()
+}
+
+// refreshHealth re-reads the strip now, when startHealth has run; otherwise it
+// does nothing and the first pass will read the fact anyway.
+func refreshHealth() {
 	if f := healthRefresh.Load(); f != nil {
 		(*f)()
 	}

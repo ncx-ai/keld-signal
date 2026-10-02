@@ -9,18 +9,19 @@ ARCH="${3:?arch}"
 OUT="keld-${VERSION}-${ARCH}.pkg"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# Stage the Terminal onboarding script into the payload (executable).
-cp "$ROOT/onboard.command" "$STAGE/onboard.command"
-chmod +x "$STAGE/onboard.command"
-
-# Pin the sidecar download to THIS build's release, so an onboarding fetch can't
-# pair a new pkg with an older/newer sidecar. onboard.command falls back to the
-# latest-release API when this file is absent (e.g. an unreleased dry-run build).
+# Pin the sidecar download to THIS build's release, so postinstall's fetch can't
+# pair a new pkg with an older/newer sidecar. postinstall falls back to the
+# latest release when this file is absent or a dry-run version.
+#
+# ⚠️ The payload no longer carries onboard.command (deleted 2026-09-29, D10 of
+# docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html): no
+# installer prompts for a setup code any more, so nothing would open it.
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 # The pkg ships WITHOUT the frozen sidecar: it is ~15k files / ~190MB of torch, and
 # Apple's notary service scans every one — the same payload sat "In Progress" for
-# 4+ hours. onboard.command fetches it from the release into ~/.local/bin instead
+# 4+ hours. The daemon (or postinstall, on a command-line install) fetches it
+# from the release into ~/.local/bin instead
 # (a well-known sidecarBinPath() dir, user-writable so no sudo prompt), which is
 # also exactly what the curl|sh path already does. dist/ keeps the copy that
 # becomes the standalone keld-agent-sidecar_darwin_*.tar.gz release asset, so
@@ -142,27 +143,14 @@ plutil -extract 0.BundleIsRelocatable raw "$APP_PLIST" | grep -qx false \
 pkgbuild --root "$APP_STAGE" --install-location /Applications --component-plist "$APP_PLIST" \
   --identifier co.keld.signal --version "$VERSION" "$TMP/app-component.pkg"
 
-# ── The wizard pane ──────────────────────────────────────────────────────────
-# Onboarding happens INSIDE the wizard: a custom Installer.app section, ordered
-# before the Install step, that redeems the setup code, downloads the analysis
-# sidecar with a progress bar, and collects which AI tools to configure. It
-# carries its own copy of `keld` because the payload is not installed while it
-# runs.
-#
-# ⚠️ A pane cannot be placed AFTER the install — measured 2026-09-14: the
-# section enters with installStarted=0 and the plugin's host process stops the
-# moment installation completes. postinstall does the rest, silently.
-PLUGIN_DIR="$TMP/plugins"
-mkdir -p "$PLUGIN_DIR"
-"$ROOT/plugin/build-plugin.sh" "$PLUGIN_DIR" "$VERSION" "$STAGE/keld"
-# build-plugin.sh signs and verifies internally (sign-after-build, or the bundle
-# fails to load with no diagnostic); verify again here for the same reason the
-# payload binaries are verified — an opaque notarization rejection is the
-# alternative.
-codesign --verify --strict --verbose=2 "$PLUGIN_DIR/KeldSetup.bundle"
-
+# ── No wizard pane (removed 2026-09-29) ──────────────────────────────────────
+# This pkg used to carry a custom Installer.app section (KeldSetup.bundle) that
+# signed the person in and asked which AI tools to configure. Installers only
+# install now (web sign-in spec, AC-10): Signal asks on first open and the
+# daemon's auto-setup configures tools. So there is no --plugins directory and
+# nothing to build or sign; installers/macos/plugin_test.sh fails if one returns.
 PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" \
-    --plugins "$PLUGIN_DIR" --package-path "$TMP" "$OUT")
+    --package-path "$TMP" "$OUT")
 if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then
   PB+=(--sign "$APPLE_DEVELOPER_ID_INSTALLER")
 fi

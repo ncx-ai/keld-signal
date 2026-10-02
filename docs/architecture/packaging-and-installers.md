@@ -10,9 +10,10 @@
 AGENTS.md → *Gotchas* keeps the one-line rule for each of these. This file
 carries the full entries — the notarization stall, the pkg that ships without
 the sidecar and the three weeks of blocks its presence check cost, the engine
-download that moved out of the installer, and the two onboarding UIs.
-See also `docs/macos-signing-and-notarization.md` and
-`docs/macos-wizard-onboarding.md`.
+download that moved out of the installer, and — since 2026-09-29 — the absence
+of any onboarding UI in the installers (the last two bullets).
+See also `docs/macos-signing-and-notarization.md` and `docs/install.md`;
+`docs/macos-wizard-onboarding.md` is kept as the superseded history.
 
 - **macOS signing needs TWO certs, and notarization is decoupled from the release.**
   `installers/macos/build-pkg.sh` signs **every** Mach-O in the payload with the
@@ -65,18 +66,22 @@ See also `docs/macos-signing-and-notarization.md` and
   nobody is handed a 300 MB button they have no reason to press. The install
   logic itself moved to `internal/sidecarinstall` so the CLI command and the
   daemon run ONE definition rather than the daemon shelling out to a binary.
-  ⚠️ **postinstall still fetches on a SILENT/MDM install** (`had_handoff`
-  false) — the same condition that decides whether to open `onboard.command` —
-  because a machine nobody will open the page on would otherwise publish no
-  blocks and never say why. A GUI install does not; the card is the
-  notification. `installers/macos/plugin_test.sh` INVERTS its three old
-  assertions rather than deleting them, so a download reintroduced into that
-  pane fails there.
+  ⚠️ **postinstall still fetches on a SILENT/MDM install** — the same condition
+  that decides whether to open Signal — because a machine nobody will open the
+  page on would otherwise publish no blocks and never say why. A GUI install
+  does not; the card is the notification. ⚠️ **Since 2026-09-29 that condition
+  is how the install was STARTED, not `had_handoff`** (the pane that wrote the
+  handoff is gone): GUI means `COMMAND_LINE_INSTALL` is unset (`man installer`:
+  "Set when performing an installation using the installer command") **and**
+  Installer.app is running, so an MDM agent driving installd directly also
+  counts as silent. Pinned by running the real script under stubs in
+  `installers/macos/postinstall_test.sh`.
   ⚠️ **The pkg ships WITHOUT the sidecar.** Apple's notary service scans every file
   in a submission, and the frozen sidecar is ~15k files / ~190MB of torch — which
   put a real submission **4+ hours** into an unbounded queue. The pkg payload is now
-  just `keld`, `keld-agent`, `onboard.command`, `VERSION` (4 files, ~2 Mach-O to
-  sign instead of ~103). `onboard.command` fetches the sidecar tarball into
+  just `keld`, `keld-agent`, `VERSION` (3 files since `onboard.command` was deleted
+  on 2026-09-29; ~2 Mach-O to sign instead of ~103). What follows describes
+  `onboard.command` as it was: it fetched the sidecar tarball into
   **`~/.local/bin`** — a well-known `sidecarBinPath()` dir that is user-writable, so
   no sudo prompt, and the same place `install.sh` puts it. It fetches **before**
   `keld-agent install`, because that command starts the daemon and the sidecar
@@ -142,53 +147,55 @@ See also `docs/macos-signing-and-notarization.md` and
   Invariants pinned by `installers/macos/build_pkg_notarization_test.sh` (static
   assertions — the gate can't execute off macOS).
 
-- **macOS onboarding UI:** onboarding happens INSIDE the installer wizard — a
-  custom Installer.app section (`installers/macos/plugin/`, ordered before the
-  Install step) that redeems the setup code, downloads the analysis sidecar with a
-  progress bar, and collects which AI tools to configure. It renders the NDJSON
-  emitted by `keld … --json` and reimplements none of it.
-  ⚠️ **A pane CANNOT be placed after the Install step** (measured 2026-09-14,
-  macOS 26.5.2: it enters with `installStarted=0` and the plugin's host process
-  stops when installation completes), which is why everything interactive is
-  pre-install and `scripts/postinstall` does every destructive step afterwards.
-  ⚠️ **Two failure modes here are completely silent** — a `SectionOrder` entry
-  missing `.bundle` loads nothing, and a bundle signed before its executable was
-  recompiled fails to load with no diagnostic at all. Both are pinned by
-  `installers/macos/plugin_test.sh`. `postinstall` falls back to opening
-  `onboard.command` only when BOTH the pane never ran at all (no handoff file
-  was ever written) AND the machine ended up unconfigured (no `hook.json`) —
-  not on either alone: gating on `hook.json` by itself would also fire for a
-  person who ran the pane and deliberately chose "Set up later", and opening a
-  Terminal at someone who just made that choice is exactly what this branch
-  exists to stop. `installers/macos/onboard.command` is retained for the
-  pane-never-ran fallback and for MDM; it is no longer opened on the success
-  path. It is staged into the payload by `build-pkg.sh` (alongside `keld`,
-  `keld-agent` and `VERSION`) and, on the fallback path, opened via
-  `launchctl asuser <uid> sudo -u <user> open "$PREFIX/onboard.command"` — the
-  same asuser idiom every other user-side postinstall command uses, so the
-  script runs in the console user's own GUI session rather than root's.
-  See `docs/macos-wizard-onboarding.md`.
-- **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
-  payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`
-  step with `postinstall shellexec skipifsilent`. It is the sibling of macOS's
-  `onboard.command` and does the same three things: prompt for the one-time setup
-  code, run `keld-agent install --code "$CODE"` (falling back to `--yes` browser
-  login), and report success from OBSERVED STATE — an `ingest_token` in
-  `hook.json` — never from an exit code. `skipifsilent` is there so an MDM
-  `/SILENT` push does not block on a console waiting for a human; such a machine
-  is finished by `keld-agent install --code <CODE>` from the management tool.
-  ⚠️ **This bullet used to describe an Inno `[Code]` wizard page driving `keld
-  --json` with a WinAPI timer and async NDJSON polling, and said its "UX is
-  human-verified on Windows". THAT PAGE NEVER EXISTED** — `git log` on the `.iss`
-  shows two commits and neither added it. What was actually there was `[Run]
-  keld-agent.exe install` with `runhidden nowait`: an interactive login in a
-  window nobody could see, on a step Inno neither waited for nor could report.
-  Every Windows machine registered its logon task and then idled on
-  `awaitConfig` forever — nothing collected, nothing said. A doc describing
-  unbuilt code as built is what kept that invisible, which is why the correction
-  is stated rather than quietly swapped. **Do not re-add `runhidden` to that
-  `[Run]` line.** The wizard page is a nicer UX and remains a legitimate future
-  change; it is an aspiration, not a description.
-  ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves
-  `onboard.cmd` is staged (a missing `Source:` is a compile error) and nothing
-  more; no CI check can confirm a console appeared and a human pasted a code.
+- **macOS: the pkg has NO Keld screen (since 2026-09-29).** It installs and asks
+  nothing — no sign-in, no setup code, no tool picker
+  (`docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html`, AC-10,
+  D10). `scripts/postinstall` symlinks the CLIs, registers the agent as the
+  console user (`launchctl asuser <uid> sudo -u <user> -H`), and then:
+  - **GUI install** (`COMMAND_LINE_INSTALL` unset AND Installer.app running):
+    opens `/Applications/Keld Signal.app`, after registration so its first frame
+    finds a daemon. Signal asks the one real question on first open — sign in
+    with Atlas, or use locally only — and the daemon's auto-setup
+    (`internal/agent/integrations`, `auto_setup_integrations`, default ON)
+    configures the AI tools it detects. No engine fetch here; the daemon owns it.
+  - **Command-line / MDM install**: fetches the engine through a self-removing
+    launchd job and opens nothing. Pairing is `keld-agent install --code <CODE>`
+    afterwards, exactly as before (`docs/install.md`).
+  What was removed: the Installer.app section (`installers/macos/plugin/`,
+  `KeldSetup.bundle`, its `SectionOrder`, the build/sign step and
+  `productbuild --plugins`), the handoff file and the tool-setup step that read
+  it, and the `onboard.command` Terminal fallback. `plugin_test.sh`,
+  `onboard_command_test.sh` and `build_pkg_notarization_test.sh` are INVERTED
+  rather than deleted, so any of them coming back fails CI. The measured facts
+  that shaped the pane (a section after Install never appears; a missing
+  `.bundle` or a stale signature fails silently) are kept in
+  `docs/macos-wizard-onboarding.md`, marked superseded.
+  ⚠️ **Only statically verified.** No CI job can click Installer.app; the
+  `pgrep -x Installer` check and `open -a` from postinstall's sandbox need one
+  real double-click install to confirm (AC-10's manual run).
+- **Windows: the installer asks nothing either (since 2026-09-29).** The Inno
+  `[Code]` "Set up Keld" page — setup code, a device-flow sign-in with Atlas's
+  approval page embedded through `keld-wizard-host --panel`, and a tool
+  picker — is removed, and so is `onboard.cmd`. (This bullet used to say that
+  page "never existed"; it was then built, and is now gone again, which is why
+  this is dated.) `ssPostInstall` registers the agent through `RunQuiet`
+  (`keld-wizard-host --run`, so no console) with `--headless`, unconditionally,
+  then waits up to 10 s for the NEW daemon's `agent.json` — earlier, `keld
+  signal open` finds no daemon on a first install or the previous one's port on
+  an upgrade. Exactly ONE of two `[Run]` entries then applies, by mutually
+  exclusive Checks (merge of main's desktop app, 2026-09-30): `Keld Signal.exe`
+  (shipped beside `keld.exe`, optional) with `Check: AppPresent`, or — only when
+  the build has no app — `keld.exe signal open` with `Check: not AppPresent`.
+  Both are `postinstall … skipifsilent nowait`: one ticked checkbox on the
+  Finished page, and nothing at all on a `/SILENT` or `/VERYSILENT` push, which
+  is paired with `keld-agent install --code <CODE>` from the management tool.
+  ⚠️ **Do not add `runhidden` to either line** — it is how `onboard.cmd` once ran an
+  interactive login where nobody could see it, and every Windows machine idled
+  forever. `keld-wizard-host.exe` stays installed: `RunQuiet` and the KeldAgent
+  logon task (`--spawn`) both use it. Pinned by
+  `installers/windows/keld_agent_iss_test.sh`.
+  ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves it
+  parses and stages; it cannot show that the Finished page opened Signal.
+  `keld.exe` is a console binary, so the browser fallback likely flashes a
+  console for the moment it runs — unmeasured, and reached only by builds that
+  shipped no app.

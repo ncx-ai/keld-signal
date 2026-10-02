@@ -54,10 +54,6 @@ on:
         description: "Existing release tag to attach assets to (repair path). Empty = dry run."
         type: string
         default: ""
-      api_url:
-        description: "Atlas the macOS wizard pane targets (e.g. https://atlas-dev.keld.co). Empty = the CLI's built-in default. NEVER set this for a release."
-        type: string
-        default: ""
 
 permissions:
   contents: write
@@ -102,7 +98,7 @@ jobs:
 
       # ⚠️ DRY RUNS ONLY, AND THE GATE IS THE WHOLE SAFETY ARGUMENT. Freezing the
       # sidecar is 17.6 of the Windows leg's 27 minutes, and a change that only
-      # touches the wizard rebuilds a ~190 MB Python bundle byte-for-byte
+      # touches the installer rebuilds a ~190 MB Python bundle byte-for-byte
       # identical to the last one. Caching it takes the leg to roughly 8 minutes.
       #
       # A cached BUILD OUTPUT is also exactly how this project shipped a stale
@@ -268,7 +264,8 @@ jobs:
             # GoReleaser archive unzipped above; on a dry run nothing produces it, so
             # the `Copy-Item stage\keld-wizard-host.exe` below fails for a reason the
             # release path does not have. -H windowsgui matches .goreleaser.yaml: a
-            # console-less helper is the entire point of the wizard page.
+            # console-less helper is the entire point — the installer registers the
+            # agent through it and the KeldAgent task starts the daemon through it.
             if [ "$goos" = "windows" ]; then
               GOOS=$goos GOARCH=$arch go build -ldflags "-s -w -H windowsgui" -o "stage/keld-wizard-host${ext}" ./cmd/keld-wizard-host
             fi
@@ -431,21 +428,6 @@ jobs:
           # dry runs on a repo without the Apple secrets), which is meant to produce
           # unsigned, non-distributable output rather than fail.
           KELD_NOTARY_REQUIRED: ${{ secrets.APPLE_NOTARY_KEY != '' && '1' || '0' }}
-          # ⚠️ AN ENV VAR CANNOT REACH THE PANE AT INSTALL TIME, so the Atlas
-          # target is baked in HERE, at build time. Installer.app does inherit
-          # the environment of whatever launched it, but the pane runs inside
-          # InstallerRemotePluginService — an XPC service that starts with a
-          # clean environment (measured 2026-09-14: the pane read
-          # KELD_API_URL=(unset) in the same run where Installer's own env dump
-          # showed it set, and silently used production).
-          #
-          # Empty on every path but a deliberate workflow_dispatch, so a release
-          # build stamps nothing and the CLI uses its compiled-in default. A
-          # published installer pointing at a dev Atlas would send real
-          # machines' telemetry there, which is why this is bound to the input
-          # alone and build-plugin.sh prints a loud "NOT a release build" line
-          # whenever it is set.
-          KELD_API_URL: ${{ inputs.api_url }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
           VER="$TAG"
@@ -457,8 +439,8 @@ jobs:
       # macOS users ever run. Sign it too, with the same content-based sweep the pkg
       # payload uses. Must precede the keychain removal below.
       #
-      # Not notarized, deliberately: it is fetched with curl (by onboard.command and by
-      # install.sh), and curl sets no com.apple.quarantine bit, so Gatekeeper never
+      # Not notarized, deliberately: it is fetched without a browser (by the daemon, by
+      # the pkg's postinstall and by install.sh), and those set no com.apple.quarantine bit, so Gatekeeper never
       # evaluates it and a ticket would buy nothing.
       - name: Sign macOS sidecar for the standalone tarball
         if: startsWith(matrix.os, 'macos')
@@ -545,9 +527,10 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
-          # ⚠️ keld-wizard-host.exe is REQUIRED by the .iss — the wizard page
-          # drives it — so a missing copy here fails the build rather than
-          # shipping a page that silently cannot run anything.
+          # ⚠️ keld-wizard-host.exe is REQUIRED by the .iss — RunQuiet registers
+          # the agent through it and the logon task starts the daemon through it
+          # — so a missing copy here fails the build rather than shipping an
+          # install that flashes consoles or cannot start the daemon.
           # ⚠️ NO TRAILING `\` ON THE DESTINATION. It is a path separator to
           # PowerShell and a line-continuation to scripts/workflow_continuation_test.sh,
           # which reads every workflow shell-agnostically — so a comment after

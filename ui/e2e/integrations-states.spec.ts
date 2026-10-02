@@ -179,6 +179,8 @@ async function startShell(): Promise<Shell> {
       return json(res, settings);
     }
     if (p === "/v1/projects") return json(res, { projects: [] });
+    // Signed in, so Settings draws the account tile, which openSettings waits on.
+    if (p === "/v1/auth/state") return json(res, { paired: true, principal: "dev@example.com" });
     if (p.startsWith("/v1/")) return json(res, {}, 404);
 
     const file = p === "/" ? "index.html" : p.slice(1);
@@ -549,9 +551,9 @@ async function openSettings(page: Page, shell: Shell): Promise<void> {
   await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/]|localhost[:/])/, (route) => route.abort());
   await page.goto(`${shell.url}/?secret=irrelevant&n=${nonce++}#/settings`);
   await expect(page.getByText("Loading…")).toBeHidden();
-  // The Environment tile's own label: unique, and drawn from nothing the
+  // The account tile's own label: unique, always drawn, and from nothing the
   // Developer box depends on, so it settles the pane without vouching for it.
-  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
+  await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
 }
 
 /** Developer mode, the way a person reaches it: seven taps on the version in the
@@ -573,8 +575,7 @@ function otlpSwitch(page: Page) {
 test.describe("Developer · extended tool telemetry (OTLP)", () => {
   test("the row is not reachable until developer mode is on", async ({ page, shell }) => {
     await openSettings(page, shell);
-    // The Atlas box is drawn; the developer rows under it are not.
-    await expect(page.getByText("Atlas", { exact: true })).toBeVisible();
+    // Outside developer mode the Developer box is not drawn at all.
     await expect(page.getByText(TOOL_OTLP_TITLE, { exact: true })).toHaveCount(0);
     await expect(page.getByText("Developer", { exact: true })).toHaveCount(0);
 

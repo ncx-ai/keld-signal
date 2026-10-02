@@ -73,18 +73,31 @@ table { border-collapse: collapse; width: 100%; }
 }
 
 /* ---- Nav ---- */
+/* The app header is a band, not a bar: the brand (top of the sidebar) and the
+   page title (.topbar) share one --header-h row, with no line between it and
+   what is under it. The welcome screen puts the same brand in the same place. */
+:root { --header-h: 56px; }
 .nav {
   background: var(--surface);
   border-right: 1px solid var(--rule);
-  padding: 18px 12px;
+  padding: 0 12px 18px;
   display: flex;
   flex-direction: column;
 }
-.nav .brand {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--header-h);
+  padding: 0 8px;
+  margin-bottom: 4px;
   font: 600 16px var(--sans);
-  padding: 0 8px 16px;
   color: var(--forest);
+  white-space: nowrap;
 }
+/* The app icon: a dark rounded square with the K in the page colour. */
+.brand-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border-radius: 7px; background: var(--ink); color: var(--bg); }
+.brand-mark svg { width: 14px; height: auto; display: block; }
 .nav nav { display: flex; flex-direction: column; gap: 2px; }
 .nav nav a {
   display: block;
@@ -135,7 +148,8 @@ main { min-width: 0; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 26px 6px;
+  min-height: var(--header-h);
+  padding: 0 26px;
 }
 .topbar-title { font-size: 22px; font-weight: 600; }
 .pane-root { padding: 10px 26px 60px; }
@@ -244,6 +258,115 @@ body.pane-today .health-strip { margin-top: 12px; }
    third button style would say it was a different kind. */
 .service-banner .btn:disabled { opacity: .45; }
 
+/* ---- Web sign-in: the bar above every pane, and the first-open choice ----
+   The bar is the service banner's shape in the page's neutral forest tint: not
+   signed in is a step left to take, not a fault, so it must not wear the
+   error or amber treatment. `display:flex` again relies on the [hidden] rule
+   at the top of this file. */
+.signin-banner {
+  margin: 0 26px 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  background: var(--forest-light);
+  border: 1px solid var(--rule-strong);
+  color: var(--forest);
+}
+.signin-banner.done { background: var(--green-soft); border-color: var(--green); color: var(--green-strong); }
+.signin-flow strong { font-weight: 600; }
+.signin-flow { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.signin-flow.failed { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--error-strong); }
+.signin-link { color: var(--ink-2); overflow-wrap: anywhere; }
+.signin-link a { color: var(--forest); font-weight: 600; }
+.signin-link .btn-small { padding: 2px 10px; font-size: 12px; margin-left: 4px; vertical-align: baseline; }
+.signin-who { margin-top: 8px; font-weight: 600; overflow-wrap: anywhere; }
+.tile .settings-row .signin-who { margin-top: 0; }
+.btn-small { padding: 2px 10px; font-size: 12px; }
+.unpair-confirm { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+/* ---- Welcome: the first-open screen ----
+   The whole window, no sidebar or top bar (body.is-welcome), keld.co's hero
+   type and its moving ribbons (canvas.mesh-fx, initMeshFx in app.js). */
+body.is-welcome .shell { grid-template-columns: 1fr; }
+body.is-welcome .nav,
+body.is-welcome .topbar,
+body.is-welcome .signin-banner,
+body.is-welcome .service-banner { display: none !important; }
+body.is-welcome .pane-root { padding: 0; }
+.welcome {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg);
+}
+.welcome .mesh-fx { position: absolute; inset: 0; pointer-events: none; }
+.welcome-inner {
+  position: relative;
+  max-width: 640px;
+  margin: 0 auto 0 clamp(24px, 9vw, 132px);
+  padding: 56px 24px 40px 0;
+  /* Hero centred in the window, the three points pinned to its bottom. */
+  box-sizing: border-box;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+/* Where the sidebar's brand sits: inside the nav's 12px padding (the brand pads itself). */
+.welcome-brand { position: absolute; top: 0; left: 12px; z-index: 1; }
+.welcome-head {
+  margin: auto 0 22px;
+  font-size: clamp(34px, 5.2vw, 56px);
+  line-height: 1.04;
+  font-weight: 400;
+  letter-spacing: .005em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.welcome-head span { color: var(--green); }
+.welcome-lede { margin: 0 0 28px; max-width: 540px; font-size: 17.5px; line-height: 1.55; color: var(--ink-2); }
+.welcome-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; width: max-content; max-width: 100%; margin-bottom: 36px; }
+.welcome-actions .btn { padding: 14px 30px; font-size: 15.5px; border-radius: 3px; }
+.welcome .btn.welcome-primary { background: var(--green); color: var(--on-dark); border: 1px solid var(--green); }
+.welcome .btn.welcome-primary:hover:not(:disabled) { background: var(--green-strong); }
+/* The quiet way out: a text link, so Sign in is the obvious step. */
+.welcome .btn.welcome-secondary { padding: 6px 2px; background: none; border: none; font-size: 13.5px; color: var(--muted); text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+.welcome .btn.welcome-secondary:hover { color: var(--ink); text-decoration-color: currentColor; }
+.welcome .signin-flow { margin: 0 0 16px; }
+.welcome-points {
+  list-style: none;
+  margin: auto 0 0;
+  padding: 22px 0 0;
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: 12px;
+}
+.welcome-points li { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 12px; letter-spacing: .04em; color: var(--muted); }
+.welcome-points strong { color: var(--ink); font-weight: 600; }
+.welcome-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--forest-light);
+  color: var(--green);
+}
+.welcome-icon svg { width: 15px; height: 15px; }
+@media (max-width: 560px) {
+  .signin-banner { margin: 0 16px 14px; }
+  .welcome-inner { margin: 0 16px; padding: 40px 0; }
+  .welcome-actions { align-items: stretch; width: auto; }
+  .welcome-actions .btn.welcome-secondary { align-self: center; }
+}
+
 /* ---- Pills ---- */
 .pill {
   display: inline-flex;
@@ -259,7 +382,9 @@ body.pane-today .health-strip { margin-top: 12px; }
 .pill.no { background: var(--error-soft); color: var(--error-strong); }
 .pill.wait { background: var(--amber-soft); color: var(--amber-strong); }
 .pill.unknown { background: var(--deep); color: var(--muted); }
-.pill.env { background: var(--forest-light); color: var(--forest); border: 1px solid var(--rule); }
+/* The top bar's label: where this machine's data goes, as an icon and a word. */
+.pill.env { border-radius: 6px; padding: 4px 9px 4px 8px; font: 600 12.5px var(--sans); background: var(--surface); color: var(--ink-2); border: 1px solid var(--rule); }
+.pill.env svg { width: 14px; height: 14px; flex: none; color: var(--forest); }
 
 /* ---- Stat tiles ---- */
 .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 4px 0 18px; }
@@ -374,13 +499,6 @@ body.pane-today .health-strip { margin-top: 12px; }
 .settings-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-top: 12px; }
 .settings-row:first-child { margin-top: 0; }
 .settings-row .desc { color: var(--muted); font-size: 12px; margin-top: 2px; max-width: 40ch; }
-.codebox {
-  display: flex; gap: 8px; align-items: center; margin-top: 8px;
-}
-.codebox input[type=text] {
-  flex: 1; border: 1px solid var(--rule); border-radius: 8px; padding: 7px 10px;
-  background: var(--bg); font: 13px var(--mono); color: var(--ink);
-}
 .btn {
   border: none; border-radius: 999px; padding: 6px 14px; font: 600 12.5px var(--sans);
   background: var(--forest); color: #fff; cursor: pointer;
@@ -465,6 +583,13 @@ fieldset:disabled { opacity: .55; }
   .nav { flex-direction: row; overflow-x: auto; }
   .nav nav { flex-direction: row; }
   .tiles, .tiles.three { grid-template-columns: 1fr 1fr; }
+}
+
+/* Settings: the account tile, and the Developer box beside it when it is on. */
+.tiles.settings-tiles { grid-template-columns: 1fr 1fr; }
+.tiles.settings-tiles.single { grid-template-columns: minmax(0, 560px); }
+@media (max-width: 720px) {
+  .tiles.settings-tiles { grid-template-columns: 1fr; }
 }
 
 /* The developer "Generate block" button and the repository box beside it.

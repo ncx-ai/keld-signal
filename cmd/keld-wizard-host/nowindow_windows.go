@@ -17,9 +17,10 @@ const createNoWindow = 0x08000000
 // is built -H windowsgui so it has no console of its own — and that is exactly
 // what causes the problem rather than avoiding it: `keld.exe` is a CONSOLE
 // subsystem binary, and when a console child is started by a parent that has no
-// console, Windows allocates a NEW one and shows it. The wizard page runs three
-// or four such children in a row (identity, clipboard, tools, login), so the
-// person sees a series of black windows appear and vanish.
+// console, Windows allocates a NEW one and shows it. The installer's (since
+// removed) wizard page ran three or four such children in a row, so the person
+// saw a series of black windows appear and vanish; registering the agent and
+// the logon task's daemon start are the same case today.
 //
 // Measured on a real install 2026-09-15, reported as "it launched and rapidly
 // closed a series of windows" — on the one screen whose entire purpose is that

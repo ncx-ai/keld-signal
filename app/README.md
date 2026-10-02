@@ -38,6 +38,16 @@ bounding box (27×44, not padded to a square — the mark is naturally tall and
 narrow) instead of shrinking the full square canvas. It's built with
 `icon_as_template(true)` set in `main.rs`.
 
+## Links that open a new window
+
+The page's `target="_blank"` links (the sign-in fallback "Open the Atlas
+sign-in page", for one) open in the **system browser**: the window's
+`on_new_window` handler hands any http(s) URL to `open` / `xdg-open` /
+`url.dll,FileProtocolHandler` — the same commands the daemon uses to open a
+browser — and denies the new window. Without a handler WKWebView drops the
+request and the click does nothing. Other schemes are refused. The page also
+offers "Copy link" beside that link.
+
 ## Autostart ("Start at login")
 
 Wired via the official `tauri-plugin-autostart` (a macOS LaunchAgent /
@@ -59,13 +69,10 @@ if (window.__TAURI__) {
 }
 ```
 
-**Not wired to the page yet.** `internal/agent/ui/app.js`'s "Start at login"
-toggle (D2's lane, out of scope here) renders permanently disabled today with
-"This browser only, until the Keld Signal app manages startup." — see
-`docs/v3/contracts.md`, point 4 under "The page's own conventions". Until D2
-adds the `window.__TAURI__` detection and calls these two commands, the
-toggle stays exactly as disabled as it is now; nothing about this shell makes
-it do otherwise on its own.
+**Not wired to the page yet.** The page draws no "Start at login" control
+today (removed 2026-10-02) — see `docs/v3/contracts.md`, point 4 under "The
+page's own conventions". Adding one means the `window.__TAURI__` detection
+plus calls to these two commands; nothing about this shell does it on its own.
 
 The command names above (`set_autostart`, `get_autostart`) and their exact
 signatures are the contract D2 wires against — don't rename them without

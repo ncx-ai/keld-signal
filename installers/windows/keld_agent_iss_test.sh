@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guards on installers/windows/keld-agent.iss and onboard.cmd.
+# Guards on installers/windows/keld-agent.iss.
 #
 # ⚠️ EVERY ASSERTION HERE IS A BUG THAT ALREADY SHIPPED. `iscc` compiling the
 # script proves the files are staged and the syntax parses; it cannot tell you
@@ -38,18 +38,28 @@
 set -eu
 d="$(cd "$(dirname "$0")" && pwd)"
 iss="$d/keld-agent.iss"
-cmd="$d/onboard.cmd"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 test -f "$iss" || fail "missing keld-agent.iss"
-test -f "$cmd" || fail "missing onboard.cmd"
+# ⚠️ INVERTED 2026-09-29 (web sign-in spec, D10): onboard.cmd is DELETED. It
+# prompted for a setup code in a console, and no installer asks anything about
+# Keld any more — Signal asks on first open.
+[ ! -e "$d/onboard.cmd" ] || fail "onboard.cmd is back; no installer prompts for a setup code"
 
 # ⚠️ UNFOLD THE BACKSLASH CONTINUATIONS FIRST. Inno entries wrap, so the Flags:
 # live on the line AFTER the Filename:. Grepping the raw file matches only the
 # first half and every flag assertion below passes VACUOUSLY — which is exactly
 # what this script did on its first run, reporting a clean bill on a file whose
 # flags it had never looked at.
-run_block="$(sed -n '/^\[Run\]/,/^\[Code\]/p' "$iss" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}')"
+# Portable (BSD and GNU): the `sed ':a;N'` form this used before is GNU-only, so
+# the guard could only ever run on the ubuntu CI runner, never on a Mac.
+unfold() {
+  awk '{ sub(/\r$/, "") }
+       { line = $0; if (buf != "") sub(/^[[:space:]]+/, "", line) }
+       /\\$/ { sub(/\\$/, "", line); buf = buf line; next }
+       { print buf line; buf = "" }' "$@"
+}
+run_block="$(sed -n '/^\[Run\]/,/^\[Code\]/p' "$iss" | unfold)"
 
 # 1. ⚠️ REGISTRATION MUST ALWAYS HAPPEN, AND IT NO LONGER LIVES IN [Run].
 #    It moved into CurStepChanged/ssPostInstall because `Flags: runhidden` hides
@@ -79,21 +89,14 @@ reg_call="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss" \
 [ -n "$reg_call" ] || \
   fail "nothing in ssPostInstall registers the agent; a silent install would register nothing"
 
-# 1a. It must NOT sit inside the `if Paired then` block. Checked structurally:
-#     the registration has to appear AFTER that block has closed.
+# 1a. ⚠️ INVERTED 2026-09-29. Registration used to have to sit OUTSIDE an
+#     `if Paired then` block, because the wizard page's pairing gated the tool
+#     step and a /SILENT push never paired. The page is gone, so there is no
+#     `Paired` at all — and registration must depend on nothing a person did.
+#     A reintroduced pairing state in [Code] fails here.
 body="$(sed -n '/procedure CurStepChanged/,/^end;/p' "$iss")"
-# ⚠️ `|| true` ON EVERY ONE. Under `set -eu` a command substitution
-# whose grep matches nothing kills this script SILENTLY — exit 1, no message, no
-# indication which check died. That is strictly worse than a failed assertion,
-# because it looks like a crash rather than a finding, and it is what happened
-# the first time these were tested against a file with the registration removed.
-paired_ln="$(printf '%s\n' "$body" | grep -n 'if Paired then' | head -1 | cut -d: -f1 || true)"
-reg_ln="$(printf '%s\n' "$body" | grep -n 'install --headless' | head -1 | cut -d: -f1 || true)"
-close_ln="$(printf '%s\n' "$body" | grep -n '^  end;$' | tail -1 | cut -d: -f1 || true)"
-if [ -n "$paired_ln" ] && [ -n "$reg_ln" ] && [ -n "$close_ln" ]; then
-  [ "$reg_ln" -gt "$close_ln" ] || \
-    fail "agent registration is inside the 'if Paired' block - a /SILENT push (page never runs, Paired false) would register nothing"
-fi
+printf '%s\n' "$body" | grep -vE '^[[:space:]]*//' | grep -q 'Paired' && \
+  fail "ssPostInstall depends on a pairing state again; registration must be unconditional"
 
 # 1b. Registration must say --headless OUT LOUD. Hiding a window does not take
 #     the console away, so keld-agent's TTY probe answered TRUE and it took its
@@ -110,24 +113,54 @@ printf '%s\n' "$reg_call" | grep -q -- '--headless' || \
 printf '%s\n' "$reg_call" | grep -q 'RunQuiet' || \
   fail "agent registration does not use RunQuiet - Inno's SW_HIDE leaves the console allocated and it shows"
 
-# 2. Onboarding must be VISIBLE. runhidden here is what made every Windows
-#    machine idle forever: an interactive login in a window nobody could see.
-onb_line="$(printf '%s\n' "$entries" | grep -F 'onboard.cmd' || true)"
-[ -n "$onb_line" ] || fail "no [Run] entry opens onboard.cmd"
-printf '%s\n' "$onb_line" | grep -q 'runhidden' && \
-  fail "onboard.cmd is 'runhidden' — a human cannot complete a login they cannot see"
-printf '%s\n' "$onb_line" | grep -q 'skipifsilent' || \
-  fail "onboard.cmd must be 'skipifsilent' or a /SILENT MDM push blocks on a console"
+# 2. After an interactive install, Signal OPENS — that replaced onboard.cmd
+#    (AC-10). The entry must be a postinstall action a person sees, and
+#    `skipifsilent` so an MDM /SILENT push opens nothing on a screen nobody is at.
+#    ⚠️ NEVER runhidden: onboard.cmd once ran as `runhidden nowait` and every
+#    Windows machine idled forever behind a window nobody could see.
+open_line="$(printf '%s\n' "$entries" | grep -F 'signal open' || true)"
+[ -n "$open_line" ] || fail "no [Run] entry opens Signal after install"
+printf '%s\n' "$open_line" | grep -qF 'Filename: "{app}\keld.exe"' || \
+  fail "the page-open entry does not run the installed keld.exe"
+printf '%s\n' "$open_line" | grep -q 'postinstall' || \
+  fail "the page-open entry is not a postinstall action"
+printf '%s\n' "$open_line" | grep -q 'skipifsilent' || \
+  fail "the page-open entry must be 'skipifsilent' or a /SILENT MDM push opens a window at nobody"
+printf '%s\n' "$open_line" | grep -q 'runhidden' && \
+  fail "the page-open entry is 'runhidden'"
+# ⚠️ Ticked by default, unlike the old console fallback: opening Signal IS the
+#    finish of an interactive install, not a surprise.
+printf '%s\n' "$open_line" | grep -q 'unchecked' && \
+  fail "the page-open entry is unchecked - an interactive install would end without Signal ever asking its question"
+# Nothing else in [Run] may prompt: every entry there is either the page-open
+# step or nothing.
+# ($entries spans to [Code], so it includes [UninstallRun]; scope this one to [Run].)
+run_only="$(sed -n '/^\[Run\]/,/^\[UninstallRun\]/p' "$iss" | unfold | grep '^Filename:' || true)"
+others="$(printf '%s\n' "$run_only" | grep -vF 'signal open' | grep -vF 'Filename: "{app}\Keld Signal.exe"' || true)"
+[ -z "$others" ] || fail "[Run] has entries besides opening Signal: $others"
 
-# 3. onboard.cmd must be staged, or iscc fails late and opaquely.
-grep -qF 'Source: "onboard.cmd"' "$iss" || fail "onboard.cmd is not staged in [Files]"
+# 2a. The daemon writes agent.json when it starts, and `keld signal open` reads
+#     it — so on a first install it would say "not running", and on an upgrade it
+#     would open the PREVIOUS daemon's port and secret. ssPostInstall waits for
+#     the file to change after registering, bounded.
+printf '%s\n' "$body" | grep -q 'WaitForAgent' || \
+  fail "ssPostInstall does not wait for the new daemon's agent.json before the finish page opens Signal"
+reg_ln="$(printf '%s\n' "$body" | grep -n 'install --headless' | head -1 | cut -d: -f1 || true)"
+wait_ln="$(printf '%s\n' "$body" | grep -n 'WaitForAgent' | tail -1 | cut -d: -f1 || true)"
+[ -n "$reg_ln" ] && [ -n "$wait_ln" ] && [ "$wait_ln" -gt "$reg_ln" ] || \
+  fail "the agent.json wait must come after registration"
+
+# 3. onboard.cmd must not be staged — a Source: for a deleted file is a compile
+#    error, and a staged prompt is what D10 removed.
+grep -vE '^[[:space:]]*(;|//)' "$iss" | grep -qF 'onboard.cmd' && \
+  fail "keld-agent.iss still stages or runs onboard.cmd"
 
 # 3b. PATH must be added WITHOUT asking. A [Tasks] checkbox for it is opt-out, and
 #     getting it wrong fails silently: every command this installer tells the user to
 #     run ("keld login", "keld signal setup") is then "not recognized", which reads as
 #     a broken install rather than an unconfigured one.
 #     Unfold continuations first — the [Registry] entry wraps, same trap as [Run].
-unfolded="$(sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}' "$iss")"
+unfolded="$(unfold "$iss")"
 # ⚠️ A CODE-ONLY VIEW, because these comments EXPLAIN the very identifiers being
 # asserted on. Mutation-testing this script caught two vacuous guards: deleting
 # `MB_DEFBUTTON2` from the code still passed, because the comment above it names
@@ -214,13 +247,7 @@ printf '%s\n' "$code" | grep -q 'MB_DEFBUTTON2' || \
 printf '%s\n' "$code" | grep -q "GetEnv('KELD_HOME')" || \
   fail "the ~/.keld prompt ignores KELD_HOME and would offer to delete a directory that is not in use"
 
-# 4. onboard.cmd's own contract: redeem a code, fall back to a browser login, and
-#    report from OBSERVED STATE rather than an exit code.
-grep -qF 'install --code' "$cmd" || fail "onboard.cmd never redeems a setup code"
-grep -qF 'install --login --yes' "$cmd" || fail "onboard.cmd has no browser-login fallback"
-grep -qF 'ingest_token'   "$cmd" || fail "onboard.cmd claims success without checking hook.json"
-
-# ── The wizard page ──────────────────────────────────────────────────────────
+# ── Encoding, and the absence of a wizard page ───────────────────────────────
 
 # 5. ⚠️ INNO READS A SCRIPT AS UTF-8 ONLY WHEN IT HAS A BOM. Without one it falls
 #    back to the system codepage and every non-ASCII character in a DISPLAYED
@@ -232,30 +259,25 @@ bom="$(head -c 3 "$iss" | od -An -tx1 | tr -d ' \n')"
 [ "$bom" = "efbbbf" ] || \
   fail "keld-agent.iss has no UTF-8 BOM - every non-ASCII string renders as mojibake"
 
-# 6. The page runs BEFORE the payload is installed, so it drives copies extracted
-#    to {tmp}. Without a dontcopy entry it drives paths that do not exist, and
-#    every step fails to start.
-grep -q 'Source: "keld.exe";.*Flags: dontcopy' "$iss" || \
-  fail "keld.exe is not staged dontcopy - the wizard page would have nothing to drive"
-grep -q 'Source: "keld-wizard-host.exe";.*Flags: dontcopy' "$iss" || \
-  fail "keld-wizard-host.exe is not staged dontcopy - the page could not run anything"
-grep -q 'ExtractTemporaryFile' "$iss" || \
-  fail "no ExtractTemporaryFile - a dontcopy file is not on disk until it is extracted"
+# 6. ⚠️ INVERTED 2026-09-29: there is NO "Set up Keld" page. It signed the person
+#    in (setup code or an embedded device flow) and asked which tools to
+#    configure, all before the install — the exact questions AC-10 removed from
+#    every installer. A custom page, a setup-code field or a sign-in run coming
+#    back fails here.
+printf '%s\n' "$code" | grep -q 'CreateCustomPage' && \
+  fail "the installer has a custom wizard page again; no installer asks anything about Keld"
+printf '%s\n' "$code" | grep -qE "'login|login --|--code|whoami|device_code" && \
+  fail "the installer signs in again; Signal asks on first open"
+printf '%s\n' "$code" | grep -q 'signal setup' && \
+  fail "the installer configures tools again; the daemon's auto-setup does that"
+grep -q 'Flags: dontcopy' "$iss" && \
+  fail "a dontcopy payload is back - it only existed to drive the removed page before install"
 
-# 7. The helper is required by the page AND installed, so CI must stage it too.
+# 7. The helper stays INSTALLED: RunQuiet registers the agent through it with no
+#    console, and the KeldAgent task starts the daemon through `--spawn`. CI must
+#    stage it too.
 grep -q 'Source: "keld-wizard-host.exe";.*DestDir' "$iss" || \
   fail "keld-wizard-host.exe is not installed to {app}"
-
-# 8. ⚠️ Without --bin-path every tool hook pins {tmp}\keld.exe, a path that stops
-#    existing when the wizard closes. The config looks right; the hook never runs.
-code_block="$(sed -n '/^\[Code\]/,$p' "$iss")"
-printf '%s\n' "$code_block" | grep -q -- '--bin-path' || \
-  fail "ssPostInstall omits --bin-path - every tool hook would pin a temp path"
-
-# 9. The console fallback must no longer fire on the success path, and must still
-#    exist for /SILENT and for a [Code] failure.
-printf '%s\n' "$onb_line" | grep -q 'Check:' || \
-  fail "onboard.cmd is unconditional - a console would open after a successful wizard"
 
 # 10. ⚠️ A `Source:` the BUILD never produces is a compile error, and the two
 #     build paths are NOT the same path. installers.yml stages keld.exe /
@@ -327,64 +349,17 @@ grep -q '{uninstallexe}' "$iss" || \
 [ "$(printf '%s\n' "$prep" | grep -c 'SW_HIDE')" -ge 2 ] || \
   fail "PrepareToInstall runs schtasks/taskkill without SW_HIDE - each pops a console window"
 
-# 9b. ⚠️ THE CONSOLE FALLBACK MUST NOT AUTO-RUN. `postinstall` entries are TICKED
-#     BY DEFAULT, so on any install that did not end paired, closing the
-#     installer launched onboard.cmd and left a blank console sitting on the
-#     desktop waiting for input — on a product whose whole Windows story is that
-#     no terminal ever appears. `unchecked` keeps the fallback reachable while
-#     making it a deliberate choice.
-printf '%s\n' "$onb_line" | grep -q 'unchecked' || \
-  fail "onboard.cmd is a ticked-by-default postinstall action - it will open a console at every unpaired install"
-
-# 9c. ⚠️ THE APPROVAL PANEL BELONGS TO THE SIGN-IN RUN ONLY, AND WITHOUT THAT
-#     SCOPE IT COMES BACK OVER THE NEXT STEP. DrainRun evaluates its "show the
-#     panel" condition for EVERY event of EVERY run. EvApprovalURL is cleared
-#     only when a sign-in STARTS, and HideApproval resets ApprovalShown to False
-#     — so after a successful sign-in both halves were true again and the first
-#     `tool` event of the NEXT run launched a second WebView2 re-navigating to
-#     the sign-in page, behind the tool checkboxes. Reported as the checklist
-#     drawn "on top of the old sign in page"; the page underneath was live.
-show_cond="$(printf '%s\n' "$code" | grep -n 'ShowApproval(EvApprovalURL)' -B4 || true)"
-printf '%s\n' "$show_cond" | grep -q 'Mode = RunSignIn' || \
-  fail "the approval panel is shown without checking Mode - it will relaunch over the tools step"
-# And the URL must be retired once used: a spent device code cannot be approved,
-# so any later reader (the browser fallback, a retry) would send someone nowhere.
-after_login="$(sed -n '/^procedure AfterLogin/,/^end;/p' "$iss" || true)"
-[ -n "$after_login" ] || fail "cannot find procedure AfterLogin - this guard would pass vacuously"
-printf '%s\n' "$after_login" | grep -qF "EvApprovalURL :=" || \
-  fail "AfterLogin does not clear EvApprovalURL - a spent approval URL stays live for later readers"
-
-# 10a. ⚠️ ONLY A KNOWN FAILURE MAY FALL BACK TO A BROWSER. DrainPanel used to end
-#      in an unconditional else, so ANY panel status the script did not
-#      recognise tore down a working embed and launched a browser. Adding one
-#      diagnostic event to the helper was enough to trigger it: the sign-in form
-#      rendered, the next event arrived, and a browser window replaced it.
-#      The helper and this script ship together but are edited separately, so an
-#      unrecognised status means "newer helper", never "the embed failed".
-drain="$(sed -n '/^procedure DrainPanel/,/^end;/p' "$iss")"
-printf '%s\n' "$drain" | grep -q "Status <> 'no_runtime'" || \
-  fail "DrainPanel falls back to a browser on ANY unrecognised status - one new diagnostic event would eject a working embed"
-printf '%s\n' "$drain" | grep -q 'ShellExec' || \
-  fail "DrainPanel no longer has a browser fallback at all - the no-WebView2 case would leave a blank rectangle"
-
-# 10b. ⚠️ THE WEB PANEL MUST BE VISIBLE BEFORE THE HELPER EMBEDS INTO IT.
-#      StartPanel hands WebPanel.Handle to the helper, which creates a WebView2
-#      controller as a child of that window. A controller created under a HIDDEN
-#      parent NEVER STARTS RENDERING, and showing the parent afterwards does not
-#      notify it — so the page loads, its JavaScript runs (proved by
-#      atlas.keld.co bytes in the WebView2 code cache) and nothing is painted.
-#      Shipped in 31cafa0 and reported as "this used to work".
-approval="$(sed -n '/^procedure ShowApproval/,/^end;/p' "$iss")"
-printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := True' || \
-  fail "ShowApproval does not make WebPanel visible - a WebView2 embedded into a hidden window renders nothing, ever"
-# and the order matters: visible FIRST, then hand the handle over.
-vis_ln="$(printf '%s\n' "$approval" | grep -n 'WebPanel.Visible := True' | head -1 | cut -d: -f1)"
-start_ln="$(printf '%s\n' "$approval" | grep -n 'StartPanel(' | head -1 | cut -d: -f1)"
-if [ -n "$vis_ln" ] && [ -n "$start_ln" ] && [ "$vis_ln" -gt "$start_ln" ]; then
-  fail "WebPanel is shown AFTER StartPanel - the controller is still created under a hidden window"
-fi
-printf '%s\n' "$approval" | grep -q 'WebPanel.Visible := False' && \
-  fail "ShowApproval still hides WebPanel; that is the line that made the sign-in page render nothing"
+# 9b/9c/10a/10b. ⚠️ INVERTED 2026-09-30 (merge of main into the web sign-in
+#     branch). Main's versions pinned onboard.cmd's `unchecked` flag and the
+#     wizard page's approval panel (ShowApproval, AfterLogin/EvApprovalURL,
+#     DrainPanel's browser fallback, WebPanel visibility). That page and
+#     onboard.cmd are deleted on this branch (web sign-in spec AC-10, D10), so
+#     the guards become "none of it may come back".
+for ident in ShowApproval DrainPanel AfterLogin EvApprovalURL WebPanel StartPanel NeedsConsoleOnboarding; do
+  if printf '%s\n' "$code" | grep -q "$ident"; then
+    fail "the removed wizard page is back in [Code] ($ident) - no installer asks anything about Keld"
+  fi
+done
 
 # 10c. ⚠️ THE DESKTOP APP SHIPS BESIDE keld.exe, AND ITS ABSENCE MUST NOT BREAK
 #      THE BUILD. `keld signal open` prefers the app over a browser tab and finds
@@ -426,12 +401,16 @@ printf '%s\n' "$app_cmd" | grep -q -- '--no-bundle' || \
 
 # 10d. ⚠️ THE APP MUST OPEN WHEN THE INSTALLER FINISHES, AND THAT ENTRY'S FLAGS
 #      PULL IN OPPOSITE DIRECTIONS FROM EVERY OTHER [Run] LINE IN THIS FILE.
-#      Guard 9b requires onboard.cmd to be `unchecked`, because a ticked
-#      postinstall entry opened a blank console. The same reasoning inverts here:
-#      this one opens the application window, which is the thing the person was
-#      waiting for. Reading 9b as a house style and copying `unchecked` across is
-#      the specific mistake this guard catches.
-open_line="$(printf '%s\n' "$unfolded" | grep -F 'Filename: "{app}\Keld Signal.exe"' || true)"
+#      The deleted onboard.cmd entry had to be `unchecked`, because a ticked
+#      postinstall entry opened a blank console. The reasoning inverts here: this
+#      one opens the application window, which is the thing the person was
+#      waiting for. Copying `unchecked` across as a house style is the specific
+#      mistake this guard catches.
+# ⚠️ SCOPED TO [Run]. The [Icons] shortcut (10f) shares this Filename and
+#    carries `Check: AppPresent`, so an unscoped match let the Check assertion
+#    below pass off the shortcut's line. Found by it passing against a merged
+#    .iss whose launch entry had no Check at all.
+open_line="$(printf '%s\n' "$run_only" | grep -F 'Filename: "{app}\Keld Signal.exe"' || true)"
 [ -n "$open_line" ] || \
   fail "nothing opens the desktop app when the installer finishes"
 printf '%s\n' "$open_line" | grep -q 'postinstall' || \
@@ -441,7 +420,7 @@ printf '%s\n' "$open_line" | grep -q 'postinstall' || \
 #    NOT MATCH — i.e. the script dies silently on exactly the passing case, and
 #    every guard after it never runs.
 if printf '%s\n' "$open_line" | grep -q 'unchecked'; then
-  fail "the app launch is unchecked - it is meant to be ticked by default, unlike the console fallback in 9b"
+  fail "the app launch is unchecked - it is meant to be ticked by default"
 fi
 # ⚠️ runhidden would hide the window the entry exists to open. It is the reflex
 #    fix everywhere else in this file, because those children are
@@ -455,6 +434,15 @@ printf '%s\n' "$open_line" | grep -q 'skipifdoesntexist' || \
   fail "the app launch would fail the install on a build where the Rust step did not produce the app"
 printf '%s\n' "$open_line" | grep -q 'skipifsilent' || \
   fail "the app launch is not skipifsilent - an MDM push would throw a window at whoever is at the console"
+# ⚠️ EXACTLY ONE THING OPENS SIGNAL ON THE FINISHED PAGE (merge 2026-09-30). The
+#    app launch and the `keld signal open` fallback must carry MUTUALLY EXCLUSIVE
+#    Checks — the app when it is on disk, the browser page when it is not — or a
+#    person gets two "Open Keld Signal" checkboxes and two windows.
+printf '%s\n' "$open_line" | grep -qE 'Check:[[:space:]]*AppPresent([^A-Za-z0-9_]|$)' || \
+  fail "the app launch has no Check: AppPresent - with the fallback also ticked, two things would open"
+fallback_line="$(printf '%s\n' "$run_only" | grep -F 'signal open' || true)"
+printf '%s\n' "$fallback_line" | grep -qE 'Check:[[:space:]]*not[[:space:]]+AppPresent([^A-Za-z0-9_]|$)' || \
+  fail "the keld signal open fallback is not gated on 'not AppPresent' - it would open a browser beside the app"
 
 # 10e. ⚠️ LAUNCHING THE APP AT THE END OF AN INSTALL BREAKS THE *NEXT* ONE UNLESS
 #      SOMETHING STOPS IT FIRST. Windows will not delete a running exe, so the
@@ -480,7 +468,8 @@ prep="$(sed -n '/^function PrepareToInstall/,/^end;/p' "$iss" || true)"
 #    the actual Exec still passed. That is four times this suite has matched a
 #    comment restating the code instead of the code.
 prep_kill="$(printf '%s\n' "$prep" | grep -v '^[[:space:]]*//' \
-  | sed -e ':a' -e '/,$/{N;s/\n[[:space:]]*//;ba}' | grep 'taskkill' || true)"
+  | awk '/,[[:space:]]*$/ { buf = buf $0; next } { print buf $0; buf = "" }' \
+  | grep 'taskkill' || true)"
 [ -n "$prep_kill" ] || fail "PrepareToInstall does not run taskkill - a running agent locks its own files"
 printf '%s\n' "$prep_kill" | grep -qF 'Keld Signal.exe' || \
   fail "PrepareToInstall does not stop the desktop app - the install it launches would block the next install's file copy"
@@ -628,4 +617,4 @@ printf '%s\n' "$sign_step" | grep -q 'IS_RELEASE' || \
 printf '%s\n' "$sign_step" | grep -qi 'throw .*UNSIGNED release' || \
   fail "an unsigned release is not refused - macOS hard-gates notarization and Windows must match"
 
-echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, signs the payload before iscc and the installer after without trampling vendor signatures, and claims success from observed state"
+echo "PASS: windows installer asks nothing, registers unconditionally, opens Signal after an interactive install (skipifsilent, never runhidden), reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, signs the payload before iscc and the installer after without trampling vendor signatures, and claims success from observed state"

@@ -121,3 +121,36 @@ func WriteV3Settings(p V3Patch) error {
 
 	return writeConfigAtomic(out)
 }
+
+// WriteAtlasEnv records which named Atlas this machine uses (`keld signal
+// env`): "dev" or "local" set `atlas_env`; "prod" REMOVES the key, so a
+// machine back on production carries no trace of having left it. Merges like
+// WriteV3Settings: every other key in the operator's file survives.
+func WriteAtlasEnv(name string) error {
+	env, ok := paths.LookupAtlasEnv(name)
+	if !ok {
+		names := make([]string, 0, len(paths.AtlasEnvs))
+		for _, e := range paths.AtlasEnvs {
+			names = append(names, e.Name)
+		}
+		return fmt.Errorf("unknown Atlas environment %q (want one of %v)", name, names)
+	}
+	cfg := map[string]json.RawMessage{}
+	if data, err := os.ReadFile(paths.AgentConfigPath()); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if env.Name == paths.AtlasEnvs[0].Name {
+		delete(cfg, "atlas_env")
+	} else {
+		b, err := json.Marshal(env.Name)
+		if err != nil {
+			return err
+		}
+		cfg["atlas_env"] = b
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeConfigAtomic(append(out, '\n'))
+}

@@ -38,7 +38,8 @@ import (
 //
 // What the pre-config handler serves is the subset that needs neither Atlas nor
 // a token: the page, the ledger and projects reads (both local files), settings
-// and `/v1/config` itself.
+// and the browser sign-in itself. (`/v1/config`, the setup-code box's route,
+// was the original door; it was removed with the box.)
 //
 // ⚠️ **THIS USED TO END "`/enrich` is deliberately NOT among them — a pointer
 // accepted before the daemon can publish is work with nowhere to go, and the
@@ -153,17 +154,17 @@ func (s *loopbackServer) Install(h http.Handler) { s.swap.Store(h) }
 // "no org vocabulary", so the Projects pane says so out loud rather than
 // showing an empty list that would read as "your org has declared nothing".
 //
-// The restart function is the real one. `POST /v1/config` answers
-// `restart_required: true` and the page's restart bar resends through
-// `PUT /v1/settings?restart=1`. A restart is not strictly necessary — the
-// daemon's own awaitConfig poll picks the file up within KELD_CONFIG_POLL — but
-// it is the fastest path and the one the page already promises: "Signal
-// restarts and points there."
+// The restart function is the real one: Settings' restart bar and Unpair use
+// it. A browser sign-in needs none — pair() announces the new pairing and the
+// daemon adopts it at once.
 func onboardingHandler(set settings.Settings, secret string) http.Handler {
 	sig := newV3(set, atlas.Off{})
 	routes := append(sig.routes(),
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
-		ingress.ConfigRoute(),
+		ingress.UnpairRoute(serviceRestarter{}.Restart),
+		// The browser sign-in pairs through ingress.pair(), and an unpaired
+		// machine is exactly where it starts.
+		ingress.SignInRoute(),
 		// Generating work needs no Atlas and no token, and an unpaired machine
 		// is exactly where someone wants to see a block appear before deciding
 		// to pair at all. No drive hook: before configuration there is no block

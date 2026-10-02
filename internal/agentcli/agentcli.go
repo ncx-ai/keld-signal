@@ -120,7 +120,7 @@ type installConfig struct {
 	// right while the CLI was the only onboarding surface: there was nowhere
 	// else to paste a token, so an install that did not onboard left a daemon
 	// idling with no way to fix it. The app removed that constraint —
-	// `POST /v1/config` pairs a machine from the Settings pane, and since
+	// the browser sign-in pairs a machine from the page, and since
 	// daemon/onboarding.go the daemon serves that route before it has any
 	// config at all — so a command called `install` opening a browser is now
 	// just a command doing three things, and the common path needed a flag to

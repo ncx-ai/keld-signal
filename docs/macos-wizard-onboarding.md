@@ -1,6 +1,18 @@
 # macOS onboarding — the wizard pane
 
-**Status:** implemented 2026-09-14. Spec:
+> ⚠️ **SUPERSEDED 2026-09-29 — the pane described here no longer exists.** The pkg
+> now installs and asks nothing: no sign-in, no setup code, no tool picker.
+> `postinstall` opens Keld Signal.app on a GUI install; Signal asks on first open
+> (sign in with Atlas, or use locally only), and the daemon's auto-setup configures
+> detected tools. `installers/macos/plugin/` and `onboard.command` were deleted.
+> Decision and acceptance criteria (AC-10, D10):
+> `docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html`. Current
+> behaviour: `docs/architecture/packaging-and-installers.md` and `docs/install.md`.
+> The page below is kept unchanged as history — the measured Installer.app facts
+> in it (a section after Install never appears; a missing `.bundle` or a stale
+> signature fails with no diagnostic) still hold for anyone who adds a section again.
+
+**Status:** implemented 2026-09-14; removed 2026-09-29 (see above). Spec:
 `docs/superpowers/specs/2026-09-14-macos-wizard-native-onboarding-design.md`.
 
 Installing Keld on macOS involves no Terminal, no browser and no second app. The

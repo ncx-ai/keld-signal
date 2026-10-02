@@ -3,6 +3,7 @@ package localagent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/version"
@@ -101,7 +102,7 @@ func (s SidecarVersionState) ProblemLine() string {
 		"version skew — keld is %s but the analysis sidecar is %s. They ship separately, "+
 			"so a route this version needs may be missing from that sidecar and the work "+
 			"goes missing silently (this is how blocks stop while telemetry keeps flowing). "+
-			"Re-run the Keld installer to update the sidecar: "+
-			"macOS `/usr/local/keld/onboard.command`, Linux `curl -fsSL https://keld.co/install.sh | sh`.",
-		s.Daemon, s.Sidecar)
+			"Signal fetches the matching sidecar itself when it starts; if that failed, press "+
+			"Try again on Signal's page or run `keld signal install-sidecar --tag v%s`.",
+		s.Daemon, s.Sidecar, strings.TrimPrefix(s.Daemon, "v"))
 }

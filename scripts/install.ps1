@@ -103,6 +103,14 @@ try {
     Remove-Item $tmpZip -ErrorAction SilentlyContinue
 }
 
+$keldHome = if ($env:KELD_HOME) { $env:KELD_HOME } else { Join-Path $env:USERPROFILE '.keld' }
+# The daemon rewrites agent.json (port + a fresh per-start secret) on every
+# start, and `keld signal open` reads it. Snapshot it before the install
+# restarts the daemon, so the end of this script can tell the new file from the
+# previous daemon's.
+$agentJson = Join-Path $keldHome 'agent.json'
+$agentBefore = if (Test-Path $agentJson) { Get-Content -Raw $agentJson -ErrorAction SilentlyContinue } else { '' }
+
 $agent = Join-Path $InstallDir 'keld-agent.exe'
 if (Test-Path $agent) {
     # keld-agent install owns login -> signal setup -> service (agent last).
@@ -129,15 +137,36 @@ Write-Host "       [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';
 # Report observed state, not the exit code of `keld-agent install` (which
 # succeeds after merely registering the task when it has no terminal). Setup is
 # done once an ingest token exists in hook.json - the same file the daemon reads.
-$keldHome = if ($env:KELD_HOME) { $env:KELD_HOME } else { Join-Path $env:USERPROFILE '.keld' }
 $hookJson = Join-Path $keldHome 'hook.json'
 $onboarded = (Test-Path $hookJson) -and ((Get-Content -Raw $hookJson) -match '"ingest_token"\s*:\s*"[^"]')
 if (-not $onboarded) {
-    Write-Host "  2. Open a new terminal, then run:  keld login"
-    Write-Host "  3. Run:  keld signal setup"
+    # This installer asks nothing about Keld (2026-09-29, web sign-in spec
+    # AC-10): Signal asks on first open whether to sign in with Atlas or use it
+    # locally only, and the daemon's auto-setup configures the AI tools it
+    # finds. So end by opening Signal for a person at the screen; otherwise say
+    # in one line how to. --Code (above) is unchanged.
     Write-Host ""
-    Write-Host "Keld is NOT set up yet (nothing is being collected) - finish steps 2-3."
-    Write-Host "The agent picks the configuration up on its own once you do."
+    Write-Host "Keld is installed and running, but not set up with Atlas yet. Signal asks"
+    Write-Host "  whether to sign in with Atlas or use it locally only."
+    $keldExe = Join-Path $InstallDir 'keld.exe'
+    $opened = $false
+    if ([Environment]::UserInteractive -and -not $env:CI -and -not $env:SSH_CONNECTION -and (Test-Path $keldExe)) {
+        # Wait (bounded) for the NEW daemon's agent.json: earlier, `signal open`
+        # finds no daemon on a first install or the previous one's port on an upgrade.
+        for ($i = 0; $i -lt 20; $i++) {
+            $now = if (Test-Path $agentJson) { Get-Content -Raw $agentJson -ErrorAction SilentlyContinue } else { '' }
+            if ($now -and ($now -ne $agentBefore)) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        & $keldExe signal open *> $null
+        $opened = ($LASTEXITCODE -eq 0)
+    }
+    if ($opened) {
+        Write-Host "  Opened Keld Signal."
+    } else {
+        Write-Host "Open Signal: keld signal open"
+    }
+    Write-Host "  (Or from a terminal: keld login; keld signal setup)"
 }
 Write-Host ""
 Write-Host "Note: Windows SmartScreen may warn on first run — unsigned binaries"

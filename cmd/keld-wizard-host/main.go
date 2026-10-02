@@ -1,24 +1,26 @@
-// keld-wizard-host — the two things the Windows installer's wizard page cannot
-// do for itself.
+// keld-wizard-host — runs a Windows console program with NO console window.
 //
-// Inno Setup's Pascal Script can neither host a browser nor run a child process
-// asynchronously while keeping its window responsive. This helper does both, and
-// ⚠️ **IT DECIDES NOTHING** — the same rule `installers/macos/plugin/KeldSetup.m`
-// follows. Auth, tool detection and path resolution stay in Go where they are
-// tested; the wizard page renders the events they already emit.
+// Inno Setup's Pascal Script cannot pass CREATE_NO_WINDOW, and Task Scheduler
+// gives a console binary a console window before any of our code runs. This
+// helper is built -H windowsgui, so it has no console to hand down, and starts
+// its child with CREATE_NO_WINDOW. ⚠️ **IT DECIDES NOTHING**: it launches what it
+// is told and reports what happened.
 //
 //	--run <exe> --events-dir <dir> [--sentinel <f>] [--parent-pid <n>] -- <args…>
-//	    Runs <exe> <args…>, publishing each stdout line as its own numbered event
-//	    file, then a final {"event":"__exit","code":N} so the page knows it
-//	    finished.
+//	    Runs <exe> <args…> and waits, publishing each stdout line as its own
+//	    numbered event file, then a final {"event":"__exit","code":N}. The
+//	    installer's RunQuiet registers the agent this way (keld-agent.iss).
 //
-//	--clipboard --events-dir <dir>
-//	    Publishes one {"event":"clipboard","text":"…"} — Pascal Script cannot read
-//	    the clipboard at all.
+//	--spawn <exe> -- <args…>
+//	    Starts one long-lived program hidden and waits for it, forwarding its
+//	    exit code. The KeldAgent logon task starts the daemon this way
+//	    (internal/agent/service/taskxml.go).
 //
-//	--panel <hwnd> --url <url> [--inset <px>] [--sentinel <f>] [--parent-pid <n>]
-//	    Embeds a WebView2 surface in <hwnd> — a TPanel on the wizard page, owned
-//	    by another process — and navigates to <url>.
+// ⚠️ `--panel` (an embedded WebView2 sign-in) and `--clipboard` (reading a
+// pasted setup code) were REMOVED on 2026-09-29 with the installer's "Set up
+// Keld" page: no installer asks anything about Keld any more
+// (docs/superpowers/specs/2026-09-29-signal-web-signin-discovery.html, AC-10).
+// They are unknown arguments now, and a test pins that.
 package main
 
 import (
@@ -28,32 +30,20 @@ import (
 	"time"
 )
 
-// exitNoWebView2 is distinct from a generic failure ON PURPOSE: the page falls
-// back to opening the URL in the default browser for this case only, and
-// treating "something broke" the same way would hide real errors behind a
-// browser window nobody expected.
-const exitNoWebView2 = 3
-
 type options struct {
-	Mode      string // "run" | "panel"
+	Mode      string // "run" | "spawn"
 	Exe       string
 	Args      []string
 	EventsDir string
 	Sentinel  string
 	ParentPID int
-	Panel     uintptr
-	URL       string
-	// Inset leaves a ring of the host panel visible around the webview, which is
-	// how the page draws a border around it — we cannot paint on a window another
-	// process owns, so the border is the panel showing through.
-	Inset int
 }
 
 func usage() {
 	fmt.Fprint(os.Stderr, `keld-wizard-host
 
   --run <exe> --events-dir <dir> [--sentinel <f>] [--parent-pid <n>] -- <args...>
-  --panel <hwnd> --url <url> [--sentinel <f>] [--parent-pid <n>]
+  --spawn <exe> -- <args...>
 `)
 }
 
@@ -90,23 +80,6 @@ func parseArgs(argv []string) (options, error) {
 			if s, err = next(); err == nil {
 				o.ParentPID, err = strconv.Atoi(s)
 			}
-		case "--clipboard":
-			o.Mode = "clipboard"
-		case "--panel":
-			o.Mode = "panel"
-			var s string
-			if s, err = next(); err == nil {
-				var h uint64
-				h, err = strconv.ParseUint(s, 10, 64)
-				o.Panel = uintptr(h)
-			}
-		case "--url":
-			o.URL, err = next()
-		case "--inset":
-			var s string
-			if s, err = next(); err == nil {
-				o.Inset, err = strconv.Atoi(s)
-			}
 		default:
 			return o, fmt.Errorf("unknown argument %q", a)
 		}
@@ -130,26 +103,16 @@ func validate(o options) error {
 		if o.Exe == "" {
 			return fmt.Errorf("--spawn needs an executable")
 		}
-	case "clipboard":
-		if o.EventsDir == "" {
-			return fmt.Errorf("--clipboard needs --events-dir")
-		}
-	case "panel":
-		if o.Panel == 0 {
-			return fmt.Errorf("--panel needs a window handle")
-		}
-		if o.URL == "" {
-			return fmt.Errorf("--panel needs --url")
-		}
 	default:
-		return fmt.Errorf("one of --run, --panel or --clipboard is required")
+		return fmt.Errorf("one of --run or --spawn is required")
 	}
 	return nil
 }
 
-// watchForExit ends this process when the wizard says so, or when the wizard is
-// gone. ⚠️ BOTH HALVES ARE NEEDED. The sentinel covers Cancel, which the page
-// can act on; the parent check covers the wizard being killed, which it cannot.
+// watchForExit ends this process when the caller says so (--sentinel), or when
+// the caller is gone (--parent-pid). ⚠️ BOTH HALVES ARE NEEDED. The sentinel
+// covers a cancel the caller can act on; the parent check covers the caller
+// being killed, which it cannot.
 // Either way this process exiting closes the job object, which reaps any child —
 // see kill_windows.go for why that is the whole cancellation story.
 func watchForExit(sentinel string, parentPID int, onExit func()) {
@@ -190,11 +153,7 @@ func main() {
 	switch o.Mode {
 	case "run":
 		os.Exit(relay(o))
-	case "panel":
-		os.Exit(panel(o))
 	case "spawn":
 		os.Exit(spawnHidden(o))
-	case "clipboard":
-		os.Exit(reportClipboard(o))
 	}
 }

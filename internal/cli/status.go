@@ -79,6 +79,9 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				console.Print(fmt.Sprintf("Logged in: %s · org %s · %s", a.Principal, a.Org, a.APIURL))
 			}
+			if note := atlasEnvNote(); note != "" {
+				console.Print(note)
+			}
 
 			manifest, err := config.LoadManifest()
 			if err != nil {
@@ -209,6 +212,11 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Check Keld Signal configuration for problems.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var problems []string
+			// Not a problem — a developer chose it — but never silent: a machine
+			// left on dev is the thing this line exists to catch.
+			if note := atlasEnvNote(); note != "" {
+				console.Print(note)
+			}
 
 			manifest, err := config.LoadManifest()
 			if err != nil {

@@ -8,15 +8,17 @@ test.describe("Settings", () => {
     test.skip(!state.settingsMounted, "GET /v1/settings is not mounted on this daemon build yet (lane B2 in flight)");
   });
 
-  test('Send to Atlas shows "off" and the page says it is local only', async ({ signal, page }) => {
+  test("pinned local only: no Send to Atlas switch, and the top bar says Local", async ({ signal, page }) => {
     await signal.open("settings");
-    const { input } = signal.settingSwitch(/^Send to Atlas/);
-    await expect(input).not.toBeChecked();
-    // KELD_ATLAS=0 pins it, and the page says so next to the control.
-    await expect(input).toBeDisabled();
-    await expect(page.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
-    await expect(page.getByText("Local only", { exact: true })).toBeVisible();
-    await expect(page.getByText("Send to Atlas: on")).toHaveCount(0);
+    // There is no switch: being signed in is what sends. (The account tile's
+    // "Set by KELD_ATLAS" note is pinned by signin.spec.ts's KELD_ATLAS=0 case.)
+    await expect(page.locator(".settings-row", { hasText: /Send to Atlas/ }).locator("input[type=checkbox]")).toHaveCount(0);
+    await expect(page.locator("#envPill")).toHaveText("Local");
+    // This daemon is paired, so the tile offers the way back to sending, held
+    // off by the pin and saying why.
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await expect(tile.getByRole("button", { name: "Send to Atlas again" })).toBeDisabled();
+    await expect(tile.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
   });
 
   // ⚠️ **THIS ASSERTED THE CONTROL WAS VISIBLE, AND IT IS NOW HIDDEN ON
@@ -51,12 +53,14 @@ test.describe("Settings", () => {
     await expect(signal.breakRows()).toHaveCount(0);
   });
 
-  test('"Start at login" is disabled, with "in the desktop app"', async ({ signal, page }) => {
+  // The Attribution tile held two switches that could not be changed ("Suggest
+  // projects…", always on; "Start at login", owned by the desktop app) and a
+  // copy of the Focus blocks "Show details" switch. Removed 2026-10-02.
+  test("there is no Attribution tile and no Start at login switch", async ({ signal, page }) => {
     await signal.open("settings");
-    const { input } = signal.settingSwitch(/^Start at login/);
-    await expect(input).toBeDisabled();
-    await expect(input).not.toBeChecked();
-    await expect(page.getByText(/in the desktop app/)).toBeVisible();
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.getByText("Attribution", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/^Start at login/)).toHaveCount(0);
   });
 
   // Vector attribution is a DEVELOPER control while the feature is being built
@@ -79,5 +83,36 @@ test.describe("Settings", () => {
     await expect(page.getByText("Vector attribution")).toBeVisible();
     const { input } = signal.settingSwitch(/^Vector attribution/);
     await expect(input).not.toBeChecked();
+  });
+
+  // The account tile is the whole pane outside developer mode, so a sign-in
+  // state that does not answer must never leave Settings blank.
+  test("when the sign-in state can't be read, the account tile says so instead of vanishing", async ({ signal, page }) => {
+    await page.route(/\/v1\/auth\/state/, (route) => route.abort());
+    await signal.open("settings");
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Couldn't read this computer's sign-in/)).toBeVisible();
+  });
+
+  // A developer can look at the first-open screen again without resetting the
+  // machine: the preview lives in the page, so the daemon's state is untouched
+  // and Back returns to the pane it was opened from.
+  test("the Developer box shows the welcome screen, and Back to Signal returns to Settings", async ({ signal, page }) => {
+    await signal.open("settings");
+    await expect(page.getByRole("button", { name: "Show welcome screen" })).toHaveCount(0);
+
+    const version = page.locator("#navVersion");
+    await expect(version).toBeVisible();
+    for (let i = 0; i < 7; i++) await version.click();
+
+    await page.getByRole("button", { name: "Show welcome screen" }).click();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Use without an account" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Back to Signal" }).click();
+    await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
+    await expect(page.getByText("Atlas account", { exact: true })).toBeVisible();
+    await expect(page.locator("#envPill")).toHaveText("Local");
   });
 });

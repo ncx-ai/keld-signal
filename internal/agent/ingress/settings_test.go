@@ -380,3 +380,35 @@ func TestSettingsCarryNoGroupsOffAndLeaveTheStoredListAlone(t *testing.T) {
 		t.Fatalf("groups_off must never be written: %s", b)
 	}
 }
+
+func TestGetSettingsReportsTheAtlasEnvironment(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_API_URL", "")
+	t.Setenv("KELD_ATLAS_WEB_URL", "")
+	srv := httptest.NewServer(DiscardHandler("s3cret", SettingsRoute(nil)))
+	defer srv.Close()
+
+	var v settingsView
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
+	if v.AtlasEnv.Name != "prod" {
+		t.Fatalf("default atlas_env = %+v", v.AtlasEnv)
+	}
+	if err := settings.WriteAtlasEnv("local"); err != nil {
+		t.Fatal(err)
+	}
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
+	if v.AtlasEnv.Name != "local" {
+		t.Fatalf("local atlas_env = %+v", v.AtlasEnv)
+	}
+	// Paired to production, the setting no longer decides where data goes:
+	// the page must name the pairing, not "local".
+	t.Setenv("KELD_CTX_ENDPOINT", "")
+	t.Setenv("KELD_CTX_TOKEN", "")
+	if err := os.WriteFile(paths.HookConfigPath(), []byte(`{"endpoint":"https://atlas.keld.co/v1","ingest_token":"tok"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
+	if v.AtlasEnv.Name != "prod" {
+		t.Fatalf("paired to prod with atlas_env local: atlas_env = %+v, want prod", v.AtlasEnv)
+	}
+}

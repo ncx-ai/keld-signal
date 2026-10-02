@@ -697,9 +697,9 @@ func TestSweepSaysARouteIsMissingOnceAndHoldsTheCursor(t *testing.T) {
 			"per-sweep line is a five-minute flood and gets filtered out, which is the "+
 			"same as never warning:\n%s", got, buf.String())
 	}
-	if !strings.Contains(buf.String(), "installer") {
-		t.Error("the line must name the INSTALLER as the remedy: restarting the daemon " +
-			"fixes nothing when the wrong artifact is on disk")
+	if !strings.Contains(buf.String(), "keld signal install-sidecar") {
+		t.Error("the line must name a way to REPLACE the sidecar as the remedy: restarting " +
+			"the daemon fixes nothing when the wrong artifact is on disk")
 	}
 	tgts := e.st.targets(e.activePaths())
 	if len(tgts) != 1 || tgts[0].Path != txPath {

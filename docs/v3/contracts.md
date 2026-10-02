@@ -224,11 +224,11 @@ second implementation cannot answer it differently.
    `agent-config.json`: it changes nothing the daemon does, and a machine-wide file is the wrong
    home for one person's view. `show_breaks` is deliberately the other way — it is in the file
    because the block/break reading is what the app is *for* and should survive a reinstall.
-4. **"Start at login" is NOT a working toggle yet and must not pretend to be.** It is a
-   property of the desktop shell (Tauri's autostart plugin, D9) and the daemon's own service
-   registration already handles the collector. Until D9 the control renders **disabled** with
-   "in the desktop app"; a toggle that silently does nothing is the defect this whole plan
-   exists to remove.
+4. **The page draws no "Start at login" control.** It is a property of the desktop shell
+   (Tauri's autostart plugin, D9) and the daemon's own service registration already handles
+   the collector. It used to render disabled with "in the desktop app"; a switch nobody can
+   change is not worth its row, so it was removed on 2026-10-02 with the Attribution tile.
+   When the shell owns autostart, the control is added back as a working one.
 5. **A project "conflict" is DERIVED, not a stored field.** Two visible projects, in
    workstreams that are on, sharing a repository rule or a ticket key. Nothing writes a
    conflict flag, so nothing can leave a stale one behind.
@@ -256,12 +256,13 @@ nothing. The rule the list encodes is not "these keys are special" but **"a key 
 re-reads while the daemon runs requires a restart"**; check that before adding the next
 one.
 
-## `POST /v1/config`
+## `POST /v1/config` — removed (2026-10-02)
 
-`{"code": "atlas-dev.keld.co/ABCD-EFGH"}` → runs the existing `auth.ParsePairingCode` +
-`LoginWithCode` + setup path, writes `auth.json`/`hook.json`, answers
-`{"host": "https://atlas-dev.keld.co", "restart_required": true}`. Malformed → 400, no
-file touched. Refused with 409 while `send_to_atlas` is false.
+It redeemed a setup code pasted into Settings' Environment box. The page now pairs only
+through the browser sign-in (`POST /v1/auth/start` → `GET /auth/callback`), and the box,
+its route and Settings' Send to Atlas switch were removed together: being signed in is what
+sends. A setup code still pairs from a terminal — `keld login --code` and
+`keld-agent install --code`, through `auth.LoginWithCode`.
 
 ## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
 

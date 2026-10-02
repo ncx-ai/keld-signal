@@ -9,6 +9,8 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/hook"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // restartDelay gives the response time to reach the client's TCP buffer
@@ -60,6 +62,13 @@ type settingsView struct {
 	Readonly    []string `json:"readonly"`
 	DevGenerate bool     `json:"dev_generate"`
 	DevRepos    []string `json:"dev_repos"`
+	// Which Atlas this machine's data goes to (`keld signal env`), read-only:
+	// the top bar names it when it is not production.
+	AtlasEnv atlasEnvView `json:"atlas_env"`
+}
+
+type atlasEnvView struct {
+	Name string `json:"name"`
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +87,18 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		Attribution: attrib.Enabled(set.Attribution),
 		ToolOTLP:    set.ToolOTLPEnabled(),
 		Readonly:    readonlySettingsKeys(),
+		AtlasEnv:    currentAtlasEnvView(),
 	})
+}
+
+// currentAtlasEnvView names the Atlas this machine's data goes to: the paired
+// one while paired, the configured one otherwise (paths.SendingAtlasEnv).
+func currentAtlasEnvView() atlasEnvView {
+	endpoint := ""
+	if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.IngestToken != "" {
+		endpoint = cfg.Endpoint
+	}
+	return atlasEnvView{Name: paths.SendingAtlasEnv(endpoint).Name}
 }
 
 // readonlySettingsKeys names every v3 key whose value is currently PINNED by
