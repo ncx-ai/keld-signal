@@ -514,10 +514,7 @@ export function configErrorText(status, body) {
 export const SIGNIN_TEXT = {
   signIn: "Sign in with Atlas",
   localOnly: "Use locally only",
-  later: "You can sign in later from Settings.",
-  localNote: "Local only: nothing leaves this computer.",
   firstRunTitle: "Welcome to Signal",
-  firstRunBody: "Sign in to send it to your company's Atlas, or keep everything here.",
   // The welcome screen's own words: what Signal is, said once, in keld.co's voice.
   welcomeEyebrow: "Keld Signal",
   welcomeHeadA: "See where your",
@@ -4307,8 +4304,6 @@ if (typeof document !== "undefined") {
           ),
           signinFlowNode(),
           err ? el("div", { class: "settings-note error-note" }, err) : null,
-          el("p", { class: "welcome-note" }, SIGNIN_TEXT.firstRunBody + " " + SIGNIN_TEXT.later),
-          el("p", { class: "welcome-note" }, SIGNIN_TEXT.localNote),
           el("ul", { class: "welcome-points" }, ...points)
         )
       )

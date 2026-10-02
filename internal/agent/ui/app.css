@@ -330,7 +330,6 @@ body.is-welcome .pane-root { padding: 0; }
 .welcome .btn.welcome-secondary { background: rgba(255, 254, 251, .85); color: var(--ink); border: 1px solid var(--rule-strong); }
 .welcome .btn.welcome-secondary:hover { border-color: var(--ink-2); }
 .welcome .signin-flow { margin: 0 0 16px; }
-.welcome-note { margin: 0 0 4px; font-size: 13px; color: var(--muted); max-width: 540px; }
 .welcome-points {
   list-style: none;
   margin: 36px 0 0;

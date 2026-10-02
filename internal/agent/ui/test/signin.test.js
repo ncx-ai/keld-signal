@@ -203,8 +203,6 @@ test("the fallback link is rendered only for an http(s) URL", () => {
 test("the first-open copy is the wireframe's", () => {
   assert.equal(SIGNIN_TEXT.signIn, "Sign in with Atlas");
   assert.equal(SIGNIN_TEXT.localOnly, "Use locally only");
-  assert.equal(SIGNIN_TEXT.later, "You can sign in later from Settings.");
-  assert.equal(SIGNIN_TEXT.localNote, "Local only: nothing leaves this computer.");
   assert.equal(SIGNIN_TEXT.waiting, "Finish signing in in your browser");
 });
 

@@ -12,8 +12,8 @@ test.describe("First open", () => {
       await expect(page.getByText("Signal is already collecting on this computer.")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Use locally only" })).toBeVisible();
-      await expect(page.getByText("You can sign in later from Settings.")).toBeVisible();
-      await expect(page.getByText("Local only: nothing leaves this computer.")).toBeVisible();
+      await expect(page.getByText("You can sign in later from Settings.")).toHaveCount(0);
+      await expect(page.getByText("Local only: nothing leaves this computer.")).toHaveCount(0);
       // The bar stays out of the choice's way.
       await expect(page.locator("#signinBanner")).toBeHidden();
       // Nor does the top bar state a choice nobody has made yet.
