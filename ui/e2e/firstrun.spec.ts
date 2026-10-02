@@ -5,13 +5,13 @@ import { test, expect } from "./support/signin-fixtures";
 // no KELD_ATLAS — decision-table row 1, the only row that shows it.
 
 test.describe("First open", () => {
-  test("a fresh machine offers Sign in with Atlas or Use locally only, on every pane", async ({ page, harness }) => {
+  test("a fresh machine offers Sign in with Atlas or Keep it on this computer, on every pane", async ({ page, harness }) => {
     for (const pane of ["today", "projects", "settings"]) {
       await page.goto(harness.pageURL(pane));
       await expect(page.getByRole("region", { name: "Welcome to Signal" })).toBeVisible();
       await expect(page.getByText("Signal is already collecting on this computer.")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Sign in with Atlas" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Use locally only" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Keep it on this computer" })).toBeVisible();
       await expect(page.getByText("You can sign in later from Settings.")).toHaveCount(0);
       await expect(page.getByText("Local only: nothing leaves this computer.")).toHaveCount(0);
       // The bar stays out of the choice's way.
@@ -21,9 +21,9 @@ test.describe("First open", () => {
     }
   });
 
-  test("Use locally only is kept across a reload and a daemon restart, and Settings still offers Sign in", async ({ page, harness }) => {
+  test("Keep it on this computer is kept across a reload and a daemon restart, and Settings still offers Sign in", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));
-    await page.getByRole("button", { name: "Use locally only" }).click();
+    await page.getByRole("button", { name: "Keep it on this computer" }).click();
 
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator("#topbarTitle")).toHaveText("Focus blocks");
