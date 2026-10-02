@@ -583,12 +583,18 @@ export const WELCOME_PREVIEW_TEXT = {
  *  `icon` is "local" or "cloud"; a cloud label names the Atlas environment
  *  when it is not production ("Atlas dev", "Atlas local"), set with
  *  `keld signal env`. Hidden while the first-open choice is up: the label
- *  states a choice, and on that screen nobody has made one yet. */
+ *  states a choice, and on that screen nobody has made one yet.
+ *
+ *  Sending on but not paired says so: nothing reaches that Atlas until a
+ *  sign-in, and a bare "Atlas local" read as connected. No auth answer (an
+ *  older daemon, or offline) is not "not signed in" — the page does not know. */
 export function envPill(settings, auth) {
   if (!settings || showFirstRun(auth)) return null;
   if (!atlasEnabled(settings)) return { icon: "local", text: "Local" };
   const name = settings.atlas_env && settings.atlas_env.name;
-  return { icon: "cloud", text: name && name !== "prod" ? `Atlas ${name}` : "Atlas" };
+  const atlas = name && name !== "prod" ? `Atlas ${name}` : "Atlas";
+  if (auth && auth.paired === false) return { icon: "cloud", text: `${atlas} · not signed in` };
+  return { icon: "cloud", text: atlas };
 }
 
 /** What the bar above every pane shows: "flow" (a sign-in in progress or just

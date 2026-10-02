@@ -229,20 +229,28 @@ test("envPill: no label while the first-open choice is up — nobody has chosen 
 
 test("envPill: once a choice exists the label says where the data goes", () => {
   const atlas = { icon: "cloud", text: "Atlas" };
-  assert.deepEqual(envPill({ send_to_atlas: true }, auth({ first_run: false })), atlas);
+  assert.deepEqual(envPill({ send_to_atlas: true }, auth({ paired: true, first_run: false })), atlas);
   assert.deepEqual(envPill({ send_to_atlas: false }, auth({ first_run: false })), { icon: "local", text: "Local" });
   // A paired machine never shows the choice, so its label stays.
   assert.deepEqual(envPill({ send_to_atlas: true }, auth({ paired: true, first_run: true })), atlas);
-  // An older daemon with no /v1/auth/state is not a first run.
+  // An older daemon with no /v1/auth/state is not a first run, and not "not signed in" either.
   assert.deepEqual(envPill({ send_to_atlas: true }, null), atlas);
+});
+
+test("envPill: sending on but not paired says not signed in, because nothing reaches Atlas yet", () => {
+  assert.deepEqual(envPill({ send_to_atlas: true }, auth({ first_run: false })), { icon: "cloud", text: "Atlas · not signed in" });
+  assert.deepEqual(envPill({ send_to_atlas: true, atlas_env: { name: "local" } }, auth({ first_run: false })), { icon: "cloud", text: "Atlas local · not signed in" });
+  // Local only is a choice, not a missing sign-in.
+  assert.deepEqual(envPill({ send_to_atlas: false }, auth({ first_run: false })), { icon: "local", text: "Local" });
 });
 
 test("envPill: a non-production Atlas is named; production and local-only are not", () => {
   const on = (name) => ({ send_to_atlas: true, atlas_env: { name } });
-  assert.deepEqual(envPill(on("prod"), auth()), { icon: "cloud", text: "Atlas" });
-  assert.deepEqual(envPill(on("dev"), auth()), { icon: "cloud", text: "Atlas dev" });
-  assert.deepEqual(envPill(on("local"), auth()), { icon: "cloud", text: "Atlas local" });
-  assert.deepEqual(envPill(on("custom"), auth()), { icon: "cloud", text: "Atlas custom" });
+  const paired = auth({ paired: true });
+  assert.deepEqual(envPill(on("prod"), paired), { icon: "cloud", text: "Atlas" });
+  assert.deepEqual(envPill(on("dev"), paired), { icon: "cloud", text: "Atlas dev" });
+  assert.deepEqual(envPill(on("local"), paired), { icon: "cloud", text: "Atlas local" });
+  assert.deepEqual(envPill(on("custom"), paired), { icon: "cloud", text: "Atlas custom" });
   // Nothing is sent, so which Atlas is configured does not matter here.
   assert.deepEqual(envPill({ send_to_atlas: false, atlas_env: { name: "dev" } }, auth()), { icon: "local", text: "Local" });
 });

@@ -143,6 +143,8 @@ test.describe("Web sign-in", () => {
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     const bar = page.locator("#signinBanner");
     await expect(bar).toBeHidden();
+    // The top bar names the Atlas it would send to, and that nothing reaches it yet.
+    await expect(page.locator("#envPill")).toHaveText(/· not signed in$/);
     await page.goto(harness.pageURL("settings"));
     await expect(bar).toBeHidden();
     await page.locator(".tile", { hasText: "Atlas account" }).getByRole("button", { name: "Sign in with Atlas" }).click();
@@ -150,6 +152,7 @@ test.describe("Web sign-in", () => {
     await finishInBrowser(page);
     await expect(bar.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
     assertPaired(harness);
+    await expect(page.locator("#envPill")).not.toHaveText(/not signed in/);
   });
 
   test("a return with a state Signal never issued is refused: nothing written, no call to Atlas, the page still signed out", async ({ page, harness }) => {
