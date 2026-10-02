@@ -1027,7 +1027,6 @@ func Run(ctx context.Context) error {
 		// already does exactly this.
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.UnpairRoute(serviceRestarter{}.Restart),
-		ingress.ConfigRoute(),
 		// Mounted here too: a paired machine can sign in again (to another org),
 		// and a sign-in started before the handler swap finishes after it — the
 		// pending store is shared across both handlers.

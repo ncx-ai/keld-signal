@@ -430,15 +430,6 @@ export function sameAsOptions(projects) {
     .map((p) => ({ id: p.id, label: p.title }));
 }
 
-/** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
- *  toggle until the desktop shell (Tauri autostart, D9) owns it. Always
- *  unchecked and disabled, with a note saying where it actually lives — a
- *  toggle that silently does nothing is the defect this whole page exists to
- *  remove, so this is never rendered as live state from settings/localStorage. */
-export function startAtLoginProps() {
-  return { checked: false, disabled: true, note: "in the desktop app" };
-}
-
 /** The env var GET /v1/settings' `readonly` names a key by, and the note the
  *  page shows next to a control that key disables — "keys named in readonly
  *  render disabled with 'set by KELD_… on this machine'" (the D2 brief).
@@ -488,17 +479,6 @@ export function settingsErrorText(status, body) {
   return "That change was refused.";
 }
 
-/** `POST /v1/config`'s two documented refusals (docs/v3/contracts.md): a
- *  malformed code is 400, and the route is refused with 409 while
- *  `send_to_atlas` is false (pointing at a different Atlas is meaningless
- *  while nothing is being sent to one). */
-export function configErrorText(status, body) {
-  if (status === 400) return "That does not look like a setup code";
-  if (status === 409) return "Turn on Send to Atlas first";
-  if (body && body.error) return body.error;
-  return "Couldn't reach Signal to set that — try again.";
-}
-
 // ---- Web sign-in (contract C6 of docs/superpowers/plans/2026-09-29-signal-web-signin-plan.md) ----
 //
 // The page asks the daemon to start a sign-in (POST /v1/auth/start), the
@@ -541,9 +521,27 @@ export const SIGNIN_TEXT = {
   copyFailed: "Couldn't copy — select the link instead",
   tryAgain: "Try again",
   notSignedInSettings: "Not signed in.",
-  turnsAtlasOn: "Signing in turns Send to Atlas on.",
   account: "Atlas account",
+  // Signed in, but this machine was set to keep everything here: the one way
+  // back to sending now that Settings has no Send to Atlas switch.
+  notSending: "Not sending. Signal keeps everything on this computer.",
+  sendAgain: "Send to Atlas again",
+  // GET /v1/auth/state did not answer (a restart, a slow first load).
+  authUnknown: "Couldn't read this computer's sign-in. Signal may be restarting; this updates on its own.",
 };
+
+/** The Atlas this machine would send to, as the top bar names it: "Atlas" for
+ *  production, "Atlas dev" / "Atlas local" otherwise. */
+export function atlasName(settings) {
+  const name = settings && settings.atlas_env && settings.atlas_env.name;
+  return name && name !== "prod" ? `Atlas ${name}` : "Atlas";
+}
+
+/** The line under "Not signed in.": where signing in sends, said before the
+ *  click that decides it. */
+export function signinDestinationText(settings) {
+  return `Signing in sends focus blocks to ${atlasName(settings)}. Prompt text stays on this computer.`;
+}
 
 /** One plain sentence per reason a sign-in can end without pairing: the six
  *  `last_error` codes contract C5 names, the start route's 409, and the two
@@ -558,7 +556,7 @@ export const SIGNIN_ERROR_TEXT = {
   // Atlas finished; writing hook.json on this machine did not. Blaming Atlas
   // for it would send a person to the wrong place.
   save_failed: "Signal couldn't save the sign-in on this computer.",
-  send_to_atlas_is_off: "Send to Atlas is off. Turn it on in Settings to sign in.",
+  send_to_atlas_is_off: "Send to Atlas is off on this machine, so Signal can't sign in.",
   unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
   abandoned: "This sign-in is no longer waiting.",
 };
@@ -584,16 +582,36 @@ export function showFirstRun(auth) {
   return !!auth && auth.first_run === true && auth.paired !== true;
 }
 
+/** Does the welcome screen stand in for the panes? The daemon's first-open
+ *  choice, or the Developer box's preview of it. Never while offline: the
+ *  cached page is showing what it last knew, and neither button could act. */
+export function welcomeShown(auth, preview, offline) {
+  return (showFirstRun(auth) || !!preview) && !offline;
+}
+
+/** The Developer box's welcome-screen row, and the way back out of it. */
+export const WELCOME_PREVIEW_TEXT = {
+  title: "Welcome screen",
+  desc: "Shows the first-open screen on this page. Its buttons work for real. Nothing changes until you press one.",
+  show: "Show welcome screen",
+  back: "Back to Signal",
+};
+
 /** The top bar's label: where this machine's data goes, or null to hide it.
  *  `icon` is "local" or "cloud"; a cloud label names the Atlas environment
  *  when it is not production ("Atlas dev", "Atlas local"), set with
  *  `keld signal env`. Hidden while the first-open choice is up: the label
- *  states a choice, and on that screen nobody has made one yet. */
+ *  states a choice, and on that screen nobody has made one yet.
+ *
+ *  Sending on but not paired says so: nothing reaches that Atlas until a
+ *  sign-in, and a bare "Atlas local" read as connected. No auth answer (an
+ *  older daemon, or offline) is not "not signed in" — the page does not know. */
 export function envPill(settings, auth) {
   if (!settings || showFirstRun(auth)) return null;
   if (!atlasEnabled(settings)) return { icon: "local", text: "Local" };
-  const name = settings.atlas_env && settings.atlas_env.name;
-  return { icon: "cloud", text: name && name !== "prod" ? `Atlas ${name}` : "Atlas" };
+  const atlas = atlasName(settings);
+  if (auth && auth.paired === false) return { icon: "cloud", text: `${atlas} · not signed in` };
+  return { icon: "cloud", text: atlas };
 }
 
 /** What the bar above every pane shows: "flow" (a sign-in in progress or just
@@ -645,7 +663,7 @@ export function signinStartErrorText(status, body) {
   const code = body && body.error;
   if (code) return signinErrorText(code);
   if (!status) return "Couldn't reach Signal to start signing in — try again.";
-  if (status === 404) return "This version of Signal can't sign in from the page. Paste a setup code in Settings instead.";
+  if (status === 404) return "This version of Signal can't sign in from the page. Update Signal, or run keld login in a terminal.";
   return "Signal couldn't start signing in just now — try again.";
 }
 
@@ -704,16 +722,6 @@ export function unpairView(status, error) {
   }
 }
 
-/** The Developer box's read-only Atlas line, or null on production when
- *  developer mode is off (production is the default; nothing to say). */
-export function atlasEnvLine(env, devMode) {
-  if (!env || !env.name) return null;
-  const off = env.name !== "prod";
-  if (!off && !devMode) return null;
-  const where = env.web && env.web !== env.api ? `API ${env.api} · web ${env.web}` : env.api;
-  return { name: env.name, where, offProduction: off };
-}
-
 export function signedInText(auth) {
   const who = auth && auth.principal;
   const org = auth && auth.org;
@@ -731,9 +739,7 @@ export function safeAuthorizeURL(u) {
 }
 
 /** The restart-bar state machine. `PUT /v1/settings` answers
- *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
- *  answers it on every success (a new host always needs one). Either landing
- *  moves NEEDED → the bar shows and offers Restart; the daemon's only
+ *  `restart_required` for `send_to_atlas`/`dev_blocks`, which moves NEEDED → the bar shows and offers Restart; the daemon's only
  *  restart trigger is `PUT /v1/settings?restart=1` (docs/v3/contracts.md), so
  *  clicking it re-PUTs (RESTARTING), then the page polls `/v1/ledger`
  *  (WAITING) until the new process answers (READY), and reloads. A pure
@@ -2336,11 +2342,8 @@ if (typeof document !== "undefined") {
 
   // "Show details on cards" is a page-only preference (docs/v3/contracts.md's
   // page convention 3): it changes nothing the daemon does, so it lives
-  // entirely client-side rather than in agent-config.json. "Start at login"
-  // used to live here too, as a toggle that looked real and did nothing —
-  // page convention 4 is explicit that this is the defect to remove, so it is
-  // no longer a stored preference at all; startAtLoginProps() always renders
-  // it disabled.
+  // entirely client-side rather than in agent-config.json. Its switch is the
+  // "Show details" one in the Focus blocks toggles.
   function loadLocalPrefs() {
     return readJSONStorage(LOCAL_PREFS_KEY, {
       showDetails: false,
@@ -2369,8 +2372,7 @@ if (typeof document !== "undefined") {
     todayUsage: null,
     // restart: the bar's own state machine (see nextRestartStatus/
     // restartBarText). `patch` is whatever PUT /v1/settings body last needs
-    // resending with ?restart=1 — empty for a restart /v1/config asked for,
-    // since that route already wrote everything itself.
+    // resending with ?restart=1.
     restart: { status: RESTART_IDLE, patch: {} },
     unpair: { status: "idle", error: null },
     // serviceRestart: the analysis-service Restart button's own state, and
@@ -2383,8 +2385,6 @@ if (typeof document !== "undefined") {
     // it was about, so it renders next to the control that caused it rather
     // than as an unscoped banner nobody can connect to an action.
     settingsError: null,
-    configError: "",
-    configHost: "",
     // naming: {id, title, error} while a suggestion is being turned into a
     // project. Null the rest of the time. It lives in state rather than in the
     // DOM because `route()` re-renders the whole pane, so a value held only in
@@ -2413,6 +2413,9 @@ if (typeof document !== "undefined") {
     // renders as no first-open screen and no sign-in bar, never as "not
     // signed in": the page does not know that, so it does not say it.
     auth: null,
+    // The Developer box's "Show welcome screen". Page memory only, so a reload
+    // ends it, and so does any choice made on the screen.
+    welcomePreview: false,
     // signin: the web sign-in in progress, from whichever entry point started
     // it. {status: idle|starting|waiting|failed|done, url, opened, startedAt,
     // failures, message, doneAt, restartAfter, enableAtlas}. See
@@ -2426,7 +2429,7 @@ if (typeof document !== "undefined") {
     return res.json();
   }
 
-  // sendJSON never throws on a non-2xx — settingsErrorText/configErrorText
+  // sendJSON never throws on a non-2xx — settingsErrorText and friends
   // need the STATUS and the BODY of a refusal (400/409), which fetchJSON's
   // throw-on-!ok would discard. Network failure (daemon down, dev server with
   // no route) is reported as status 0 with a null body, which both error-text
@@ -3349,12 +3352,6 @@ if (typeof document !== "undefined") {
     return state.settingsError && state.settingsError.keys.includes(key) ? state.settingsError.text : null;
   }
 
-  // The daemon's only restart trigger is PUT /v1/settings?restart=1
-  // (docs/v3/contracts.md); POST /v1/config's own restart_required rides the
-  // same mechanism with whatever settings patch is pending (empty when a
-  // config change is what asked for it — that route already wrote
-  // hook.json/auth.json itself). Not specified by contracts.md which route a
-  // config-triggered restart should use — this lane's choice; see the report.
   function setUnpair(status, error = null) {
     state.unpair = { status, error };
     route();
@@ -3713,59 +3710,19 @@ if (typeof document !== "undefined") {
     }
     const readonly = new Set(settings.readonly || []);
     const atlasOn = atlasEnabled(settings);
-    const startAtLogin = startAtLoginProps();
 
     const bar = renderRestartBar();
     if (bar) root.appendChild(bar);
 
+    // Two columns only when the Developer box is beside the account tile; a
+    // lone tile is one capped column, and one full column on a narrow window.
+    const devTile = renderDevBlocksTile(settings, atlasOn, readonly);
     root.appendChild(
       el(
         "div",
-        { class: "tiles", style: "grid-template-columns:1fr 1fr" },
+        { class: devTile ? "tiles settings-tiles" : "tiles settings-tiles single" },
         renderAccountTile(atlasOn, readonly),
-        el(
-          "div",
-          { class: "tile" },
-          el("div", { class: "l" }, "Environment"),
-          el("div", { class: "codebox" },
-            el("input", { type: "text", id: "codeInput", placeholder: "atlas-dev.keld.co/ABCD-EFGH" }),
-            el("button", { class: "btn", onclick: submitCode }, "Switch")
-          ),
-          state.configError
-            ? el("div", { class: "settings-note error-note" }, state.configError)
-            : state.configHost
-            ? el("div", { class: "settings-note", style: "color:var(--green-strong)" }, `Now pointing at ${state.configHost}.`)
-            : el("div", { class: "settings-note", style: "color:var(--muted)" }, "Paste a setup code from any Atlas. Signal restarts and points there.")
-        ),
-        el(
-          "div",
-          { class: "tile" },
-          el("div", { class: "l" }, "Attribution"),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Suggest projects from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
-            switchEl({ checked: true, disabled: true })
-          ),
-          // Vector attribution used to be the second row here. It is a
-          // developer control while the feature is still being built — see
-          // renderDevAttribution — so a person who never turned developer mode
-          // on cannot switch on a 1.2 GB download and a message-reading model
-          // from this tile.
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Start at login", el("div", { class: "desc" }, `Not yet a working toggle here — ${startAtLogin.note}.`)),
-            switchEl({ checked: startAtLogin.checked, disabled: startAtLogin.disabled })
-          ),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Show details on cards"),
-            switchEl({ checked: !!state.local.showDetails, onChange: (v) => { state.local.showDetails = v; saveLocalPrefs(state.local); route(); } })
-          )
-        ),
-        renderDevBlocksTile(settings, atlasOn, readonly)
+        devTile
       )
     );
   }
@@ -3824,62 +3781,31 @@ if (typeof document !== "undefined") {
     if (isReadonly) note = el("div", { class: "settings-note readonly-note" }, readonlyNote("dev_blocks"));
     else if (atlasOn) note = el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.");
     const err = settingsErrorFor("dev_blocks");
-    // ⚠️ **SEND TO ATLAS IS NOT A DEVELOPER CONTROL, AND HIDING IT WITH THE
-    // DEVELOPER ROWS WOULD BE A BUG, NOT A FEATURE.** It decides whether this
-    // machine publishes at all — the single most consequential switch on the
-    // page — and it lives in this box only because the developer rows below it
-    // are refused or reinterpreted depending on it (see the comment on the row
-    // itself). So the box is always drawn and always carries that row; what
-    // developer mode gates is the rows underneath, and the heading, which is
-    // the only part that is actually about developing.
-    const dev = devModeOn();
+    // ⚠️ **THERE IS NO SEND TO ATLAS SWITCH ANY MORE, AND THIS BOX USED TO BE
+    // ITS HOME.** Signing in IS sending and not being signed in is not sending
+    // (Settings' account tile, Unpair); the top bar's label says which Atlas;
+    // `keld signal env` switches it from a terminal. A switch beside those was
+    // a second way to say the same thing that could disagree with the first.
+    // `send_to_atlas` itself stays: the welcome screen's "Use without an
+    // account" writes it, sign-in turns it back on, and KELD_ATLAS still pins it.
+    // So this box is now only the developer rows, drawn in developer mode.
+    if (!devModeOn()) return null;
     return el(
       "div",
       { class: "tile", style: "background:var(--nested)" },
-      el("div", { class: "l" }, dev ? "Developer" : "Atlas"),
-      // ⚠️ Send to Atlas lives HERE rather than in a tile of its own. The two
-      // controls are read together and never separately: every other switch in
-      // this box is refused or reinterpreted depending on it, so putting them
-      // side by side is what makes those refusals legible instead of arriving
-      // as an error from a control three tiles away.
-      el(
-        "div",
-        { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks and the projects they matched. Off: nothing leaves this machine.")),
-        switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
-      ),
-      fieldNote("send_to_atlas", readonly),
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
-      dev && SHOW_BLOCK_GRANULARITY ? grid : null,
-      dev && SHOW_BLOCK_GRANULARITY ? note : null,
-      dev && SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevGenerate(settings) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevToolOTLP(settings, readonly) : null,
-      renderAtlasEnvRow(settings, dev)
-    );
-  }
-
-  /** Which Atlas this machine uses. Read-only: it is switched from a terminal
-   *  with `keld signal env`, never from the page. */
-  function renderAtlasEnvRow(settings, dev) {
-    const line = atlasEnvLine(settings && settings.atlas_env, dev);
-    if (!line) return null;
-    return el(
-      "div",
-      {},
+      el("div", { class: "l" }, "Developer"),
+      SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
+      SHOW_BLOCK_GRANULARITY ? grid : null,
+      SHOW_BLOCK_GRANULARITY ? note : null,
+      SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
+      SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      renderDevWelcome(),
       el("div", { class: "settings-sep" }),
-      el(
-        "div",
-        { class: "settings-row" },
-        el("span", {}, "Atlas environment", el("div", { class: "desc" }, "Switch with keld signal env prod, dev or local, from a terminal.")),
-        el("span", { class: "pill" + (line.offProduction ? " atlas-env-off" : "") }, line.name)
-      ),
-      el("div", { class: "settings-note" + (line.offProduction ? " atlas-env-note" : "") }, line.where)
+      renderDevGenerate(settings),
+      el("div", { class: "settings-sep" }),
+      renderDevAttribution(settings, readonly),
+      el("div", { class: "settings-sep" }),
+      renderDevToolOTLP(settings, readonly)
     );
   }
 
@@ -3952,6 +3878,20 @@ if (typeof document !== "undefined") {
         switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
       ),
       fieldNote("attribution", readonly)
+    );
+  }
+
+  function setWelcomePreview(on) {
+    state.welcomePreview = on;
+    route();
+  }
+
+  function renderDevWelcome() {
+    return el(
+      "div",
+      { class: "settings-row" },
+      el("span", {}, WELCOME_PREVIEW_TEXT.title, el("div", { class: "desc" }, WELCOME_PREVIEW_TEXT.desc)),
+      el("button", { class: "btn btn-small", type: "button", onclick: () => setWelcomePreview(true) }, WELCOME_PREVIEW_TEXT.show)
     );
   }
 
@@ -4041,27 +3981,6 @@ if (typeof document !== "undefined") {
     );
   }
 
-  async function submitCode() {
-    const input = document.getElementById("codeInput");
-    const code = input && input.value.trim();
-    if (!code) return;
-    state.configError = "";
-    state.configHost = "";
-    const res = await sendJSON("/v1/config", "POST", { code });
-    if (!res.ok) {
-      state.configError = configErrorText(res.status, res.body);
-      route();
-      return;
-    }
-    state.configHost = (res.body && res.body.host) || "";
-    if (res.body && res.body.restart_required) {
-      state.restart.patch = {};
-      state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
-    }
-    await loadAll();
-    route();
-  }
-
   // ---- Web sign-in ----
 
   let signinTimer = null;
@@ -4073,8 +3992,8 @@ if (typeof document !== "undefined") {
   /** Start a web sign-in: POST /v1/auth/start, then poll /v1/auth/state.
    *
    *  `enableAtlas` is Settings' path from local-only mode: the start route
-   *  refuses while Send to Atlas is off (409, as /v1/config does), so the
-   *  switch is turned on first through the same PUT the switch itself uses.
+   *  refuses while Send to Atlas is off (409), so it is turned on first
+   *  through the page's one settings PUT.
    *
    *  ⚠️ The restart that PUT asks for is DEFERRED until the sign-in finishes.
    *  The daemon's page port is random on every start and the pending sign-in
@@ -4124,7 +4043,7 @@ if (typeof document !== "undefined") {
 
   // One poll. Re-renders only when the verdict changes: route() rebuilds the
   // whole pane, and doing that every second would wipe whatever a person is
-  // typing into the setup-code box meanwhile.
+  // typing meanwhile (the Developer box's repository list).
   async function pollSignin() {
     const flow = state.signin;
     if (flow.status !== "waiting") return;
@@ -4145,6 +4064,7 @@ if (typeof document !== "undefined") {
     }
     if (step.status === "done") {
       state.signin = { status: "done", doneAt: Date.now() };
+      state.welcomePreview = false;
       if (flow.restartAfter) {
         state.restart.patch = { ...state.restart.patch, send_to_atlas: true };
         state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
@@ -4170,6 +4090,7 @@ if (typeof document !== "undefined") {
   async function chooseLocalOnly() {
     clearTimeout(signinTimer);
     state.signin = { status: "idle" };
+    state.welcomePreview = false;
     await updateSettings({ send_to_atlas: false });
     if (settingsErrorFor("send_to_atlas")) return; // updateSettings already routed it
     if (state.auth) state.auth = { ...state.auth, first_run: false };
@@ -4179,8 +4100,8 @@ if (typeof document !== "undefined") {
   }
 
   /** "Copy link" beside the sign-in link. Its feedback changes only its own
-   *  label: route() would rebuild the pane and wipe whatever is being typed
-   *  into the setup-code box, the same reason pollSignin avoids it. */
+   *  label: route() would rebuild the pane and wipe whatever is being typed,
+   *  the same reason pollSignin avoids it. */
   function copyLinkButton(url) {
     const btn = el("button", { class: "btn secondary btn-small", type: "button" }, SIGNIN_TEXT.copyLink);
     let reset = null;
@@ -4299,8 +4220,12 @@ if (typeof document !== "undefined") {
           el(
             "div",
             { class: "welcome-actions" },
-            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin() }, SIGNIN_TEXT.signIn),
-            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly)
+            // A preview can be opened on a machine that already chose local
+            // only, where the start route refuses until Send to Atlas is on —
+            // Settings' own sign-in path handles that, so the preview uses it.
+            el("button", { class: "btn welcome-primary", type: "button", disabled: signinBusy(), onclick: () => startSignin(state.welcomePreview ? { enableAtlas: !atlasEnabled(state.settings) } : {}) }, SIGNIN_TEXT.signIn),
+            el("button", { class: "btn welcome-secondary", type: "button", onclick: chooseLocalOnly }, SIGNIN_TEXT.localOnly),
+            state.welcomePreview ? el("button", { class: "btn welcome-secondary", type: "button", onclick: () => setWelcomePreview(false) }, WELCOME_PREVIEW_TEXT.back) : null
           ),
           signinFlowNode(),
           err ? el("div", { class: "settings-note error-note" }, err) : null,
@@ -4383,13 +4308,16 @@ if (typeof document !== "undefined") {
   }
 
   /** Settings' account tile: who this machine is signed in as, or a way to
-   *  sign in. Beside the setup-code box, which stays (AC-8). Nothing at all
-   *  on a daemon without /v1/auth/state. */
+   *  sign in. Drawn even when /v1/auth/state did not answer, since it is the
+   *  whole pane outside developer mode. */
   function renderAccountTile(atlasOn, readonly) {
     const auth = state.auth;
-    if (!auth) return null;
+    if (!auth) {
+      return el("div", { class: "tile" }, el("div", { class: "l" }, SIGNIN_TEXT.account), el("div", { class: "settings-note" }, SIGNIN_TEXT.authUnknown));
+    }
     if (auth.paired) {
       const v = unpairView(state.unpair.status, state.unpair.error);
+      const pinned = readonly.has("send_to_atlas");
       return el(
         "div",
         { class: "tile" },
@@ -4400,6 +4328,15 @@ if (typeof document !== "undefined") {
           el("span", { class: "signin-who" }, signedInText(auth)),
           v.button ? el("button", { class: "btn btn-quiet btn-small", type: "button", disabled: signinBusy(), onclick: () => setUnpair("confirm") }, UNPAIR_TEXT.button) : null
         ),
+        atlasOn
+          ? null
+          : el(
+              "div",
+              { class: "settings-row" },
+              el("span", { class: "desc" }, SIGNIN_TEXT.notSending),
+              el("button", { class: "btn btn-small", type: "button", disabled: pinned, onclick: () => updateSettings({ send_to_atlas: true }) }, SIGNIN_TEXT.sendAgain)
+            ),
+        atlasOn ? null : fieldNote("send_to_atlas", readonly),
         v.note ? el("div", { class: "settings-note unpair-note" }, v.note) : null,
         v.confirm
           ? el(
@@ -4421,7 +4358,7 @@ if (typeof document !== "undefined") {
       el(
         "div",
         { class: "settings-row" },
-        el("span", {}, SIGNIN_TEXT.notSignedInSettings, atlasOn ? null : el("div", { class: "desc" }, SIGNIN_TEXT.turnsAtlasOn)),
+        el("span", {}, SIGNIN_TEXT.notSignedInSettings, el("div", { class: "desc" }, signinDestinationText(state.settings))),
         el(
           "button",
           { class: "btn", type: "button", disabled: pinnedOff || signinBusy(), onclick: () => startSignin({ enableAtlas: !atlasOn }) },
@@ -4944,7 +4881,7 @@ if (typeof document !== "undefined") {
     // The first-open choice stands in for every pane until it is answered.
     // Not while offline: the cached page is showing what it last knew, and
     // neither button could do anything.
-    const welcome = showFirstRun(state.auth) && !state.offline;
+    const welcome = welcomeShown(state.auth, state.welcomePreview, state.offline);
     document.body.classList.toggle("is-welcome", welcome);
     if (welcome) {
       document.body.classList.remove("pane-today");
@@ -4952,7 +4889,7 @@ if (typeof document !== "undefined") {
       // route() runs on every poll (each second during a sign-in). Redraw only
       // when something this screen shows has changed, so the ribbons keep
       // moving instead of restarting from a fresh canvas every tick.
-      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas")]);
+      const key = JSON.stringify([state.signin, settingsErrorFor("send_to_atlas"), state.welcomePreview]);
       const live = root.querySelector(":scope > section.welcome");
       if (live && live.dataset.key === key) return;
       renderFirstRun(root);

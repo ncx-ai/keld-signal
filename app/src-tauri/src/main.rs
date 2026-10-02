@@ -328,12 +328,10 @@ fn open_in_browser(url: Url) -> NewWindowResponse<tauri::Wry> {
 /// independently).
 ///
 /// ⚠️ **Exposed for the PAGE to call, not wired to any UI here.** The Keld
-/// Signal page's "Start at login" toggle (`internal/agent/ui/app.js`) is D2's
-/// lane, out of scope for this one, and today renders permanently disabled
-/// with "This browser only, until the Keld Signal app manages startup."
-/// `set_autostart`/`get_autostart` are the exact command names D2 calls via
-/// `window.__TAURI__.core.invoke(...)` once that page learns to detect it is
-/// running inside this shell — see app/README.md.
+/// Signal page draws no "Start at login" control today. `set_autostart`/
+/// `get_autostart` are the exact command names it calls via
+/// `window.__TAURI__.core.invoke(...)` once it learns to detect it is running
+/// inside this shell — see app/README.md.
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let manager = app.autolaunch();

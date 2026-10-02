@@ -52,8 +52,8 @@ test.describe("First open", () => {
     const tile = page.locator(".tile", { hasText: "Atlas account" });
     await expect(tile.getByText("Not signed in.")).toBeVisible();
     await expect(tile.getByRole("button", { name: "Sign in with Atlas" })).toBeEnabled();
-    const sendToAtlas = page.getByText(/^Send to Atlas/).locator("..").locator("input[type=checkbox]").first();
-    await expect(sendToAtlas).not.toBeChecked();
+    await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
+    await expect(page.locator("#envPill")).toHaveText("Local");
 
     // Nothing was asked of Atlas along the way.
     const counts = await harness.atlasCounts();

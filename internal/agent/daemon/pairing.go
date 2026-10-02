@@ -27,7 +27,7 @@ import (
 // `settings.ErrNotPaired` are the three ways that is said.
 
 // pairing is the machine's Atlas pairing: the ingest endpoint written to
-// ~/.keld/hook.json by `keld signal setup` or `POST /v1/config`.
+// ~/.keld/hook.json by `keld signal setup` or the browser sign-in.
 //
 // It holds the ENDPOINT only. The token beside it lives in creds.Token, which
 // already existed for exactly this reason (a self-heal re-auth swaps it live),

@@ -106,8 +106,9 @@ func noteSidecarVersion(sidecarVersion string, emitter *clientevents.Emitter) {
 	// suggests it sends people round a loop that cannot terminate.
 	log.Printf("keld-agent: VERSION SKEW — this agent is %s and the analysis sidecar is %s. "+
 		"They ship as separate artifacts, so a route this agent needs may not exist in that "+
-		"sidecar and the work would go missing SILENTLY. Re-run the Keld installer "+
-		"(macOS: /usr/local/keld/onboard.command) to bring the sidecar to %s.",
+		"sidecar and the work would go missing SILENTLY. Signal fetches the matching sidecar "+
+		"itself at startup; if that failed, press Try again on Signal's page or run "+
+		"`keld signal install-sidecar --tag v%s`.",
 		version.CLI, sidecarVersion, version.CLI)
 	if emitter != nil {
 		// Floor-exempt for the reason the lifecycle events are: it describes what

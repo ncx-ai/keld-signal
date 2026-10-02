@@ -278,8 +278,7 @@ body.pane-today .health-strip { margin-top: 12px; }
   color: var(--forest);
 }
 .signin-banner.done { background: var(--green-soft); border-color: var(--green); color: var(--green-strong); }
-.signin-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.signin-copy strong, .signin-flow strong { font-weight: 600; }
+.signin-flow strong { font-weight: 600; }
 .signin-flow { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .signin-flow.failed { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--error-strong); }
 .signin-link { color: var(--ink-2); overflow-wrap: anywhere; }
@@ -289,8 +288,6 @@ body.pane-today .health-strip { margin-top: 12px; }
 .tile .settings-row .signin-who { margin-top: 0; }
 .btn-small { padding: 2px 10px; font-size: 12px; }
 .unpair-confirm { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.pill.atlas-env-off { background: var(--amber-soft); color: var(--amber-strong); border: 1px solid var(--amber); }
-.settings-note.atlas-env-note { color: var(--amber-strong); }
 
 /* ---- Welcome: the first-open screen ----
    The whole window, no sidebar or top bar (body.is-welcome), keld.co's hero
@@ -502,13 +499,6 @@ body.is-welcome .pane-root { padding: 0; }
 .settings-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-top: 12px; }
 .settings-row:first-child { margin-top: 0; }
 .settings-row .desc { color: var(--muted); font-size: 12px; margin-top: 2px; max-width: 40ch; }
-.codebox {
-  display: flex; gap: 8px; align-items: center; margin-top: 8px;
-}
-.codebox input[type=text] {
-  flex: 1; border: 1px solid var(--rule); border-radius: 8px; padding: 7px 10px;
-  background: var(--bg); font: 13px var(--mono); color: var(--ink);
-}
 .btn {
   border: none; border-radius: 999px; padding: 6px 14px; font: 600 12.5px var(--sans);
   background: var(--forest); color: #fff; cursor: pointer;
@@ -593,6 +583,13 @@ fieldset:disabled { opacity: .55; }
   .nav { flex-direction: row; overflow-x: auto; }
   .nav nav { flex-direction: row; }
   .tiles, .tiles.three { grid-template-columns: 1fr 1fr; }
+}
+
+/* Settings: the account tile, and the Developer box beside it when it is on. */
+.tiles.settings-tiles { grid-template-columns: 1fr 1fr; }
+.tiles.settings-tiles.single { grid-template-columns: minmax(0, 560px); }
+@media (max-width: 720px) {
+  .tiles.settings-tiles { grid-template-columns: 1fr; }
 }
 
 /* The developer "Generate block" button and the repository box beside it.

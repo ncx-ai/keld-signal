@@ -75,8 +75,9 @@ test.describe("Web sign-in", () => {
     await expect(page.getByText("Loading…")).toBeHidden();
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator(".tile", { hasText: "Atlas account" }).getByText(SIGNED_IN)).toBeVisible();
-    // The setup-code box is still there (AC-8).
-    await expect(page.locator("#codeInput")).toBeVisible();
+    // No setup-code box and no Send to Atlas switch: signing in is the switch.
+    await expect(page.locator("#codeInput")).toHaveCount(0);
+    await expect(page.getByText(/^Send to Atlas/)).toHaveCount(0);
   });
 
   test("from local only, Settings' Sign in turns Send to Atlas back on and signs in", async ({ page, harness }) => {
@@ -87,7 +88,7 @@ test.describe("Web sign-in", () => {
 
     await page.goto(harness.pageURL("settings"));
     const tile = page.locator(".tile", { hasText: "Atlas account" });
-    await expect(tile.getByText("Signing in turns Send to Atlas on.")).toBeVisible();
+    await expect(tile.getByText(/^Signing in sends focus blocks to Atlas/)).toBeVisible();
     await tile.getByRole("button", { name: "Sign in with Atlas" }).click();
 
     await expect(page.getByText("Finish signing in in your browser")).toBeVisible();
@@ -131,6 +132,29 @@ test.describe("Web sign-in", () => {
     assertPaired(harness);
   });
 
+  // Settings has no Send to Atlas switch, so a machine signed in with sending
+  // off (an upgrade from a release that had the switch, or the welcome
+  // preview's "Use without an account") needs a way back that is not Unpair.
+  test("signed in but not sending: the account tile says so and Send to Atlas again turns it back on", async ({ page, harness }) => {
+    await page.goto(harness.pageURL("today"));
+    await page.getByRole("button", { name: "Sign in with Atlas" }).click();
+    await finishInBrowser(page);
+    await expect(page.getByText(SIGNED_IN).first()).toBeVisible({ timeout: 5_000 });
+    await harness.stopDaemon();
+    const cfgPath = path.join(harness.home, "agent-config.json");
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, "utf8")), send_to_atlas: false }));
+    await harness.startDaemon();
+
+    await page.goto(harness.pageURL("settings"));
+    const tile = page.locator(".tile", { hasText: "Atlas account" });
+    await expect(tile.getByText("Not sending. Signal keeps everything on this computer.")).toBeVisible();
+    await expect(page.locator("#envPill")).toHaveText("Local");
+    await tile.getByRole("button", { name: "Send to Atlas again" }).click();
+    await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(true);
+    await expect(tile.getByRole("button", { name: "Send to Atlas again" })).toHaveCount(0);
+    assertPaired(harness);
+  });
+
   test("Send to Atlas on but never signed in: no bar nags, and Settings signs in", async ({ page, harness }) => {
     // Decision-table row 3: send_to_atlas set to true by hand, not paired.
     await harness.stopDaemon();
@@ -142,6 +166,8 @@ test.describe("Web sign-in", () => {
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     const bar = page.locator("#signinBanner");
     await expect(bar).toBeHidden();
+    // The top bar names the Atlas it would send to, and that nothing reaches it yet.
+    await expect(page.locator("#envPill")).toHaveText(/· not signed in$/);
     await page.goto(harness.pageURL("settings"));
     await expect(bar).toBeHidden();
     await page.locator(".tile", { hasText: "Atlas account" }).getByRole("button", { name: "Sign in with Atlas" }).click();
@@ -149,6 +175,7 @@ test.describe("Web sign-in", () => {
     await finishInBrowser(page);
     await expect(bar.getByText(SIGNED_IN)).toBeVisible({ timeout: 5_000 });
     assertPaired(harness);
+    await expect(page.locator("#envPill")).not.toHaveText(/not signed in/);
   });
 
   test("a return with a state Signal never issued is refused: nothing written, no call to Atlas, the page still signed out", async ({ page, harness }) => {

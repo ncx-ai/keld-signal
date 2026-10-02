@@ -1061,9 +1061,9 @@ stdin to `/dev/null`).
 rather than been chosen.** `install` used to log in whenever stdout looked like a
 terminal, with `--headless` to opt out — correct while the CLI was the only
 onboarding surface, because an install that did not onboard left a daemon idling
-with nowhere to be told about Atlas. `POST /v1/config` plus daemon/onboarding.go
-(the daemon now serves the page and that route BEFORE it has any config) removed
-the constraint, so the flag was protecting a dead end that no longer exists.
+with nowhere to be told about Atlas. The page's own pairing route (first
+`POST /v1/config`, now the browser sign-in) plus daemon/onboarding.go (the daemon
+serves the page and that route BEFORE it has any config) removed the constraint, so the flag was protecting a dead end that no longer exists.
 `--headless` is kept ACCEPTED AND INERT — it asks for what already happens —
 because cobra fails hard on an unknown flag and scripts, runbooks and MDM
 payloads outlive a release. (`onboard.command` and `onboard.cmd`, which passed

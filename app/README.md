@@ -69,13 +69,10 @@ if (window.__TAURI__) {
 }
 ```
 
-**Not wired to the page yet.** `internal/agent/ui/app.js`'s "Start at login"
-toggle (D2's lane, out of scope here) renders permanently disabled today with
-"This browser only, until the Keld Signal app manages startup." — see
-`docs/v3/contracts.md`, point 4 under "The page's own conventions". Until D2
-adds the `window.__TAURI__` detection and calls these two commands, the
-toggle stays exactly as disabled as it is now; nothing about this shell makes
-it do otherwise on its own.
+**Not wired to the page yet.** The page draws no "Start at login" control
+today (removed 2026-10-02) — see `docs/v3/contracts.md`, point 4 under "The
+page's own conventions". Adding one means the `window.__TAURI__` detection
+plus calls to these two commands; nothing about this shell does it on its own.
 
 The command names above (`set_autostart`, `get_autostart`) and their exact
 signatures are the contract D2 wires against — don't rename them without

@@ -35,6 +35,7 @@ import type { SigninHarness } from "../support/signin-harness";
 // Every case asserts what landed on disk in the daemon's KELD_HOME and what the
 // page shows, not only status codes.
 
+// The welcome screen is a region named "Welcome to Signal"; its heading is the tagline.
 const WELCOME = { name: "Welcome to Signal" } as const;
 
 /** Every navigation and every POST to Atlas's mint route, context-wide — the
@@ -71,7 +72,7 @@ test.describe("Web sign-in against the real local Atlas", () => {
   test("01 happy path: first open → Sign in → Atlas email login → Continue → signed in within 5 s, ingest token live", async ({ page, harness }) => {
     const seen = recordContext(page);
     await page.goto(harness.pageURL("today"));
-    await expect(page.getByRole("heading", WELCOME)).toBeVisible();
+    await expect(page.getByRole("region", WELCOME)).toBeVisible();
 
     const href = await startSignin(page);
     const u = new URL(href);
@@ -87,7 +88,7 @@ test.describe("Web sign-in against the real local Atlas", () => {
 
     // AC-5: the page says so within 5 s, no reload, with principal + org.
     await expect(page.getByText(`Signed in as ${ADMIN.email} · ${ADMIN.org}`)).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole("heading", WELCOME)).toHaveCount(0);
+    await expect(page.getByRole("region", WELCOME)).toHaveCount(0);
 
     await expectPairedAs(harness, ADMIN);
     const st = await authState(harness);
@@ -159,7 +160,7 @@ test.describe("Web sign-in against the real local Atlas", () => {
 
     // Try again: a fresh start from the page, a fresh state, and it pairs.
     await page.reload();
-    await expect(page.getByRole("heading", WELCOME)).toBeVisible();
+    await expect(page.getByRole("region", WELCOME)).toBeVisible();
     const second = await startSignin(page);
     expect(new URL(second).searchParams.get("state")).not.toBe(new URL(first).searchParams.get("state"));
     const tab2 = await openAuthorizeTab(page);
@@ -309,8 +310,8 @@ test.describe("Web sign-in against the real local Atlas", () => {
     await held.release();
 
     // …then the person chooses local only on the page.
-    await page.getByRole("button", { name: "Use locally only" }).click();
-    await expect(page.getByRole("heading", WELCOME)).toHaveCount(0);
+    await page.getByRole("button", { name: "Use without an account" }).click();
+    await expect(page.getByRole("region", WELCOME)).toHaveCount(0);
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
 
     const start = await daemonCall(harness, "POST", "/v1/auth/start", {});
@@ -327,8 +328,8 @@ test.describe("Web sign-in against the real local Atlas", () => {
 
   test("11 first-run local only survives a daemon restart; Settings' Sign in then completes against the real Atlas", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));
-    await page.getByRole("button", { name: "Use locally only" }).click();
-    await expect(page.getByRole("heading", WELCOME)).toHaveCount(0);
+    await page.getByRole("button", { name: "Use without an account" }).click();
+    await expect(page.getByRole("region", WELCOME)).toHaveCount(0);
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(false);
 
     await harness.stopDaemon();
@@ -337,11 +338,11 @@ test.describe("Web sign-in against the real local Atlas", () => {
     expect(await authState(harness)).toMatchObject({ first_run: false, paired: false });
     await page.goto(harness.pageURL("today"));
     await expect(page.getByText("Loading…")).toBeHidden();
-    await expect(page.getByRole("heading", WELCOME)).toHaveCount(0);
+    await expect(page.getByRole("region", WELCOME)).toHaveCount(0);
 
     await page.goto(harness.pageURL("settings"));
     const tile = page.locator(".tile", { hasText: "Atlas account" });
-    await expect(tile.getByText("Signing in turns Send to Atlas on.")).toBeVisible();
+    await expect(tile.getByText(/^Signing in sends focus blocks to Atlas/)).toBeVisible();
     await startSignin(page, tile);
     await expect.poll(() => harness.readJSON("agent-config.json")?.send_to_atlas).toBe(true);
     const tab = await openAuthorizeTab(page);
@@ -379,23 +380,9 @@ test.describe("Web sign-in against the real local Atlas", () => {
     }
   });
 
-  test("13 setup-code regression (AC-8): a code minted by Atlas's enroll-code route, pasted in Settings, pairs as before", async ({ page, harness }) => {
-    // Decision-table row 3 (Send to Atlas on, not paired), where the box is reachable without the first-open screen.
-    await restartWith(harness, { send_to_atlas: true });
-    await atlasSession(page.context(), ADMIN);
-    const minted = await page.context().request.post(`${ATLAS_WEB}/api/cli/enroll-code`);
-    expect(minted.status(), await minted.text()).toBe(200);
-    const { pairing_code } = await minted.json();
-    expect(String(pairing_code).startsWith(`${ATLAS_API}/`), pairing_code).toBe(true);
-
-    await page.goto(harness.pageURL("settings"));
-    await expect(page.getByText("Loading…")).toBeHidden();
-    await page.locator("#codeInput").fill(pairing_code);
-    await page.getByRole("button", { name: "Switch" }).click();
-    await expect(page.getByText(`Now pointing at ${ATLAS_API}.`)).toBeVisible({ timeout: 15_000 });
-    await expectPairedAs(harness, ADMIN);
-    expect(await authState(harness)).toMatchObject({ paired: true, principal: ADMIN.email, org: ADMIN.org });
-  });
+  // 13 was the setup-code box in Settings (AC-8). The box and POST /v1/config
+  // were removed: a setup code still pairs from a terminal (keld login --code,
+  // keld-agent install --code), which this browser suite does not drive.
 
   test("14 a viewer (sarah@acme.test) signs in and gets her own principal", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));

@@ -87,6 +87,26 @@ func TestSignalEnvSaysAPairingStays(t *testing.T) {
 	}
 }
 
+// The bare command describes the setting, so a paired machine whose pairing
+// sends elsewhere says so there too; a pairing to the same Atlas says nothing.
+func TestSignalEnvBareCommandSaysWhereAPairingSends(t *testing.T) {
+	isolateAtlasEnv(t)
+	runSignalEnv(t, "dev", "--no-restart")
+	if err := os.WriteFile(paths.HookConfigPath(), []byte(`{"endpoint":"https://atlas.keld.co/v1","ingest_token":"t"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ := runSignalEnv(t)
+	if !strings.Contains(out, "Atlas: dev") || !strings.Contains(out, "Still paired, and sending to https://atlas.keld.co/v1") {
+		t.Fatalf("out=%q", out)
+	}
+	if err := os.WriteFile(paths.HookConfigPath(), []byte(`{"endpoint":"https://atlas-dev.keld.co","ingest_token":"t"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, _ := runSignalEnv(t); strings.Contains(out, "Still paired") {
+		t.Fatalf("paired to the Atlas the setting names, nothing to add: %q", out)
+	}
+}
+
 func TestSignalEnvSaysWhenTheRestartFailed(t *testing.T) {
 	isolateAtlasEnv(t)
 	old := restartSignalService

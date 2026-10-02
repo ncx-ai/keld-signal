@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import {
   readonlyNote,
   settingsErrorText,
-  configErrorText,
   localOnlyConfirmationText,
-  startAtLoginProps,
   projectRulesSummary,
   restartBarText,
   restartBarView,
@@ -56,26 +54,6 @@ test("a 500 with no error field gets a plain retry sentence", () => {
   assert.notEqual(text, "");
 });
 
-// --- configErrorText: POST /v1/config's 400 and 409. ---
-
-test("400 reads as a setup-code problem", () => {
-  assert.equal(configErrorText(400, {}), "That does not look like a setup code");
-});
-
-test("409 (Atlas off) tells the user what to do about it, naming Send to Atlas", () => {
-  const text = configErrorText(409, {});
-  assert.match(text, /Send to Atlas/i);
-});
-
-test("an unmapped status with an error body still shows something, never silence", () => {
-  assert.equal(configErrorText(422, { error: "weird" }), "weird");
-});
-
-test("a network failure (status 0) still shows something actionable", () => {
-  const text = configErrorText(0, null);
-  assert.ok(text.length > 0);
-});
-
 // --- localOnlyConfirmationText: the one sentence every /v1/projects mutation's
 // local_only:true renders as. Must never imply the org learned anything. ---
 
@@ -86,15 +64,6 @@ test("localOnlyConfirmationText says the change is local and never implies the o
   const text = localOnlyConfirmationText();
   assert.match(text, /Applied on this machine/);
   assert.doesNotMatch(text, /synced|published|sent to Atlas|the org (now )?knows/i);
-});
-
-// --- startAtLoginProps: page convention 4 — not a working toggle until D9. ---
-
-test("Start at login always renders unchecked, disabled, and says where it really lives", () => {
-  const props = startAtLoginProps();
-  assert.equal(props.checked, false);
-  assert.equal(props.disabled, true);
-  assert.equal(props.note, "in the desktop app");
 });
 
 // --- projectRulesSummary: the response's `rules`, never raw repos/keywords. ---

@@ -408,7 +408,7 @@ var (
 	pageStateExpired   = signInPage{"Not signed in", "This sign-in expired. Start again from Signal."}
 	pageCodeExpired    = signInPage{"Not signed in", "That code expired. Start again from Signal."}
 	pageAtlasMismatch  = signInPage{"Not signed in", "This sign-in came back from a different Atlas than the one Signal asked. Nothing was changed. Start again from Signal."}
-	pageAtlasOff       = signInPage{"Not signed in", "Send to Atlas is off, so Signal did not sign in. Turn it on in Signal's Settings and try again."}
+	pageAtlasOff       = signInPage{"Not signed in", "Send to Atlas is off, so Signal did not sign in. Start again from Signal: signing in there turns it back on."}
 	pageAtlasError     = signInPage{"Not signed in", "Signal could not finish signing in. Start again from Signal."}
 	pageSaveFailed     = signInPage{"Not signed in", "Signal couldn't save the sign-in on this computer. Start again from Signal."}
 )

@@ -390,14 +390,14 @@ func TestGetSettingsReportsTheAtlasEnvironment(t *testing.T) {
 
 	var v settingsView
 	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
-	if v.AtlasEnv.Name != "prod" || v.AtlasEnv.API != "https://atlas.keld.co" {
+	if v.AtlasEnv.Name != "prod" {
 		t.Fatalf("default atlas_env = %+v", v.AtlasEnv)
 	}
 	if err := settings.WriteAtlasEnv("local"); err != nil {
 		t.Fatal(err)
 	}
 	decodeInto(t, doJSON(t, http.MethodGet, srv.URL+"/v1/settings", nil), &v)
-	if v.AtlasEnv != (atlasEnvView{Name: "local", API: "http://localhost:8000", Web: "http://localhost:3000"}) {
+	if v.AtlasEnv.Name != "local" {
 		t.Fatalf("local atlas_env = %+v", v.AtlasEnv)
 	}
 	// Paired to production, the setting no longer decides where data goes:

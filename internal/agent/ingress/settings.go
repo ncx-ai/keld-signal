@@ -62,15 +62,13 @@ type settingsView struct {
 	Readonly    []string `json:"readonly"`
 	DevGenerate bool     `json:"dev_generate"`
 	DevRepos    []string `json:"dev_repos"`
-	// Which Atlas this machine uses (`keld signal env`): read-only here, shown
-	// in the Developer box, and always when it is not production.
+	// Which Atlas this machine's data goes to (`keld signal env`), read-only:
+	// the top bar names it when it is not production.
 	AtlasEnv atlasEnvView `json:"atlas_env"`
 }
 
 type atlasEnvView struct {
 	Name string `json:"name"`
-	API  string `json:"api"`
-	Web  string `json:"web"`
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -100,8 +98,7 @@ func currentAtlasEnvView() atlasEnvView {
 	if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.IngestToken != "" {
 		endpoint = cfg.Endpoint
 	}
-	e := paths.SendingAtlasEnv(endpoint)
-	return atlasEnvView{Name: e.Name, API: e.API, Web: e.Web}
+	return atlasEnvView{Name: paths.SendingAtlasEnv(endpoint).Name}
 }
 
 // readonlySettingsKeys names every v3 key whose value is currently PINNED by

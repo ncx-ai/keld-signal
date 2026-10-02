@@ -8,7 +8,6 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
-	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -32,6 +31,7 @@ func newSignalEnvCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			if len(args) == 0 {
 				printAtlasEnv(out)
+				printPairedElsewhere(out)
 				return nil
 			}
 			if err := settings.WriteAtlasEnv(args[0]); err != nil {
@@ -41,9 +41,7 @@ func newSignalEnvCmd() *cobra.Command {
 			if paths.CurrentAtlasEnv().Name == "custom" {
 				fmt.Fprintln(out, "Note: KELD_API_URL / KELD_ATLAS_WEB_URL are set in this shell and win over the setting here; the background service does not see them.")
 			}
-			if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.Endpoint != "" && cfg.IngestToken != "" {
-				fmt.Fprintf(out, "Still paired, and sending to %s. To pair with this Atlas, Unpair in Settings and sign in again.\n", cfg.Endpoint)
-			}
+			printPairedElsewhere(out)
 			if noRestart {
 				fmt.Fprintln(out, "Restart Signal to use it: keld signal restart")
 				return nil
@@ -69,24 +67,27 @@ func printAtlasEnv(out io.Writer) {
 	fmt.Fprintf(out, "Atlas: %s (API %s, web %s)\n", e.Name, e.API, e.Web)
 }
 
+// printPairedElsewhere says where a paired machine actually sends when that is
+// not the Atlas the setting names: a pairing outlives `keld signal env`, and
+// the top bar, status and doctor all describe the pairing.
+func printPairedElsewhere(out io.Writer) {
+	endpoint := pairedEndpoint()
+	if endpoint == "" || paths.SendingAtlasEnv(endpoint).Name == paths.CurrentAtlasEnv().Name {
+		return
+	}
+	fmt.Fprintf(out, "Still paired, and sending to %s. To pair with this Atlas, Unpair in Settings and sign in again.\n", endpoint)
+}
+
 // atlasEnvNote is the one line status and doctor print when this machine's
 // data does not go to production, or "" when it does. A paired machine is
 // described by where it paired, not by the setting (paths.SendingAtlasEnv).
 func atlasEnvNote() string {
-	endpoint := ""
-	if cfg, err := hook.LoadConfig(); err == nil && cfg != nil && cfg.IngestToken != "" {
-		endpoint = cfg.Endpoint
-	}
-	e := paths.SendingAtlasEnv(endpoint)
+	e := paths.SendingAtlasEnv(pairedEndpoint())
 	if e.Name == paths.AtlasEnvs[0].Name {
 		return ""
 	}
 	if e.Web == "" || e.Web == e.API {
 		return fmt.Sprintf("Atlas: %s (%s), not production. `keld signal env prod` switches back.", e.Name, e.API)
 	}
-	where := e.API
-	if e.Web != e.API {
-		where = "API " + e.API + ", web " + e.Web
-	}
-	return fmt.Sprintf("Atlas: %s (%s), not production. `keld signal env prod` switches back.", e.Name, where)
+	return fmt.Sprintf("Atlas: %s (API %s, web %s), not production. `keld signal env prod` switches back.", e.Name, e.API, e.Web)
 }
