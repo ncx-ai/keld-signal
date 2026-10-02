@@ -17,20 +17,21 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
-// TestUnconfiguredDaemonServesThePageAndTheConfigRoute is the regression this
-// whole file exists for.
+// TestUnconfiguredDaemonServesThePageAndSettings is the regression this whole
+// file exists for.
 //
 // Before onboarding.go, every listener was created after awaitConfig, so a
 // machine with no hook.json served nothing at all: no agent.json for the app to
-// find, no page, and no reachable POST /v1/config — the one route whose job is
-// to onboard a machine. Pairing from the app was structurally impossible, and
-// the failure looked like a working daemon, because the daemon WAS working. It
-// was idling exactly as designed with no way to be told where Atlas is.
+// find, no page, and no route to onboard it. Pairing from the app was
+// structurally impossible, and the failure looked like a working daemon,
+// because the daemon WAS working. It was idling exactly as designed with no way
+// to be told where Atlas is.
 //
-// The assertion is deliberately about the two surfaces a person uses, not about
-// the internals: the page loads, and the config route answers something other
-// than "no such route".
-func TestUnconfiguredDaemonServesThePageAndTheConfigRoute(t *testing.T) {
+// The assertion is about the surfaces a person uses: the page loads and its
+// settings answer. The route that pairs from the page is now the browser
+// sign-in, pinned by TestUnconfiguredDaemonMountsTheSignInRoutes. (It used to
+// be POST /v1/config, the setup-code box, removed with that box.)
+func TestUnconfiguredDaemonServesThePageAndSettings(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	if _, err := os.Stat(paths.HookConfigPath()); !os.IsNotExist(err) {
 		t.Fatalf("this test is only meaningful with no hook.json; stat gave %v", err)
@@ -54,26 +55,8 @@ func TestUnconfiguredDaemonServesThePageAndTheConfigRoute(t *testing.T) {
 		t.Fatal("the page was empty")
 	}
 
-	// The config route. A malformed code is a 400 from the route itself, which
-	// is what proves it is MOUNTED — a 404 here is the original defect, and a
-	// 401 would mean the secret gate rejected us before the route was reached.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/config", jsonBody(`{"code":""}`))
-	req.Header.Set("x-keld-agent-secret", "s3cret")
-	req.Header.Set("content-type", "application/json")
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST /v1/config: %v", err)
-	}
-	res.Body.Close()
-	if res.StatusCode == http.StatusNotFound {
-		t.Fatal("POST /v1/config is not mounted on an unconfigured daemon — pairing from the app is impossible")
-	}
-	if res.StatusCode == http.StatusUnauthorized {
-		t.Fatal("POST /v1/config rejected the agent secret on an unconfigured daemon")
-	}
-
 	// And settings, because the page reads it on load to decide what to render.
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/v1/settings", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/settings", nil)
 	req.Header.Set("x-keld-agent-secret", "s3cret")
 	res, err = http.DefaultClient.Do(req)
 	if err != nil {

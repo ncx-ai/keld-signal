@@ -379,23 +379,9 @@ test.describe("Web sign-in against the real local Atlas", () => {
     }
   });
 
-  test("13 setup-code regression (AC-8): a code minted by Atlas's enroll-code route, pasted in Settings, pairs as before", async ({ page, harness }) => {
-    // Decision-table row 3 (Send to Atlas on, not paired), where the box is reachable without the first-open screen.
-    await restartWith(harness, { send_to_atlas: true });
-    await atlasSession(page.context(), ADMIN);
-    const minted = await page.context().request.post(`${ATLAS_WEB}/api/cli/enroll-code`);
-    expect(minted.status(), await minted.text()).toBe(200);
-    const { pairing_code } = await minted.json();
-    expect(String(pairing_code).startsWith(`${ATLAS_API}/`), pairing_code).toBe(true);
-
-    await page.goto(harness.pageURL("settings"));
-    await expect(page.getByText("Loading…")).toBeHidden();
-    await page.locator("#codeInput").fill(pairing_code);
-    await page.getByRole("button", { name: "Switch" }).click();
-    await expect(page.getByText(`Now pointing at ${ATLAS_API}.`)).toBeVisible({ timeout: 15_000 });
-    await expectPairedAs(harness, ADMIN);
-    expect(await authState(harness)).toMatchObject({ paired: true, principal: ADMIN.email, org: ADMIN.org });
-  });
+  // 13 was the setup-code box in Settings (AC-8). The box and POST /v1/config
+  // were removed: a setup code still pairs from a terminal (keld login --code,
+  // keld-agent install --code), which this browser suite does not drive.
 
   test("14 a viewer (sarah@acme.test) signs in and gets her own principal", async ({ page, harness }) => {
     await page.goto(harness.pageURL("today"));

@@ -75,8 +75,9 @@ test.describe("Web sign-in", () => {
     await expect(page.getByText("Loading…")).toBeHidden();
     await expect(page.getByRole("region", { name: "Welcome to Signal" })).toHaveCount(0);
     await expect(page.locator(".tile", { hasText: "Atlas account" }).getByText(SIGNED_IN)).toBeVisible();
-    // The setup-code box is still there (AC-8).
-    await expect(page.locator("#codeInput")).toBeVisible();
+    // No setup-code box and no Send to Atlas switch: signing in is the switch.
+    await expect(page.locator("#codeInput")).toHaveCount(0);
+    await expect(page.getByText(/^Send to Atlas/)).toHaveCount(0);
   });
 
   test("from local only, Settings' Sign in turns Send to Atlas back on and signs in", async ({ page, harness }) => {

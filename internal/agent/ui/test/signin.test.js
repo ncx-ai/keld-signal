@@ -19,7 +19,6 @@ import {
   unpairView,
   unpairErrorText,
   UNPAIR_TEXT,
-  atlasEnvLine,
 } from "../app.js";
 
 // GET /v1/auth/state (contract C5): {paired, principal, org, first_run, pending, last_error}.
@@ -175,7 +174,7 @@ test("POST /v1/auth/start's 409 send_to_atlas_is_off says what to do", () => {
 
 test("start: a transport failure, a daemon without the route and a 5xx each get a plain sentence", () => {
   assert.match(signinStartErrorText(0, null), /reach Signal/i);
-  assert.match(signinStartErrorText(404, null), /setup code/i);
+  assert.match(signinStartErrorText(404, null), /keld login/);
   assert.ok(signinStartErrorText(500, {}).length > 0);
 });
 
@@ -300,11 +299,3 @@ test("a refused Unpair says why and offers the button again", () => {
   assert.equal(unpairErrorText(null), "Signal couldn't unpair. Try again.");
 });
 
-test("the Atlas environment line: silent on production unless developer mode, always shown off it", () => {
-  const prod = { name: "prod", api: "https://atlas.keld.co", web: "https://atlas.keld.co" };
-  assert.equal(atlasEnvLine(prod, false), null);
-  assert.deepEqual(atlasEnvLine(prod, true), { name: "prod", where: "https://atlas.keld.co", offProduction: false });
-  const local = { name: "local", api: "http://localhost:8000", web: "http://localhost:3000" };
-  assert.deepEqual(atlasEnvLine(local, false), { name: "local", where: "API http://localhost:8000 · web http://localhost:3000", offProduction: true });
-  assert.equal(atlasEnvLine(undefined, true), null);
-});

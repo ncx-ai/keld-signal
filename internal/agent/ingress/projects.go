@@ -31,7 +31,7 @@ const maxProjectsBody = 1 << 20 // 1 MiB
 // `type Route` in route.go — a function literally named Route here would be
 // a redeclaration. Every v3 lane's constructor is named after what it
 // registers (see Handler's own doc comment for the sibling routes:
-// /v1/ledger, /v1/settings, /v1/projects, /v1/config, the page) and returns
+// /v1/ledger, /v1/settings, /v1/projects, the page) and returns
 // an ingress.Route value for Handler's `extras ...Route` to take.
 //
 // ⚠️ EVERY MUTATING ROUTE HERE IS A LOCAL EDIT, PERIOD. docs/v3/contracts.md's

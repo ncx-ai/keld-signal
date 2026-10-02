@@ -8,13 +8,11 @@ test.describe("Settings", () => {
     test.skip(!state.settingsMounted, "GET /v1/settings is not mounted on this daemon build yet (lane B2 in flight)");
   });
 
-  test('Send to Atlas shows "off" and the page says it is local only', async ({ signal, page }) => {
+  test("pinned local only: no Send to Atlas switch, and the top bar says Local", async ({ signal, page }) => {
     await signal.open("settings");
-    const { input } = signal.settingSwitch(/^Send to Atlas/);
-    await expect(input).not.toBeChecked();
-    // KELD_ATLAS=0 pins it, and the page says so next to the control.
-    await expect(input).toBeDisabled();
-    await expect(page.getByText("Set by KELD_ATLAS on this machine.")).toBeVisible();
+    // There is no switch: being signed in is what sends. (The account tile's
+    // "Set by KELD_ATLAS" note is pinned by signin.spec.ts's KELD_ATLAS=0 case.)
+    await expect(page.getByText(/^Send to Atlas/)).toHaveCount(0);
     await expect(page.locator("#envPill")).toHaveText("Local");
   });
 

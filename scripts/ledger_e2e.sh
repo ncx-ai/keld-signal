@@ -118,12 +118,11 @@ NS=$(python3 -c "import json;print(len(json.load(open('$WORK/projects.json')).ge
 [ "$NS" -gt 0 ] && ok "suggestions exist for unattributed work ($NS) — expected: the org's values carry no repo tags yet" || bad "no suggestions"
 grep -q 'repo' <(python3 -c "import json;print([s.get('kind') for s in json.load(open('$WORK/projects.json')).get('suggestions',[])])") && ok "a suggestion is keyed by REPOSITORY (the real checkout resolved)" || bad "no repo-keyed suggestion; workspace fallback only"
 
-echo "== 7. pairing a second host via /v1/config"
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "x-keld-agent-secret: $SECRET" -H 'content-type: application/json' -d '{"code":"not a code"}' "http://127.0.0.1:$PORT/v1/config")
+echo "== 7. the page can sign in from here"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-keld-agent-secret: $SECRET" "http://127.0.0.1:$PORT/v1/auth/state")
 case "$code" in
-  400) ok "/v1/config refuses a malformed code with 400" ;;
-  404) echo "  pending: /v1/config not mounted yet (lane B2)" ;;
-  *)   bad "/v1/config answered $code to a malformed code" ;;
+  200) ok "/v1/auth/state answers (the browser sign-in is mounted)" ;;
+  *)   bad "/v1/auth/state answered $code" ;;
 esac
 
 echo "== result: $pass ok, $fail failed  (work dir: $WORK)"

@@ -488,17 +488,6 @@ export function settingsErrorText(status, body) {
   return "That change was refused.";
 }
 
-/** `POST /v1/config`'s two documented refusals (docs/v3/contracts.md): a
- *  malformed code is 400, and the route is refused with 409 while
- *  `send_to_atlas` is false (pointing at a different Atlas is meaningless
- *  while nothing is being sent to one). */
-export function configErrorText(status, body) {
-  if (status === 400) return "That does not look like a setup code";
-  if (status === 409) return "Turn on Send to Atlas first";
-  if (body && body.error) return body.error;
-  return "Couldn't reach Signal to set that — try again.";
-}
-
 // ---- Web sign-in (contract C6 of docs/superpowers/plans/2026-09-29-signal-web-signin-plan.md) ----
 //
 // The page asks the daemon to start a sign-in (POST /v1/auth/start), the
@@ -558,7 +547,7 @@ export const SIGNIN_ERROR_TEXT = {
   // Atlas finished; writing hook.json on this machine did not. Blaming Atlas
   // for it would send a person to the wrong place.
   save_failed: "Signal couldn't save the sign-in on this computer.",
-  send_to_atlas_is_off: "Send to Atlas is off. Turn it on in Settings to sign in.",
+  send_to_atlas_is_off: "Send to Atlas is off on this machine, so Signal can't sign in.",
   unreachable: "Signal stopped answering while you were signing in. Reload this page, then try again.",
   abandoned: "This sign-in is no longer waiting.",
 };
@@ -645,7 +634,7 @@ export function signinStartErrorText(status, body) {
   const code = body && body.error;
   if (code) return signinErrorText(code);
   if (!status) return "Couldn't reach Signal to start signing in — try again.";
-  if (status === 404) return "This version of Signal can't sign in from the page. Paste a setup code in Settings instead.";
+  if (status === 404) return "This version of Signal can't sign in from the page. Update Signal, or run keld login in a terminal.";
   return "Signal couldn't start signing in just now — try again.";
 }
 
@@ -702,16 +691,6 @@ export function unpairView(status, error) {
     default:
       return { button: true, confirm: false, note: null, busy: false };
   }
-}
-
-/** The Developer box's read-only Atlas line, or null on production when
- *  developer mode is off (production is the default; nothing to say). */
-export function atlasEnvLine(env, devMode) {
-  if (!env || !env.name) return null;
-  const off = env.name !== "prod";
-  if (!off && !devMode) return null;
-  const where = env.web && env.web !== env.api ? `API ${env.api} · web ${env.web}` : env.api;
-  return { name: env.name, where, offProduction: off };
 }
 
 export function signedInText(auth) {
@@ -2383,8 +2362,6 @@ if (typeof document !== "undefined") {
     // it was about, so it renders next to the control that caused it rather
     // than as an unscoped banner nobody can connect to an action.
     settingsError: null,
-    configError: "",
-    configHost: "",
     // naming: {id, title, error} while a suggestion is being turned into a
     // project. Null the rest of the time. It lives in state rather than in the
     // DOM because `route()` re-renders the whole pane, so a value held only in
@@ -2426,7 +2403,7 @@ if (typeof document !== "undefined") {
     return res.json();
   }
 
-  // sendJSON never throws on a non-2xx — settingsErrorText/configErrorText
+  // sendJSON never throws on a non-2xx — settingsErrorText and friends
   // need the STATUS and the BODY of a refusal (400/409), which fetchJSON's
   // throw-on-!ok would discard. Network failure (daemon down, dev server with
   // no route) is reported as status 0 with a null body, which both error-text
@@ -3726,20 +3703,6 @@ if (typeof document !== "undefined") {
         el(
           "div",
           { class: "tile" },
-          el("div", { class: "l" }, "Environment"),
-          el("div", { class: "codebox" },
-            el("input", { type: "text", id: "codeInput", placeholder: "atlas-dev.keld.co/ABCD-EFGH" }),
-            el("button", { class: "btn", onclick: submitCode }, "Switch")
-          ),
-          state.configError
-            ? el("div", { class: "settings-note error-note" }, state.configError)
-            : state.configHost
-            ? el("div", { class: "settings-note", style: "color:var(--green-strong)" }, `Now pointing at ${state.configHost}.`)
-            : el("div", { class: "settings-note", style: "color:var(--muted)" }, "Paste a setup code from any Atlas. Signal restarts and points there.")
-        ),
-        el(
-          "div",
-          { class: "tile" },
           el("div", { class: "l" }, "Attribution"),
           el(
             "div",
@@ -3824,62 +3787,29 @@ if (typeof document !== "undefined") {
     if (isReadonly) note = el("div", { class: "settings-note readonly-note" }, readonlyNote("dev_blocks"));
     else if (atlasOn) note = el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.");
     const err = settingsErrorFor("dev_blocks");
-    // ⚠️ **SEND TO ATLAS IS NOT A DEVELOPER CONTROL, AND HIDING IT WITH THE
-    // DEVELOPER ROWS WOULD BE A BUG, NOT A FEATURE.** It decides whether this
-    // machine publishes at all — the single most consequential switch on the
-    // page — and it lives in this box only because the developer rows below it
-    // are refused or reinterpreted depending on it (see the comment on the row
-    // itself). So the box is always drawn and always carries that row; what
-    // developer mode gates is the rows underneath, and the heading, which is
-    // the only part that is actually about developing.
-    const dev = devModeOn();
+    // ⚠️ **THERE IS NO SEND TO ATLAS SWITCH ANY MORE, AND THIS BOX USED TO BE
+    // ITS HOME.** Signing in IS sending and not being signed in is not sending
+    // (Settings' account tile, Unpair); the top bar's label says which Atlas;
+    // `keld signal env` switches it from a terminal. A switch beside those was
+    // a second way to say the same thing that could disagree with the first.
+    // `send_to_atlas` itself stays: the welcome screen's "Use without an
+    // account" writes it, sign-in turns it back on, and KELD_ATLAS still pins it.
+    // So this box is now only the developer rows, drawn in developer mode.
+    if (!devModeOn()) return null;
     return el(
       "div",
       { class: "tile", style: "background:var(--nested)" },
-      el("div", { class: "l" }, dev ? "Developer" : "Atlas"),
-      // ⚠️ Send to Atlas lives HERE rather than in a tile of its own. The two
-      // controls are read together and never separately: every other switch in
-      // this box is refused or reinterpreted depending on it, so putting them
-      // side by side is what makes those refusals legible instead of arriving
-      // as an error from a control three tiles away.
-      el(
-        "div",
-        { class: "settings-row" },
-        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks and the projects they matched. Off: nothing leaves this machine.")),
-        switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
-      ),
-      fieldNote("send_to_atlas", readonly),
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
-      dev && SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
-      dev && SHOW_BLOCK_GRANULARITY ? grid : null,
-      dev && SHOW_BLOCK_GRANULARITY ? note : null,
-      dev && SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevGenerate(settings) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevAttribution(settings, readonly) : null,
-      dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevToolOTLP(settings, readonly) : null,
-      renderAtlasEnvRow(settings, dev)
-    );
-  }
-
-  /** Which Atlas this machine uses. Read-only: it is switched from a terminal
-   *  with `keld signal env`, never from the page. */
-  function renderAtlasEnvRow(settings, dev) {
-    const line = atlasEnvLine(settings && settings.atlas_env, dev);
-    if (!line) return null;
-    return el(
-      "div",
-      {},
+      el("div", { class: "l" }, "Developer"),
+      SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
+      SHOW_BLOCK_GRANULARITY ? grid : null,
+      SHOW_BLOCK_GRANULARITY ? note : null,
+      SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
+      SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      renderDevGenerate(settings),
       el("div", { class: "settings-sep" }),
-      el(
-        "div",
-        { class: "settings-row" },
-        el("span", {}, "Atlas environment", el("div", { class: "desc" }, "Switch with keld signal env prod, dev or local, from a terminal.")),
-        el("span", { class: "pill" + (line.offProduction ? " atlas-env-off" : "") }, line.name)
-      ),
-      el("div", { class: "settings-note" + (line.offProduction ? " atlas-env-note" : "") }, line.where)
+      renderDevAttribution(settings, readonly),
+      el("div", { class: "settings-sep" }),
+      renderDevToolOTLP(settings, readonly)
     );
   }
 
@@ -4039,27 +3969,6 @@ if (typeof document !== "undefined") {
       el("span", {}, view.text),
       view.button ? el("button", { class: "btn", type: "button", disabled: view.disabled, onclick: clickRestart }, "Restart") : null
     );
-  }
-
-  async function submitCode() {
-    const input = document.getElementById("codeInput");
-    const code = input && input.value.trim();
-    if (!code) return;
-    state.configError = "";
-    state.configHost = "";
-    const res = await sendJSON("/v1/config", "POST", { code });
-    if (!res.ok) {
-      state.configError = configErrorText(res.status, res.body);
-      route();
-      return;
-    }
-    state.configHost = (res.body && res.body.host) || "";
-    if (res.body && res.body.restart_required) {
-      state.restart.patch = {};
-      state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
-    }
-    await loadAll();
-    route();
   }
 
   // ---- Web sign-in ----

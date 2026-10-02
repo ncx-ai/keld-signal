@@ -256,12 +256,13 @@ nothing. The rule the list encodes is not "these keys are special" but **"a key 
 re-reads while the daemon runs requires a restart"**; check that before adding the next
 one.
 
-## `POST /v1/config`
+## `POST /v1/config` — removed (2026-10-02)
 
-`{"code": "atlas-dev.keld.co/ABCD-EFGH"}` → runs the existing `auth.ParsePairingCode` +
-`LoginWithCode` + setup path, writes `auth.json`/`hook.json`, answers
-`{"host": "https://atlas-dev.keld.co", "restart_required": true}`. Malformed → 400, no
-file touched. Refused with 409 while `send_to_atlas` is false.
+It redeemed a setup code pasted into Settings' Environment box. The page now pairs only
+through the browser sign-in (`POST /v1/auth/start` → `GET /auth/callback`), and the box,
+its route and Settings' Send to Atlas switch were removed together: being signed in is what
+sends. A setup code still pairs from a terminal — `keld login --code` and
+`keld-agent install --code`, through `auth.LoginWithCode`.
 
 ## Projects (`~/.keld/state/projects.json`) and `/v1/projects`
 

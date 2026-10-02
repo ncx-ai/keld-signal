@@ -38,7 +38,7 @@ const (
 
 // Route registers the page at "/". Per the D6 scope, the static assets carry
 // no data about this machine and are therefore NOT wrapped in the auth
-// middleware — only /v1/ledger, /v1/settings, /v1/projects and /v1/config
+// middleware — only /v1/ledger, /v1/settings, /v1/projects and the sign-in routes
 // (each some other lane's own Route) are. The page takes the secret once from
 // its own URL's query parameter and sets it as the keld_secret cookie, so
 // every fetch after the first load carries it without the query parameter
