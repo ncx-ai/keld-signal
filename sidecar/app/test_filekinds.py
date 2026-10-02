@@ -75,7 +75,7 @@ def test_names_decide_when_there_is_no_extension():
 
 
 def test_required_kinds_exist():
-    for k in "java ruby php c_cpp csharp swift kotlin sql notebook archive binary office_doc image".split():
+    for k in "java ruby php c_cpp csharp swift kotlin sql notebook archive binary document spreadsheet presentation image".split():
         assert k in F.KINDS, k
 
 
@@ -118,6 +118,44 @@ def test_unrecognized_is_spelled_the_american_way_like_its_own_id():
     disagree with itself. Atlas UI copy is American English throughout."""
     assert F.KINDS[F.UNRECOGNIZED][0] == "Unrecognized"
     assert "Unrecognised" not in open(F.__file__).read()
+
+
+def test_the_three_office_kinds_are_distinct_and_each_maps_its_own_extensions():
+    want = {"document": ".docx .doc .odt .rtf .pages", "spreadsheet": ".xlsx .xls .xlsm .ods .numbers",
+            "presentation": ".pptx .ppt .odp .key"}
+    assert len(set(want)) == 3 and "office_doc" not in F.KINDS
+    for kind, exts in want.items():
+        for e in exts.split():
+            assert F.EXT_KIND[e] == kind, (e, kind)
+
+
+def test_dot_key_is_keynote_not_a_certificate():
+    assert F.kind_for("deck.key") == "presentation"
+    assert ".key" not in {e for e, k in F.EXT_KIND.items() if k == "certificate"}
+    assert F.kind_for("a.pem") == "certificate"
+
+
+def test_every_business_domain_resolves_to_its_kind():
+    for path, kind in (("a.qfx", "financial_data"), ("a.xbrl", "financial_data"),
+                       ("a.fig", "design"), ("a.psd", "design"), ("a.eps", "design"),
+                       ("a.mkv", "video"), ("a.flac", "audio"), ("a.eml", "email"),
+                       ("a.ics", "calendar"), ("a.epub", "ebook"), ("a.tex", "typesetting"),
+                       ("a.sav", "stats_data"), ("a.rds", "stats_data"), ("a.orc", "database"),
+                       ("a.parquet", "database"), ("a.geojson", "geo"), ("a.dcm", "medical_image"), ("a.hl7", "health_message"),
+                       ("a.dwg", "cad"), ("a.stl", "model_3d"), ("a.woff2", "font"),
+                       ("a.pfx", "certificate"), ("a.dmg", "archive"), ("a.iso", "archive")):
+        assert F.kind_for(path) == kind, (path, F.kind_for(path))
+
+
+def test_every_group_is_used_and_every_kind_has_one():
+    used = {g for _, g in F.KINDS.values()}
+    assert used == set(F.GROUPS), set(F.GROUPS) ^ used
+    assert F.group_for("audio") == F.group_for("video") == "media" and F.group_for("design") == "design"
+
+
+def test_non_code_kinds_outnumber_code_kinds():
+    code = sum(1 for _, g in F.KINDS.values() if g == "code")
+    assert len(F.KINDS) - code > code, (code, len(F.KINDS))
 
 
 if __name__ == "__main__":

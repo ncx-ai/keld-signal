@@ -26,7 +26,7 @@ import re
 
 from app.analysis.vocab import EXT_LANG
 
-GROUPS = ("code", "docs", "data", "config", "image", "document", "other")
+GROUPS = ("code", "docs", "data", "config", "image", "document", "design", "media", "other")
 
 # Display labels for the acts a file-touching call can carry. Only the four that `file_action`
 # publishes for a file in practice; any other act still publishes (the vocabulary of ACTS is
@@ -82,7 +82,8 @@ _EXTRA = (
     ("json", "JSON", "data", (".json", ".jsonl", ".ndjson", ".jsonc", ".json5")),
     ("xml", "XML", "data", (".xml", ".rels", ".xsd", ".xsl", ".plist")),
     ("csv", "CSV/TSV", "data", (".csv", ".tsv")),
-    ("database", "Database", "data", (".db", ".sqlite", ".sqlite3", ".parquet", ".avro")),
+    ("database", "Database", "data", (".db", ".sqlite", ".sqlite3", ".parquet", ".avro",
+                                 ".orc", ".feather")),   # columnar files ride with `.parquet`
     ("log", "Log / captured output", "data", (".log", ".output")),
     # config
     ("yaml", "YAML", "config", (".yaml", ".yml")),
@@ -96,14 +97,45 @@ _EXTRA = (
     ("svg", "SVG", "image", (".svg",)),
     # documents
     ("pdf", "PDF", "document", (".pdf",)),
-    ("office_doc", "Office document", "document",
-     (".docx", ".doc", ".odt", ".rtf", ".pages", ".xlsx", ".xls", ".xlsm", ".ods", ".numbers",
-      ".pptx", ".ppt", ".odp", ".key")),
+    # ⚠️ THREE KINDS OF WORK, NOT ONE: editing a spreadsheet is analysis, a presentation is
+    # communication, a document is writing. This was one `office_doc` kind, which erased that.
+    # The id `document` shares its spelling with the GROUP `document` (as `image` and `docs`
+    # already do); ids and groups are separate namespaces and nothing treats them as one.
+    ("document", "Document", "document", (".docx", ".doc", ".odt", ".rtf", ".pages")),
+    ("spreadsheet", "Spreadsheet", "document", (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")),
+    # ⚠️ `.key` is DECIDED, deliberately: Apple Keynote, not a private key. Keynote is far more
+    # likely in this population, and a private key is not a work product an agent edits.
+    # Certificates below therefore omit `.key`.
+    ("presentation", "Presentation", "document", (".pptx", ".ppt", ".odp", ".key")),
+    ("ebook", "E-book", "document", (".epub", ".mobi", ".azw3")),
+    ("typesetting", "LaTeX / bibliography", "docs", (".tex", ".bib")),
+    ("email", "Email", "document", (".eml", ".msg", ".mbox")),
+    ("calendar", "Calendar / contacts", "document", (".ics", ".vcf")),
+    # finance / accounting (spreadsheets are above)
+    ("financial_data", "Financial data", "data", (".qbo", ".qfx", ".ofx", ".iif", ".xbrl")),
+    # analytics / stats (`.parquet` stays under `database`, which already owned it)
+    ("stats_data", "Statistical data", "data",
+     (".sav", ".dta", ".rdata", ".rds", ".mat", ".sas7bdat")),
+    ("geo", "Geospatial data", "data", (".geojson", ".kml", ".kmz", ".shp", ".gpx")),
+    # imaging and interchange messages are different work (clinical vs integration)
+    ("medical_image", "Medical image", "data", (".dcm",)),
+    ("health_message", "Healthcare message", "data", (".hl7",)),
+    # design. `.svg` stays `image`: it is XML text an agent edits as code-like markup and is
+    # already published as `svg`; re-homing it would move existing rows.
+    ("design", "Design file", "design",
+     (".fig", ".sketch", ".psd", ".ai", ".xd", ".indd", ".afdesign", ".afphoto", ".eps")),
+    ("cad", "CAD drawing", "other", (".dwg", ".dxf", ".step", ".iges")),
+    ("model_3d", "3D mesh", "other", (".stl",)),
+    ("font", "Font", "other", (".ttf", ".otf", ".woff", ".woff2", ".eot")),
+    ("certificate", "Certificate / keystore", "config",
+     (".pem", ".crt", ".cer", ".p12", ".pfx", ".jks")),
     # other
-    ("archive", "Archive", "other", (".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar")),
+    ("archive", "Archive", "other", (".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+                                    ".dmg", ".iso")),
     ("binary", "Binary", "other", (".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".wasm",
                                    ".class", ".pyc", ".jar")),
-    ("media", "Audio / video", "other", (".mp3", ".wav", ".mp4", ".mov", ".webm", ".m4a")),
+    ("audio", "Audio", "media", (".mp3", ".wav", ".m4a", ".flac", ".aac", ".aiff")),
+    ("video", "Video", "media", (".mp4", ".mov", ".webm", ".avi", ".mkv")),
 )
 
 # Kinds only reachable by file NAME (no extension, or the name IS the kind).
@@ -169,8 +201,14 @@ _PHRASE = {
     "config": "config files", "template": "template files",
     "docker": "Docker files", "make": "Makefiles",
     "image": "images", "svg": "SVGs",
-    "pdf": "PDFs", "office_doc": "Office documents",
-    "archive": "archives", "binary": "binaries", "media": "audio and video",
+    "pdf": "PDFs", "document": "documents", "spreadsheet": "spreadsheets",
+    "presentation": "presentations", "ebook": "e-books", "typesetting": "LaTeX and bibliography files",
+    "email": "email files", "calendar": "calendar and contact files",
+    "audio": "audio", "video": "video", "model_3d": "3D meshes", "financial_data": "financial data files",
+    "stats_data": "statistical data files", "geo": "geospatial files",
+    "medical_image": "medical images", "health_message": "healthcare messages", "design": "designs", "cad": "CAD models",
+    "font": "fonts", "certificate": "certificates",
+    "archive": "archives", "binary": "binaries",
     UNRECOGNIZED: "unrecognized files",
 }
 

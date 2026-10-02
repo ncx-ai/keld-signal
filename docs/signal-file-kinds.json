@@ -7,6 +7,8 @@
     "config",
     "image",
     "document",
+    "design",
+    "media",
     "other"
   ],
   "action_labels": {
@@ -347,10 +349,106 @@
       "group": "document"
     },
     {
-      "id": "office_doc",
-      "display": "Office document",
-      "phrase": "Office documents",
+      "id": "document",
+      "display": "Document",
+      "phrase": "documents",
       "group": "document"
+    },
+    {
+      "id": "spreadsheet",
+      "display": "Spreadsheet",
+      "phrase": "spreadsheets",
+      "group": "document"
+    },
+    {
+      "id": "presentation",
+      "display": "Presentation",
+      "phrase": "presentations",
+      "group": "document"
+    },
+    {
+      "id": "ebook",
+      "display": "E-book",
+      "phrase": "e-books",
+      "group": "document"
+    },
+    {
+      "id": "typesetting",
+      "display": "LaTeX / bibliography",
+      "phrase": "LaTeX and bibliography files",
+      "group": "docs"
+    },
+    {
+      "id": "email",
+      "display": "Email",
+      "phrase": "email files",
+      "group": "document"
+    },
+    {
+      "id": "calendar",
+      "display": "Calendar / contacts",
+      "phrase": "calendar and contact files",
+      "group": "document"
+    },
+    {
+      "id": "financial_data",
+      "display": "Financial data",
+      "phrase": "financial data files",
+      "group": "data"
+    },
+    {
+      "id": "stats_data",
+      "display": "Statistical data",
+      "phrase": "statistical data files",
+      "group": "data"
+    },
+    {
+      "id": "geo",
+      "display": "Geospatial data",
+      "phrase": "geospatial files",
+      "group": "data"
+    },
+    {
+      "id": "medical_image",
+      "display": "Medical image",
+      "phrase": "medical images",
+      "group": "data"
+    },
+    {
+      "id": "health_message",
+      "display": "Healthcare message",
+      "phrase": "healthcare messages",
+      "group": "data"
+    },
+    {
+      "id": "design",
+      "display": "Design file",
+      "phrase": "designs",
+      "group": "design"
+    },
+    {
+      "id": "cad",
+      "display": "CAD drawing",
+      "phrase": "CAD models",
+      "group": "other"
+    },
+    {
+      "id": "model_3d",
+      "display": "3D mesh",
+      "phrase": "3D meshes",
+      "group": "other"
+    },
+    {
+      "id": "font",
+      "display": "Font",
+      "phrase": "fonts",
+      "group": "other"
+    },
+    {
+      "id": "certificate",
+      "display": "Certificate / keystore",
+      "phrase": "certificates",
+      "group": "config"
     },
     {
       "id": "archive",
@@ -365,10 +463,16 @@
       "group": "other"
     },
     {
-      "id": "media",
-      "display": "Audio / video",
-      "phrase": "audio and video",
-      "group": "other"
+      "id": "audio",
+      "display": "Audio",
+      "phrase": "audio",
+      "group": "media"
+    },
+    {
+      "id": "video",
+      "display": "Video",
+      "phrase": "video",
+      "group": "media"
     },
     {
       "id": "docker",
